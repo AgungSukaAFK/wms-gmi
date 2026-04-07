@@ -3,14 +3,13 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import Link from "next/link";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
-import { signInWithEmailOrNrp } from "@/services/userService";
+import { signIn } from "@/services/auth-actions";
 import {
   Card,
   CardContent,
@@ -21,7 +20,6 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 export default function LoginPage() {
-  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,16 +29,14 @@ export default function LoginPage() {
     setError(null);
 
     const formData = new FormData(event.currentTarget);
-    const identifier = formData.get("identifier") as string;
-    const password = formData.get("password") as string;
 
     try {
-      await signInWithEmailOrNrp(identifier, password);
-
+      const result = await signIn(formData);
+      if (result?.error) {
+        throw new Error(result.error);
+      }
       toast.success("Login berhasil! Mengarahkan ke dashboard...");
-      // Refresh state server dan arahkan ke root (middleware akan handle sisanya)
-      router.push("/dashboard");
-      router.refresh();
+      // signIn server action already handles redirect if successful
     } catch (error: any) {
       setError(error.message);
       toast.error("Login Gagal", { description: error.message });
@@ -53,9 +49,9 @@ export default function LoginPage() {
     <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 px-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="text-2xl text-center">Login</CardTitle>
+          <CardTitle className="text-2xl text-center font-bold">WMS-GMI Login</CardTitle>
           <CardDescription className="text-center">
-            Masukkan Email atau NRP Anda untuk masuk.
+            Masukkan Email atau NRP Anda untuk mengakses gudang.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -67,7 +63,7 @@ export default function LoginPage() {
                 name="identifier"
                 type="text"
                 required
-                placeholder="email@example.com atau 123456"
+                placeholder="email@example.com / 123456"
                 disabled={loading}
               />
             </div>
@@ -84,7 +80,7 @@ export default function LoginPage() {
             <div className="w-full flex justify-end">
               <Link
                 href={"/auth/forgot-password"}
-                className="text-end text-sm bg-blac"
+                className="text-end text-sm text-primary hover:underline"
               >
                 Lupa password?
               </Link>
@@ -95,15 +91,15 @@ export default function LoginPage() {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
-            <Button type="submit" disabled={loading} className="w-full">
-              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            <Button type="submit" disabled={loading} className="w-full text-lg font-semibold py-6">
+              {loading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
               Login
             </Button>
           </form>
-          <div className="mt-4 text-center text-sm">
+          <div className="mt-6 text-center text-sm">
             Belum punya akun?{" "}
-            <Link href="/auth/sign-up" className="underline underline-offset-4">
-              Daftar di sini
+            <Link href="/auth/sign-up" className="underline underline-offset-4 text-primary font-medium">
+              Daftar Sekarang
             </Link>
           </div>
         </CardContent>

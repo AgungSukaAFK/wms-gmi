@@ -1,0 +1,1 @@
+ALTER TABLE public.profiles ADD COLUMN nrp TEXT UNIQUE;

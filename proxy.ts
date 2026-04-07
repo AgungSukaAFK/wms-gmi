@@ -7,8 +7,8 @@ export async function proxy(request: NextRequest) {
   });
 
   const supabase = createServerClient(
-    process.env.SUPABASE_URL!,
-    process.env.SUPABASE_ANON_KEY!,
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY!,
     {
       cookies: {
         get(name: string) {
@@ -32,7 +32,16 @@ export async function proxy(request: NextRequest) {
   // getUser() memvalidasi token ke server auth Supabase
   const {
     data: { user },
+    error: authError,
   } = await supabase.auth.getUser();
+
+  // Jika token kedaluwarsa atau tidak valid (seperti setelah database reset),
+  // Supabase akan mengembalikan error. Kita amankan dengan menghapus cookies.
+  if (authError || !user) {
+    if (authError && authError.message.includes("Refresh Token")) {
+      await supabase.auth.signOut(); // Force clear local cookies
+    }
+  }
 
   const { pathname } = request.nextUrl;
 
