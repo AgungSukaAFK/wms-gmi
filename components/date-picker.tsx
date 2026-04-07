@@ -42,7 +42,7 @@ export function DatePicker({ value, onChange, placeholder }: DatePickerProps) {
             mode="single"
             selected={value}
             captionLayout="dropdown"
-            onSelect={(date) => {
+            onSelect={(date: Date | undefined) => {
               onChange?.(date);
               setOpen(false);
             }}
