@@ -1,10 +1,18 @@
--- Seed Cabang Data
+-- Seed Cabang Data (matches stk_location values from legacy tb_stock)
 INSERT INTO public.cabang (nama_cabang, kode_cabang, is_active)
 VALUES 
-('Site LOURDES', 'LDS', TRUE),
-('Head Office', 'HO', TRUE),
-('Tanjung Enim', 'TE', TRUE),
-('Balikpapan', 'BPN', TRUE);
+('JAKARTA', 'JKT', TRUE),
+('TANJUNG ENIM', 'ENIM', TRUE),
+('BALIKPAPAN', 'BPP', TRUE),
+('SITE BA', 'BA', TRUE),
+('SITE TAL', 'TAL', TRUE),
+('SITE MIP', 'MIP', TRUE),
+('SITE MIFA', 'MIFA', TRUE),
+('SITE BIB', 'BIB', TRUE),
+('SITE AMI', 'AMI', TRUE),
+('SITE TABANG', 'TABANG', TRUE),
+('SITE BCP+PIK', 'BCP', TRUE),
+('SITE DIZA', 'DIZA', TRUE);
 
 -- Seed Admin Demo User
 -- Password: demo123
