@@ -10,6 +10,7 @@ import {
   BreadcrumbSeparator,
 } from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
+import { Toaster } from "@/components/ui/sonner";
 import {
   SidebarInset,
   SidebarProvider,
@@ -83,6 +84,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   return (
     <>
+      <Toaster richColors position="top-right" />
       <SidebarProvider>
         {/* Pastikan AppSidebar menerima prop user dengan tipe yang sesuai */}
         <AppSidebar className="shadow-lg" />
@@ -98,7 +100,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                 <BreadcrumbList>
                   <BreadcrumbItem className="hidden md:block">
                     <BreadcrumbLink href="/dashboard">
-                      Garuda Procure
+                      WMS-GMI
                     </BreadcrumbLink>
                   </BreadcrumbItem>
                   <BreadcrumbSeparator className="hidden md:block" />
