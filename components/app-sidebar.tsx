@@ -45,6 +45,7 @@ import {
   FileWarning,
   Undo2,
   Calculator,
+  FileSignature,
 } from "lucide-react";
 
 // Update the menu data
@@ -66,6 +67,11 @@ const data = {
       title: "Dashboard",
       url: "/dashboard",
       icon: LayoutDashboard,
+    },
+    {
+      title: "Signature Manager",
+      url: "/signatures",
+      icon: FileSignature,
     },
   ],
   navMaster: [
