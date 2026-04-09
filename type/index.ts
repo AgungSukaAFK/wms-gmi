@@ -44,9 +44,23 @@ export interface Discussion {
   timestamp: string;
 }
 
+export interface Role {
+  id: number;
+  name: string;
+  label: string;
+  description?: string | null;
+  color?: string | null;
+  created_at?: string;
+}
+
+export interface RolePermission {
+  page_path: string;
+  cabang_id: number | null;
+}
+
 export interface Profile {
   id: string;
-  role?: string | null;
+  roles?: Role[];
   lokasi?: string | null;
   department?: string | null;
   created_at?: string | null;
@@ -367,3 +381,9 @@ export type MrItemStatus =
   | "PO Created" // Sudah resmi ada di PO
   | "Cancelled" // Dibatalkan oleh Purchasing
   | "Replaced"; // Diganti dengan barang lain
+
+export type ProfileWithRoles = Profile & {
+  roles: Role[];
+  cabang_id?: number | null;
+  cabang?: { id: number; nama_cabang: string; kode_cabang?: string } | null;
+};

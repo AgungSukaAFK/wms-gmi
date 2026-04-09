@@ -36,6 +36,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   MoreHorizontal,
   ShieldCheck,
@@ -50,13 +51,14 @@ import {
   updateUserDetail,
   deleteUserProfile,
 } from "@/services/user-actions";
+import type { Role } from "@/type";
 
 interface UserProfile {
   id: string;
   nama: string;
   email: string;
   nrp: string;
-  role: string;
+  roles: Role[];
   is_active: boolean;
   cabang_id: number | null;
   cabang?: { nama_cabang: string };
@@ -70,19 +72,18 @@ interface Cabang {
 interface UserTableClientProps {
   users: UserProfile[];
   cabangList: Cabang[];
+  allRoles: Role[];
 }
 
-const ROLES = ["admin", "warehouse", "finance", "approver", "purchasing", "ga"];
-
-export default function UserTableClient({ users, cabangList }: UserTableClientProps) {
+export default function UserTableClient({ users, cabangList, allRoles }: UserTableClientProps) {
   const [search, setSearch] = useState("");
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [loadingUserId, setLoadingUserId] = useState<string | null>(null);
 
-  // Controlled state — Radix UI Select tidak compatible dengan FormData
-  const [editRole, setEditRole] = useState("");
+  // States untuk editor
+  const [editRoleIds, setEditRoleIds] = useState<number[]>([]);
   const [editCabangId, setEditCabangId] = useState("");
 
   const filteredUsers = users.filter(
@@ -109,21 +110,27 @@ export default function UserTableClient({ users, cabangList }: UserTableClientPr
 
   const handleEdit = (user: UserProfile) => {
     setEditingUser(user);
-    setEditRole(user.role);
+    setEditRoleIds(user.roles.map((r) => r.id));
     setEditCabangId(user.cabang_id?.toString() ?? "");
     setIsEditModalOpen(true);
   };
 
+  const toggleRoleSelection = (roleId: number) => {
+    setEditRoleIds((prev) =>
+      prev.includes(roleId) ? prev.filter((id) => id !== roleId) : [...prev, roleId]
+    );
+  };
+
   const saveEdit = async () => {
     if (!editingUser) return;
-    if (!editRole) {
-      toast.error("Role harus dipilih");
+    if (editRoleIds.length === 0) {
+      toast.error("Setidaknya pilih satu role");
       return;
     }
 
     setIsUpdating(true);
     const result = await updateUserDetail(editingUser.id, {
-      role: editRole,
+      roleIds: editRoleIds,
       cabang_id: parseInt(editCabangId) || 0,
     });
     setIsUpdating(false);
@@ -150,6 +157,26 @@ export default function UserTableClient({ users, cabangList }: UserTableClientPr
     }
   };
 
+  // Helper untuk menentukan warna badge
+  const getBadgeColor = (color: string | null | undefined) => {
+    switch (color) {
+      case "red": return "bg-red-100 text-red-800 border-red-200 hover:bg-red-100";
+      case "orange": return "bg-orange-100 text-orange-800 border-orange-200 hover:bg-orange-100";
+      case "yellow": return "bg-yellow-100 text-yellow-800 border-yellow-200 hover:bg-yellow-100";
+      case "green": return "bg-green-100 text-green-800 border-green-200 hover:bg-green-100";
+      case "blue": return "bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-100";
+      case "purple": return "bg-purple-100 text-purple-800 border-purple-200 hover:bg-purple-100";
+      case "indigo": return "bg-indigo-100 text-indigo-800 border-indigo-200 hover:bg-indigo-100";
+      case "cyan": return "bg-cyan-100 text-cyan-800 border-cyan-200 hover:bg-cyan-100";
+      case "teal": return "bg-teal-100 text-teal-800 border-teal-200 hover:bg-teal-100";
+      case "lime": return "bg-lime-100 text-lime-800 border-lime-200 hover:bg-lime-100";
+      case "amber": return "bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-100";
+      case "gray": return "bg-gray-100 text-gray-800 border-gray-200 hover:bg-gray-100";
+      case "slate": return "bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-100";
+      default: return "bg-secondary text-secondary-foreground";
+    }
+  };
+
   return (
     <div className="space-y-4">
       {/* Search Bar */}
@@ -164,13 +191,13 @@ export default function UserTableClient({ users, cabangList }: UserTableClientPr
       </div>
 
       {/* Table */}
-      <div className="rounded-md border">
+      <div className="rounded-md border bg-white">
         <Table>
           <TableHeader>
             <TableRow>
               <TableHead>Nama</TableHead>
               <TableHead>Email / NRP</TableHead>
-              <TableHead>Role</TableHead>
+              <TableHead>Roles</TableHead>
               <TableHead>Cabang</TableHead>
               <TableHead>Status</TableHead>
               <TableHead className="w-[60px]">Aksi</TableHead>
@@ -183,18 +210,30 @@ export default function UserTableClient({ users, cabangList }: UserTableClientPr
                   <TableCell className="font-medium">{user.nama}</TableCell>
                   <TableCell>
                     <div className="flex flex-col">
-                      <span>{user.email}</span>
+                      <span className="text-sm">{user.email}</span>
                       <span className="text-xs text-muted-foreground">{user.nrp || "-"}</span>
                     </div>
                   </TableCell>
                   <TableCell>
-                    <Badge variant="outline" className="capitalize">
-                      {user.role}
-                    </Badge>
+                    <div className="flex flex-wrap gap-1">
+                      {user.roles.length > 0 ? (
+                        user.roles.map((r) => (
+                          <Badge 
+                            key={r.id} 
+                            variant="outline" 
+                            className={`text-[10px] px-1.5 py-0 capitalize border shadow-sm ${getBadgeColor(r.color)}`}
+                          >
+                            {r.label}
+                          </Badge>
+                        ))
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic">No role</span>
+                      )}
+                    </div>
                   </TableCell>
                   <TableCell>{user.cabang?.nama_cabang || "-"}</TableCell>
                   <TableCell>
-                    <Badge variant={user.is_active ? "default" : "destructive"}>
+                    <Badge variant={user.is_active ? "default" : "destructive"} className="text-[10px]">
                       {user.is_active ? "Aktif" : "Pending Approval"}
                     </Badge>
                   </TableCell>
@@ -213,7 +252,7 @@ export default function UserTableClient({ users, cabangList }: UserTableClientPr
                           <DropdownMenuLabel>Aksi</DropdownMenuLabel>
                           <DropdownMenuItem onClick={() => handleEdit(user)}>
                             <UserCog className="mr-2 h-4 w-4" />
-                            Edit Role & Cabang
+                            Edit Roles & Cabang
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleToggleStatus(user)}>
                             {user.is_active ? (
@@ -265,29 +304,29 @@ export default function UserTableClient({ users, cabangList }: UserTableClientPr
           </DialogHeader>
 
           <div className="grid gap-4 py-4">
-            <div className="space-y-2">
-              <Label>Nama</Label>
-              <Input value={editingUser?.nama ?? ""} disabled />
+            <div className="space-y-4">
+              <Label className="text-sm font-semibold">User Roles (Multiple)</Label>
+              <div className="grid grid-cols-2 gap-3 p-3 border rounded-md bg-slate-50">
+                {allRoles.map((role) => (
+                  <div key={role.id} className="flex items-center space-x-2">
+                    <Checkbox 
+                      id={`role-${role.id}`} 
+                      checked={editRoleIds.includes(role.id)}
+                      onCheckedChange={() => toggleRoleSelection(role.id)}
+                    />
+                    <label
+                      htmlFor={`role-${role.id}`}
+                      className="text-xs font-medium leading-none cursor-pointer peer-disabled:cursor-not-allowed peer-disabled:opacity-70 capitalize"
+                    >
+                      {role.label}
+                    </label>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="space-y-2">
-              <Label>Role / Jabatan</Label>
-              <Select value={editRole} onValueChange={setEditRole}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Pilih Role" />
-                </SelectTrigger>
-                <SelectContent>
-                  {ROLES.map((role) => (
-                    <SelectItem key={role} value={role} className="capitalize">
-                      {role}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Penempatan Cabang</Label>
+              <Label className="text-sm font-semibold">Penempatan Cabang</Label>
               <Select value={editCabangId} onValueChange={setEditCabangId}>
                 <SelectTrigger>
                   <SelectValue placeholder="Pilih Cabang" />

@@ -12,7 +12,9 @@ VALUES
 ('SITE AMI', 'AMI', TRUE),
 ('SITE TABANG', 'TABANG', TRUE),
 ('SITE BCP+PIK', 'BCP', TRUE),
-('SITE DIZA', 'DIZA', TRUE);
+('SITE DIZA', 'DIZA', TRUE),
+('MAN Jkt Service', 'MJS', TRUE),
+('Service BPN', 'SBPN', TRUE);
 
 -- Seed Admin Demo User
 -- Password: demo123
@@ -44,7 +46,20 @@ VALUES (
     crypt('demo123', gen_salt('bf')), 
     now(), 
     '{"provider":"email","providers":["email"]}', 
-    '{"nama": "Admin DEMO", "nrp": "999999", "cabang_id": 1, "role": "admin", "is_active": true}', 
+    '{"nama": "Admin SITE DEMO", "nrp": "999999", "cabang_id": 1, "role": "admin", "is_active": true}', 
+    false, 
+    'authenticated', 
+    'authenticated', 
+    '', '', '', 0, now(), now(), '', NULL, ''
+),
+(
+    '66666666-6666-6666-6666-666666666666', 
+    '00000000-0000-0000-0000-000000000000', 
+    'moderator@demo.com', 
+    crypt('demo123', gen_salt('bf')), 
+    now(), 
+    '{"provider":"email","providers":["email"]}', 
+    '{"nama": "Moderator Superuser", "nrp": "000000", "cabang_id": 1, "role": "moderator", "is_active": true}', 
     false, 
     'authenticated', 
     'authenticated', 
