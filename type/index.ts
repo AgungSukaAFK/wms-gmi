@@ -387,3 +387,13 @@ export type ProfileWithRoles = Profile & {
   cabang_id?: number | null;
   cabang?: { id: number; nama_cabang: string; kode_cabang?: string } | null;
 };
+
+export interface UserSignature {
+  id: string;
+  user_id: string;
+  image_url: string;
+  printed_name: string;
+  label: string;
+  is_hidden: boolean;
+  created_at: string;
+}
