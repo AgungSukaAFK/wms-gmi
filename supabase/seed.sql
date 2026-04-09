@@ -1,3 +1,49 @@
+-- CABANG SEEDS
+INSERT INTO public.cabang (id, nama_cabang, kode_cabang, is_active)
+VALUES 
+    (1, 'Head Office Jakarta', 'HO-JKT', true),
+    (2, 'Site Balikpapan', 'BPN-01', true),
+    (3, 'Site Samarinda', 'SRI-01', true)
+ON CONFLICT (id) DO UPDATE SET 
+    nama_cabang = EXCLUDED.nama_cabang,
+    kode_cabang = EXCLUDED.kode_cabang;
+
+-- BARANG SEEDS
+INSERT INTO public.barang (id, part_number, part_name, part_satuan)
+VALUES
+    (1, 'OF-001', 'Oil Filter Komatsu PC200', 'PCS'),
+    (2, 'FF-002', 'Fuel Filter Cummins QSK60', 'PCS'),
+    (3, 'BR-6205', 'Bearing 6205-2RS', 'SET'),
+    (4, 'OIL-HYD-20', 'Hydraulic Oil ISO 46 (20L)', 'PAIL'),
+    (5, 'GRS-LIT-01', 'Grease Lithium Multi-Purpose (1kg)', 'CAN'),
+    (6, 'BOLT-M10', 'Bolt & Nut M10x50 Grade 8.8', 'PCS'),
+    (7, 'OR-KIT-A', 'O-Ring Kit Service A', 'BOX'),
+    (8, 'BELT-A42', 'V-Belt A-42 Gates', 'PCS'),
+    (9, 'SL-CRK', 'Seal Crankshaft Front', 'PCS'),
+    (10, 'SP-01', 'Spark Plug Denso', 'PCS')
+ON CONFLICT (id) DO UPDATE SET 
+    part_number = EXCLUDED.part_number,
+    part_name = EXCLUDED.part_name,
+    part_satuan = EXCLUDED.part_satuan;
+
+-- STOCK SEEDS
+INSERT INTO public.stock (part_id, cabang_id, qty, min_qty, max_qty)
+VALUES
+    (1, 1, 50, 10, 100), (1, 2, 20, 5, 50), (1, 3, 10, 5, 50),
+    (2, 1, 30, 10, 80),  (2, 2, 15, 5, 40), (2, 3, 5, 2, 20),
+    (3, 1, 100, 20, 200), (3, 2, 50, 10, 100),
+    (4, 1, 12, 5, 20),   (4, 2, 24, 10, 40), (4, 3, 18, 5, 30),
+    (5, 1, 40, 10, 60),   (5, 2, 20, 5, 30),
+    (6, 1, 500, 100, 1000), (6, 2, 200, 50, 500),
+    (7, 1, 5, 2, 10),    (7, 2, 8, 2, 12),
+    (8, 1, 25, 5, 40),   (8, 2, 12, 5, 20),
+    (9, 1, 15, 5, 30),   (9, 2, 5, 2, 10),
+    (10, 1, 60, 20, 100), (10, 2, 40, 10, 80)
+ON CONFLICT (part_id, cabang_id) DO UPDATE SET
+    qty = EXCLUDED.qty,
+    min_qty = EXCLUDED.min_qty,
+    max_qty = EXCLUDED.max_qty;
+
 -- Seed Admin Demo User
 -- Password: demo123
 INSERT INTO auth.users (
@@ -111,7 +157,5 @@ VALUES (
     'authenticated', 
     'authenticated', 
     '', '', '', 0, now(), now(), '', NULL, ''
-);
-
--- Note: The trigger public.handle_new_user() will automatically insert 
--- the corresponding row into public.profiles using the metadata above.
+)
+ON CONFLICT (id) DO NOTHING;

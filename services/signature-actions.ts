@@ -27,12 +27,30 @@ export async function createSignature(formData: {
   if (authError) return { error: "Password akun salah. Verifikasi gagal." };
 
   // 3. Ambil Nama Profile otomatis
-  const { data: profile } = await supabase
+  let { data: profile, error: profFetchError } = await supabase
     .from("profiles")
     .select("nama")
     .eq("id", user.id)
     .single();
   
+  // Auto-fix: Jika profile tidak ditemukan, coba buatkan
+  if (profFetchError?.code === 'PGRST116' || !profile) {
+    console.log("Repairing missing profile in createSignature for:", user.id);
+    const { data: newProfile, error: repairError } = await supabase
+      .from("profiles")
+      .insert({
+        id: user.id,
+        nama: user.user_metadata?.nama || user.email?.split('@')[0] || "User",
+        email: user.email!,
+        is_active: true
+      })
+      .select("nama")
+      .single();
+    
+    if (repairError) return { error: `Gagal memperbaiki profil: ${(repairError as any).message}` };
+    profile = newProfile;
+  }
+
   const printedName = profile?.nama || "Unknown User";
 
   // 4. Hash Password Signature
@@ -123,5 +141,107 @@ export async function toggleSignatureVisibility(id: string, isHidden: boolean) {
 
   if (error) return { error: error.message };
   revalidatePath("/signatures");
+  return { success: true };
+}
+
+/**
+ * Verifikasi Password Signature dengan Lockout Mechanism
+ */
+export async function verifySignaturePassword(signatureId: string, plainPassword: string) {
+  const supabase = await createClient();
+  
+  // 1. Dapatkan user saat ini
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: "Unauthorized" };
+
+  // 2. Ambil Signature dan Profile User (termasuk status aktif & failed attempts)
+  const { data: signatureData, error: sigError } = await supabase
+    .from("user_signatures")
+    .select("password_hash")
+    .eq("id", signatureId)
+    .eq("user_id", user.id)
+    .single();
+
+  if (sigError || !signatureData) return { success: false, error: "Tanda tangan tidak ditemukan" };
+
+  const { data: profile, error: profError } = await supabase
+    .from("profiles")
+    .select("is_active, signature_failed_attempts")
+    .eq("id", user.id)
+    .single();
+
+  if (profError || !profile) {
+    console.error("Profile security check error:", profError);
+    
+    // Auto-fix: Jika profile tidak ditemukan (PGRST116), coba buatkan profile dasar
+    if (profError?.code === 'PGRST116' || !profile) {
+      console.log("Attempting to auto-create missing profile for user:", user.id);
+      const { data: newProfile, error: createError } = await supabase
+        .from("profiles")
+        .insert({
+          id: user.id,
+          nama: user.user_metadata?.nama || user.email?.split('@')[0] || "User",
+          email: user.email!,
+          is_active: true,
+          signature_failed_attempts: 0
+        })
+        .select()
+        .single();
+      
+      if (createError) {
+        return { success: false, error: `Gagal membuat profil otomatis: ${createError.message}` };
+      }
+      
+      return verifySignaturePassword(signatureId, plainPassword); // Pecobaan ulang setelah repair
+    }
+
+    return { success: false, error: `Gagal memuat profil keamanan: ${(profError as any)?.message || 'Unknown Error'}` };
+  }
+
+  // 3. Cek apakah akun sudah nonaktif
+  if (!profile.is_active) {
+    return { 
+      success: false, 
+      error: "AKUN NONAKTIF: Akun Anda telah terkunci karena terlalu banyak percobaan salah. Silakan hubungi Administrator." 
+    };
+  }
+
+  // 4. Verifikasi Password
+  const isMatch = await bcrypt.compare(plainPassword, signatureData.password_hash);
+
+  if (!isMatch) {
+    const newAttempts = (profile.signature_failed_attempts || 0) + 1;
+    const isLockout = newAttempts >= 5;
+
+    // Update failed attempts & potentially deactivate
+    await supabase
+      .from("profiles")
+      .update({ 
+        signature_failed_attempts: newAttempts,
+        is_active: !isLockout
+      })
+      .eq("id", user.id);
+
+    if (isLockout) {
+      return { 
+        success: false, 
+        error: "ACCOUNT LOCKED: Anda telah salah memasukkan password sebanyak 5 kali. Akun Anda telah dinonaktifkan." 
+      };
+    }
+
+    return { 
+      success: false, 
+      error: `Password salah. Sisa percobaan: ${5 - newAttempts} kali lagi.` 
+    };
+  }
+
+  // 5. Success: Reset failed attempts
+  if (profile.signature_failed_attempts > 0) {
+    await supabase
+      .from("profiles")
+      .update({ signature_failed_attempts: 0 })
+      .eq("id", user.id);
+  }
+
   return { success: true };
 }
