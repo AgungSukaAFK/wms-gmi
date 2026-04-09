@@ -1,5 +1,7 @@
 // src/type/index.ts
 
+export type ApprovalLevel = "menyetujui" | "mengetahui";
+
 export interface Approval {
   type: string;
   status: "pending" | "approved" | "rejected";
@@ -9,7 +11,49 @@ export interface Approval {
   role: string;
   department: string;
   processed_at?: string | null;
+  level?: ApprovalLevel;
+  notes?: string | null;
+  snapshot?: {
+    nama: string;
+    email: string;
+    role: string;
+    lokasi: string;
+  } | null;
 }
+
+export type ApprovalType =
+  | "Material Request"
+  | "Purchase Request"
+  | "Purchase Order"
+  | "Item Transfer";
+
+export interface ApprovalTemplate {
+  id: number;
+  name: string;
+  type: ApprovalType;
+  cabang_id: number;
+  created_at: string;
+  updated_at: string;
+  cabang?: {
+    nama_cabang: string;
+  };
+}
+
+export interface ApprovalTemplateStep {
+  id: number;
+  template_id: number;
+  step_order: number;
+  approver_type: "user" | "requester";
+  user_id: string | null;
+  level: ApprovalLevel;
+  created_at: string;
+  updated_at: string;
+  profiles?: {
+    nama: string;
+    email: string;
+  } | null;
+}
+
 
 // REVISI: Tambahkan field untuk integrasi Master Barang
 export interface Order {
