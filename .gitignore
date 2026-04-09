@@ -42,3 +42,7 @@ next-env.d.ts
 supabase/import/*.csv
 supabase/import/*.sql
 supabase/import/*.xlsx
+
+# temporary and backup folders
+/temp_ga_web/
+/.issue_bodies/

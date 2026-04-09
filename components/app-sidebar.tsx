@@ -55,6 +55,11 @@ const data = {
       url: "/users",
       icon: Users,
     },
+    {
+      title: "Role & Permission",
+      url: "/role-management",
+      icon: CheckCheck,
+    },
   ],
   navMain: [
     {
@@ -113,16 +118,33 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       }
       if (data.user) {
         setUser(data.user);
-        const profileRes = await supabase
+        
+        // Fetch profile with roles using the new RBAC structure
+        const { data: profileWithRoles } = await supabase
           .from("profiles")
-          .select("*")
+          .select(`
+            *,
+            roles:user_roles(
+              roles(id, name, label, color)
+            )
+          `)
           .eq("id", data.user.id)
           .single();
-        if (profileRes.data) setProfile(profileRes.data);
+
+        if (profileWithRoles) {
+          // Transform the nested join into a flat roles array
+          const flattenedProfile = {
+            ...profileWithRoles,
+            roles: (profileWithRoles.roles as any[]).map(r => r.roles)
+          };
+          setProfile(flattenedProfile);
+        }
       }
     };
     getUser();
   }, [supabase]);
+
+  const isModerator = profile?.roles?.some((r: any) => r.name === "moderator");
 
   const markActive = React.useCallback(
     (items: any[]) =>
@@ -150,7 +172,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
 
       <SidebarContent>
-        {profile?.role === "admin" && (
+        {isModerator && (
           <NavMain label="Admin" items={markActive(data.navAdmin)} />
         )}
         <NavMain items={markActive(data.navMain)} />

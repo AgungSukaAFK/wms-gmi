@@ -24,25 +24,52 @@ export async function toggleUserStatus(userId: string, currentStatus: boolean) {
 }
 
 /**
- * Update user's role and cabang_id
+ * Update user's roles and cabang_id (Multiple roles support)
  */
 export async function updateUserDetail(
   userId: string,
-  data: { role: string; cabang_id: number }
+  data: { roleIds: number[]; cabang_id: number }
 ) {
   const supabase = await createClient();
 
-  const { error } = await supabase
+  // 1. Update cabang_id di profiles
+  const { error: profileError } = await supabase
     .from("profiles")
     .update({ 
-      role: data.role as any, // Cast to any to handle custom enum type
       cabang_id: data.cabang_id 
     })
     .eq("id", userId);
 
-  if (error) {
-    console.error("Error updating user detail:", error);
-    return { error: error.message };
+  if (profileError) {
+    console.error("Error updating profile cabang:", profileError);
+    return { error: profileError.message };
+  }
+
+  // 2. Update roles via user_roles (Hapus lama, insert baru)
+  const { error: deleteError } = await supabase
+    .from("user_roles")
+    .delete()
+    .eq("user_id", userId);
+
+  if (deleteError) {
+    console.error("Error deleting old roles:", deleteError);
+    return { error: deleteError.message };
+  }
+
+  if (data.roleIds.length > 0) {
+    const inserts = data.roleIds.map((roleId) => ({
+      user_id: userId,
+      role_id: roleId,
+    }));
+
+    const { error: insertError } = await supabase
+      .from("user_roles")
+      .insert(inserts);
+
+    if (insertError) {
+      console.error("Error inserting new roles:", insertError);
+      return { error: insertError.message };
+    }
   }
 
   revalidatePath("/users");

@@ -17,11 +17,16 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { createClient } from "@/lib/supabase/client";
-import { redirect, usePathname } from "next/navigation";
-import { Fragment, ReactNode, useEffect } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { Fragment, ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { DailyResetGuard } from "@/components/daily-reset-guard";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
+  const [userId, setUserId] = useState<string | null>(null);
+  const pathname = usePathname();
+  const router = useRouter();
+
   function urlToBreadcrumb(pathname: string) {
     const parts = pathname.split("/").filter(Boolean);
 
@@ -59,20 +64,27 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
+      
       if (!user) {
-        redirect("/auth/login");
+        // Gunakan router.push untuk navigasi client-side di dalam useEffect
+        router.push("/auth/login");
+        return;
       }
+
+      setUserId(user.id);
+
       const profileRes = await supabase
         .from("profiles")
         .select("*")
         .eq("id", user.id)
         .single();
-      if (!profileRes.data.nama) {
+
+      if (profileRes.data && !profileRes.data.nama) {
         toast.warning("Anda belum melengkapi informasi akun.", {
           action: {
             label: "Lengkapi Profil",
             onClick: () => {
-              redirect("/profile");
+              router.push("/profile");
             },
           },
         });
@@ -80,13 +92,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }
 
     fetch();
-  }, []);
+  }, [router]);
 
   return (
     <>
       <Toaster richColors position="top-right" />
       <SidebarProvider>
-        {/* Pastikan AppSidebar menerima prop user dengan tipe yang sesuai */}
         <AppSidebar className="shadow-lg" />
         <SidebarInset>
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
@@ -99,20 +110,26 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               <Breadcrumb>
                 <BreadcrumbList>
                   <BreadcrumbItem className="hidden md:block">
-                    <BreadcrumbLink href="/dashboard">
-                      WMS-GMI
-                    </BreadcrumbLink>
+                    <BreadcrumbLink href="/dashboard">WMS-GMI</BreadcrumbLink>
                   </BreadcrumbItem>
                   <BreadcrumbSeparator className="hidden md:block" />
-                  {urlToBreadcrumb(usePathname())}
+                  {urlToBreadcrumb(pathname)}
                 </BreadcrumbList>
               </Breadcrumb>
             </div>
           </header>
           <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
-            <div className="grid grid-cols-12 items-start gap-4 md:gap-6 auto-rows-auto">
-              {children}
-            </div>
+            {userId ? (
+              <DailyResetGuard userId={userId}>
+                <div className="grid grid-cols-12 items-start gap-4 md:gap-6 auto-rows-auto">
+                  {children}
+                </div>
+              </DailyResetGuard>
+            ) : (
+              <div className="grid grid-cols-12 items-start gap-4 md:gap-6 auto-rows-auto">
+                {children}
+              </div>
+            )}
           </div>
         </SidebarInset>
       </SidebarProvider>
