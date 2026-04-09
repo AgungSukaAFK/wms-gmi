@@ -26,6 +26,7 @@ import {
   MessageSquareShare,
   Info,
   CheckCheck,
+  CheckCircle2,
   FileSearch2,
   PackageSearch,
   BadgeDollarSign,
@@ -60,6 +61,11 @@ const data = {
       title: "Role & Permission",
       url: "/role-management",
       icon: CheckCheck,
+    },
+    {
+      title: "Approval Templates",
+      url: "/approval-templates",
+      icon: CheckCircle2,
     },
   ],
   navMain: [
@@ -151,6 +157,12 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   }, [supabase]);
 
   const isModerator = profile?.roles?.some((r: any) => r.name === "moderator");
+  const isAdmin = profile?.roles?.some((r: any) => r.name === "admin");
+
+  const adminItems = data.navAdmin.filter((item) => {
+    if (item.url === "/approval-templates") return isModerator || isAdmin;
+    return isModerator;
+  });
 
   const markActive = React.useCallback(
     (items: any[]) =>
@@ -178,8 +190,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
 
       <SidebarContent>
-        {isModerator && (
-          <NavMain label="Admin" items={markActive(data.navAdmin)} />
+        {adminItems.length > 0 && (
+          <NavMain label="Admin" items={markActive(adminItems)} />
         )}
         <NavMain items={markActive(data.navMain)} />
         <NavMain label="Data Master" items={markActive(data.navMaster)} />
