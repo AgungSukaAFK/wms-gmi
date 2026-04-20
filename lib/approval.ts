@@ -12,7 +12,7 @@ import { Approval, ApprovalType, Profile } from "@/type";
 export async function getApprovalFlow(
   type: ApprovalType,
   cabang_id: number,
-  requesterId: string
+  requesterId: string,
 ): Promise<Approval[]> {
   const supabase = createClient();
 
@@ -40,7 +40,7 @@ export async function getApprovalFlow(
 
   // 3. Get requester profile if needed
   let requesterProfile: any = null;
-  if (steps.some(s => s.approver_type === 'requester')) {
+  if (steps.some((step: any) => step.approver_type === "requester")) {
     const { data } = await supabase
       .from("profiles")
       .select("*")
@@ -50,12 +50,15 @@ export async function getApprovalFlow(
   }
 
   // 4. Map steps to Approval objects
-  return steps.map(step => {
+  return steps.map((step: any) => {
     const isRequester = step.approver_type === "requester";
     const profile = isRequester ? requesterProfile : step.profiles;
 
     return {
-      type: step.approver_type === "requester" ? "Requester" : (profile?.roles?.[0]?.label || "Approver"),
+      type:
+        step.approver_type === "requester"
+          ? "Requester"
+          : profile?.roles?.[0]?.label || "Approver",
       status: "pending",
       userid: profile?.id || "",
       nama: profile?.nama || "Unknown",
@@ -65,7 +68,7 @@ export async function getApprovalFlow(
       level: step.level,
       processed_at: null,
       notes: null,
-      snapshot: null
+      snapshot: null,
     };
   });
 }
@@ -77,11 +80,11 @@ export async function processApprovalStep(
   approvals: Approval[],
   userProfile: any,
   action: "approved" | "rejected",
-  notes?: string
+  notes?: string,
 ): Promise<Approval[]> {
   // Find the current step for this user
   const stepIndex = approvals.findIndex(
-    a => a.userid === userProfile.id && a.status === "pending"
+    (a) => a.userid === userProfile.id && a.status === "pending",
   );
 
   if (stepIndex === -1) return approvals;
@@ -103,8 +106,8 @@ export async function processApprovalStep(
       nama: userProfile.nama,
       email: userProfile.email,
       role: userProfile.roles?.[0]?.name || "N/A",
-      lokasi: userProfile.cabang?.nama_cabang || "N/A"
-    }
+      lokasi: userProfile.cabang?.nama_cabang || "N/A",
+    },
   };
 
   return newApprovals;

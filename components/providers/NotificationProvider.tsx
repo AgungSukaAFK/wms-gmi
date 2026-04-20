@@ -5,6 +5,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Notification } from "@/type";
+import type { RealtimePostgresInsertPayload } from "@supabase/supabase-js";
 
 type NotificationContextType = {
   unreadCount: number;
@@ -15,7 +16,7 @@ type NotificationContextType = {
 };
 
 const NotificationContext = createContext<NotificationContextType | undefined>(
-  undefined
+  undefined,
 );
 
 export function NotificationProvider({
@@ -41,7 +42,7 @@ export function NotificationProvider({
         `
         *,
         actor:profiles!actor_id (name, avatar_url)
-      `
+      `,
       )
       .eq("user_id", user.id)
       .order("created_at", { ascending: false })
@@ -63,14 +64,16 @@ export function NotificationProvider({
   useEffect(() => {
     fetchNotifications();
 
-    // Setup Realtime Subscription
+    let isMounted = true;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+
     const setupRealtime = async () => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (!user) return;
+      if (!user || !isMounted) return;
 
-      const channel = supabase
+      channel = supabase
         .channel("realtime-notifications")
         .on(
           "postgres_changes",
@@ -80,9 +83,9 @@ export function NotificationProvider({
             table: "notifications",
             filter: `user_id=eq.${user.id}`, // Filter hanya untuk user ini
           },
-          (payload) => {
+          (payload: RealtimePostgresInsertPayload<Notification>) => {
             // Saat ada notifikasi baru
-            const newNotif = payload.new as Notification;
+            const newNotif = payload.new;
 
             // Tambahkan ke state
             setNotifications((prev) => [newNotif, ...prev]);
@@ -96,22 +99,25 @@ export function NotificationProvider({
                 onClick: () => router.push(newNotif.link),
               },
             });
-          }
+          },
         )
         .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
     };
 
     setupRealtime();
+
+    return () => {
+      isMounted = false;
+      if (channel) {
+        supabase.removeChannel(channel);
+      }
+    };
   }, [router]);
 
   const markAsRead = async (id: string) => {
     // Optimistic Update
     setNotifications((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n))
+      prev.map((n) => (n.id === id ? { ...n, is_read: true } : n)),
     );
     setUnreadCount((prev) => Math.max(0, prev - 1));
 
@@ -151,7 +157,7 @@ export const useNotification = () => {
   const context = useContext(NotificationContext);
   if (context === undefined) {
     throw new Error(
-      "useNotification must be used within a NotificationProvider"
+      "useNotification must be used within a NotificationProvider",
     );
   }
   return context;

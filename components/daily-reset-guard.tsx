@@ -30,10 +30,11 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
         return;
       }
 
-      // 2. Jika store kosong (misal hard refresh), fetch ulang data dari DB
-      if (!profile && userId) {
+      // 2. Jika store kosong ATAU user berganti akun, fetch ulang data dari DB
+      const shouldReinitialize = !profile || profile.id !== userId;
+      if (shouldReinitialize && userId) {
         console.log("Re-initializing session store...");
-        
+
         const { data: profileData } = await supabase
           .from("profiles")
           .select("*, cabang(id, nama_cabang, kode_cabang)")
@@ -53,11 +54,11 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
               ...profileData,
               roles: rolesData?.map((r: any) => r.roles).filter(Boolean) ?? [],
             },
-            permissions
+            permissions,
           );
         }
       }
-      
+
       setIsInitializing(false);
     };
 
@@ -69,7 +70,9 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
       <div className="flex h-screen w-full items-center justify-center bg-background">
         <div className="flex flex-col items-center gap-2">
           <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-sm text-muted-foreground animate-pulse">Menyiapkan sesi...</p>
+          <p className="text-sm text-muted-foreground animate-pulse">
+            Menyiapkan sesi...
+          </p>
         </div>
       </div>
     );

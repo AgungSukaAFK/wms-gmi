@@ -8,7 +8,9 @@ export default async function UsersPage() {
   const supabase = await createClient();
 
   // Proteksi: Hanya Moderator yang boleh masuk ke sini
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) {
     redirect("/auth/login");
   }
@@ -17,16 +19,21 @@ export default async function UsersPage() {
     .from("user_roles")
     .select("roles(name)")
     .eq("user_id", user.id);
-  
+
   const isModerator = userRoles?.some((r: any) => r.roles.name === "moderator");
-  
+
   if (!isModerator) {
     return (
       <Content>
-        <div className="flex h-[400px] items-center justify-center border-2 border-dashed rounded-xl">
+        <div className="flex h-100 items-center justify-center border-2 border-dashed rounded-xl">
           <div className="text-center">
-            <h2 className="text-xl font-bold text-destructive">Akses Ditolak</h2>
-            <p className="text-muted-foreground">Hanya Moderator (Superuser) yang memiliki izin untuk mengelola pengguna.</p>
+            <h2 className="text-xl font-bold text-destructive">
+              Akses Ditolak
+            </h2>
+            <p className="text-muted-foreground">
+              Hanya Moderator (Superuser) yang memiliki izin untuk mengelola
+              pengguna.
+            </p>
           </div>
         </div>
       </Content>
@@ -65,21 +72,12 @@ export default async function UsersPage() {
   }));
 
   return (
-    <Content>
-      <div className="flex flex-col space-y-6">
-        <div className="flex flex-col space-y-2">
-          <h1 className="text-3xl font-bold tracking-tight">User Management</h1>
-          <p className="text-muted-foreground">
-            Kelola data akun pengguna, hak akses (RBAC), dan penempatan cabang.
-          </p>
-        </div>
-        
-        <UserTableClient 
-          users={mappedUsers} 
-          cabangList={cabangList || []} 
-          allRoles={allRoles || []}
-        />
-      </div>
-    </Content>
+    <>
+      <UserTableClient
+        users={mappedUsers}
+        cabangList={cabangList || []}
+        allRoles={allRoles || []}
+      />
+    </>
   );
 }

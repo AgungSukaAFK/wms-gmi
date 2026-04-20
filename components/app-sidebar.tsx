@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/sidebar";
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "./nav-user";
+import { Button } from "@/components/ui/button";
 import {
   GalleryVerticalEnd,
   Bot,
@@ -28,7 +29,6 @@ import {
   CheckCheck,
   CheckCircle2,
   FileSearch2,
-  PackageSearch,
   BadgeDollarSign,
   Briefcase,
   PackagePlus,
@@ -39,7 +39,6 @@ import {
   Archive,
   PackageCheck,
   Truck,
-  Handshake,
   FileText,
   FileSpreadsheet,
   ShoppingCart,
@@ -87,19 +86,23 @@ const data = {
   ],
   navInventory: [
     { title: "Stock", url: "/stock", icon: Archive },
-    { title: "Receive", url: "/receive", icon: PackageCheck },
     { title: "Delivery", url: "/deliveries", icon: Truck },
-    { title: "Peminjaman", url: "/peminjaman", icon: Handshake },
+    { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
+    { title: "Job Costing", url: "/job-costing", icon: Calculator },
   ],
   navProcurement: [
     { title: "Material Request", url: "/mr", icon: FileText },
     { title: "Purchase Request", url: "/pr", icon: FileSpreadsheet },
     { title: "Purchase Order", url: "/po", icon: ShoppingCart },
+    { title: "Receive Item", url: "/receive", icon: PackageCheck },
   ],
-  navFinance: [
+  navStockOut: [
+    { title: "Report SPB", url: "/spb/report", icon: FileBox },
     { title: "SPB", url: "/spb", icon: FileWarning },
+    { title: "Purchase Order", url: "/spb/po", icon: ShoppingCart },
+    { title: "Delivery Order", url: "/spb/do", icon: Truck },
+    { title: "Invoice", url: "/spb/invoice", icon: BadgeDollarSign },
     { title: "Return SPB", url: "/return-spb", icon: Undo2 },
-    { title: "Job Costing", url: "/job-costing", icon: Calculator },
   ],
   navSecondary: [
     {
@@ -121,6 +124,47 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   const [user, setUser] = React.useState<any>(null);
   const [profile, setProfile] = React.useState<any>(null);
+  type CollapsedGroups = {
+    admin: boolean;
+    main: boolean;
+    master: boolean;
+    inventory: boolean;
+    procurement: boolean;
+    stockOut: boolean;
+    help: boolean;
+  };
+
+  // Default: all expanded (false)
+  const defaultCollapsedGroups: CollapsedGroups = {
+    admin: false,
+    main: false,
+    master: false,
+    inventory: false,
+    procurement: false,
+    stockOut: false,
+    help: false,
+  };
+  const [collapsedGroups, setCollapsedGroups] = React.useState<CollapsedGroups>(
+    () => {
+      if (typeof window !== "undefined") {
+        const saved = window.localStorage.getItem("sidebarCollapsedGroups");
+        if (saved) {
+          try {
+            return { ...defaultCollapsedGroups, ...JSON.parse(saved) };
+          } catch {
+            // ignore parse error
+          }
+        }
+      }
+      return defaultCollapsedGroups;
+    },
+  );
+
+  // Determine if all groups are collapsed
+  const allCollapsed = React.useMemo(
+    () => Object.values(collapsedGroups).every(Boolean),
+    [collapsedGroups],
+  );
 
   React.useEffect(() => {
     const getUser = async () => {
@@ -130,16 +174,18 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       }
       if (data.user) {
         setUser(data.user);
-        
+
         // Fetch profile with roles using the new RBAC structure
         const { data: profileWithRoles } = await supabase
           .from("profiles")
-          .select(`
+          .select(
+            `
             *,
             roles:user_roles(
               roles(id, name, label, color)
             )
-          `)
+          `,
+          )
           .eq("id", data.user.id)
           .single();
 
@@ -147,7 +193,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           // Transform the nested join into a flat roles array
           const flattenedProfile = {
             ...profileWithRoles,
-            roles: (profileWithRoles.roles as any[]).map(r => r.roles)
+            roles: (profileWithRoles.roles as any[]).map((r) => r.roles),
           };
           setProfile(flattenedProfile);
         }
@@ -165,15 +211,77 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   });
 
   const markActive = React.useCallback(
-    (items: any[]) =>
-      items.map((item) => ({
+    (items: any[]) => {
+      const matchingUrls = items
+        .map((item) => item.url as string)
+        .filter(
+          (url) =>
+            currentPath === url ||
+            (url !== "/dashboard" && currentPath.startsWith(`${url}/`)),
+        );
+
+      const activeUrl =
+        matchingUrls.sort((a, b) => b.length - a.length)[0] || null;
+
+      return items.map((item) => ({
         ...item,
-        isActive:
-          currentPath === item.url ||
-          (item.url !== "/dashboard" && currentPath.startsWith(item.url)),
-      })),
+        isActive: item.url === activeUrl,
+      }));
+    },
     [currentPath],
   );
+
+  const toggleGroup = React.useCallback((key: keyof typeof collapsedGroups) => {
+    setCollapsedGroups((prev) => {
+      const updated = { ...prev, [key]: !prev[key] };
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          "sidebarCollapsedGroups",
+          JSON.stringify(updated),
+        );
+      }
+      return updated;
+    });
+  }, []);
+
+  const collapseAll = React.useCallback(() => {
+    setCollapsedGroups((prev) => {
+      const updated = Object.fromEntries(
+        Object.keys(prev).map((k) => [k, true]),
+      ) as CollapsedGroups;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          "sidebarCollapsedGroups",
+          JSON.stringify(updated),
+        );
+      }
+      return updated;
+    });
+  }, []);
+
+  const expandAll = React.useCallback(() => {
+    setCollapsedGroups((prev) => {
+      const updated = Object.fromEntries(
+        Object.keys(prev).map((k) => [k, false]),
+      ) as CollapsedGroups;
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(
+          "sidebarCollapsedGroups",
+          JSON.stringify(updated),
+        );
+      }
+      return updated;
+    });
+  }, []);
+  // Sync localStorage if user reloads or navigates
+  React.useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(
+        "sidebarCollapsedGroups",
+        JSON.stringify(collapsedGroups),
+      );
+    }
+  }, [collapsedGroups]);
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -183,22 +291,72 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             W
           </div>
           <div className="flex flex-col gap-0.5 leading-none">
-            <span className="font-semibold text-lg tracking-tight">WMS-GMI</span>
-            <span className="text-xs text-muted-foreground">Internal System</span>
+            <span className="font-semibold text-lg tracking-tight">
+              WMS-GMI
+            </span>
+            <span className="text-xs text-muted-foreground">
+              Internal System
+            </span>
           </div>
         </div>
       </SidebarHeader>
 
       <SidebarContent>
+        <div className="px-2 pb-2 flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-7 text-[10px] font-semibold"
+            onClick={allCollapsed ? expandAll : collapseAll}
+          >
+            {allCollapsed ? "Expand All" : "Collapse All"}
+          </Button>
+        </div>
+
         {adminItems.length > 0 && (
-          <NavMain label="Admin" items={markActive(adminItems)} />
+          <NavMain
+            label="Admin"
+            items={markActive(adminItems)}
+            collapsed={collapsedGroups.admin}
+            onToggle={() => toggleGroup("admin")}
+          />
         )}
-        <NavMain items={markActive(data.navMain)} />
-        <NavMain label="Data Master" items={markActive(data.navMaster)} />
-        <NavMain label="Inventory" items={markActive(data.navInventory)} />
-        <NavMain label="Procurement" items={markActive(data.navProcurement)} />
-        <NavMain label="Finance" items={markActive(data.navFinance)} />
-        <NavMain label="Bantuan" items={markActive(data.navSecondary)} />
+        <NavMain
+          items={markActive(data.navMain)}
+          collapsed={collapsedGroups.main}
+          onToggle={() => toggleGroup("main")}
+        />
+        <NavMain
+          label="Data Master"
+          items={markActive(data.navMaster)}
+          collapsed={collapsedGroups.master}
+          onToggle={() => toggleGroup("master")}
+        />
+        <NavMain
+          label="Inventory"
+          items={markActive(data.navInventory)}
+          collapsed={collapsedGroups.inventory}
+          onToggle={() => toggleGroup("inventory")}
+        />
+        <NavMain
+          label="Procurement"
+          items={markActive(data.navProcurement)}
+          collapsed={collapsedGroups.procurement}
+          onToggle={() => toggleGroup("procurement")}
+        />
+        <NavMain
+          label="Stock Out"
+          items={markActive(data.navStockOut)}
+          collapsed={collapsedGroups.stockOut}
+          onToggle={() => toggleGroup("stockOut")}
+        />
+        <NavMain
+          label="Bantuan"
+          items={markActive(data.navSecondary)}
+          collapsed={collapsedGroups.help}
+          onToggle={() => toggleGroup("help")}
+        />
       </SidebarContent>
 
       <SidebarFooter>

@@ -55,7 +55,12 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { createClient } from "@/lib/supabase/client";
-import { ApprovalTemplate, ApprovalTemplateStep, ApprovalType, ApprovalLevel } from "@/type";
+import {
+  ApprovalTemplate,
+  ApprovalTemplateStep,
+  ApprovalType,
+  ApprovalLevel,
+} from "@/type";
 import { toast } from "sonner";
 
 interface TemplateEditorProps {
@@ -96,7 +101,11 @@ export function TemplateEditor({
       } else {
         setName("");
         setType("Material Request");
-        setCabangId(userProfile?.isAdmin && !userProfile?.isModerator ? userProfile.cabang_id.toString() : "all");
+        setCabangId(
+          userProfile?.isAdmin && !userProfile?.isModerator
+            ? userProfile.cabang_id.toString()
+            : "all",
+        );
         setSteps([]);
       }
     }
@@ -121,13 +130,15 @@ export function TemplateEditor({
     setSearching(true);
     let query = supabase
       .from("profiles")
-      .select(`
+      .select(
+        `
         id, 
         nama, 
         email,
         cabang:cabang_id(nama_cabang),
         roles:user_roles(roles(label))
-      `)
+      `,
+      )
       .order("nama")
       .limit(10);
 
@@ -162,7 +173,10 @@ export function TemplateEditor({
     setSteps(updatedSteps);
   };
 
-  const updateStep = (index: number, updates: Partial<ApprovalTemplateStep>) => {
+  const updateStep = (
+    index: number,
+    updates: Partial<ApprovalTemplateStep>,
+  ) => {
     const newSteps = [...steps];
     newSteps[index] = { ...newSteps[index], ...updates };
     setSteps(newSteps);
@@ -174,7 +188,10 @@ export function TemplateEditor({
 
     const newSteps = [...steps];
     const targetIndex = direction === "up" ? index - 1 : index + 1;
-    [newSteps[index], newSteps[targetIndex]] = [newSteps[targetIndex], newSteps[index]];
+    [newSteps[index], newSteps[targetIndex]] = [
+      newSteps[targetIndex],
+      newSteps[index],
+    ];
 
     const updatedSteps = newSteps.map((step, i) => ({
       ...step,
@@ -199,7 +216,9 @@ export function TemplateEditor({
       return;
     }
 
-    const invalidStep = steps.find(s => s.approver_type === 'user' && !s.user_id);
+    const invalidStep = steps.find(
+      (s) => s.approver_type === "user" && !s.user_id,
+    );
     if (invalidStep) {
       toast.error("Ada tahap approval yang belum memilih user");
       return;
@@ -245,7 +264,9 @@ export function TemplateEditor({
 
       if (sError) throw sError;
 
-      toast.success(template ? "Template berhasil diperbarui" : "Template berhasil dibuat");
+      toast.success(
+        template ? "Template berhasil diperbarui" : "Template berhasil dibuat",
+      );
       onSuccess();
       onOpenChange(false);
     } catch (error: any) {
@@ -260,12 +281,18 @@ export function TemplateEditor({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl h-[90vh] max-h-[90vh] flex flex-col p-0 overflow-hidden">
         <DialogHeader className="p-6 pb-0 shrink-0">
-          <DialogTitle>{template ? "Edit Approval Template" : "Tambah Approval Template Baru"}</DialogTitle>
+          <DialogTitle>
+            {template
+              ? "Edit Approval Template"
+              : "Tambah Approval Template Baru"}
+          </DialogTitle>
         </DialogHeader>
 
         <div className="p-6 space-y-4 flex-1 overflow-hidden flex flex-col">
           <div className="space-y-2 shrink-0">
-            <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">Nama Template</Label>
+            <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+              Nama Template
+            </Label>
             <Input
               placeholder="Contoh: Approval MR - Urgent"
               value={name}
@@ -276,7 +303,9 @@ export function TemplateEditor({
 
           <div className="grid grid-cols-2 gap-4 shrink-0">
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">Lokasi</Label>
+              <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+                Lokasi
+              </Label>
               <Select
                 value={cabangId}
                 onValueChange={setCabangId}
@@ -300,14 +329,20 @@ export function TemplateEditor({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">Jenis Dokumen</Label>
+              <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+                Jenis Dokumen
+              </Label>
               <Select value={type} onValueChange={(val: any) => setType(val)}>
                 <SelectTrigger className="h-10 text-[13px]">
                   <SelectValue placeholder="Pilih Jenis" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="Material Request">Material Request</SelectItem>
-                  <SelectItem value="Purchase Request">Purchase Request</SelectItem>
+                  <SelectItem value="Material Request">
+                    Material Request
+                  </SelectItem>
+                  <SelectItem value="Purchase Request">
+                    Purchase Request
+                  </SelectItem>
                   <SelectItem value="Purchase Order">Purchase Order</SelectItem>
                   <SelectItem value="Item Transfer">Item Transfer</SelectItem>
                 </SelectContent>
@@ -323,10 +358,20 @@ export function TemplateEditor({
                 <Settings2 className="h-4 w-4 text-blue-500" /> Tahap Approval
               </h3>
               <div className="flex gap-2">
-                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs font-bold" onClick={() => addStep("requester")}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs font-bold"
+                  onClick={() => addStep("requester")}
+                >
                   <UserPlus className="h-3.5 w-3.5" /> Tambah Requester
                 </Button>
-                <Button size="sm" variant="outline" className="h-8 gap-1.5 text-xs font-bold" onClick={() => addStep("user")}>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 gap-1.5 text-xs font-bold"
+                  onClick={() => addStep("user")}
+                >
                   <Plus className="h-3.5 w-3.5" /> Tambah User
                 </Button>
               </div>
@@ -334,26 +379,46 @@ export function TemplateEditor({
 
             <div className="flex-1 min-h-0 border rounded-xl bg-slate-100/30 flex flex-col overflow-hidden shadow-inner">
               <div className="flex items-center gap-3 pl-[58px] pr-12 pt-3 pb-2 shrink-0 border-b bg-white/50 backdrop-blur-sm">
-                <div className="flex-1 text-[10px] uppercase font-extrabold text-slate-400 tracking-widest px-1">Penyetuju</div>
-                <div className="w-[120px] text-[10px] uppercase font-extrabold text-slate-400 pl-2 tracking-widest">Level</div>
+                <div className="flex-1 text-[10px] uppercase font-extrabold text-slate-400 tracking-widest px-1">
+                  Penyetuju
+                </div>
+                <div className="w-[120px] text-[10px] uppercase font-extrabold text-slate-400 pl-2 tracking-widest">
+                  Level
+                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
                 {steps.length === 0 ? (
                   <div className="text-center py-16 border-2 border-dashed rounded-lg text-muted-foreground text-sm bg-white mx-1 my-1">
-                    Belum ada tahap approval. <br/> Klik "Tambah" di atas untuk memulai.
+                    Belum ada tahap approval. <br /> Klik "Tambah" di atas untuk
+                    memulai.
                   </div>
                 ) : (
                   steps.map((step, index) => (
-                    <div key={index} className="flex gap-3 items-center bg-white p-2 rounded-lg border border-slate-200 group shadow-sm transition-all hover:border-blue-200">
+                    <div
+                      key={index}
+                      className="flex gap-3 items-center bg-white p-2 rounded-lg border border-slate-200 group shadow-sm transition-all hover:border-blue-200"
+                    >
                       <div className="flex flex-col items-center min-w-[32px] shrink-0">
-                        <Button variant="ghost" size="icon" className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors" onClick={() => moveStep(index, "up")} disabled={index === 0}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
+                          onClick={() => moveStep(index, "up")}
+                          disabled={index === 0}
+                        >
                           <ChevronUp className="h-3 w-3" />
                         </Button>
                         <span className="text-[11px] font-black text-slate-500 my-0.5">
                           {index + 1}
                         </span>
-                        <Button variant="ghost" size="icon" className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors" onClick={() => moveStep(index, "down")} disabled={index === steps.length - 1}>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
+                          onClick={() => moveStep(index, "down")}
+                          disabled={index === steps.length - 1}
+                        >
                           <ChevronDown className="h-3 w-3" />
                         </Button>
                       </div>
@@ -362,7 +427,8 @@ export function TemplateEditor({
                         <div className="flex-1 min-w-0">
                           {step.approver_type === "requester" ? (
                             <div className="h-9 px-3 w-full flex items-center bg-blue-50/50 border border-blue-200 rounded-md text-[12px] font-bold text-blue-700 whitespace-nowrap">
-                              <Bot className="h-4 w-4 mr-2 shrink-0 text-blue-500" /> Requester
+                              <Bot className="h-4 w-4 mr-2 shrink-0 text-blue-500" />{" "}
+                              Requester
                             </div>
                           ) : (
                             <Popover>
@@ -373,31 +439,45 @@ export function TemplateEditor({
                                   className="w-full h-9 justify-between bg-white text-[12px] border-slate-200 px-3 hover:bg-slate-50 transition-colors rounded-md font-bold text-slate-700"
                                 >
                                   <span className="truncate flex-1 text-left">
-                                    {step.user_id 
-                                      ? profiles.find((p) => p.id === step.user_id)?.nama || "User terpilih"
+                                    {step.user_id
+                                      ? profiles.find(
+                                          (p) => p.id === step.user_id,
+                                        )?.nama || "User terpilih"
                                       : "Pilih User..."}
                                   </span>
                                   <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-40" />
                                 </Button>
                               </PopoverTrigger>
-                              <PopoverContent className="w-[320px] p-0 shadow-xl border-slate-200 rounded-lg overflow-hidden" align="start" onOpenAutoFocus={(e) => e.preventDefault()}>
+                              <PopoverContent
+                                className="w-[calc(100vw-2rem)] max-w-[320px] p-0 shadow-xl border-slate-200 rounded-lg overflow-hidden"
+                                align="start"
+                                onOpenAutoFocus={(e) => e.preventDefault()}
+                              >
                                 <div className="flex items-center border-b px-3 bg-slate-50">
                                   <Search className="mr-2 h-4 w-4 shrink-0 opacity-40" />
                                   <input
                                     className="flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
                                     placeholder="Cari user (nama/email)..."
                                     value={profileSearchValue}
-                                    onChange={(e) => setProfileSearchValue(e.currentTarget.value)}
+                                    onChange={(e) =>
+                                      setProfileSearchValue(
+                                        e.currentTarget.value,
+                                      )
+                                    }
                                     autoFocus
                                   />
-                                  {searching && <Loader2 className="h-4 w-4 animate-spin opacity-40 ml-2" />}
+                                  {searching && (
+                                    <Loader2 className="h-4 w-4 animate-spin opacity-40 ml-2" />
+                                  )}
                                 </div>
-                                
+
                                 <div className="max-h-[250px] overflow-y-auto p-1 space-y-0.5 custom-scrollbar bg-white">
                                   {profiles.length === 0 && !searching && (
-                                    <div className="py-12 text-center text-[12px] text-slate-500 font-medium">User tidak ditemukan.</div>
+                                    <div className="py-12 text-center text-[12px] text-slate-500 font-medium">
+                                      User tidak ditemukan.
+                                    </div>
                                   )}
-                                  
+
                                   {profiles.map((p) => (
                                     <div
                                       key={p.id}
@@ -406,28 +486,44 @@ export function TemplateEditor({
                                       }}
                                       className={cn(
                                         "flex flex-col items-start gap-1 px-3 py-2 cursor-pointer transition-all rounded-md border border-transparent mb-0.5 last:mb-0",
-                                        step.user_id === p.id ? "bg-blue-50 border-blue-100" : "hover:bg-slate-50 hover:border-slate-100"
+                                        step.user_id === p.id
+                                          ? "bg-blue-50 border-blue-100"
+                                          : "hover:bg-slate-50 hover:border-slate-100",
                                       )}
                                     >
                                       <div className="flex items-center justify-between w-full gap-2">
-                                        <span className="font-bold text-[13px] text-slate-800 tracking-tight truncate">{p.nama}</span>
+                                        <span className="font-bold text-[13px] text-slate-800 tracking-tight truncate">
+                                          {p.nama}
+                                        </span>
                                         <div className="flex gap-1 shrink-0">
-                                          {(p.roles as any[])?.map((r: any, i: number) => (
-                                            <Badge key={i} variant="secondary" className="text-[8px] px-1.5 py-0 h-3.5 bg-blue-100/50 text-blue-600 border-0 font-bold uppercase tracking-tighter">
-                                              {r.roles.label}
-                                            </Badge>
-                                          ))}
+                                          {(p.roles as any[])?.map(
+                                            (r: any, i: number) => (
+                                              <Badge
+                                                key={i}
+                                                variant="secondary"
+                                                className="text-[8px] px-1.5 py-0 h-3.5 bg-blue-100/50 text-blue-600 border-0 font-bold uppercase tracking-tighter"
+                                              >
+                                                {r.roles.label}
+                                              </Badge>
+                                            ),
+                                          )}
                                         </div>
-                                        {step.user_id === p.id && <Check className="h-3.5 w-3.5 text-blue-600 shrink-0 stroke-[3px]" />}
+                                        {step.user_id === p.id && (
+                                          <Check className="h-3.5 w-3.5 text-blue-600 shrink-0 stroke-[3px]" />
+                                        )}
                                       </div>
-                                      
+
                                       <div className="flex items-center gap-2 text-[10px] text-slate-400 w-full overflow-hidden font-medium">
-                                        <span className="truncate max-w-[150px]">{p.email}</span>
+                                        <span className="truncate max-w-[150px]">
+                                          {p.email}
+                                        </span>
                                         <span className="opacity-30">•</span>
                                         {p.cabang && (
                                           <div className="flex items-center truncate">
                                             <Building2 className="w-2.5 h-2.5 mr-1 opacity-50 text-slate-400" />
-                                            <span className="truncate">{p.cabang.nama_cabang}</span>
+                                            <span className="truncate">
+                                              {p.cabang.nama_cabang}
+                                            </span>
                                           </div>
                                         )}
                                       </div>
@@ -439,14 +535,23 @@ export function TemplateEditor({
                           )}
                         </div>
 
-                        <div className="w-[120px] shrink-0">
-                          <Select value={step.level} onValueChange={(val: any) => updateStep(index, { level: val })}>
+                        <div className="w-28 shrink-0 sm:w-[120px]">
+                          <Select
+                            value={step.level}
+                            onValueChange={(val: any) =>
+                              updateStep(index, { level: val })
+                            }
+                          >
                             <SelectTrigger className="bg-white h-9 text-[12px] border-slate-200 font-bold text-slate-700 rounded-md shadow-none hover:bg-slate-50 transition-colors">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent className="text-[12px]">
-                              <SelectItem value="menyetujui">Menyetujui</SelectItem>
-                              <SelectItem value="mengetahui">Mengetahui</SelectItem>
+                              <SelectItem value="menyetujui">
+                                Menyetujui
+                              </SelectItem>
+                              <SelectItem value="mengetahui">
+                                Mengetahui
+                              </SelectItem>
                             </SelectContent>
                           </Select>
                         </div>
@@ -471,12 +576,25 @@ export function TemplateEditor({
         </div>
 
         <DialogFooter className="p-6 pt-3 shrink-0 border-t bg-slate-50/50">
-          <Button variant="ghost" onClick={() => onOpenChange(false)} className="font-bold text-slate-500 hover:text-slate-800 transition-colors">Batal</Button>
-          <Button onClick={handleSave} disabled={loading} className="bg-blue-600 hover:bg-blue-700 px-8 font-bold shadow-md shadow-blue-100 hover:shadow-lg transition-all">
-            {loading ? "Menyimpan..." : template ? "Update Template" : "Create Template"}
+          <Button
+            variant="ghost"
+            onClick={() => onOpenChange(false)}
+            className="font-bold text-slate-500 hover:text-slate-800 transition-colors"
+          >
+            Batal
+          </Button>
+          <Button
+            onClick={handleSave}
+            disabled={loading}
+            className="bg-blue-600 hover:bg-blue-700 px-8 font-bold shadow-md shadow-blue-100 hover:shadow-lg transition-all"
+          >
+            {loading
+              ? "Menyimpan..."
+              : template
+                ? "Update Template"
+                : "Create Template"}
           </Button>
         </DialogFooter>
-
       </DialogContent>
     </Dialog>
   );

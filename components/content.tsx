@@ -49,7 +49,7 @@ export function Content({
   const colClass = colSpanMap[size] ?? "";
 
   return (
-    <Card id={id} className={cn("col-span-12", colClass, className)}>
+    <Card id={id} className={cn("col-span-12 min-w-0", colClass, className)}>
       {(title || description || cardAction) && (
         <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
           <div>

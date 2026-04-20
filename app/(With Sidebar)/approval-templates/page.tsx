@@ -13,14 +13,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import {
-  Plus,
-  Search,
-  PlusCircle,
-  FileText,
-  Settings2,
-  Loader2,
-} from "lucide-react";
+import { Plus, Search, FileText, Settings2, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -46,7 +39,8 @@ export default function ApprovalTemplatesPage() {
 
   // Editor State
   const [isEditorOpen, setIsEditorOpen] = useState(false);
-  const [selectedTemplate, setSelectedTemplate] = useState<ApprovalTemplate | null>(null);
+  const [selectedTemplate, setSelectedTemplate] =
+    useState<ApprovalTemplate | null>(null);
 
   // Pagination & Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -62,7 +56,9 @@ export default function ApprovalTemplatesPage() {
 
     // 1. Get current user profile (cached or once)
     if (!userProfile) {
-      const { data: { user } } = await supabase.auth.getUser();
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
       if (user) {
         const { data: profile } = await supabase
           .from("profiles")
@@ -73,8 +69,12 @@ export default function ApprovalTemplatesPage() {
         if (profile) {
           const processedProfile = {
             ...profile,
-            isModerator: (profile.roles as any[]).some(r => r.roles.name === "moderator"),
-            isAdmin: (profile.roles as any[]).some(r => r.roles.name === "admin"),
+            isModerator: (profile.roles as any[]).some(
+              (r) => r.roles.name === "moderator",
+            ),
+            isAdmin: (profile.roles as any[]).some(
+              (r) => r.roles.name === "admin",
+            ),
           };
           setUserProfile(processedProfile);
 
@@ -147,29 +147,38 @@ export default function ApprovalTemplatesPage() {
   };
 
   return (
-    <Content>
-      <div className="flex flex-col gap-6 p-6">
+    <>
+      <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Approval Templates</h1>
-            <p className="text-muted-foreground">
-              Manajemen workflow approval untuk berbagai jenis dokumen dan lokasi.
-            </p>
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 rounded bg-primary text-primary-foreground shadow-sm flex items-center justify-center">
+              <FileText className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-foreground tracking-tight">
+                APPROVAL TEMPLATES
+              </h1>
+              <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
+                Workflow approval lintas dokumen dan lokasi
+              </p>
+            </div>
           </div>
           <Button
-            className="shrink-0 gap-2 bg-blue-600 hover:bg-blue-700 font-bold"
+            className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase"
             onClick={handleAddTemplate}
           >
             <Plus className="h-4 w-4" /> Tambah Template
           </Button>
         </div>
+      </Content>
 
-        <div className="flex flex-col md:flex-row gap-4">
-          <div className="relative flex-1">
-            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+      <Content>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+          <div className="relative min-w-0 flex-1 xl:min-w-70">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
               placeholder="Cari nama template..."
-              className="pl-8"
+              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
               value={searchQuery}
               onChange={(e) => {
                 setSearchQuery(e.target.value);
@@ -177,15 +186,25 @@ export default function ApprovalTemplatesPage() {
               }}
             />
           </div>
-          <div className="flex gap-2">
-            <Select value={typeFilter} onValueChange={(val) => { setTypeFilter(val); setPage(1); }}>
-              <SelectTrigger className="w-[180px]">
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
+            <Select
+              value={typeFilter}
+              onValueChange={(val) => {
+                setTypeFilter(val);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
                 <SelectValue placeholder="Jenis Dokumen" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Semua Jenis</SelectItem>
-                <SelectItem value="Material Request">Material Request</SelectItem>
-                <SelectItem value="Purchase Request">Purchase Request</SelectItem>
+                <SelectItem value="Material Request">
+                  Material Request
+                </SelectItem>
+                <SelectItem value="Purchase Request">
+                  Purchase Request
+                </SelectItem>
                 <SelectItem value="Purchase Order">Purchase Order</SelectItem>
                 <SelectItem value="Item Transfer">Item Transfer</SelectItem>
               </SelectContent>
@@ -193,15 +212,20 @@ export default function ApprovalTemplatesPage() {
 
             <Select
               value={cabangFilter}
-              onValueChange={(val) => { setCabangFilter(val); setPage(1); }}
+              onValueChange={(val) => {
+                setCabangFilter(val);
+                setPage(1);
+              }}
               disabled={userProfile?.isAdmin && !userProfile?.isModerator}
             >
-              <SelectTrigger className="w-[180px]">
+              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
                 <SelectValue placeholder="Lokasi" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Lokasi: Semua</SelectItem>
-                <SelectItem value="global" className="font-bold text-blue-600">Global (Semua Lokasi)</SelectItem>
+                <SelectItem value="global" className="font-bold text-primary">
+                  Global (Semua Lokasi)
+                </SelectItem>
                 {cabang.map((c) => (
                   <SelectItem key={c.id} value={c.id.toString()}>
                     {c.nama_cabang}
@@ -211,102 +235,134 @@ export default function ApprovalTemplatesPage() {
             </Select>
           </div>
         </div>
+      </Content>
 
-        <div className="rounded-xl border bg-white shadow-sm overflow-hidden flex flex-col">
-          <div className="flex-1">
-            <Table>
-              <TableHeader className="bg-slate-50/50">
+      <Content className="overflow-hidden">
+        <div className="flex-1 overflow-x-auto">
+          <Table>
+            <TableHeader className="bg-muted/50">
+              <TableRow className="border-b border-border hover:bg-transparent">
+                <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
+                  No
+                </TableHead>
+                <TableHead className="w-50 text-[10px] font-black uppercase text-muted-foreground">
+                  Nama Template
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Jenis Dokumen
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Lokasi
+                </TableHead>
+                <TableHead className="w-37.5 text-[10px] font-black uppercase text-muted-foreground">
+                  Pembaruan Terakhir
+                </TableHead>
+                <TableHead className="text-right w-25 text-[10px] font-black uppercase text-muted-foreground">
+                  Aksi
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
                 <TableRow>
-                  <TableHead className="w-[50px] text-center">No</TableHead>
-                  <TableHead className="w-[200px]">Nama Template</TableHead>
-                  <TableHead>Jenis Dokumen</TableHead>
-                  <TableHead>Lokasi</TableHead>
-                  <TableHead className="w-[150px]">Pembaruan Terakhir</TableHead>
-                  <TableHead className="text-right w-[100px]">Aksi</TableHead>
+                  <TableCell colSpan={6} className="h-24 text-center">
+                    <div className="flex items-center justify-center gap-2 text-muted-foreground">
+                      <Loader2 className="h-4 w-4 animate-spin" /> Sedang memuat
+                      data...
+                    </div>
+                  </TableCell>
                 </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center">
-                      <div className="flex items-center justify-center gap-2 text-muted-foreground">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Sedang memuat data...
+              ) : templates.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className="h-24 text-center text-muted-foreground"
+                  >
+                    Tidak ada template yang ditemukan.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                templates.map((template, index) => (
+                  <TableRow
+                    key={template.id}
+                    className="hover:bg-muted/30 transition-colors border-b border-border/50"
+                  >
+                    <TableCell className="text-center text-muted-foreground text-xs font-medium">
+                      {(page - 1) * limit + index + 1}
+                    </TableCell>
+                    <TableCell>
+                      <span className="font-bold text-foreground">
+                        {template.name}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        <FileText className="h-4 w-4 text-primary" />
+                        <span className="font-medium text-muted-foreground font-mono text-xs">
+                          {template.type}
+                        </span>
                       </div>
                     </TableCell>
-                  </TableRow>
-                ) : templates.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-24 text-center text-muted-foreground">
-                      Tidak ada template yang ditemukan.
+                    <TableCell>
+                      {template.cabang_id ? (
+                        <Badge
+                          variant="outline"
+                          className="font-normal border-border text-muted-foreground bg-background"
+                        >
+                          {template.cabang?.nama_cabang || "Unknown"}
+                        </Badge>
+                      ) : (
+                        <Badge
+                          variant="secondary"
+                          className="font-bold bg-primary/10 text-primary border-none"
+                        >
+                          Semua Lokasi (Global)
+                        </Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-xs">
+                      {new Date(template.updated_at).toLocaleDateString()}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 hover:bg-primary/10 hover:text-primary"
+                        onClick={() => handleEditTemplate(template)}
+                      >
+                        <Settings2 className="h-4 w-4" />
+                      </Button>
                     </TableCell>
                   </TableRow>
-                ) : (
-                  templates.map((template, index) => (
-                    <TableRow key={template.id} className="hover:bg-slate-50 transition-colors">
-                      <TableCell className="text-center text-muted-foreground text-xs font-medium">
-                        {(page - 1) * limit + index + 1}
-                      </TableCell>
-                      <TableCell>
-                        <span className="font-bold text-slate-900">{template.name}</span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 text-blue-500" />
-                          <span className="font-medium text-slate-600 font-mono text-xs">{template.type}</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        {template.cabang_id ? (
-                          <Badge variant="outline" className="font-normal border-slate-200 text-slate-600">
-                            {template.cabang?.nama_cabang || "Unknown"}
-                          </Badge>
-                        ) : (
-                          <Badge variant="secondary" className="font-bold bg-blue-50 text-blue-600 border-blue-100">
-                            Semua Lokasi (Global)
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-muted-foreground text-xs">
-                        {new Date(template.updated_at).toLocaleDateString()}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 hover:bg-blue-50 hover:text-blue-600"
-                          onClick={() => handleEditTemplate(template)}
-                        >
-                          <Settings2 className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          <div className="p-4 border-t bg-slate-50/30">
-            <DataTablePagination
-              totalCount={totalCount}
-              pageSize={limit}
-              currentPage={page}
-              onPageChange={setPage}
-              onPageSizeChange={(val) => { setLimit(parseInt(val)); setPage(1); }}
-              itemLabel="Template"
-            />
-          </div>
+                ))
+              )}
+            </TableBody>
+          </Table>
         </div>
 
-        <TemplateEditor
-          open={isEditorOpen}
-          onOpenChange={setIsEditorOpen}
-          template={selectedTemplate}
-          cabang={cabang}
-          userProfile={userProfile}
-          onSuccess={fetchData}
-        />
-      </div>
-    </Content>
+        <div className="p-4 border-t border-border bg-muted/30">
+          <DataTablePagination
+            totalCount={totalCount}
+            pageSize={limit}
+            currentPage={page}
+            onPageChange={setPage}
+            onPageSizeChange={(val) => {
+              setLimit(parseInt(val));
+              setPage(1);
+            }}
+            itemLabel="Template"
+          />
+        </div>
+      </Content>
+
+      <TemplateEditor
+        open={isEditorOpen}
+        onOpenChange={setIsEditorOpen}
+        template={selectedTemplate}
+        cabang={cabang}
+        userProfile={userProfile}
+        onSuccess={fetchData}
+      />
+    </>
   );
 }

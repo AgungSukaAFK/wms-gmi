@@ -50,15 +50,20 @@ export function DataTablePagination({
   };
 
   return (
-    <div className="flex flex-col md:flex-row items-center justify-between gap-4 bg-white p-3 rounded-xl border shadow-sm">
-      <p className="text-xs text-muted-foreground whitespace-nowrap font-medium">
-        Ditemukan <span className="font-bold text-slate-900">{totalCount} {itemLabel}</span>
+    <div className="flex flex-col items-start justify-between gap-4 rounded-xl border bg-white p-3 shadow-sm md:flex-row md:items-center">
+      <p className="text-xs font-medium text-muted-foreground">
+        Ditemukan{" "}
+        <span className="font-bold text-slate-900">
+          {totalCount} {itemLabel}
+        </span>
       </p>
 
-      <div className="flex items-center gap-3">
+      <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:flex-nowrap">
         {/* Rows Per Page */}
-        <div className="flex items-center gap-1.5 pr-3 border-r border-slate-100">
-          <span className="text-[10px] uppercase font-black text-slate-300">BARIS:</span>
+        <div className="flex items-center gap-1.5 pr-3 md:border-r md:border-slate-100">
+          <span className="text-[10px] uppercase font-black text-slate-300">
+            BARIS:
+          </span>
           <Select value={pageSize.toString()} onValueChange={onPageSizeChange}>
             <SelectTrigger className="h-7 w-[65px] bg-slate-50 border-slate-200 text-xs font-bold">
               <SelectValue />
@@ -74,13 +79,18 @@ export function DataTablePagination({
         </div>
 
         {/* Jump to Page */}
-        <form onSubmit={handleJumpPage} className="flex items-center gap-1.5 focus-within:opacity-100 transition-opacity">
-          <Input 
+        <form
+          onSubmit={handleJumpPage}
+          className="flex items-center gap-1.5 focus-within:opacity-100 transition-opacity"
+        >
+          <Input
             className="h-7 w-12 text-center bg-slate-50 border-slate-200 text-xs font-bold"
             value={jumpPage}
             onChange={(e) => setJumpPage(e.target.value)}
           />
-          <span className="text-[10px] uppercase font-black text-slate-300">/ {totalPages || 1}</span>
+          <span className="text-[10px] uppercase font-black text-slate-300">
+            / {totalPages || 1}
+          </span>
         </form>
 
         {/* Navigation Buttons */}

@@ -54,7 +54,6 @@ export interface ApprovalTemplateStep {
   } | null;
 }
 
-
 // REVISI: Tambahkan field untuk integrasi Master Barang
 export interface Order {
   // --- FIELD LAMA (JANGAN DIUBAH) ---
@@ -112,6 +111,7 @@ export interface Profile {
   nrp?: string | null;
   company?: string | null;
   email?: string | null;
+  nomor_whatsapp?: string | null;
 }
 
 export type User = Profile;
@@ -440,4 +440,144 @@ export interface UserSignature {
   label: string;
   is_hidden: boolean;
   created_at: string;
+}
+
+export interface Spb {
+  id: number;
+  spb_no: string;
+  spb_tanggal: string;
+  spb_no_wo?: string | null;
+  spb_section?: string | null;
+  spb_pic_gmi?: string | null;
+  spb_pic_ppa?: string | null;
+  spb_kode_unit?: string | null;
+  spb_tipe_unit?: string | null;
+  spb_brand?: string | null;
+  spb_hm?: number | null;
+  spb_problem_remark?: string | null;
+  spb_status: string;
+  spb_gudang?: string | null;
+  cabang_id?: number | null;
+  spb_is_deleted: boolean;
+  created_by?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  details?: SpbDetail[];
+}
+
+export interface SpbDetail {
+  id: number;
+  spb_id: number;
+  part_id: number;
+  dtl_spb_part_number: string;
+  dtl_spb_part_name: string;
+  dtl_spb_part_satuan: string;
+  dtl_spb_qty: number;
+  dtl_spb_qty_returned: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SpbPo {
+  id: number;
+  spb_id: number;
+  po_no: string;
+  so_no?: string | null;
+  so_date?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SpbPoDetail {
+  id: number;
+  spb_po_id: number;
+  spb_dtl_id: number;
+}
+
+export interface SpbDo {
+  id: number;
+  spb_po_id: number;
+  do_no: string;
+  do_date?: string | null;
+  do_status_part?: string | null;
+  do_pic?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SpbDoDetail {
+  id: number;
+  spb_do_id: number;
+  spb_po_dtl_id: number;
+}
+
+export interface SpbInvoice {
+  id: number;
+  spb_do_id: number;
+  invoice_no: string;
+  invoice_date?: string | null;
+  invoice_email_date?: string | null;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SpbInvoiceDetail {
+  id: number;
+  spb_invoice_id: number;
+  spb_do_dtl_id: number;
+  invoice_qty?: number | null;
+}
+
+export interface ReturnSpb {
+  id: number;
+  rtn_kode: string;
+  spb_id: number;
+  rtn_tanggal: string;
+  rtn_note?: string | null;
+  rtn_status: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ReturnSpbDetail {
+  id: number;
+  rtn_id: number;
+  spb_dtl_id: number;
+  part_id: number;
+  dtl_rtn_qty_return: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface SpbReport {
+  spb_id: number;
+  spb_no: string;
+  spb_tanggal: string;
+  spb_created_at?: string;
+  spb_no_wo?: string | null;
+  spb_section?: string | null;
+  spb_pic_gmi?: string | null;
+  spb_pic_ppa?: string | null;
+  spb_kode_unit?: string | null;
+  spb_tipe_unit?: string | null;
+  spb_brand?: string | null;
+  spb_hm?: number | null;
+  spb_problem_remark?: string | null;
+  spb_status: string;
+  spb_dtl_id?: number;
+  dtl_spb_part_number: string;
+  dtl_spb_part_name: string;
+  dtl_spb_qty: number;
+  dtl_spb_part_satuan: string;
+  po_no?: string | null;
+  so_no?: string | null;
+  so_date?: string | null;
+  po_created_at?: string | null;
+  do_no?: string | null;
+  do_date?: string | null;
+  do_created_at?: string | null;
+  invoice_no?: string | null;
+  invoice_date?: string | null;
+  invoice_email_date?: string | null;
+  invoice_created_at?: string | null;
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Table,
   TableBody,
@@ -37,6 +37,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Content } from "@/components/content";
 import {
   MoreHorizontal,
   ShieldCheck,
@@ -44,6 +45,8 @@ import {
   UserCog,
   UserMinus,
   Loader2,
+  Users,
+  Search,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -75,23 +78,56 @@ interface UserTableClientProps {
   allRoles: Role[];
 }
 
-export default function UserTableClient({ users, cabangList, allRoles }: UserTableClientProps) {
+export default function UserTableClient({
+  users,
+  cabangList,
+  allRoles,
+}: UserTableClientProps) {
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [cabangFilter, setCabangFilter] = useState("all");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
   const [loadingUserId, setLoadingUserId] = useState<string | null>(null);
 
-  // States untuk editor
   const [editRoleIds, setEditRoleIds] = useState<number[]>([]);
+  const [rolesTouched, setRolesTouched] = useState(false);
   const [editCabangId, setEditCabangId] = useState("");
 
-  const filteredUsers = users.filter(
-    (u) =>
-      u.nama.toLowerCase().includes(search.toLowerCase()) ||
-      u.email.toLowerCase().includes(search.toLowerCase()) ||
-      (u.nrp && u.nrp.includes(search))
-  );
+  const filteredUsers = useMemo(() => {
+    const searchLower = search.toLowerCase();
+
+    return users.filter((u) => {
+      const matchSearch =
+        u.nama.toLowerCase().includes(searchLower) ||
+        u.email.toLowerCase().includes(searchLower) ||
+        (u.nrp && u.nrp.includes(search));
+
+      const matchStatus =
+        statusFilter === "all" ||
+        (statusFilter === "active" && u.is_active) ||
+        (statusFilter === "inactive" && !u.is_active);
+
+      const matchCabang =
+        cabangFilter === "all" || u.cabang_id?.toString() === cabangFilter;
+
+      return matchSearch && matchStatus && matchCabang;
+    });
+  }, [users, search, statusFilter, cabangFilter]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, statusFilter, cabangFilter, pageSize]);
+
+  const totalCount = filteredUsers.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const startIndex = (safeCurrentPage - 1) * pageSize;
+  const endIndex = startIndex + pageSize;
+  const paginatedUsers = filteredUsers.slice(startIndex, endIndex);
 
   const handleToggleStatus = async (user: UserProfile) => {
     const label = user.is_active ? "Nonaktifkan" : "Aktifkan";
@@ -102,7 +138,9 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
     setLoadingUserId(null);
 
     if (result.success) {
-      toast.success(user.is_active ? "Akses user dicabut" : "User berhasil diaktifkan");
+      toast.success(
+        user.is_active ? "Akses user dicabut" : "User berhasil diaktifkan",
+      );
     } else {
       toast.error("Gagal mengubah status: " + result.error);
     }
@@ -111,13 +149,17 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
   const handleEdit = (user: UserProfile) => {
     setEditingUser(user);
     setEditRoleIds(user.roles.map((r) => r.id));
+    setRolesTouched(false);
     setEditCabangId(user.cabang_id?.toString() ?? "");
     setIsEditModalOpen(true);
   };
 
   const toggleRoleSelection = (roleId: number) => {
+    setRolesTouched(true);
     setEditRoleIds((prev) =>
-      prev.includes(roleId) ? prev.filter((id) => id !== roleId) : [...prev, roleId]
+      prev.includes(roleId)
+        ? prev.filter((id) => id !== roleId)
+        : [...prev, roleId],
     );
   };
 
@@ -132,6 +174,7 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
     const result = await updateUserDetail(editingUser.id, {
       roleIds: editRoleIds,
       cabang_id: parseInt(editCabangId) || 0,
+      updateRoles: rolesTouched,
     });
     setIsUpdating(false);
 
@@ -144,7 +187,10 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
   };
 
   const handleDelete = async (user: UserProfile) => {
-    if (!confirm(`Hapus user ${user.nama}? Tindakan ini tidak dapat dibatalkan.`)) return;
+    if (
+      !confirm(`Hapus user ${user.nama}? Tindakan ini tidak dapat dibatalkan.`)
+    )
+      return;
 
     setLoadingUserId(user.id);
     const result = await deleteUserProfile(user.id);
@@ -157,83 +203,162 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
     }
   };
 
-  // Helper untuk menentukan warna badge
   const getBadgeColor = (color: string | null | undefined) => {
     switch (color) {
-      case "red": return "bg-red-100 text-red-800 border-red-200 hover:bg-red-100";
-      case "orange": return "bg-orange-100 text-orange-800 border-orange-200 hover:bg-orange-100";
-      case "yellow": return "bg-yellow-100 text-yellow-800 border-yellow-200 hover:bg-yellow-100";
-      case "green": return "bg-green-100 text-green-800 border-green-200 hover:bg-green-100";
-      case "blue": return "bg-blue-100 text-blue-800 border-blue-200 hover:bg-blue-100";
-      case "purple": return "bg-purple-100 text-purple-800 border-purple-200 hover:bg-purple-100";
-      case "indigo": return "bg-indigo-100 text-indigo-800 border-indigo-200 hover:bg-indigo-100";
-      case "cyan": return "bg-cyan-100 text-cyan-800 border-cyan-200 hover:bg-cyan-100";
-      case "teal": return "bg-teal-100 text-teal-800 border-teal-200 hover:bg-teal-100";
-      case "lime": return "bg-lime-100 text-lime-800 border-lime-200 hover:bg-lime-100";
-      case "amber": return "bg-amber-100 text-amber-800 border-amber-200 hover:bg-amber-100";
-      case "gray": return "bg-gray-100 text-gray-800 border-gray-200 hover:bg-gray-100";
-      case "slate": return "bg-slate-100 text-slate-800 border-slate-200 hover:bg-slate-100";
-      default: return "bg-secondary text-secondary-foreground";
+      case "red":
+        return "bg-destructive/10 text-destructive border-destructive/20";
+      case "orange":
+      case "amber":
+      case "yellow":
+        return "bg-warning/10 text-warning border-warning/20";
+      case "green":
+      case "teal":
+      case "lime":
+        return "bg-success/10 text-success border-success/20";
+      case "blue":
+      case "indigo":
+      case "cyan":
+      case "purple":
+        return "bg-primary/10 text-primary border-primary/20";
+      case "gray":
+      case "slate":
+        return "bg-muted text-muted-foreground border-border";
+      default:
+        return "bg-secondary text-secondary-foreground";
     }
   };
 
   return (
-    <div className="space-y-4">
-      {/* Search Bar */}
-      <div className="flex items-center justify-between">
-        <Input
-          placeholder="Cari Nama, Email, atau NRP..."
-          className="max-w-sm"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-        />
-        <p className="text-sm text-muted-foreground">{filteredUsers.length} pengguna</p>
-      </div>
+    <>
+      <Content>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="h-10 w-10 bg-primary rounded flex items-center justify-center shadow-sm text-primary-foreground">
+              <Users className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-xl font-bold text-foreground tracking-tight">
+                USER MANAGEMENT
+              </h1>
+              <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
+                Kelola akun, role, dan cabang pengguna
+              </p>
+            </div>
+          </div>
+          <p className="text-xs font-semibold text-muted-foreground uppercase">
+            {filteredUsers.length} pengguna
+          </p>
+        </div>
+      </Content>
 
-      {/* Table */}
-      <div className="rounded-md border bg-white">
+      <Content>
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+          <div className="relative min-w-0 flex-1 xl:min-w-70">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Cari Nama, Email, atau NRP..."
+              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
+            <Select value={statusFilter} onValueChange={setStatusFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
+                <SelectValue placeholder="Status" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Status</SelectItem>
+                <SelectItem value="active">Aktif</SelectItem>
+                <SelectItem value="inactive">Pending Approval</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select value={cabangFilter} onValueChange={setCabangFilter}>
+              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
+                <SelectValue placeholder="Cabang" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Cabang</SelectItem>
+                {cabangList.map((cabang) => (
+                  <SelectItem key={cabang.id} value={cabang.id.toString()}>
+                    {cabang.nama_cabang}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+      </Content>
+
+      <Content className="overflow-hidden">
         <Table>
           <TableHeader>
-            <TableRow>
-              <TableHead>Nama</TableHead>
-              <TableHead>Email / NRP</TableHead>
-              <TableHead>Roles</TableHead>
-              <TableHead>Cabang</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="w-[60px]">Aksi</TableHead>
+            <TableRow className="bg-muted/50 hover:bg-muted/50">
+              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+                Nama
+              </TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+                Email / NRP
+              </TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+                Roles
+              </TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+                Cabang
+              </TableHead>
+              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+                Status
+              </TableHead>
+              <TableHead className="w-15 text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+                Aksi
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
-            {filteredUsers.length > 0 ? (
-              filteredUsers.map((user) => (
-                <TableRow key={user.id}>
-                  <TableCell className="font-medium">{user.nama}</TableCell>
+            {paginatedUsers.length > 0 ? (
+              paginatedUsers.map((user) => (
+                <TableRow key={user.id} className="hover:bg-muted/30">
+                  <TableCell className="font-semibold text-foreground">
+                    {user.nama}
+                  </TableCell>
                   <TableCell>
                     <div className="flex flex-col">
-                      <span className="text-sm">{user.email}</span>
-                      <span className="text-xs text-muted-foreground">{user.nrp || "-"}</span>
+                      <span className="text-sm text-foreground">
+                        {user.email}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {user.nrp || "-"}
+                      </span>
                     </div>
                   </TableCell>
                   <TableCell>
                     <div className="flex flex-wrap gap-1">
                       {user.roles.length > 0 ? (
                         user.roles.map((r) => (
-                          <Badge 
-                            key={r.id} 
-                            variant="outline" 
+                          <Badge
+                            key={r.id}
+                            variant="outline"
                             className={`text-[10px] px-1.5 py-0 capitalize border shadow-sm ${getBadgeColor(r.color)}`}
                           >
                             {r.label}
                           </Badge>
                         ))
                       ) : (
-                        <span className="text-xs text-muted-foreground italic">No role</span>
+                        <span className="text-xs text-muted-foreground italic">
+                          No role
+                        </span>
                       )}
                     </div>
                   </TableCell>
-                  <TableCell>{user.cabang?.nama_cabang || "-"}</TableCell>
+                  <TableCell className="text-foreground">
+                    {user.cabang?.nama_cabang || "-"}
+                  </TableCell>
                   <TableCell>
-                    <Badge variant={user.is_active ? "default" : "destructive"} className="text-[10px]">
+                    <Badge
+                      variant={user.is_active ? "default" : "destructive"}
+                      className="text-[10px]"
+                    >
                       {user.is_active ? "Aktif" : "Pending Approval"}
                     </Badge>
                   </TableCell>
@@ -254,7 +379,9 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
                             <UserCog className="mr-2 h-4 w-4" />
                             Edit Roles & Cabang
                           </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleToggleStatus(user)}>
+                          <DropdownMenuItem
+                            onClick={() => handleToggleStatus(user)}
+                          >
                             {user.is_active ? (
                               <>
                                 <ShieldAlert className="mr-2 h-4 w-4 text-destructive" />
@@ -262,7 +389,7 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
                               </>
                             ) : (
                               <>
-                                <ShieldCheck className="mr-2 h-4 w-4 text-green-600" />
+                                <ShieldCheck className="mr-2 h-4 w-4 text-success" />
                                 Buka Akses (Approve)
                               </>
                             )}
@@ -283,18 +410,75 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
               ))
             ) : (
               <TableRow>
-                <TableCell colSpan={6} className="h-24 text-center">
+                <TableCell
+                  colSpan={6}
+                  className="h-24 text-center text-muted-foreground"
+                >
                   Tidak ada data user.
                 </TableCell>
               </TableRow>
             )}
           </TableBody>
         </Table>
-      </div>
 
-      {/* Edit Modal */}
+        <div className="mt-3 flex flex-col gap-3 rounded-md border border-border bg-muted/30 p-3 md:flex-row md:items-center md:justify-between">
+          <p className="text-xs font-medium text-muted-foreground">
+            Menampilkan {totalCount === 0 ? 0 : startIndex + 1}-
+            {Math.min(endIndex, totalCount)} dari {totalCount} pengguna
+          </p>
+
+          <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:justify-end">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-black uppercase text-muted-foreground">
+                Baris:
+              </span>
+              <Select
+                value={pageSize.toString()}
+                onValueChange={(value) => setPageSize(Number(value))}
+              >
+                <SelectTrigger className="h-8 w-18 border-input bg-background text-xs font-semibold text-foreground">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="10">10</SelectItem>
+                  <SelectItem value="25">25</SelectItem>
+                  <SelectItem value="50">50</SelectItem>
+                  <SelectItem value="100">100</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
+                disabled={safeCurrentPage <= 1}
+              >
+                Prev
+              </Button>
+              <span className="text-xs font-semibold text-foreground">
+                {safeCurrentPage} / {totalPages}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8"
+                onClick={() =>
+                  setCurrentPage((prev) => Math.min(totalPages, prev + 1))
+                }
+                disabled={safeCurrentPage >= totalPages}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Content>
+
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
-        <DialogContent className="sm:max-w-[425px]">
+        <DialogContent className="sm:max-w-106.25">
           <DialogHeader>
             <DialogTitle>Edit Akun Pengguna</DialogTitle>
             <DialogDescription>
@@ -305,12 +489,14 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
 
           <div className="grid gap-4 py-4">
             <div className="space-y-4">
-              <Label className="text-sm font-semibold">User Roles (Multiple)</Label>
-              <div className="grid grid-cols-2 gap-3 p-3 border rounded-md bg-slate-50">
+              <Label className="text-sm font-semibold">
+                User Roles (Multiple)
+              </Label>
+              <div className="grid grid-cols-2 gap-3 p-3 border border-input rounded-md bg-muted/40">
                 {allRoles.map((role) => (
                   <div key={role.id} className="flex items-center space-x-2">
-                    <Checkbox 
-                      id={`role-${role.id}`} 
+                    <Checkbox
+                      id={`role-${role.id}`}
                       checked={editRoleIds.includes(role.id)}
                       onCheckedChange={() => toggleRoleSelection(role.id)}
                     />
@@ -328,7 +514,7 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
             <div className="space-y-2">
               <Label className="text-sm font-semibold">Penempatan Cabang</Label>
               <Select value={editCabangId} onValueChange={setEditCabangId}>
-                <SelectTrigger>
+                <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
                   <SelectValue placeholder="Pilih Cabang" />
                 </SelectTrigger>
                 <SelectContent>
@@ -364,6 +550,6 @@ export default function UserTableClient({ users, cabangList, allRoles }: UserTab
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </>
   );
 }

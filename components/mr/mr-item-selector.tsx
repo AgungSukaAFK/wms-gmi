@@ -85,7 +85,7 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
 
   const handleAddItem = (barang: Barang) => {
     if (items.some((i) => i.part_id === barang.id)) return;
-    
+
     const newItem: MRItem = {
       part_id: barang.id,
       part_number: barang.part_number,
@@ -93,7 +93,7 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
       satuan: barang.part_satuan,
       qty: 1,
     };
-    
+
     onItemsChange([...items, newItem]);
     setOpen(false);
     setSearch("");
@@ -105,7 +105,7 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
 
   const updateItem = (part_id: number, updates: Partial<MRItem>) => {
     onItemsChange(
-      items.map((i) => (i.part_id === part_id ? { ...i, ...updates } : i))
+      items.map((i) => (i.part_id === part_id ? { ...i, ...updates } : i)),
     );
   };
 
@@ -113,17 +113,26 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-           <Package className="h-4 w-4 text-slate-500" />
-           <h3 className="font-semibold text-slate-900 text-sm">Daftar Barang</h3>
+          <Package className="h-4 w-4 text-slate-500" />
+          <h3 className="font-semibold text-slate-900 text-sm">
+            Daftar Barang
+          </h3>
         </div>
 
         <Popover open={open} onOpenChange={setOpen}>
           <PopoverTrigger asChild>
-            <Button variant="outline" size="sm" className="h-8 gap-2 font-medium">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-2 font-medium"
+            >
               <Plus className="h-3.5 w-3.5" /> Tambah Barang
             </Button>
           </PopoverTrigger>
-          <PopoverContent className="w-[400px] p-0 rounded-lg border-slate-200 shadow-xl overflow-hidden" align="end">
+          <PopoverContent
+            className="w-[calc(100vw-2rem)] max-w-100 p-0 rounded-lg border-slate-200 shadow-xl overflow-hidden"
+            align="end"
+          >
             <div className="p-2 border-b border-slate-100 bg-slate-50/50">
               <div className="relative">
                 <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
@@ -139,7 +148,9 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
             <div className="max-h-[300px] overflow-y-auto p-1">
               {loading ? (
                 <div className="p-8 text-center bg-slate-50/30">
-                  <span className="text-[10px] font-medium text-slate-400">Searching...</span>
+                  <span className="text-[10px] font-medium text-slate-400">
+                    Searching...
+                  </span>
                 </div>
               ) : results.length > 0 ? (
                 results.map((r) => (
@@ -154,20 +165,30 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
                         <span className="text-xs font-semibold text-slate-900 leading-none mb-0.5">
                           {r.part_name}
                         </span>
-                        <code className="text-[10px] text-slate-400">{r.part_number}</code>
+                        <code className="text-[10px] text-slate-400">
+                          {r.part_number}
+                        </code>
                       </div>
-                      <Badge variant="outline" className="text-[10px] font-medium text-slate-400 h-4 px-1">
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] font-medium text-slate-400 h-4 px-1"
+                      >
                         {r.part_satuan}
                       </Badge>
                     </div>
                   </button>
                 ))
               ) : (
-                <div className="p-8 text-center text-slate-400 text-xs italic">Barang tidak ditemukan.</div>
+                <div className="p-8 text-center text-slate-400 text-xs italic">
+                  Barang tidak ditemukan.
+                </div>
               )}
             </div>
             <div className="p-2 bg-slate-50/80 border-t border-slate-100 flex justify-center">
-              <Link href="/request-barang-baru" className="text-[10px] font-medium text-blue-600 hover:underline">
+              <Link
+                href="/request-barang-baru"
+                className="text-[10px] font-medium text-blue-600 hover:underline"
+              >
                 Request Item Baru
               </Link>
             </div>
@@ -179,36 +200,59 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
         <Table>
           <TableHeader className="bg-slate-50/50">
             <TableRow className="h-10 hover:bg-transparent">
-              <TableHead className="w-[50px] text-center font-semibold text-slate-500 text-xs text-slate-500">No</TableHead>
-              <TableHead className="font-semibold text-slate-500 text-xs">Part Name & Number</TableHead>
-              <TableHead className="w-[100px] font-semibold text-slate-500 text-xs text-center">Unit</TableHead>
-              <TableHead className="w-[120px] font-semibold text-slate-500 text-xs text-center">Quantity</TableHead>
-              <TableHead className="w-[60px] text-center font-semibold text-slate-500 text-xs">Aksi</TableHead>
+              <TableHead className="w-[50px] text-center font-semibold text-slate-500 text-xs">
+                No
+              </TableHead>
+              <TableHead className="font-semibold text-slate-500 text-xs">
+                Part Name & Number
+              </TableHead>
+              <TableHead className="w-[100px] font-semibold text-slate-500 text-xs text-center">
+                Unit
+              </TableHead>
+              <TableHead className="w-[120px] font-semibold text-slate-500 text-xs text-center">
+                Quantity
+              </TableHead>
+              <TableHead className="w-[60px] text-center font-semibold text-slate-500 text-xs">
+                Aksi
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {items.length > 0 ? (
               items.map((item, index) => (
-                <TableRow key={item.part_id} className="h-12 hover:bg-slate-50/50 transition-colors">
+                <TableRow
+                  key={item.part_id}
+                  className="h-12 hover:bg-slate-50/50 transition-colors"
+                >
                   <TableCell className="text-center text-slate-400 text-xs font-medium">
                     {index + 1}
                   </TableCell>
                   <TableCell className="py-2">
                     <div className="flex flex-col">
-                      <span className="font-semibold text-slate-900 text-xs">{item.part_name}</span>
-                      <code className="text-[10px] text-slate-400">{item.part_number}</code>
+                      <span className="font-semibold text-slate-900 text-xs">
+                        {item.part_name}
+                      </span>
+                      <code className="text-[10px] text-slate-400">
+                        {item.part_number}
+                      </code>
                     </div>
                   </TableCell>
                   <TableCell className="text-center">
-                    <span className="text-[10px] font-medium text-slate-500 uppercase">{item.satuan}</span>
+                    <span className="text-[10px] font-medium text-slate-500 uppercase">
+                      {item.satuan}
+                    </span>
                   </TableCell>
                   <TableCell>
                     <div className="flex items-center justify-center">
-                       <Input
+                      <Input
                         type="number"
                         min="1"
                         value={item.qty}
-                        onChange={(e) => updateItem(item.part_id, { qty: parseInt(e.target.value) || 0 })}
+                        onChange={(e) =>
+                          updateItem(item.part_id, {
+                            qty: parseInt(e.target.value) || 0,
+                          })
+                        }
                         className="h-8 w-20 text-center font-medium text-xs rounded-md bg-white border-slate-200"
                       />
                     </div>
@@ -228,7 +272,9 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
                 <TableCell colSpan={5} className="text-center">
-                  <span className="text-xs font-medium text-slate-400 italic">No items added yet.</span>
+                  <span className="text-xs font-medium text-slate-400 italic">
+                    No items added yet.
+                  </span>
                 </TableCell>
               </TableRow>
             )}

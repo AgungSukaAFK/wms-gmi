@@ -13,6 +13,18 @@ export async function updateStock(
 ) {
   const supabase = await createClient();
 
+  // 1. Get current stock for change calculation
+  const { data: currentStock } = await supabase
+    .from("stock")
+    .select("qty, part_id, cabang_id")
+    .eq("id", id)
+    .single();
+
+  if (!currentStock) return { success: false, error: "Stock record not found" };
+
+  const qtyChange = data.qty - currentStock.qty;
+
+  // 2. Perform Update
   const { error } = await supabase
     .from("stock")
     .update(data)
@@ -23,7 +35,22 @@ export async function updateStock(
     return { success: false, error: error.message };
   }
 
+  // 3. Log Movement if qty changed
+  if (qtyChange !== 0) {
+    const { data: { user } } = await supabase.auth.getUser();
+    await supabase.from("stock_movements").insert({
+      part_id: currentStock.part_id,
+      cabang_id: currentStock.cabang_id,
+      qty_change: qtyChange,
+      type: 'ADJUSTMENT',
+      reference_id: 'MANUAL',
+      created_by: user?.id,
+      notes: 'Manual stock adjustment'
+    });
+  }
+
   revalidatePath("/stock");
+  revalidatePath("/barang");
   return { success: true };
 }
 

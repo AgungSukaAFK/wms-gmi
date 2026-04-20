@@ -1,4 +1,3 @@
-import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/server";
 import BarangClient from "./BarangClient";
 
@@ -27,9 +26,7 @@ export default async function BarangPage({
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
-  let query = supabase
-    .from("barang")
-    .select("*", { count: "exact" });
+  let query = supabase.from("barang").select("*", { count: "exact" });
 
   if (q) {
     query = query.or(`part_number.ilike.%${q}%,part_name.ilike.%${q}%`);
@@ -57,27 +54,14 @@ export default async function BarangPage({
   }
 
   return (
-    <Content>
-      <div className="space-y-6">
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight">Master Barang</h1>
-            <p className="text-muted-foreground">
-              Kelola katalog suku cadang dan material perusahaan.
-            </p>
-          </div>
-        </div>
-
-        <BarangClient
-          initialData={data || []}
-          totalCount={count || 0}
-          currentPage={page}
-          pageSize={limit}
-          initialQuery={q}
-          initialSort={sort}
-          initialView={view}
-        />
-      </div>
-    </Content>
+    <BarangClient
+      initialData={data || []}
+      totalCount={count || 0}
+      currentPage={page}
+      pageSize={limit}
+      initialQuery={q}
+      initialSort={sort}
+      initialView={view}
+    />
   );
 }

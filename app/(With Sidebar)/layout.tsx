@@ -35,7 +35,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       const href = `/${parts.slice(0, index + 1).join("/")}`;
 
       const readablePart = decodeURIComponent(
-        part.replace(/-/g, " ").replace(/\b\w/g, (s) => s.toUpperCase())
+        part.replace(/-/g, " ").replace(/\b\w/g, (s) => s.toUpperCase()),
       );
 
       // 👉 skip kalau part terakhir adalah UUID
@@ -64,7 +64,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      
+
       if (!user) {
         // Gunakan router.push untuk navigasi client-side di dalam useEffect
         router.push("/auth/login");
@@ -101,14 +101,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
         <AppSidebar className="shadow-lg" />
         <SidebarInset>
           <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-            <div className="flex items-center gap-2 px-4">
+            <div className="flex min-w-0 items-center gap-2 px-4">
               <SidebarTrigger className="-ml-1" />
               <Separator
                 orientation="vertical"
                 className="mr-2 data-[orientation=vertical]:h-4"
               />
-              <Breadcrumb>
-                <BreadcrumbList>
+              <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
+                <BreadcrumbList className="min-w-0 flex-nowrap overflow-x-auto">
                   <BreadcrumbItem className="hidden md:block">
                     <BreadcrumbLink href="/dashboard">WMS-GMI</BreadcrumbLink>
                   </BreadcrumbItem>
@@ -118,15 +118,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               </Breadcrumb>
             </div>
           </header>
-          <div className="flex flex-1 flex-col gap-4 p-4 pt-0">
+          <div className="flex min-w-0 flex-1 flex-col gap-4 [overflow-x:clip] p-4 pt-0">
             {userId ? (
               <DailyResetGuard userId={userId}>
-                <div className="grid grid-cols-12 items-start gap-4 md:gap-6 auto-rows-auto">
+                <div className="grid min-w-0 auto-rows-auto grid-cols-12 items-start gap-4 md:gap-6">
                   {children}
                 </div>
               </DailyResetGuard>
             ) : (
-              <div className="grid grid-cols-12 items-start gap-4 md:gap-6 auto-rows-auto">
+              <div className="grid min-w-0 auto-rows-auto grid-cols-12 items-start gap-4 md:gap-6">
                 {children}
               </div>
             )}

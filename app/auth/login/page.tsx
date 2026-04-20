@@ -35,8 +35,14 @@ export default function LoginPage() {
       if (result?.error) {
         throw new Error(result.error);
       }
-      toast.success("Login berhasil! Mengarahkan ke dashboard...");
-      // signIn server action already handles redirect if successful
+
+      if (result?.success) {
+        toast.success("Login berhasil! Mengarahkan ke dashboard...");
+        // Use full-page navigation to ensure fresh session state on protected pages.
+        setTimeout(() => {
+          window.location.assign("/dashboard");
+        }, 500);
+      }
     } catch (error: any) {
       setError(error.message);
       toast.error("Login Gagal", { description: error.message });
@@ -49,7 +55,9 @@ export default function LoginPage() {
     <div className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 px-4">
       <Card className="w-full max-w-md">
         <CardHeader>
-          <CardTitle className="text-2xl text-center font-bold">WMS-GMI Login</CardTitle>
+          <CardTitle className="text-2xl text-center font-bold">
+            WMS-GMI Login
+          </CardTitle>
           <CardDescription className="text-center">
             Masukkan Email atau NRP Anda untuk mengakses gudang.
           </CardDescription>
@@ -91,14 +99,21 @@ export default function LoginPage() {
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}
-            <Button type="submit" disabled={loading} className="w-full text-lg font-semibold py-6">
+            <Button
+              type="submit"
+              disabled={loading}
+              className="w-full text-lg font-semibold py-6"
+            >
               {loading && <Loader2 className="mr-2 h-5 w-5 animate-spin" />}
               Login
             </Button>
           </form>
           <div className="mt-6 text-center text-sm">
             Belum punya akun?{" "}
-            <Link href="/auth/sign-up" className="underline underline-offset-4 text-primary font-medium">
+            <Link
+              href="/auth/sign-up"
+              className="underline underline-offset-4 text-primary font-medium"
+            >
               Daftar Sekarang
             </Link>
           </div>
