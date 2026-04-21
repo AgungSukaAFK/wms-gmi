@@ -34,7 +34,9 @@ export default async function Home() {
                 <Link href="/auth/login">Masuk Sekarang</Link>
               </Button>
               <Button asChild size="lg" variant="outline" className="font-bold">
-                <Link href="/auth/sign-up">Daftar Akun</Link>
+                <Link href="/auth/sign-up" className="text-foreground">
+                  Daftar Akun
+                </Link>
               </Button>
             </div>
           </div>
