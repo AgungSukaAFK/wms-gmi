@@ -16,8 +16,8 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Config (same as run-import.mjs) ─────────────────────────
-const SUPABASE_URL = "http://127.0.0.1:54331";
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = "https://db.wms-gmi.my.id";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzY4MjkyMDcsImV4cCI6MjA5MjE4OTIwN30.xtamy8yt05eJCVUf4G9awMVt_yhkr3-w4GQCB-cKnDQ";
 const BATCH_SIZE = 500;
 const DEFAULT_TS = "2024-01-01T00:00:00+00:00";
 

@@ -12,8 +12,8 @@ import { fileURLToPath } from "url";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // ─── Config ───────────────────────────────────────────────────
-const SUPABASE_URL = "http://127.0.0.1:54331";
-const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+const SUPABASE_URL = "https://db.wms-gmi.my.id";
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3NzY4MjkyMDcsImV4cCI6MjA5MjE4OTIwN30.xtamy8yt05eJCVUf4G9awMVt_yhkr3-w4GQCB-cKnDQ";
 const DEFAULT_PASSWORD = "gmi2026";
 const BATCH_SIZE = 500;
 const DEFAULT_TS = "2024-01-01T00:00:00+00:00";
@@ -259,15 +259,63 @@ async function main() {
   console.log("\n🚀 WMS Legacy → Supabase Full Migration");
   console.log("═".repeat(55));
 
-  // ─── STEP 0: Clear auth users ─────────────────────────────
-  // NOTE: Run this BEFORE the script to truncate all tables:
-  //   psql postgresql://postgres:postgres@127.0.0.1:54332/postgres -c \
-  //     "TRUNCATE TABLE return_spb_details, return_spb, spb_invoice_details, spb_invoice,
-  //      spb_do_details, spb_do, spb_po_details, spb_po, spb_details, spb,
-  //      delivery_items, deliveries, po_items, pos, pr_items, prs, mr_items, mrs,
-  //      stock, barang, vendors, customers, user_roles, profiles, role_permissions,
-  //      job_costing, cabang RESTART IDENTITY CASCADE;"
-  console.log("\n🧹 Step 0: Clearing auth users...");
+  // ─── STEP 0: Clear auth users and all tables ─────────────────────────────
+  console.log("\n🧹 Step 0: Clearing existing database tables...");
+  
+  const tablesToClear = [
+    { name: "return_spb_details", col: "id" },
+    { name: "return_spb", col: "id" },
+    { name: "spb_invoice_details", col: "id" },
+    { name: "spb_invoice", col: "id" },
+    { name: "spb_do_details", col: "id" },
+    { name: "spb_do", col: "id" },
+    { name: "spb_po_details", col: "id" },
+    { name: "spb_po", col: "id" },
+    { name: "spb_details", col: "id" },
+    { name: "spb", col: "id" },
+    { name: "delivery_items", col: "id" },
+    { name: "deliveries", col: "id" },
+    { name: "po_items", col: "id" },
+    { name: "pos", col: "id" },
+    { name: "pr_items", col: "id" },
+    { name: "prs", col: "id" },
+    { name: "mr_items", col: "id" },
+    { name: "mrs", col: "id" },
+    { name: "stock", col: "part_id" },
+    { name: "barang", col: "id" },
+    { name: "vendors", col: "id" },
+    { name: "customers", col: "id" },
+    { name: "user_roles", col: "user_id" },
+    { name: "profiles", col: "id" },
+    { name: "cabang", col: "id" }
+  ];
+
+  for (const t of tablesToClear) {
+    let totalDeleted = 0;
+    while (true) {
+      const { data, error } = await supabase
+        .from(t.name)
+        .delete()
+        .not(t.col, "is", "null")
+        .select(t.col);
+        
+      if (error) {
+         if (!error.message.includes("could not find the") && error.code !== "PGRST116") {
+            console.log(`\n  ⚠️  Could not clear ${t.name}: ${error.message}`);
+         }
+         break;
+      }
+      if (!data || data.length === 0) break;
+      totalDeleted += data.length;
+      process.stdout.write(`\r  🗑️  Clearing ${t.name}... ${totalDeleted} rows deleted`);
+    }
+    if (totalDeleted > 0) {
+      console.log(`\r  ✅ Cleared ${t.name}: ${totalDeleted} rows deleted       `);
+    }
+  }
+
+  // Clear Auth Users AFTER clearing tables that might reference them
+  console.log("  🗑️  Clearing auth users...");
   const { data: existingUsers } = await supabase.auth.admin.listUsers({
     perPage: 1000,
   });
@@ -275,9 +323,10 @@ async function main() {
     for (const u of existingUsers.users) {
       await supabase.auth.admin.deleteUser(u.id);
     }
-    console.log(`  🗑️  Deleted ${existingUsers.users.length} auth users`);
+    console.log(`  ✅ Deleted ${existingUsers.users.length} auth users`);
+  } else {
+    console.log("  ✅ Auth users cleared");
   }
-  console.log("  ✅ Auth users cleared");
 
   // ─── STEP 1: Insert cabang ────────────────────────────────
   console.log("\n🏢 Step 1: Inserting cabang locations...");
