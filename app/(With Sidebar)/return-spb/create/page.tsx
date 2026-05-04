@@ -99,25 +99,25 @@ export default function ReturnSpbCreatePage() {
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, "0");
     const dd = String(today.getDate()).padStart(2, "0");
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
 
-      if (!user) return;
+    if (!user) return;
 
-      const { data: profile } = await supabase
-        .from("profiles")
-        .select("cabang_id")
-        .eq("id", user.id)
-        .maybeSingle();
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("cabang_id")
+      .eq("id", user.id)
+      .maybeSingle();
 
-      const tplRes = await getStockOutApprovalTemplates(
-        "return_spb",
-        profile?.cabang_id || undefined,
-      );
-      if (!tplRes.error) {
-        setApprovalTemplates((tplRes.data || []) as ApprovalTemplateOption[]);
-      }
+    const tplRes = await getStockOutApprovalTemplates(
+      "return_spb",
+      profile?.cabang_id || undefined,
+    );
+    if (!tplRes.error) {
+      setApprovalTemplates((tplRes.data || []) as ApprovalTemplateOption[]);
+    }
     setRtnTanggal(`${yyyy}-${mm}-${dd}`);
   };
 
