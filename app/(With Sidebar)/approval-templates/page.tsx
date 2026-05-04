@@ -206,7 +206,19 @@ export default function ApprovalTemplatesPage() {
                   Purchase Request
                 </SelectItem>
                 <SelectItem value="Purchase Order">Purchase Order</SelectItem>
+                <SelectItem value="Receive Item">Receive Item</SelectItem>
                 <SelectItem value="Item Transfer">Item Transfer</SelectItem>
+                <SelectItem value="Stock Out - SPB">Stock Out - SPB</SelectItem>
+                <SelectItem value="Stock Out - SPB PO">
+                  Stock Out - SPB PO
+                </SelectItem>
+                <SelectItem value="Stock Out - SPB DO">
+                  Stock Out - SPB DO
+                </SelectItem>
+                <SelectItem value="Stock Out - SPB Invoice">
+                  Stock Out - SPB Invoice
+                </SelectItem>
+                <SelectItem value="Return SPB">Return SPB</SelectItem>
               </SelectContent>
             </Select>
 

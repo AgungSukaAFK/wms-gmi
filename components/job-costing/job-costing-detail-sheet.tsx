@@ -43,11 +43,12 @@ import {
   ListChecks,
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
+import { normalizeDocumentStatus } from "@/lib/document-status";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-blue-100 text-blue-700 border-blue-200",
   approved: "bg-green-100 text-green-700 border-green-200",
-  closed: "bg-gray-100 text-gray-600 border-gray-200",
+  completed: "bg-gray-100 text-gray-600 border-gray-200",
   rejected: "bg-red-100 text-red-700 border-red-200",
 };
 
@@ -116,7 +117,7 @@ export function JobCostingDetailSheet({
 
   useEffect(() => {
     if (job?.status) {
-      setStatusDraft(job.status);
+      setStatusDraft(normalizeDocumentStatus(job.status));
     }
   }, [job?.status]);
 
@@ -204,9 +205,11 @@ export function JobCostingDetailSheet({
   const statusLabel: Record<string, string> = {
     open: "Open",
     approved: "Approved",
-    closed: "Closed",
+    completed: "Completed",
     rejected: "Rejected",
   };
+
+  const normalizedJobStatus = normalizeDocumentStatus(job?.status);
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -233,9 +236,9 @@ export function JobCostingDetailSheet({
                     </span>
                     <Badge
                       variant="outline"
-                      className={`text-[10px] font-bold capitalize ${STATUS_COLORS[job.status] ?? ""}`}
+                      className={`text-[10px] font-bold capitalize ${STATUS_COLORS[normalizedJobStatus] ?? ""}`}
                     >
-                      {statusLabel[job.status] ?? job.status}
+                      {statusLabel[normalizedJobStatus] ?? normalizedJobStatus}
                     </Badge>
                   </div>
                   <p className="font-bold text-base">{job.description}</p>
@@ -260,8 +263,21 @@ export function JobCostingDetailSheet({
                   <span>{job.cabang?.nama_cabang ?? "-"}</span>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Calculator className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Finish: {job.finish_part || "-"} ({job.qty_finish_part || 0}
+                    )
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <User className="h-3.5 w-3.5 shrink-0" />
                   <span>{job.creator_nama ?? job.profiles?.nama ?? "-"}</span>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Building2 className="h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    Cabang Finish: {job.finish_part_cabang?.nama_cabang ?? "-"}
+                  </span>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Calendar className="h-3.5 w-3.5 shrink-0" />
@@ -437,6 +453,11 @@ export function JobCostingDetailSheet({
                         <TableRow key={item.id}>
                           <TableCell className="text-xs">
                             <p className="font-medium">{item.description}</p>
+                            {item.source_cabang?.nama_cabang && (
+                              <p className="text-[10px] text-muted-foreground">
+                                Cabang Asal: {item.source_cabang.nama_cabang}
+                              </p>
+                            )}
                             {item.notes && (
                               <p className="text-[10px] text-muted-foreground">
                                 {item.notes}
@@ -511,7 +532,7 @@ export function JobCostingDetailSheet({
                       <SelectContent>
                         <SelectItem value="open">Open</SelectItem>
                         <SelectItem value="approved">Approved</SelectItem>
-                        <SelectItem value="closed">Closed</SelectItem>
+                        <SelectItem value="completed">Completed</SelectItem>
                         <SelectItem value="rejected">Rejected</SelectItem>
                       </SelectContent>
                     </Select>
@@ -519,7 +540,9 @@ export function JobCostingDetailSheet({
                       size="sm"
                       className="h-8 text-xs gap-1.5"
                       onClick={() => handleStatusChange(statusDraft)}
-                      disabled={actionLoading || statusDraft === job.status}
+                      disabled={
+                        actionLoading || statusDraft === normalizedJobStatus
+                      }
                     >
                       {actionLoading ? (
                         <Loader2 className="h-3.5 w-3.5 animate-spin" />

@@ -18,6 +18,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Loader2,
   PackageCheck,
@@ -27,8 +29,15 @@ import {
   Package,
   ShoppingCart,
   ClipboardList,
+  CheckCircle2,
+  Clock,
+  XCircle,
+  ShieldCheck,
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
+import { approveReceive, rejectReceive } from "@/services/procurement-actions";
+import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 
 interface ReceiveDetailSheetProps {
   receiveId: number | null;
@@ -45,15 +54,43 @@ export function ReceiveDetailSheet({
   const [loading, setLoading] = useState(false);
   const [receive, setReceive] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
+  const [currentUser, setCurrentUser] = useState<any>(null);
+  const [approvalSubmitting, setApprovalSubmitting] = useState(false);
+  const [signatureDialogOpen, setSignatureDialogOpen] = useState(false);
+  const [pendingAction, setPendingAction] = useState<
+    "approve" | "reject" | null
+  >(null);
+  const [rejectionReason, setRejectionReason] = useState("");
 
   useEffect(() => {
     if (open && receiveId) {
+      fetchCurrentUser();
       fetchDetail(receiveId);
     } else if (!open) {
       setReceive(null);
       setItems([]);
+      setPendingAction(null);
+      setRejectionReason("");
     }
   }, [open, receiveId]);
+
+  const fetchCurrentUser = async () => {
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) {
+      setCurrentUser(null);
+      return;
+    }
+
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, nama, email")
+      .eq("id", user.id)
+      .single();
+
+    setCurrentUser(profile || { id: user.id });
+  };
 
   const fetchDetail = async (id: number) => {
     setLoading(true);
@@ -61,7 +98,7 @@ export function ReceiveDetailSheet({
       .from("receives")
       .select(
         `
-          id, ri_kode, ri_tanggal, ri_pic, ri_keterangan, created_at,
+          id, ri_kode, ri_tanggal, ri_pic, ri_keterangan, ri_status, approvals, rejection_reason, created_at,
           cabang(id, nama_cabang),
           pos(id, po_kode)
         `,
@@ -82,6 +119,95 @@ export function ReceiveDetailSheet({
   };
 
   const totalQty = items.reduce((sum, i) => sum + (i.qty || 0), 0);
+  const approvals: any[] = receive?.approvals ?? [];
+  const nextPendingApproval = approvals.find(
+    (a: any) => a.status === "pending",
+  );
+  const isMyTurn =
+    Boolean(currentUser?.id) &&
+    Boolean(nextPendingApproval) &&
+    nextPendingApproval.userid === currentUser.id;
+
+  const getStatusBadge = (status?: string) => {
+    if (status === "completed") {
+      return (
+        <Badge className="text-[10px] font-bold uppercase bg-green-600 text-white">
+          Completed
+        </Badge>
+      );
+    }
+
+    if (status === "rejected") {
+      return (
+        <Badge
+          variant="destructive"
+          className="text-[10px] font-bold uppercase"
+        >
+          Rejected
+        </Badge>
+      );
+    }
+
+    return (
+      <Badge variant="secondary" className="text-[10px] font-bold uppercase">
+        Open
+      </Badge>
+    );
+  };
+
+  const openApproveFlow = () => {
+    setPendingAction("approve");
+    setSignatureDialogOpen(true);
+  };
+
+  const openRejectFlow = () => {
+    if (!rejectionReason.trim()) {
+      toast.error("Alasan penolakan wajib diisi");
+      return;
+    }
+    setPendingAction("reject");
+    setSignatureDialogOpen(true);
+  };
+
+  const handleConfirmSignature = async (signature: {
+    id: string;
+    image_url: string;
+    label: string;
+  }) => {
+    if (!receiveId || !pendingAction) return;
+
+    setApprovalSubmitting(true);
+    try {
+      if (pendingAction === "approve") {
+        const result = await approveReceive(receiveId, signature.image_url);
+        if (!result?.success) {
+          toast.error(result?.error || "Gagal menyetujui receive");
+        } else {
+          const isAllDone = "isAllDone" in result && result.isAllDone;
+          toast.success(
+            isAllDone ? "Receive completed" : "Approval receive berhasil",
+          );
+          fetchDetail(receiveId);
+        }
+      } else {
+        const result = await rejectReceive(
+          receiveId,
+          rejectionReason.trim(),
+          signature.image_url,
+        );
+        if (!result?.success) {
+          toast.error(result?.error || "Gagal menolak receive");
+        } else {
+          toast.success("Receive ditolak");
+          fetchDetail(receiveId);
+          setRejectionReason("");
+        }
+      }
+    } finally {
+      setApprovalSubmitting(false);
+      setPendingAction(null);
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -115,9 +241,12 @@ export function ReceiveDetailSheet({
                   <p className="text-[9px] font-black uppercase text-muted-foreground">
                     Kode RI
                   </p>
-                  <p className="font-black text-lg text-foreground font-mono uppercase tracking-wide">
-                    {receive.ri_kode}
-                  </p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-black text-lg text-foreground font-mono uppercase tracking-wide">
+                      {receive.ri_kode}
+                    </p>
+                    {getStatusBadge(receive.ri_status)}
+                  </div>
                 </div>
 
                 {/* Tanggal */}
@@ -173,6 +302,108 @@ export function ReceiveDetailSheet({
                     <p className="text-sm text-muted-foreground font-medium leading-relaxed">
                       {receive.ri_keterangan}
                     </p>
+                  </div>
+                )}
+              </div>
+
+              <Separator />
+
+              {/* Approval */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-[10px] font-black uppercase text-muted-foreground flex items-center gap-1.5">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Alur Approval Receive
+                  </p>
+                </div>
+
+                {approvals.length === 0 ? (
+                  <div className="rounded-md border border-dashed border-border p-3 text-[10px] font-medium text-muted-foreground">
+                    Approval belum terdefinisi pada dokumen ini.
+                  </div>
+                ) : (
+                  <div className="rounded-lg border border-border overflow-hidden">
+                    {approvals.map((step: any, idx: number) => (
+                      <div
+                        key={`${step.userid}-${idx}`}
+                        className="flex items-start gap-3 p-3 border-b last:border-b-0"
+                      >
+                        <div className="pt-0.5">
+                          {step.status === "approved" ? (
+                            <CheckCircle2 className="h-4 w-4 text-green-600" />
+                          ) : step.status === "rejected" ? (
+                            <XCircle className="h-4 w-4 text-red-600" />
+                          ) : (
+                            <Clock className="h-4 w-4 text-muted-foreground" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-[11px] font-bold uppercase text-foreground truncate">
+                            {step.nama || "Unknown"}
+                          </p>
+                          <p className="text-[10px] text-muted-foreground">
+                            {step.email || "-"}
+                          </p>
+                          {step.notes && (
+                            <p className="text-[10px] text-muted-foreground mt-1 italic">
+                              {step.notes}
+                            </p>
+                          )}
+                        </div>
+                        <Badge
+                          variant={
+                            step.status === "approved"
+                              ? "default"
+                              : step.status === "rejected"
+                                ? "destructive"
+                                : "secondary"
+                          }
+                          className="text-[9px] font-bold uppercase"
+                        >
+                          {step.status}
+                        </Badge>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {receive?.rejection_reason && (
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[10px] text-red-700">
+                    <span className="font-bold uppercase">Alasan Reject:</span>{" "}
+                    {receive.rejection_reason}
+                  </div>
+                )}
+
+                {isMyTurn && receive?.ri_status === "open" && (
+                  <div className="space-y-2 rounded-md border border-border p-3">
+                    <p className="text-[10px] font-bold uppercase text-muted-foreground">
+                      Aksi Approval Anda
+                    </p>
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1 h-8 text-[10px] font-bold uppercase"
+                        onClick={openApproveFlow}
+                        disabled={approvalSubmitting}
+                      >
+                        Setujui
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        className="flex-1 h-8 text-[10px] font-bold uppercase"
+                        onClick={openRejectFlow}
+                        disabled={approvalSubmitting}
+                      >
+                        Tolak
+                      </Button>
+                    </div>
+                    <Textarea
+                      value={rejectionReason}
+                      onChange={(event) =>
+                        setRejectionReason(event.target.value)
+                      }
+                      placeholder="Alasan penolakan (wajib saat tolak)"
+                      className="min-h-16 text-xs"
+                    />
                   </div>
                 )}
               </div>
@@ -270,6 +501,12 @@ export function ReceiveDetailSheet({
             </div>
           )}
         </div>
+
+        <MRSignatureDialog
+          open={signatureDialogOpen}
+          onOpenChange={setSignatureDialogOpen}
+          onConfirm={handleConfirmSignature}
+        />
       </SheetContent>
     </Sheet>
   );

@@ -24,7 +24,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { deleteSpb, getSpbList } from "@/services/spb-actions";
+import {
+  approveSpb,
+  deleteSpb,
+  getSpbList,
+  rejectSpb,
+} from "@/services/spb-actions";
+import { createClient } from "@/lib/supabase/client";
 
 type SpbRow = {
   id: number;
@@ -39,9 +45,12 @@ type SpbRow = {
   spb_pic_gmi?: string | null;
   spb_pic_ppa?: string | null;
   spb_status: string;
+  approval_status?: string;
+  approvals?: any[];
 };
 
 export default function SpbPage() {
+  const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SpbRow[]>([]);
   const [search, setSearch] = useState("");
@@ -50,6 +59,7 @@ export default function SpbPage() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [total, setTotal] = useState(0);
+  const [userId, setUserId] = useState("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -75,6 +85,16 @@ export default function SpbPage() {
     fetchData();
   }, [debouncedSearch, status, page, limit]);
 
+  useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) setUserId(user.id);
+    };
+    loadUser();
+  }, [supabase]);
+
   const onDelete = async (id: number) => {
     const ok = window.confirm("Hapus SPB ini? Stok akan dikembalikan.");
     if (!ok) return;
@@ -87,6 +107,34 @@ export default function SpbPage() {
 
     toast.success("SPB berhasil dihapus.");
     fetchData();
+  };
+
+  const onApprove = async (id: number) => {
+    const res = await approveSpb(id);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Approval SPB berhasil diproses.");
+    fetchData();
+  };
+
+  const onReject = async (id: number) => {
+    const reason = window.prompt("Alasan reject SPB:");
+    if (!reason) return;
+    const res = await rejectSpb(id, reason);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("SPB berhasil direject.");
+    fetchData();
+  };
+
+  const isMyApprovalTurn = (row: SpbRow) => {
+    return (row.approvals || []).some(
+      (a: any) => a.userid === userId && a.status === "pending",
+    );
   };
 
   return (
@@ -173,6 +221,7 @@ export default function SpbPage() {
                 <TableHead>PIC GMI</TableHead>
                 <TableHead>PIC PPA</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Approval</TableHead>
                 <TableHead className="w-24">Aksi</TableHead>
               </TableRow>
             </TableHeader>
@@ -180,7 +229,7 @@ export default function SpbPage() {
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={12}
+                    colSpan={13}
                     className="text-center text-muted-foreground"
                   >
                     Memuat data...
@@ -189,7 +238,7 @@ export default function SpbPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={12}
+                    colSpan={13}
                     className="text-center text-muted-foreground"
                   >
                     Belum ada data SPB.
@@ -211,15 +260,37 @@ export default function SpbPage() {
                     <TableCell>{row.spb_pic_gmi || "-"}</TableCell>
                     <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
                     <TableCell>{row.spb_status}</TableCell>
+                    <TableCell>{row.approval_status || "open"}</TableCell>
                     <TableCell>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => onDelete(row.id)}
-                        title="Hapus SPB"
-                      >
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        {row.approval_status === "open" &&
+                          isMyApprovalTurn(row) && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => onApprove(row.id)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                variant="destructive"
+                                size="sm"
+                                onClick={() => onReject(row.id)}
+                              >
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onDelete(row.id)}
+                          title="Hapus SPB"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

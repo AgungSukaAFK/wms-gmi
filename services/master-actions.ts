@@ -6,6 +6,62 @@ import { revalidatePath } from "next/cache";
 /**
  * CABANG SERVICES
  */
+
+type CabangPayload = {
+  nama_cabang: string;
+  kode_cabang: string;
+  is_active?: boolean;
+};
+
+async function hasCabangWriteAccess() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { allowed: false, error: "Unauthorized" };
+  }
+
+  const { data: roleRows, error } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  if (error) {
+    return { allowed: false, error: error.message };
+  }
+
+  const roles = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
+  const allowed = roles.includes("moderator");
+
+  return {
+    allowed,
+    error: allowed
+      ? null
+      : "Akses ditolak. Hanya moderator yang diizinkan mengelola cabang.",
+  };
+}
+
+async function countReferences(
+  table: string,
+  column: string,
+  cabangId: number,
+) {
+  const supabase = await createClient();
+  const { count, error } = await supabase
+    .from(table)
+    .select("id", { count: "exact", head: true })
+    .eq(column, cabangId);
+
+  if (error) {
+    // If a table/column doesn't exist in a specific environment, ignore safely.
+    return 0;
+  }
+
+  return count || 0;
+}
+
 export async function getCabangList() {
   const supabase = await createClient();
   const { data, error } = await supabase
@@ -18,6 +74,192 @@ export async function getCabangList() {
     return [];
   }
   return data;
+}
+
+export async function getCabangManagementList() {
+  const access = await hasCabangWriteAccess();
+  if (!access.allowed) return { data: [], error: access.error };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("cabang")
+    .select("id, nama_cabang, kode_cabang, is_active, created_at")
+    .order("nama_cabang");
+
+  if (error) return { data: [], error: error.message };
+  return { data: data || [], error: null as string | null };
+}
+
+export async function createCabang(payload: CabangPayload) {
+  const access = await hasCabangWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const supabase = await createClient();
+  const nama_cabang = payload.nama_cabang?.trim();
+  const kode_cabang = payload.kode_cabang?.trim();
+
+  if (!nama_cabang || !kode_cabang) {
+    return { error: "Nama cabang dan kode cabang wajib diisi." };
+  }
+
+  const { data: created, error: createError } = await supabase
+    .from("cabang")
+    .insert([
+      {
+        nama_cabang,
+        kode_cabang,
+        is_active: payload.is_active ?? true,
+      },
+    ])
+    .select("id")
+    .single();
+
+  if (createError || !created) {
+    return { error: createError?.message || "Gagal membuat cabang." };
+  }
+
+  // Ensure every existing part has an initial stock row at this new cabang.
+  const { data: barangRows, error: barangError } = await supabase
+    .from("barang")
+    .select("id");
+
+  if (barangError) {
+    return {
+      error: `Cabang berhasil dibuat, tetapi gagal inisialisasi stok: ${barangError.message}`,
+    };
+  }
+
+  const initialStockRows = (barangRows || []).map((b: any) => ({
+    part_id: b.id,
+    cabang_id: created.id,
+    qty: 0,
+    min_qty: 0,
+    max_qty: 0,
+  }));
+
+  if (initialStockRows.length > 0) {
+    const { error: stockError } = await supabase
+      .from("stock")
+      .upsert(initialStockRows, { onConflict: "part_id,cabang_id" });
+
+    if (stockError) {
+      return {
+        error: `Cabang berhasil dibuat, tetapi gagal inisialisasi stok: ${stockError.message}`,
+      };
+    }
+  }
+
+  revalidatePath("/cabang");
+  return { success: true };
+}
+
+export async function updateCabang(id: number, payload: CabangPayload) {
+  const access = await hasCabangWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const supabase = await createClient();
+  const nama_cabang = payload.nama_cabang?.trim();
+  const kode_cabang = payload.kode_cabang?.trim();
+
+  if (!nama_cabang || !kode_cabang) {
+    return { error: "Nama cabang dan kode cabang wajib diisi." };
+  }
+
+  const { error } = await supabase
+    .from("cabang")
+    .update({
+      nama_cabang,
+      kode_cabang,
+      is_active: payload.is_active ?? true,
+    })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/cabang");
+  return { success: true };
+}
+
+export async function deleteCabangWithConfirmation(
+  id: number,
+  typedName: string,
+) {
+  const access = await hasCabangWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const supabase = await createClient();
+  const { data: cabang, error: cabangError } = await supabase
+    .from("cabang")
+    .select("id, nama_cabang")
+    .eq("id", id)
+    .single();
+
+  if (cabangError || !cabang) return { error: "Cabang tidak ditemukan." };
+
+  if (typedName.trim() !== cabang.nama_cabang) {
+    return {
+      error:
+        "Konfirmasi hapus tidak sesuai. Ketik persis nama cabang untuk melanjutkan.",
+    };
+  }
+
+  const checks = [
+    { table: "profiles", column: "cabang_id", label: "Profiles" },
+    { table: "stock", column: "cabang_id", label: "Stock" },
+    {
+      table: "deliveries",
+      column: "dari_cabang_id",
+      label: "Deliveries (Dari)",
+    },
+    { table: "deliveries", column: "ke_cabang_id", label: "Deliveries (Ke)" },
+    { table: "mrs", column: "cabang_id", label: "Material Request" },
+    { table: "prs", column: "cabang_id", label: "Purchase Request" },
+    { table: "pos", column: "cabang_id", label: "Purchase Order" },
+    { table: "receives", column: "cabang_id", label: "Receive Item" },
+    { table: "job_costing", column: "cabang_id", label: "Job Costing" },
+    {
+      table: "approval_templates",
+      column: "cabang_id",
+      label: "Approval Templates",
+    },
+    {
+      table: "mr_sharestock_allocations",
+      column: "source_cabang_id",
+      label: "MR Share Stock Allocations",
+    },
+    {
+      table: "job_costing_items",
+      column: "source_cabang_id",
+      label: "Job Costing Items (Source)",
+    },
+    {
+      table: "job_costing",
+      column: "finish_part_cabang_id",
+      label: "Job Costing Finish Part",
+    },
+  ];
+
+  const refs: string[] = [];
+  for (const check of checks) {
+    const count = await countReferences(check.table, check.column, id);
+    if (count > 0) {
+      refs.push(`${check.label}: ${count}`);
+    }
+  }
+
+  if (refs.length > 0) {
+    return {
+      error:
+        "Cabang tidak dapat dihapus karena masih direferensikan data lain.",
+      references: refs,
+    };
+  }
+
+  const { error } = await supabase.from("cabang").delete().eq("id", id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/cabang");
+  return { success: true };
 }
 
 export async function upsertCabang(formData: FormData) {

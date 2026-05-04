@@ -105,19 +105,12 @@ export function MRDetailSheet({
             Rejected
           </Badge>
         );
+      case "completed":
       case "done":
-        return (
-          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-semibold text-[10px] uppercase"
-          >
-            Closed
+          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -421,57 +414,62 @@ export function MRDetailSheet({
             </div>
 
             <div className="p-6 border-t border-border bg-muted/40 space-y-4 shadow-sm mt-auto">
-              <button
-                onClick={handleToggleAccurate}
-                disabled={updatingAccurate}
-                className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all ${
-                  mr?.accurate
-                    ? "bg-amber-50 border-amber-200 hover:bg-amber-100"
-                    : "bg-muted/30 border-border hover:bg-muted/60"
-                }`}
-              >
-                <div
-                  className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 ${
+              {/* ACCURATE_HIDDEN: tombol toggle disembunyikan, nilai selalu false */}
+              {false && (
+                <button
+                  onClick={handleToggleAccurate}
+                  disabled={updatingAccurate}
+                  className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all ${
                     mr?.accurate
-                      ? "bg-amber-500 border-amber-500"
-                      : "border-muted-foreground/40"
+                      ? "bg-amber-50 border-amber-200 hover:bg-amber-100"
+                      : "bg-muted/30 border-border hover:bg-muted/60"
                   }`}
                 >
-                  {mr?.accurate && (
-                    <svg
-                      className="h-2.5 w-2.5 text-white"
-                      fill="none"
-                      viewBox="0 0 24 24"
-                      stroke="currentColor"
-                      strokeWidth={3}
-                    >
-                      <path
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        d="M5 13l4 4L19 7"
-                      />
-                    </svg>
-                  )}
-                </div>
-                <div className="flex-1 text-left">
-                  <p
-                    className={`text-[10px] font-bold uppercase tracking-tight leading-none ${
-                      mr?.accurate ? "text-amber-700" : "text-muted-foreground"
+                  <div
+                    className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 ${
+                      mr?.accurate
+                        ? "bg-amber-500 border-amber-500"
+                        : "border-muted-foreground/40"
                     }`}
                   >
-                    {mr?.accurate
-                      ? "Sudah Input ke Accurate"
-                      : "Belum Input ke Accurate"}
-                  </p>
-                  <p className="text-[9px] text-muted-foreground font-medium mt-0.5">
-                    Klik untuk{" "}
-                    {mr?.accurate ? "hapus tanda" : "tandai sudah input"}
-                  </p>
-                </div>
-                {updatingAccurate && (
-                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
-                )}
-              </button>
+                    {mr?.accurate && (
+                      <svg
+                        className="h-2.5 w-2.5 text-white"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        strokeWidth={3}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                    )}
+                  </div>
+                  <div className="flex-1 text-left">
+                    <p
+                      className={`text-[10px] font-bold uppercase tracking-tight leading-none ${
+                        mr?.accurate
+                          ? "text-amber-700"
+                          : "text-muted-foreground"
+                      }`}
+                    >
+                      {mr?.accurate
+                        ? "Sudah Input ke Accurate"
+                        : "Belum Input ke Accurate"}
+                    </p>
+                    <p className="text-[9px] text-muted-foreground font-medium mt-0.5">
+                      Klik untuk{" "}
+                      {mr?.accurate ? "hapus tanda" : "tandai sudah input"}
+                    </p>
+                  </div>
+                  {updatingAccurate && (
+                    <Loader2 className="h-3 w-3 animate-spin text-muted-foreground shrink-0" />
+                  )}
+                </button>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full">
                 <Button
                   variant="outline"

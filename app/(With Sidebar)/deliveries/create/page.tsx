@@ -42,7 +42,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { useDebounce } from "use-debounce";
 import { createDelivery } from "@/services/inventory-actions";
-import { cn } from "@/lib/utils";
+import { cn, toYmdLocal } from "@/lib/utils";
 import {
   Select,
   SelectContent,
@@ -76,9 +76,7 @@ export default function CreateDeliveryPage() {
 
   // Form State
   const [dlvKode, setDlvKode] = useState("");
-  const [dlvTanggal, setDlvTanggal] = useState(
-    new Date().toISOString().split("T")[0],
-  );
+  const [dlvTanggal, setDlvTanggal] = useState(toYmdLocal());
   const [dariCabang, setDariCabang] = useState<number | null>(null);
   const [keCabang, setKeCabang] = useState<number | null>(null);
   // Shipment type
@@ -418,7 +416,7 @@ export default function CreateDeliveryPage() {
               Nomor Delivery
             </Label>
             <Input
-              placeholder="Auto generated atau manual..."
+              placeholder="Masukkan nomor delivery (manual)"
               className="h-10 w-full bg-muted/40 border-input rounded-md font-bold text-sm uppercase text-primary md:w-70"
               value={dlvKode}
               onChange={(e) => setDlvKode(e.target.value)}

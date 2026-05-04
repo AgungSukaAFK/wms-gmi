@@ -21,6 +21,7 @@ import {
   ShoppingCart,
   Truck,
 } from "lucide-react";
+import { toYmdLocal } from "@/lib/utils";
 
 type TrendData = {
   bulan: string;
@@ -245,8 +246,8 @@ export default async function DashboardPage() {
         month: "short",
         year: "2-digit",
       }),
-      start: monthDate.toISOString().split("T")[0],
-      end: nextMonthDate.toISOString().split("T")[0],
+      start: toYmdLocal(monthDate),
+      end: toYmdLocal(nextMonthDate),
     });
   }
 

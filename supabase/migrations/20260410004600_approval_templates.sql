@@ -7,25 +7,18 @@
 TRUNCATE public.cabang CASCADE;
 
 INSERT INTO public.cabang (nama_cabang, kode_cabang) VALUES
-  ('GMI-JAKARTA', 'JKT'),
-  ('GMI-JAKARTA DS', 'JKT-DS'),
-  ('GMI-MAN JAKARTA', 'MAN-JKT'),
-  ('GMI-MAN BPP', 'MAN-BPP'),
-  ('GMI-SERVICE JAKARTA', 'SRV-JKT'),
-  ('GMI-SERVICE BPP', 'SRV-BPP'),
-  ('GMI-SERVICE TABANG', 'SRV-TBG'),
-  ('GMI-SERVICE ENIM', 'SRV-ENIM'),
+  ('GMI-HO',   'HO'),
+  ('GMI-BPP',  'BPP'),
+  ('GMI-BA',   'BA'),
   ('GMI-ENIM', 'ENIM'),
-  ('GMI-BA', 'BA'),
-  ('GMI-DIZA', 'DIZA'),
-  ('GMI-MIP', 'MIP'),
-  ('GMI-TAL', 'TAL'),
+  ('GMI-MIP',  'MIP'),
+  ('GMI-TAL',  'TAL'),
+  ('GMI-BIB',  'BIB'),
+  ('GMI-AMI',  'AMI'),
   ('GMI-MIFA', 'MIFA'),
-  ('GMI-BPP', 'BPP'),
-  ('GMI-AMI', 'AMI'),
-  ('GMI-BIB', 'BIB'),
-  ('GMI-IPT', 'IPT'),
-  ('GMI-LKP', 'LKP');
+  ('GMI-IPT',  'IPT'),
+  ('GMI-DIZA', 'DIZA'),
+  ('GMI-LKP',  'LKP');
 
 -- 2. Create Approval Templates Table
 CREATE TABLE public.approval_templates (

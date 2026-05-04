@@ -47,16 +47,39 @@ export async function updateSession(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const user = data?.claims;
 
-  if (
-    request.nextUrl.pathname !== "/" &&
-    !user &&
-    !request.nextUrl.pathname.startsWith("/login") &&
-    !request.nextUrl.pathname.startsWith("/auth")
-  ) {
+  const isAuthRoute =
+    request.nextUrl.pathname.startsWith("/auth") ||
+    request.nextUrl.pathname.startsWith("/login") ||
+    request.nextUrl.pathname === "/";
+
+  if (!user && !isAuthRoute) {
     // no user, potentially respond by redirecting the user to the login page
     const url = request.nextUrl.clone();
     url.pathname = "/auth/login";
     return NextResponse.redirect(url);
+  }
+
+  // If user is authenticated, verify their account is still active
+  if (user && !isAuthRoute) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("is_active")
+      .eq("id", user.sub)
+      .single();
+
+    if (!profile?.is_active) {
+      // Sign out — this updates cookies inside supabaseResponse
+      await supabase.auth.signOut();
+      const url = request.nextUrl.clone();
+      url.pathname = "/auth/login";
+      url.searchParams.set("error", "account_inactive");
+      const redirectResponse = NextResponse.redirect(url);
+      // Copy all cookies (including sign-out cookie deletions) to the redirect response
+      supabaseResponse.cookies.getAll().forEach((cookie) => {
+        redirectResponse.cookies.set(cookie);
+      });
+      return redirectResponse;
+    }
   }
 
   // IMPORTANT: You *must* return the supabaseResponse object as it is.

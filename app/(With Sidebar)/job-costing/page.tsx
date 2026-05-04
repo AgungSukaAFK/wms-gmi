@@ -39,11 +39,15 @@ import { JobCostingDetailSheet } from "@/components/job-costing/job-costing-deta
 import { useAuthStore } from "@/stores/auth-store";
 import { toast } from "sonner";
 import { DatePickerString } from "@/components/date-picker-string";
+import {
+  completedFilterStatuses,
+  normalizeDocumentStatus,
+} from "@/lib/document-status";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-blue-100 text-blue-700 border-blue-200",
   approved: "bg-green-100 text-green-700 border-green-200",
-  closed: "bg-gray-100 text-gray-600 border-gray-200",
+  completed: "bg-gray-100 text-gray-600 border-gray-200",
   rejected: "bg-red-100 text-red-700 border-red-200",
 };
 
@@ -91,7 +95,7 @@ export default function JobCostingListPage() {
     let query = supabase
       .from("job_costing")
       .select(
-        "*, cabang(nama_cabang), job_costing_items(id, qty, unit_price)",
+        "*, cabang!job_costing_cabang_id_fkey(nama_cabang), job_costing_items(id, qty, unit_price)",
         { count: "exact" },
       );
 
@@ -100,7 +104,13 @@ export default function JobCostingListPage() {
         `job_kode.ilike.%${debouncedSearch}%,description.ilike.%${debouncedSearch}%,finish_part.ilike.%${debouncedSearch}%`,
       );
     }
-    if (statusFilter !== "all") query = query.eq("status", statusFilter);
+    if (statusFilter !== "all") {
+      if (statusFilter === "completed") {
+        query = query.in("status", completedFilterStatuses());
+      } else {
+        query = query.eq("status", statusFilter);
+      }
+    }
     if (locationFilter !== "all") query = query.eq("cabang_id", locationFilter);
     if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00`);
     if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59`);
@@ -215,7 +225,7 @@ export default function JobCostingListPage() {
                 <SelectItem value="all">Semua Status</SelectItem>
                 <SelectItem value="open">Open</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
               </SelectContent>
             </Select>
@@ -369,12 +379,19 @@ export default function JobCostingListPage() {
                         {job.finish_part || job.description || "-"}
                       </TableCell>
                       <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={`text-[10px] font-bold capitalize ${STATUS_COLORS[job.status] ?? ""}`}
-                        >
-                          {job.status}
-                        </Badge>
+                        {(() => {
+                          const normalizedStatus = normalizeDocumentStatus(
+                            job.status,
+                          );
+                          return (
+                            <Badge
+                              variant="outline"
+                              className={`text-[10px] font-bold capitalize ${STATUS_COLORS[normalizedStatus] ?? ""}`}
+                            >
+                              {normalizedStatus}
+                            </Badge>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-center">
                         <ChevronRight className="h-4 w-4 text-muted-foreground" />

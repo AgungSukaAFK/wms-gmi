@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { createJobCosting, generateJobKode } from "@/services/finance-actions";
+import { createJobCosting } from "@/services/finance-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -42,6 +42,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
+import { toYmdLocal } from "@/lib/utils";
 
 const rupiahFormatter = new Intl.NumberFormat("id-ID");
 
@@ -60,6 +61,8 @@ interface LineItem {
   part_id: number;
   part_number: string;
   part_name: string;
+  source_cabang_id: number;
+  source_cabang_name: string;
   unit: string;
   stock_qty: number;
   qty: number;
@@ -83,11 +86,8 @@ export default function JobCostingCreatePage() {
   const [submitting, setSubmitting] = useState(false);
 
   const [jobKode, setJobKode] = useState("");
-  const [kodeLoading, setKodeLoading] = useState(false);
   const [cabangId, setCabangId] = useState("");
-  const [jobTanggal, setJobTanggal] = useState(
-    new Date().toISOString().split("T")[0],
-  );
+  const [jobTanggal, setJobTanggal] = useState(toYmdLocal());
   const [finishPartOpen, setFinishPartOpen] = useState(false);
   const [finishPartSearch, setFinishPartSearch] = useState("");
   const [debouncedFinishPartSearch] = useDebounce(finishPartSearch, 300);
@@ -99,6 +99,9 @@ export default function JobCostingCreatePage() {
     number | null
   >(null);
   const [selectedFinishPartLabel, setSelectedFinishPartLabel] = useState("");
+  const [finishPartQty, setFinishPartQty] = useState(1);
+  const [finishPartCabangId, setFinishPartCabangId] = useState("");
+  const [selectedSourceCabangId, setSelectedSourceCabangId] = useState("");
   const [status, setStatus] = useState("open");
   const [notes, setNotes] = useState("");
 
@@ -114,6 +117,8 @@ export default function JobCostingCreatePage() {
   useEffect(() => {
     if (storeProfile?.cabang_id) {
       setCabangId(String(storeProfile.cabang_id));
+      setSelectedSourceCabangId(String(storeProfile.cabang_id));
+      setFinishPartCabangId(String(storeProfile.cabang_id));
     }
 
     supabase
@@ -123,6 +128,16 @@ export default function JobCostingCreatePage() {
       .order("nama_cabang")
       .then((result: { data: any[] | null }) => setCabangs(result.data || []));
   }, [storeProfile?.cabang_id, supabase]);
+
+  useEffect(() => {
+    if (!cabangId) return;
+    if (!selectedSourceCabangId) {
+      setSelectedSourceCabangId(cabangId);
+    }
+    if (!finishPartCabangId) {
+      setFinishPartCabangId(cabangId);
+    }
+  }, [cabangId, selectedSourceCabangId, finishPartCabangId]);
 
   useEffect(() => {
     if (!barangOpen) return;
@@ -154,11 +169,11 @@ export default function JobCostingCreatePage() {
       const ids = rows.map((b) => b.id);
       let stockMap = new Map<number, number>();
 
-      if (cabangId) {
+      if (selectedSourceCabangId) {
         const { data: stockRows } = await supabase
           .from("stock")
           .select("part_id, qty")
-          .eq("cabang_id", parseInt(cabangId, 10))
+          .eq("cabang_id", parseInt(selectedSourceCabangId, 10))
           .in("part_id", ids);
 
         stockMap = new Map(
@@ -179,7 +194,7 @@ export default function JobCostingCreatePage() {
     };
 
     fetchBarang();
-  }, [barangOpen, debouncedBarangSearch, cabangId, supabase]);
+  }, [barangOpen, debouncedBarangSearch, selectedSourceCabangId, supabase]);
 
   useEffect(() => {
     if (!finishPartOpen) return;
@@ -214,19 +229,12 @@ export default function JobCostingCreatePage() {
     fetchFinishPartOptions();
   }, [finishPartOpen, debouncedFinishPartSearch, supabase]);
 
-  useEffect(() => {
-    if (!cabangId) return;
-    const cabang = cabangs.find((c) => String(c.id) === cabangId);
-    if (!cabang?.kode_cabang) return;
-
-    setKodeLoading(true);
-    generateJobKode(cabang.kode_cabang).then((kode) => {
-      setJobKode(kode);
-      setKodeLoading(false);
-    });
-  }, [cabangId, cabangs]);
-
   function addBarangToItems() {
+    if (!selectedSourceCabangId) {
+      toast.error("Pilih cabang asal barang terlebih dahulu.");
+      return;
+    }
+
     if (!selectedBarangId) {
       toast.error("Pilih barang terlebih dahulu.");
       return;
@@ -239,12 +247,20 @@ export default function JobCostingCreatePage() {
     }
 
     setItems((prev) => {
-      const idx = prev.findIndex((i) => i.part_id === selected.id);
+      const sourceCabangId = parseInt(selectedSourceCabangId, 10);
+      const idx = prev.findIndex(
+        (i) =>
+          i.part_id === selected.id && i.source_cabang_id === sourceCabangId,
+      );
       if (idx >= 0) {
         const cloned = [...prev];
         cloned[idx] = { ...cloned[idx], qty: cloned[idx].qty + 1 };
         return cloned;
       }
+
+      const sourceCabang = cabangs.find(
+        (c) => String(c.id) === selectedSourceCabangId,
+      );
 
       return [
         ...prev,
@@ -253,6 +269,8 @@ export default function JobCostingCreatePage() {
           part_id: selected.id,
           part_number: selected.part_number,
           part_name: selected.part_name,
+          source_cabang_id: sourceCabangId,
+          source_cabang_name: sourceCabang?.nama_cabang || "-",
           unit: selected.part_satuan || "pcs",
           stock_qty: selected.stock_qty,
           qty: 1,
@@ -297,8 +315,16 @@ export default function JobCostingCreatePage() {
       toast.error("Finish part wajib diisi.");
       return;
     }
+    if (!finishPartCabangId) {
+      toast.error("Cabang tujuan finish part wajib dipilih.");
+      return;
+    }
+    if (!Number.isFinite(finishPartQty) || finishPartQty <= 0) {
+      toast.error("Qty finish part wajib lebih dari 0.");
+      return;
+    }
     if (!jobKode.trim()) {
-      toast.error("Kode Job belum ter-generate. Pilih cabang.");
+      toast.error("Kode Job wajib diisi manual.");
       return;
     }
 
@@ -311,10 +337,13 @@ export default function JobCostingCreatePage() {
     const result = await createJobCosting({
       job_kode: jobKode.trim(),
       cabang_id: parseInt(cabangId, 10),
+      finish_part_id: selectedFinishPartId,
+      finish_part_cabang_id: parseInt(finishPartCabangId, 10),
+      qty_finish_part: finishPartQty,
       description: selectedFinishPartLabel,
       finish_part: selectedFinishPartLabel,
       job_tanggal: jobTanggal,
-      status: status as "open" | "approved" | "closed" | "rejected",
+      status: status as "open" | "approved" | "completed" | "rejected",
       notes: notes.trim(),
       items: items.map((i) => ({
         part_id: i.part_id,
@@ -324,6 +353,7 @@ export default function JobCostingCreatePage() {
         qty: i.qty,
         unit: i.unit,
         unit_price: i.unit_price,
+        source_cabang_id: i.source_cabang_id,
       })),
     });
     setSubmitting(false);
@@ -351,9 +381,6 @@ export default function JobCostingCreatePage() {
                 placeholder="Masukkan no job costing"
                 className="h-10"
               />
-              {kodeLoading && (
-                <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
-              )}
             </div>
           </div>
 
@@ -372,6 +399,25 @@ export default function JobCostingCreatePage() {
             <Label className="text-xs font-semibold">
               Barang <span className="text-destructive">*</span>
             </Label>
+
+            <div className="mb-2">
+              <Select
+                value={selectedSourceCabangId}
+                onValueChange={setSelectedSourceCabangId}
+              >
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Pilih cabang asal barang" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cabangs.map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {c.nama_cabang}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
             <Popover open={barangOpen} onOpenChange={setBarangOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -439,6 +485,36 @@ export default function JobCostingCreatePage() {
             <Label className="text-xs font-semibold">
               Finish Part <span className="text-destructive">*</span>
             </Label>
+
+            <div className="mb-2 grid grid-cols-2 gap-2">
+              <Select
+                value={finishPartCabangId}
+                onValueChange={setFinishPartCabangId}
+              >
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Cabang tujuan finish part" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cabangs.map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {c.nama_cabang}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Input
+                type="number"
+                min={1}
+                value={finishPartQty}
+                onChange={(e) =>
+                  setFinishPartQty(parseInt(e.target.value || "0", 10))
+                }
+                placeholder="Qty finish part"
+                className="h-9"
+              />
+            </div>
+
             <Popover open={finishPartOpen} onOpenChange={setFinishPartOpen}>
               <PopoverTrigger asChild>
                 <Button
@@ -523,7 +599,7 @@ export default function JobCostingCreatePage() {
               <SelectContent>
                 <SelectItem value="open">Pending</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
               </SelectContent>
             </Select>
@@ -558,6 +634,7 @@ export default function JobCostingCreatePage() {
                 <TableHead className="w-28">Qty</TableHead>
                 <TableHead className="w-36">Harga</TableHead>
                 <TableHead className="w-24">Unit</TableHead>
+                <TableHead className="w-36">Cabang Asal</TableHead>
                 <TableHead className="w-28">Stock</TableHead>
                 <TableHead className="w-16 text-center">Aksi</TableHead>
               </TableRow>
@@ -566,7 +643,7 @@ export default function JobCostingCreatePage() {
               {items.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={8}
+                    colSpan={9}
                     className="h-24 text-center text-muted-foreground"
                   >
                     Belum ada barang ditambahkan.
@@ -610,6 +687,7 @@ export default function JobCostingCreatePage() {
                       />
                     </TableCell>
                     <TableCell>{item.unit}</TableCell>
+                    <TableCell>{item.source_cabang_name}</TableCell>
                     <TableCell>{item.stock_qty}</TableCell>
                     <TableCell className="text-center">
                       <Button

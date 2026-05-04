@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -82,8 +82,47 @@ export async function updateUserDetail(
 ) {
   const supabase = await createClient();
 
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Tidak terautentikasi." };
+  }
+
+  // Allow only moderator/admin to change user management data.
+  const { data: callerRoles, error: callerRolesError } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  if (callerRolesError) {
+    return { error: callerRolesError.message };
+  }
+
+  const roleNames = (callerRoles ?? []).map((r: any) => r.roles?.name);
+  const isAllowed =
+    roleNames.includes("moderator") || roleNames.includes("admin");
+
+  if (!isAllowed) {
+    return {
+      error:
+        "Unauthorized: hanya moderator atau admin yang dapat mengubah data pengguna.",
+    };
+  }
+
+  // Prefer service-role client for bypassing RLS, but gracefully fallback
+  // to caller JWT client when key is not configured in local setup.
+  let writeClient: any = supabase;
+  try {
+    writeClient = createAdminClient();
+  } catch {
+    writeClient = supabase;
+  }
+
   // 1. Update cabang_id di profiles
-  const { error: profileError } = await supabase
+  const { error: profileError } = await writeClient
     .from("profiles")
     .update({
       cabang_id: data.cabang_id,
@@ -102,8 +141,7 @@ export async function updateUserDetail(
   }
 
   // 3. Update roles only when there is an actual change.
-  // This avoids unnecessary writes that may be blocked by RLS.
-  const { data: existingRoles, error: existingRolesError } = await supabase
+  const { data: existingRoles, error: existingRolesError } = await writeClient
     .from("user_roles")
     .select("role_id")
     .eq("user_id", userId);
@@ -118,36 +156,52 @@ export async function updateUserDetail(
   );
   const currentRoleIds = Array.from(
     new Set((existingRoles || []).map((r: any) => Number(r.role_id))),
-  ).sort((a, b) => a - b);
+  ) as number[];
+  currentRoleIds.sort((a, b) => a - b);
 
   const rolesChanged =
     requestedRoleIds.length !== currentRoleIds.length ||
     requestedRoleIds.some((roleId, idx) => roleId !== currentRoleIds[idx]);
 
   if (rolesChanged) {
-    const { error: deleteError } = await supabase
-      .from("user_roles")
-      .delete()
-      .eq("user_id", userId);
+    const currentRoleIdSet = new Set(currentRoleIds);
+    const requestedRoleIdSet = new Set(requestedRoleIds);
 
-    if (deleteError) {
-      console.error("Error deleting old roles:", deleteError);
-      return { error: deleteError.message };
-    }
+    const roleIdsToAdd = requestedRoleIds.filter(
+      (roleId) => !currentRoleIdSet.has(roleId),
+    );
+    const roleIdsToRemove = currentRoleIds.filter(
+      (roleId) => !requestedRoleIdSet.has(roleId),
+    );
 
-    if (requestedRoleIds.length > 0) {
-      const inserts = requestedRoleIds.map((roleId) => ({
+    // Insert first so existing roles are preserved if insert fails.
+    if (roleIdsToAdd.length > 0) {
+      const inserts = roleIdsToAdd.map((roleId) => ({
         user_id: userId,
         role_id: roleId,
       }));
 
-      const { error: insertError } = await supabase
+      const { error: insertError } = await writeClient
         .from("user_roles")
         .insert(inserts);
 
       if (insertError) {
         console.error("Error inserting new roles:", insertError);
         return { error: insertError.message };
+      }
+    }
+
+    // Then remove roles that are no longer selected.
+    if (roleIdsToRemove.length > 0) {
+      const { error: deleteError } = await writeClient
+        .from("user_roles")
+        .delete()
+        .eq("user_id", userId)
+        .in("role_id", roleIdsToRemove);
+
+      if (deleteError) {
+        console.error("Error deleting old roles:", deleteError);
+        return { error: deleteError.message };
       }
     }
   }

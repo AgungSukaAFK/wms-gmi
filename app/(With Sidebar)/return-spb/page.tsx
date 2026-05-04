@@ -17,9 +17,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { getReturnSpbList } from "@/services/spb-actions";
+import {
+  approveReturnSpb,
+  getReturnSpbList,
+  rejectReturnSpb,
+} from "@/services/spb-actions";
+import { createClient } from "@/lib/supabase/client";
 
 export default function ReturnSpbPage() {
+  const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -27,6 +33,7 @@ export default function ReturnSpbPage() {
   const [debouncedSearch] = useDebounce(search, 500);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+  const [userId, setUserId] = useState("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -49,6 +56,38 @@ export default function ReturnSpbPage() {
   useEffect(() => {
     fetchData();
   }, [debouncedSearch, page, limit]);
+
+  useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) setUserId(user.id);
+    };
+    loadUser();
+  }, [supabase]);
+
+  const isMyApprovalTurn = (row: any) => {
+    return (row.approvals || []).some(
+      (a: any) => a.userid === userId && a.status === "pending",
+    );
+  };
+
+  const onApprove = async (id: number) => {
+    const res = await approveReturnSpb(id);
+    if (res.error) return toast.error(res.error);
+    toast.success("Approval return berhasil diproses.");
+    fetchData();
+  };
+
+  const onReject = async (id: number) => {
+    const reason = window.prompt("Alasan reject Return SPB:");
+    if (!reason) return;
+    const res = await rejectReturnSpb(id, reason);
+    if (res.error) return toast.error(res.error);
+    toast.success("Return SPB berhasil direject.");
+    fetchData();
+  };
 
   return (
     <>
@@ -104,15 +143,17 @@ export default function ReturnSpbPage() {
                 <TableHead>No SPB</TableHead>
                 <TableHead>Tanggal Return</TableHead>
                 <TableHead>Status</TableHead>
+                <TableHead>Approval</TableHead>
                 <TableHead>Catatan</TableHead>
                 <TableHead>Created</TableHead>
+                <TableHead>Aksi</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={8}
                     className="text-center text-muted-foreground"
                   >
                     Memuat data...
@@ -121,7 +162,7 @@ export default function ReturnSpbPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={8}
                     className="text-center text-muted-foreground"
                   >
                     Belum ada data return.
@@ -138,9 +179,31 @@ export default function ReturnSpbPage() {
                       {new Date(row.rtn_tanggal).toLocaleDateString("id-ID")}
                     </TableCell>
                     <TableCell>{row.rtn_status}</TableCell>
+                    <TableCell>{row.approval_status || "open"}</TableCell>
                     <TableCell>{row.rtn_note || "-"}</TableCell>
                     <TableCell>
                       {new Date(row.created_at).toLocaleDateString("id-ID")}
+                    </TableCell>
+                    <TableCell>
+                      {row.approval_status === "open" &&
+                        isMyApprovalTurn(row) && (
+                          <div className="flex gap-1">
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onApprove(row.id)}
+                            >
+                              Approve
+                            </Button>
+                            <Button
+                              size="sm"
+                              variant="destructive"
+                              onClick={() => onReject(row.id)}
+                            >
+                              Reject
+                            </Button>
+                          </div>
+                        )}
                     </TableCell>
                   </TableRow>
                 ))

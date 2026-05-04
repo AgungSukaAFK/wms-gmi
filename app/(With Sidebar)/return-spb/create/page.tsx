@@ -25,6 +25,13 @@ import {
 import { DatePickerString } from "@/components/date-picker-string";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -34,12 +41,13 @@ import {
 } from "@/components/ui/table";
 import {
   createReturnSpb,
-  generateReturnKode,
   getSpbOptionsForReturn,
+  getStockOutApprovalTemplates,
   getSpbReturnableDetails,
 } from "@/services/spb-actions";
 import { useDebounce } from "use-debounce";
-import { cn } from "@/lib/utils";
+import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 type SpbOption = { id: number; spb_no: string; spb_status: string };
 type ReturnableRow = {
@@ -52,8 +60,15 @@ type ReturnableRow = {
   dtl_spb_qty_returned: number;
 };
 
+type ApprovalTemplateOption = {
+  id: number;
+  name: string;
+  cabang_id: number | null;
+};
+
 export default function ReturnSpbCreatePage() {
   const router = useRouter();
+  const supabase = createClient();
 
   const [loading, setLoading] = useState(false);
   const [rtnKode, setRtnKode] = useState("");
@@ -62,6 +77,10 @@ export default function ReturnSpbCreatePage() {
 
   const [spbOptions, setSpbOptions] = useState<SpbOption[]>([]);
   const [selectedSpbId, setSelectedSpbId] = useState("");
+  const [approvalTemplateId, setApprovalTemplateId] = useState("");
+  const [approvalTemplates, setApprovalTemplates] = useState<
+    ApprovalTemplateOption[]
+  >([]);
   const [selectedSpbLabel, setSelectedSpbLabel] = useState("");
   const [openSpbCombobox, setOpenSpbCombobox] = useState(false);
   const [spbOptionSearch, setSpbOptionSearch] = useState("");
@@ -76,15 +95,29 @@ export default function ReturnSpbCreatePage() {
   );
 
   const fetchInit = async () => {
-    const kodeRes = await generateReturnKode();
-
-    if (kodeRes.error) toast.error(kodeRes.error);
-    else setRtnKode(kodeRes.data || "");
-
     const today = new Date();
     const yyyy = today.getFullYear();
     const mm = String(today.getMonth() + 1).padStart(2, "0");
     const dd = String(today.getDate()).padStart(2, "0");
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+
+      if (!user) return;
+
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("cabang_id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      const tplRes = await getStockOutApprovalTemplates(
+        "return_spb",
+        profile?.cabang_id || undefined,
+      );
+      if (!tplRes.error) {
+        setApprovalTemplates((tplRes.data || []) as ApprovalTemplateOption[]);
+      }
     setRtnTanggal(`${yyyy}-${mm}-${dd}`);
   };
 
@@ -135,7 +168,9 @@ export default function ReturnSpbCreatePage() {
   }, [selectedSpbId]);
 
   const submit = async () => {
-    if (!rtnKode) return toast.error("Kode return belum tersedia.");
+    if (!rtnKode.trim()) return toast.error("Kode return wajib diisi manual.");
+    if (!approvalTemplateId)
+      return toast.error("Template approval wajib dipilih.");
     if (!selectedSpbId) return toast.error("Pilih SPB.");
     if (!rtnTanggal) return toast.error("Tanggal return wajib diisi.");
 
@@ -162,9 +197,10 @@ export default function ReturnSpbCreatePage() {
 
     setLoading(true);
     const res = await createReturnSpb({
-      rtn_kode: rtnKode,
+      rtn_kode: rtnKode.trim(),
       spb_id: Number(selectedSpbId),
-      rtn_tanggal: new Date(rtnTanggal).toISOString(),
+      approval_template_id: Number(approvalTemplateId),
+      rtn_tanggal: ymdToLocalStartIso(rtnTanggal),
       rtn_note: rtnNote || undefined,
       details,
     });
@@ -196,7 +232,11 @@ export default function ReturnSpbCreatePage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
           <div className="space-y-2">
             <Label>Kode Return</Label>
-            <Input value={rtnKode} disabled />
+            <Input
+              value={rtnKode}
+              onChange={(e) => setRtnKode(e.target.value)}
+              placeholder="Masukkan kode return"
+            />
           </div>
 
           <div className="space-y-2">
@@ -266,6 +306,26 @@ export default function ReturnSpbCreatePage() {
                 </Command>
               </PopoverContent>
             </Popover>
+          </div>
+
+          <div className="space-y-2 md:col-span-3">
+            <Label>Template Approval</Label>
+            <Select
+              value={approvalTemplateId}
+              onValueChange={setApprovalTemplateId}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Pilih template approval" />
+              </SelectTrigger>
+              <SelectContent>
+                {approvalTemplates.map((tpl) => (
+                  <SelectItem key={tpl.id} value={String(tpl.id)}>
+                    {tpl.name}
+                    {tpl.cabang_id ? " (Site)" : " (Global)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-2 md:col-span-3">

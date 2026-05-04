@@ -42,6 +42,7 @@ import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { PRDetailSheet } from "@/components/pr/pr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
+import { completedFilterStatuses } from "@/lib/document-status";
 
 export default function PRListPage() {
   const supabase = createClient();
@@ -110,7 +111,11 @@ export default function PRListPage() {
     }
 
     if (statusFilter !== "all") {
-      query = query.eq("pr_status", statusFilter);
+      if (statusFilter === "completed") {
+        query = query.in("pr_status", completedFilterStatuses());
+      } else {
+        query = query.eq("pr_status", statusFilter);
+      }
     }
 
     if (accurateFilter !== "all") {
@@ -223,19 +228,12 @@ export default function PRListPage() {
             Rejected
           </Badge>
         );
+      case "completed":
       case "done":
-        return (
-          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-semibold text-[10px] uppercase text-muted-foreground"
-          >
-            Closed
+          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -331,8 +329,7 @@ export default function PRListPage() {
                 <SelectItem value="open">Open</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="done">Done</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
               </SelectContent>
             </Select>
 

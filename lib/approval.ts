@@ -21,8 +21,10 @@ export async function getApprovalFlow(
     .from("approval_templates")
     .select("id")
     .eq("type", type)
-    .eq("cabang_id", cabang_id)
-    .single();
+    .or(`cabang_id.eq.${cabang_id},cabang_id.is.null`)
+    .order("cabang_id", { ascending: false, nullsFirst: false })
+    .limit(1)
+    .maybeSingle();
 
   if (tError || !template) {
     console.warn(`No approval template found for ${type} in site ${cabang_id}`);

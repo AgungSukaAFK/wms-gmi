@@ -13,6 +13,7 @@ type SpbItemPayload = {
 
 type CreateSpbPayload = {
   spb_no: string;
+  approval_template_id: number;
   spb_tanggal: string;
   spb_no_wo?: string;
   spb_section?: string;
@@ -57,7 +58,7 @@ async function getCurrentUserProfile() {
 
   const { data: profile, error } = await supabase
     .from("profiles")
-    .select("id, nama, cabang_id, cabang:cabang_id(nama_cabang)")
+    .select("id, nama, email, cabang_id, cabang:cabang_id(nama_cabang)")
     .eq("id", user.id)
     .maybeSingle();
 
@@ -66,6 +67,402 @@ async function getCurrentUserProfile() {
   }
 
   return { user, profile: profile || null, error: null as string | null };
+}
+
+const STOCK_OUT_APPROVAL_TYPES = {
+  spb: "Stock Out - SPB",
+  spb_po: "Stock Out - SPB PO",
+  spb_do: "Stock Out - SPB DO",
+  spb_invoice: "Stock Out - SPB Invoice",
+  return_spb: "Return SPB",
+} as const;
+
+type StockOutDocType = keyof typeof STOCK_OUT_APPROVAL_TYPES;
+
+async function buildStockOutApprovalFlow(
+  supabase: any,
+  docType: StockOutDocType,
+  cabangId: number,
+  requesterId: string,
+  templateId: number,
+) {
+  const approvalType = STOCK_OUT_APPROVAL_TYPES[docType];
+
+  const { data: template } = await supabase
+    .from("approval_templates")
+    .select("id, cabang_id")
+    .eq("id", templateId)
+    .eq("type", approvalType)
+    .or(`cabang_id.eq.${cabangId},cabang_id.is.null`)
+    .maybeSingle();
+
+  if (!template) return [];
+
+  const { data: steps } = await supabase
+    .from("approval_template_steps")
+    .select("*, profiles(*)")
+    .eq("template_id", template.id)
+    .order("step_order");
+
+  if (!steps?.length) return [];
+
+  const { data: requesterProfile } = await supabase
+    .from("profiles")
+    .select("id, nama, email")
+    .eq("id", requesterId)
+    .maybeSingle();
+
+  return steps.map((step: any) => {
+    const isRequester = step.approver_type === "requester";
+    const profile = isRequester ? requesterProfile : step.profiles;
+    return {
+      type: isRequester ? "Requester" : profile?.nama || "Approver",
+      status: "pending",
+      userid: profile?.id || "",
+      nama: profile?.nama || "Unknown",
+      email: profile?.email || "",
+      level: step.step_order,
+      processed_at: null,
+      notes: null,
+      snapshot: null,
+    };
+  });
+}
+
+function processStockOutApprovalStep(
+  approvals: any[],
+  userId: string,
+  userProfile: any,
+  action: "approved" | "rejected",
+  notes?: string,
+) {
+  const updated = [...(approvals || [])];
+  const idx = updated.findIndex(
+    (a: any) => a.userid === userId && a.status === "pending",
+  );
+  if (idx === -1) return updated;
+
+  updated[idx] = {
+    ...updated[idx],
+    status: action,
+    processed_at: new Date().toISOString(),
+    notes: notes || null,
+    snapshot: {
+      nama: userProfile?.nama || "",
+      email: userProfile?.email || "",
+      lokasi: userProfile?.cabang?.nama_cabang || "",
+    },
+  };
+
+  return updated;
+}
+
+async function applySpbPosting(spbId: number, actorId: string) {
+  const supabase = await createClient();
+
+  const { data: spbHeader, error: spbErr } = await supabase
+    .from("spb")
+    .select("id, spb_no, cabang_id")
+    .eq("id", spbId)
+    .single();
+
+  if (spbErr || !spbHeader) {
+    return { error: spbErr?.message || "SPB tidak ditemukan." };
+  }
+
+  const { data: detailRows, error: detailErr } = await supabase
+    .from("spb_details")
+    .select("part_id, dtl_spb_part_number, dtl_spb_qty")
+    .eq("spb_id", spbId);
+
+  if (detailErr) return { error: detailErr.message };
+  if (!detailRows?.length) return { error: "Detail SPB tidak ditemukan." };
+
+  const stockSnapshots: Array<{
+    stockId: number;
+    oldQty: number;
+    newQty: number;
+    partId: number;
+    partNumber: string;
+  }> = [];
+
+  for (const row of detailRows) {
+    if (!row.part_id || !row.dtl_spb_qty || row.dtl_spb_qty <= 0) {
+      return { error: "Qty item SPB tidak valid." };
+    }
+
+    const { data: stockRow, error: stockErr } = await supabase
+      .from("stock")
+      .select("id, qty")
+      .eq("part_id", row.part_id)
+      .eq("cabang_id", spbHeader.cabang_id)
+      .single();
+
+    if (stockErr || !stockRow) {
+      return {
+        error: `Stok untuk part ${row.dtl_spb_part_number} tidak ditemukan di cabang.`,
+      };
+    }
+
+    if ((stockRow.qty || 0) < row.dtl_spb_qty) {
+      return {
+        error: `Stok part ${row.dtl_spb_part_number} tidak mencukupi.`,
+      };
+    }
+
+    stockSnapshots.push({
+      stockId: stockRow.id,
+      oldQty: stockRow.qty,
+      newQty: stockRow.qty - row.dtl_spb_qty,
+      partId: row.part_id,
+      partNumber: row.dtl_spb_part_number,
+    });
+  }
+
+  const alreadyPosted = await Promise.all(
+    stockSnapshots.map(async (snap) => {
+      const { data } = await supabase
+        .from("stock_movements")
+        .select("id")
+        .eq("type", "SPB_OUT")
+        .eq("reference_id", spbHeader.spb_no)
+        .eq("part_id", snap.partId)
+        .limit(1)
+        .maybeSingle();
+      return Boolean(data);
+    }),
+  );
+
+  if (alreadyPosted.every(Boolean)) {
+    return { success: true };
+  }
+
+  for (const snap of stockSnapshots) {
+    const { error: upErr } = await supabase
+      .from("stock")
+      .update({ qty: snap.newQty })
+      .eq("id", snap.stockId);
+
+    if (upErr) {
+      return { error: upErr.message };
+    }
+
+    await supabase.from("stock_movements").insert({
+      part_id: snap.partId,
+      cabang_id: spbHeader.cabang_id,
+      qty_change: -Math.abs(snap.oldQty - snap.newQty),
+      type: "SPB_OUT",
+      reference_id: spbHeader.spb_no,
+      notes: "Stock out from SPB",
+      created_by: actorId,
+    });
+  }
+
+  return { success: true };
+}
+
+async function applyReturnSpbPosting(returnId: number, actorId: string) {
+  const supabase = await createClient();
+
+  const { data: header, error: headerErr } = await supabase
+    .from("return_spb")
+    .select(
+      "id, rtn_kode, spb_id, details:return_spb_details(spb_dtl_id, part_id, dtl_rtn_qty_return)",
+    )
+    .eq("id", returnId)
+    .single();
+
+  if (headerErr || !header) {
+    return { error: headerErr?.message || "Return SPB tidak ditemukan." };
+  }
+
+  const { data: spbHeader, error: spbErr } = await supabase
+    .from("spb")
+    .select("id, cabang_id")
+    .eq("id", header.spb_id)
+    .single();
+
+  if (spbErr || !spbHeader) {
+    return { error: spbErr?.message || "SPB tidak ditemukan." };
+  }
+
+  const detailRows = (header.details || []) as Array<{
+    spb_dtl_id: number;
+    part_id: number;
+    dtl_rtn_qty_return: number;
+  }>;
+
+  if (!detailRows.length) {
+    return { error: "Detail return SPB tidak ditemukan." };
+  }
+
+  const alreadyPosted = await Promise.all(
+    detailRows.map(async (row) => {
+      const { data } = await supabase
+        .from("stock_movements")
+        .select("id")
+        .eq("type", "SPB_RETURN")
+        .eq("reference_id", header.rtn_kode)
+        .eq("part_id", row.part_id)
+        .limit(1)
+        .maybeSingle();
+      return Boolean(data);
+    }),
+  );
+
+  if (alreadyPosted.every(Boolean)) {
+    return { success: true };
+  }
+
+  for (const row of detailRows) {
+    const qty = row.dtl_rtn_qty_return || 0;
+    if (qty <= 0) continue;
+
+    const { data: spbDetail, error: spbDetailErr } = await supabase
+      .from("spb_details")
+      .select("dtl_spb_qty_returned")
+      .eq("id", row.spb_dtl_id)
+      .single();
+
+    if (spbDetailErr || !spbDetail) {
+      return {
+        error:
+          spbDetailErr?.message || "Detail SPB untuk return tidak ditemukan.",
+      };
+    }
+
+    await supabase
+      .from("spb_details")
+      .update({
+        dtl_spb_qty_returned: (spbDetail.dtl_spb_qty_returned || 0) + qty,
+      })
+      .eq("id", row.spb_dtl_id);
+
+    const { data: stockRow } = await supabase
+      .from("stock")
+      .select("id, qty")
+      .eq("part_id", row.part_id)
+      .eq("cabang_id", spbHeader.cabang_id)
+      .maybeSingle();
+
+    if (stockRow?.id) {
+      await supabase
+        .from("stock")
+        .update({ qty: (stockRow.qty || 0) + qty })
+        .eq("id", stockRow.id);
+    } else {
+      await supabase.from("stock").insert({
+        part_id: row.part_id,
+        cabang_id: spbHeader.cabang_id,
+        qty,
+        min_qty: 0,
+        max_qty: 0,
+      });
+    }
+
+    await supabase.from("stock_movements").insert({
+      part_id: row.part_id,
+      cabang_id: spbHeader.cabang_id,
+      qty_change: qty,
+      type: "SPB_RETURN",
+      reference_id: header.rtn_kode,
+      notes: "Stock return from SPB",
+      created_by: actorId,
+    });
+  }
+
+  const { data: allDetails } = await supabase
+    .from("spb_details")
+    .select("dtl_spb_qty, dtl_spb_qty_returned")
+    .eq("spb_id", header.spb_id);
+
+  const allReturned = (allDetails || []).every(
+    (d) => (d.dtl_spb_qty_returned || 0) >= (d.dtl_spb_qty || 0),
+  );
+
+  await supabase
+    .from("spb")
+    .update({ spb_status: allReturned ? "Returned" : "Partial" })
+    .eq("id", header.spb_id);
+
+  await supabase
+    .from("return_spb")
+    .update({ rtn_status: allReturned ? "Returned" : "Partial" })
+    .eq("id", returnId);
+
+  return { success: true };
+}
+
+async function finalizeSpbPoStatus(spbPoId: number) {
+  const supabase = await createClient();
+  const { data: po } = await supabase
+    .from("spb_po")
+    .select("spb_id")
+    .eq("id", spbPoId)
+    .single();
+
+  if (po?.spb_id) {
+    await supabase
+      .from("spb")
+      .update({ spb_status: "PO_ATTACH" })
+      .eq("id", po.spb_id);
+  }
+}
+
+async function finalizeSpbDoStatus(spbDoId: number) {
+  const supabase = await createClient();
+  const { data: doHeader } = await supabase
+    .from("spb_do")
+    .select("spb_po_id")
+    .eq("id", spbDoId)
+    .single();
+
+  if (!doHeader?.spb_po_id) return;
+
+  const { data: po } = await supabase
+    .from("spb_po")
+    .select("spb_id")
+    .eq("id", doHeader.spb_po_id)
+    .single();
+
+  if (po?.spb_id) {
+    await supabase
+      .from("spb")
+      .update({ spb_status: "DO_ATTACH" })
+      .eq("id", po.spb_id);
+  }
+}
+
+async function finalizeSpbInvoiceStatus(spbInvoiceId: number) {
+  const supabase = await createClient();
+  const { data: invoiceHeader } = await supabase
+    .from("spb_invoice")
+    .select("spb_do_id")
+    .eq("id", spbInvoiceId)
+    .single();
+
+  if (!invoiceHeader?.spb_do_id) return;
+
+  const { data: doHeader } = await supabase
+    .from("spb_do")
+    .select("spb_po_id")
+    .eq("id", invoiceHeader.spb_do_id)
+    .single();
+
+  if (!doHeader?.spb_po_id) return;
+
+  const { data: po } = await supabase
+    .from("spb_po")
+    .select("spb_id")
+    .eq("id", doHeader.spb_po_id)
+    .single();
+
+  if (po?.spb_id) {
+    await supabase
+      .from("spb")
+      .update({ spb_status: "DONE_QUOTE" })
+      .eq("id", po.spb_id);
+  }
 }
 
 export async function generateSpbKode(cabangId?: number) {
@@ -213,6 +610,21 @@ export async function createSpb(payload: CreateSpbPayload) {
   const me = await getCurrentUserProfile();
   if (me.error || !me.user) return { error: me.error || "Unauthorized" };
 
+  const spbNo = payload.spb_no?.trim();
+  if (!spbNo) {
+    return { error: "Nomor SPB wajib diisi manual." };
+  }
+
+  const { data: existingSpb } = await supabase
+    .from("spb")
+    .select("id")
+    .eq("spb_no", spbNo)
+    .maybeSingle();
+
+  if (existingSpb) {
+    return { error: "Nomor SPB sudah digunakan. Gunakan nomor lain." };
+  }
+
   if (!payload.items?.length) {
     return { error: "Minimal 1 item wajib diisi." };
   }
@@ -222,49 +634,34 @@ export async function createSpb(payload: CreateSpbPayload) {
     return { error: "Cabang user tidak ditemukan." };
   }
 
-  const stockSnapshots: Array<{
-    stockId: number;
-    oldQty: number;
-    newQty: number;
-    partId: number;
-  }> = [];
+  if (!payload.approval_template_id) {
+    return { error: "Template approval wajib dipilih sebelum membuat SPB." };
+  }
+
+  const approvals = await buildStockOutApprovalFlow(
+    supabase,
+    "spb",
+    cabangId,
+    me.user.id,
+    payload.approval_template_id,
+  );
+
+  if (!approvals.length) {
+    return {
+      error: "Template approval SPB tidak ditemukan atau tidak sesuai site.",
+    };
+  }
 
   for (const item of payload.items) {
     if (!item.part_id || !item.dtl_spb_qty || item.dtl_spb_qty <= 0) {
       return { error: "Semua item harus valid dan qty > 0." };
     }
-
-    const { data: stockRow, error: stockErr } = await supabase
-      .from("stock")
-      .select("id, qty, part_id")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", cabangId)
-      .single();
-
-    if (stockErr || !stockRow) {
-      return {
-        error: `Stok untuk part ${item.dtl_spb_part_number} tidak ditemukan di cabang.`,
-      };
-    }
-
-    if (stockRow.qty < item.dtl_spb_qty) {
-      return {
-        error: `Stok part ${item.dtl_spb_part_number} tidak mencukupi.`,
-      };
-    }
-
-    stockSnapshots.push({
-      stockId: stockRow.id,
-      oldQty: stockRow.qty,
-      newQty: stockRow.qty - item.dtl_spb_qty,
-      partId: stockRow.part_id,
-    });
   }
 
   const { data: spbHeader, error: spbErr } = await supabase
     .from("spb")
     .insert({
-      spb_no: payload.spb_no,
+      spb_no: spbNo,
       spb_tanggal: payload.spb_tanggal,
       spb_no_wo: payload.spb_no_wo || null,
       spb_section: payload.spb_section || null,
@@ -275,11 +672,14 @@ export async function createSpb(payload: CreateSpbPayload) {
       spb_brand: payload.spb_brand || null,
       spb_hm: payload.spb_hm || null,
       spb_problem_remark: payload.spb_problem_remark || null,
-      spb_status: "DONE QUOT",
+      spb_status: "DRAFT",
       spb_gudang:
         payload.spb_gudang || (me.profile as any)?.cabang?.nama_cabang || null,
       cabang_id: cabangId,
       spb_pic: me.profile?.nama || null,
+      approval_template_id: payload.approval_template_id,
+      approvals,
+      approval_status: "open",
       created_by: me.user.id,
     })
     .select()
@@ -303,35 +703,6 @@ export async function createSpb(payload: CreateSpbPayload) {
   if (detailErr) {
     await supabase.from("spb").delete().eq("id", spbHeader.id);
     return { error: detailErr.message };
-  }
-
-  for (const snap of stockSnapshots) {
-    const { error: upErr } = await supabase
-      .from("stock")
-      .update({ qty: snap.newQty })
-      .eq("id", snap.stockId);
-
-    if (upErr) {
-      // rollback stock and document best-effort
-      for (const prevSnap of stockSnapshots) {
-        await supabase
-          .from("stock")
-          .update({ qty: prevSnap.oldQty })
-          .eq("id", prevSnap.stockId);
-      }
-      await supabase.from("spb").delete().eq("id", spbHeader.id);
-      return { error: upErr.message };
-    }
-
-    await supabase.from("stock_movements").insert({
-      part_id: snap.partId,
-      cabang_id: cabangId,
-      qty_change: -Math.abs(snap.oldQty - snap.newQty),
-      type: "SPB_OUT",
-      reference_id: payload.spb_no,
-      notes: "Stock out from SPB",
-      created_by: me.user.id,
-    });
   }
 
   revalidateStockOutPaths();
@@ -454,10 +825,42 @@ export async function createSpbPo(payload: {
   po_no: string;
   so_no?: string;
   so_date?: string;
+  approval_template_id: number;
   details: { spb_dtl_id: number }[];
 }) {
   const supabase = await createClient();
+  const me = await getCurrentUserProfile();
+  if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+
   if (!payload.details?.length) return { error: "Pilih minimal 1 item SPB." };
+
+  if (!payload.approval_template_id) {
+    return { error: "Template approval wajib dipilih sebelum membuat SPB PO." };
+  }
+
+  const { data: spbHeader } = await supabase
+    .from("spb")
+    .select("id, cabang_id")
+    .eq("id", payload.spb_id)
+    .single();
+
+  if (!spbHeader?.cabang_id) {
+    return { error: "SPB sumber tidak valid." };
+  }
+
+  const approvals = await buildStockOutApprovalFlow(
+    supabase,
+    "spb_po",
+    spbHeader.cabang_id,
+    me.user.id,
+    payload.approval_template_id,
+  );
+
+  if (!approvals.length) {
+    return {
+      error: "Template approval SPB PO tidak ditemukan atau tidak sesuai site.",
+    };
+  }
 
   const { data: poHeader, error: poErr } = await supabase
     .from("spb_po")
@@ -466,6 +869,9 @@ export async function createSpbPo(payload: {
       po_no: payload.po_no,
       so_no: payload.so_no || null,
       so_date: payload.so_date || null,
+      approval_template_id: payload.approval_template_id,
+      approvals,
+      approval_status: "open",
     })
     .select()
     .single();
@@ -482,11 +888,6 @@ export async function createSpbPo(payload: {
     await supabase.from("spb_po").delete().eq("id", poHeader.id);
     return { error: rowsErr.message };
   }
-
-  await supabase
-    .from("spb")
-    .update({ spb_status: "PO_ATTACH" })
-    .eq("id", payload.spb_id);
 
   revalidateStockOutPaths();
   return { success: true, data: poHeader };
@@ -528,11 +929,47 @@ export async function createSpbDo(payload: {
   do_date?: string;
   do_status_part?: string;
   do_pic?: string;
+  approval_template_id: number;
   details: { spb_po_dtl_id: number }[];
 }) {
   const supabase = await createClient();
+  const me = await getCurrentUserProfile();
+  if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+
   if (!payload.details?.length)
     return { error: "Pilih minimal 1 item PO detail." };
+
+  if (!payload.approval_template_id) {
+    return { error: "Template approval wajib dipilih sebelum membuat SPB DO." };
+  }
+
+  const { data: poHeader } = await supabase
+    .from("spb_po")
+    .select("id, spb:spb_id(cabang_id)")
+    .eq("id", payload.spb_po_id)
+    .single();
+
+  const spbRelation = Array.isArray((poHeader as any)?.spb)
+    ? (poHeader as any)?.spb?.[0]
+    : (poHeader as any)?.spb;
+  const cabangId = spbRelation?.cabang_id;
+  if (!cabangId) {
+    return { error: "PO sumber tidak valid." };
+  }
+
+  const approvals = await buildStockOutApprovalFlow(
+    supabase,
+    "spb_do",
+    cabangId,
+    me.user.id,
+    payload.approval_template_id,
+  );
+
+  if (!approvals.length) {
+    return {
+      error: "Template approval SPB DO tidak ditemukan atau tidak sesuai site.",
+    };
+  }
 
   const { data: doHeader, error: doErr } = await supabase
     .from("spb_do")
@@ -542,6 +979,9 @@ export async function createSpbDo(payload: {
       do_date: payload.do_date || null,
       do_status_part: payload.do_status_part || "DELIVERED",
       do_pic: payload.do_pic || null,
+      approval_template_id: payload.approval_template_id,
+      approvals,
+      approval_status: "open",
     })
     .select()
     .single();
@@ -557,18 +997,6 @@ export async function createSpbDo(payload: {
   if (rowsErr) {
     await supabase.from("spb_do").delete().eq("id", doHeader.id);
     return { error: rowsErr.message };
-  }
-
-  const { data: po } = await supabase
-    .from("spb_po")
-    .select("spb_id")
-    .eq("id", payload.spb_po_id)
-    .single();
-  if (po?.spb_id) {
-    await supabase
-      .from("spb")
-      .update({ spb_status: "DO_ATTACH" })
-      .eq("id", po.spb_id);
   }
 
   revalidateStockOutPaths();
@@ -608,11 +1036,53 @@ export async function createSpbInvoice(payload: {
   invoice_no: string;
   invoice_date?: string;
   invoice_email_date?: string;
+  approval_template_id: number;
   details: { spb_do_dtl_id: number; invoice_qty?: number }[];
 }) {
   const supabase = await createClient();
+  const me = await getCurrentUserProfile();
+  if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+
   if (!payload.details?.length)
     return { error: "Pilih minimal 1 item DO detail." };
+
+  if (!payload.approval_template_id) {
+    return {
+      error: "Template approval wajib dipilih sebelum membuat SPB Invoice.",
+    };
+  }
+
+  const { data: doHeader } = await supabase
+    .from("spb_do")
+    .select("id, po:spb_po_id(spb:spb_id(cabang_id))")
+    .eq("id", payload.spb_do_id)
+    .single();
+
+  const poRelation = Array.isArray((doHeader as any)?.po)
+    ? (doHeader as any)?.po?.[0]
+    : (doHeader as any)?.po;
+  const spbRelation = Array.isArray(poRelation?.spb)
+    ? poRelation?.spb?.[0]
+    : poRelation?.spb;
+  const cabangId = spbRelation?.cabang_id;
+  if (!cabangId) {
+    return { error: "DO sumber tidak valid." };
+  }
+
+  const approvals = await buildStockOutApprovalFlow(
+    supabase,
+    "spb_invoice",
+    cabangId,
+    me.user.id,
+    payload.approval_template_id,
+  );
+
+  if (!approvals.length) {
+    return {
+      error:
+        "Template approval SPB Invoice tidak ditemukan atau tidak sesuai site.",
+    };
+  }
 
   const { data: invHeader, error: invErr } = await supabase
     .from("spb_invoice")
@@ -621,6 +1091,9 @@ export async function createSpbInvoice(payload: {
       invoice_no: payload.invoice_no,
       invoice_date: payload.invoice_date || null,
       invoice_email_date: payload.invoice_email_date || null,
+      approval_template_id: payload.approval_template_id,
+      approvals,
+      approval_status: "open",
     })
     .select()
     .single();
@@ -640,25 +1113,6 @@ export async function createSpbInvoice(payload: {
   if (rowsErr) {
     await supabase.from("spb_invoice").delete().eq("id", invHeader.id);
     return { error: rowsErr.message };
-  }
-
-  const { data: doHeader } = await supabase
-    .from("spb_do")
-    .select("spb_po_id")
-    .eq("id", payload.spb_do_id)
-    .single();
-  if (doHeader?.spb_po_id) {
-    const { data: po } = await supabase
-      .from("spb_po")
-      .select("spb_id")
-      .eq("id", doHeader.spb_po_id)
-      .single();
-    if (po?.spb_id) {
-      await supabase
-        .from("spb")
-        .update({ spb_status: "DONE_QUOTE" })
-        .eq("id", po.spb_id);
-    }
   }
 
   revalidateStockOutPaths();
@@ -710,6 +1164,7 @@ export async function getReturnSpbByKode(kode: string) {
 export async function createReturnSpb(payload: {
   rtn_kode: string;
   spb_id: number;
+  approval_template_id: number;
   rtn_tanggal: string;
   rtn_note?: string;
   details: { spb_dtl_id: number; part_id: number; qty_return: number }[];
@@ -717,6 +1172,21 @@ export async function createReturnSpb(payload: {
   const supabase = await createClient();
   const me = await getCurrentUserProfile();
   if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+
+  const rtnKode = payload.rtn_kode?.trim();
+  if (!rtnKode) {
+    return { error: "Kode Return wajib diisi manual." };
+  }
+
+  const { data: existingReturn } = await supabase
+    .from("return_spb")
+    .select("id")
+    .eq("rtn_kode", rtnKode)
+    .maybeSingle();
+
+  if (existingReturn) {
+    return { error: "Kode Return sudah digunakan. Gunakan kode lain." };
+  }
 
   if (!payload.details?.length) {
     return { error: "Minimal 1 item return wajib diisi." };
@@ -730,6 +1200,27 @@ export async function createReturnSpb(payload: {
 
   if (spbErr || !spbHeader)
     return { error: spbErr?.message || "SPB tidak ditemukan." };
+
+  if (!payload.approval_template_id) {
+    return {
+      error: "Template approval wajib dipilih sebelum membuat Return SPB.",
+    };
+  }
+
+  const approvals = await buildStockOutApprovalFlow(
+    supabase,
+    "return_spb",
+    spbHeader.cabang_id,
+    me.user.id,
+    payload.approval_template_id,
+  );
+
+  if (!approvals.length) {
+    return {
+      error:
+        "Template approval Return SPB tidak ditemukan atau tidak sesuai site.",
+    };
+  }
 
   const toReturnRows: Array<{
     spb_dtl_id: number;
@@ -771,11 +1262,14 @@ export async function createReturnSpb(payload: {
   const { data: returnHeader, error: returnErr } = await supabase
     .from("return_spb")
     .insert({
-      rtn_kode: payload.rtn_kode,
+      rtn_kode: rtnKode,
       spb_id: payload.spb_id,
       rtn_tanggal: payload.rtn_tanggal,
       rtn_note: payload.rtn_note || null,
-      rtn_status: "Posted",
+      rtn_status: "DRAFT",
+      approval_template_id: payload.approval_template_id,
+      approvals,
+      approval_status: "open",
     })
     .select()
     .single();
@@ -799,74 +1293,205 @@ export async function createReturnSpb(payload: {
     return { error: rtnDetailErr.message };
   }
 
-  for (const row of toReturnRows) {
-    const { data: detail } = await supabase
-      .from("spb_details")
-      .select("dtl_spb_qty_returned")
-      .eq("id", row.spb_dtl_id)
-      .single();
-
-    await supabase
-      .from("spb_details")
-      .update({
-        dtl_spb_qty_returned: (detail?.dtl_spb_qty_returned || 0) + row.qty,
-      })
-      .eq("id", row.spb_dtl_id);
-
-    const { data: stockRow } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", row.part_id)
-      .eq("cabang_id", spbHeader.cabang_id)
-      .maybeSingle();
-
-    if (stockRow?.id) {
-      await supabase
-        .from("stock")
-        .update({ qty: (stockRow.qty || 0) + row.qty })
-        .eq("id", stockRow.id);
-    } else {
-      await supabase.from("stock").insert({
-        part_id: row.part_id,
-        cabang_id: spbHeader.cabang_id,
-        qty: row.qty,
-        min_qty: 0,
-        max_qty: 0,
-      });
-    }
-
-    await supabase.from("stock_movements").insert({
-      part_id: row.part_id,
-      cabang_id: spbHeader.cabang_id,
-      qty_change: row.qty,
-      type: "SPB_RETURN",
-      reference_id: payload.rtn_kode,
-      notes: "Stock return from SPB",
-      created_by: me.user.id,
-    });
-  }
-
-  const { data: allDetails } = await supabase
-    .from("spb_details")
-    .select("dtl_spb_qty, dtl_spb_qty_returned")
-    .eq("spb_id", payload.spb_id);
-
-  const allReturned = (allDetails || []).every(
-    (d) => (d.dtl_spb_qty_returned || 0) >= (d.dtl_spb_qty || 0),
-  );
-
-  await supabase
-    .from("spb")
-    .update({ spb_status: allReturned ? "Returned" : "Partial" })
-    .eq("id", payload.spb_id);
-
-  await supabase
-    .from("return_spb")
-    .update({ rtn_status: allReturned ? "Returned" : "Partial" })
-    .eq("id", returnHeader.id);
-
   revalidateStockOutPaths();
   return { success: true, data: returnHeader };
+}
+
+export async function getStockOutApprovalTemplates(
+  docType: StockOutDocType,
+  cabangId?: number,
+) {
+  const supabase = await createClient();
+  const type = STOCK_OUT_APPROVAL_TYPES[docType];
+
+  let query = supabase
+    .from("approval_templates")
+    .select("id, name, cabang_id")
+    .eq("type", type)
+    .order("cabang_id", { ascending: false, nullsFirst: false })
+    .order("name", { ascending: true });
+
+  if (cabangId) {
+    query = query.or(`cabang_id.eq.${cabangId},cabang_id.is.null`);
+  }
+
+  const { data, error } = await query;
+  if (error) return { data: [], error: error.message };
+  return { data: data || [], error: null as string | null };
+}
+
+async function approveStockOutDocument(
+  table: "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb",
+  id: number,
+  onComplete?: (
+    id: number,
+    actorId: string,
+  ) => Promise<{ error?: string } | void>,
+) {
+  const supabase = await createClient();
+  const me = await getCurrentUserProfile();
+  if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+
+  const { data: row, error } = await supabase
+    .from(table)
+    .select("id, approvals, approval_status")
+    .eq("id", id)
+    .single();
+
+  if (error || !row)
+    return { error: error?.message || "Dokumen tidak ditemukan." };
+  if (row.approval_status === "completed") return { success: true, data: row };
+  if (row.approval_status === "rejected") {
+    return { error: "Dokumen sudah berstatus rejected." };
+  }
+
+  const approvals = processStockOutApprovalStep(
+    row.approvals || [],
+    me.user.id,
+    me.profile,
+    "approved",
+  );
+
+  const stillPending = approvals.some((a: any) => a.status === "pending");
+  const nextStatus = stillPending ? "open" : "completed";
+
+  const { data: updated, error: updateErr } = await supabase
+    .from(table)
+    .update({
+      approvals,
+      approval_status: nextStatus,
+      completed_at: stillPending ? null : new Date().toISOString(),
+      rejection_reason: null,
+    })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (updateErr) return { error: updateErr.message };
+
+  if (!stillPending && onComplete) {
+    const finalizeResult = await onComplete(id, me.user.id);
+    if (finalizeResult?.error) {
+      await supabase
+        .from(table)
+        .update({ approval_status: "open", completed_at: null })
+        .eq("id", id);
+      return { error: finalizeResult.error };
+    }
+  }
+
+  revalidateStockOutPaths();
+  return { success: true, data: updated };
+}
+
+async function rejectStockOutDocument(
+  table: "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb",
+  id: number,
+  reason: string,
+) {
+  const supabase = await createClient();
+  const me = await getCurrentUserProfile();
+  if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+
+  const notes = reason?.trim();
+  if (!notes) {
+    return { error: "Alasan reject wajib diisi." };
+  }
+
+  const { data: row, error } = await supabase
+    .from(table)
+    .select("id, approvals, approval_status")
+    .eq("id", id)
+    .single();
+
+  if (error || !row)
+    return { error: error?.message || "Dokumen tidak ditemukan." };
+  if (row.approval_status === "completed") {
+    return { error: "Dokumen sudah completed dan tidak bisa direject." };
+  }
+
+  const approvals = processStockOutApprovalStep(
+    row.approvals || [],
+    me.user.id,
+    me.profile,
+    "rejected",
+    notes,
+  );
+
+  const { data: updated, error: updateErr } = await supabase
+    .from(table)
+    .update({
+      approvals,
+      approval_status: "rejected",
+      rejection_reason: notes,
+      completed_at: null,
+    })
+    .eq("id", id)
+    .select("*")
+    .single();
+
+  if (updateErr) return { error: updateErr.message };
+
+  revalidateStockOutPaths();
+  return { success: true, data: updated };
+}
+
+export async function approveSpb(id: number) {
+  return approveStockOutDocument("spb", id, async (docId, actorId) => {
+    const res = await applySpbPosting(docId, actorId);
+    if (res.error) return { error: res.error };
+
+    const supabase = await createClient();
+    await supabase
+      .from("spb")
+      .update({ spb_status: "DONE QUOT" })
+      .eq("id", docId);
+  });
+}
+
+export async function rejectSpb(id: number, reason: string) {
+  return rejectStockOutDocument("spb", id, reason);
+}
+
+export async function approveSpbPo(id: number) {
+  return approveStockOutDocument("spb_po", id, async (docId) => {
+    await finalizeSpbPoStatus(docId);
+  });
+}
+
+export async function rejectSpbPo(id: number, reason: string) {
+  return rejectStockOutDocument("spb_po", id, reason);
+}
+
+export async function approveSpbDo(id: number) {
+  return approveStockOutDocument("spb_do", id, async (docId) => {
+    await finalizeSpbDoStatus(docId);
+  });
+}
+
+export async function rejectSpbDo(id: number, reason: string) {
+  return rejectStockOutDocument("spb_do", id, reason);
+}
+
+export async function approveSpbInvoice(id: number) {
+  return approveStockOutDocument("spb_invoice", id, async (docId) => {
+    await finalizeSpbInvoiceStatus(docId);
+  });
+}
+
+export async function rejectSpbInvoice(id: number, reason: string) {
+  return rejectStockOutDocument("spb_invoice", id, reason);
+}
+
+export async function approveReturnSpb(id: number) {
+  return approveStockOutDocument("return_spb", id, async (docId, actorId) => {
+    const res = await applyReturnSpbPosting(docId, actorId);
+    if (res.error) return { error: res.error };
+  });
+}
+
+export async function rejectReturnSpb(id: number, reason: string) {
+  return rejectStockOutDocument("return_spb", id, reason);
 }
 
 export async function getSpbReport(params?: {

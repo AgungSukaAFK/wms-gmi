@@ -25,6 +25,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -40,12 +47,16 @@ import {
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
+  approveSpbDo,
   createSpbDo,
+  getStockOutApprovalTemplates,
   getSpbDoList,
   getSpbPoDetailsByPoId,
   getSpbPoOptionsForDo,
+  rejectSpbDo,
 } from "@/services/spb-actions";
-import { cn } from "@/lib/utils";
+import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 type PoOption = {
   id: number;
@@ -63,7 +74,14 @@ type PoDetailRow = {
   } | null;
 };
 
+type ApprovalTemplateOption = {
+  id: number;
+  name: string;
+  cabang_id: number | null;
+};
+
 export default function SpbDoPage() {
+  const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -85,8 +103,13 @@ export default function SpbDoPage() {
   const [doNo, setDoNo] = useState("");
   const [doDate, setDoDate] = useState("");
   const [doPic, setDoPic] = useState("");
+  const [approvalTemplateId, setApprovalTemplateId] = useState("");
+  const [approvalTemplates, setApprovalTemplates] = useState<
+    ApprovalTemplateOption[]
+  >([]);
   const [submitting, setSubmitting] = useState(false);
   const [openCreateModal, setOpenCreateModal] = useState(false);
+  const [userId, setUserId] = useState("");
 
   const selectedPo = useMemo(
     () => poOptions.find((s) => String(s.id) === selectedPoId),
@@ -125,9 +148,31 @@ export default function SpbDoPage() {
   }, [debouncedSearch, page, limit]);
 
   useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) setUserId(user.id);
+    };
+    loadUser();
+  }, [supabase]);
+
+  useEffect(() => {
     if (!openCreateModal) return;
     fetchPoOptions();
   }, [openCreateModal, debouncedPoOptionSearch]);
+
+  useEffect(() => {
+    const loadTemplates = async () => {
+      if (!openCreateModal) return;
+      const res = await getStockOutApprovalTemplates("spb_do");
+      if (!res.error) {
+        setApprovalTemplates((res.data || []) as ApprovalTemplateOption[]);
+      }
+    };
+
+    loadTemplates();
+  }, [openCreateModal]);
 
   useEffect(() => {
     const loadDetails = async () => {
@@ -158,14 +203,17 @@ export default function SpbDoPage() {
   const submit = async () => {
     if (!selectedPoId) return toast.error("Pilih SPB-PO.");
     if (!doNo.trim()) return toast.error("No DO wajib diisi.");
+    if (!approvalTemplateId)
+      return toast.error("Template approval wajib dipilih.");
     if (!selectedDetailIds.length) return toast.error("Pilih minimal 1 item.");
 
     setSubmitting(true);
     const res = await createSpbDo({
       spb_po_id: Number(selectedPoId),
       do_no: doNo,
-      do_date: doDate ? new Date(doDate).toISOString() : undefined,
+      do_date: doDate ? ymdToLocalStartIso(doDate) : undefined,
       do_pic: doPic || undefined,
+      approval_template_id: Number(approvalTemplateId),
       details: selectedDetailIds.map((id) => ({ spb_po_dtl_id: id })),
     });
     setSubmitting(false);
@@ -185,6 +233,7 @@ export default function SpbDoPage() {
     setDoNo("");
     setDoDate("");
     setDoPic("");
+    setApprovalTemplateId("");
     setSelectedPoId("");
     setSelectedPoLabel("");
     setPoOptionSearch("");
@@ -198,6 +247,28 @@ export default function SpbDoPage() {
     if (!open) {
       resetCreateForm();
     }
+  };
+
+  const onApprove = async (id: number) => {
+    const res = await approveSpbDo(id);
+    if (res.error) return toast.error(res.error);
+    toast.success("Approval SPB DO berhasil diproses.");
+    fetchList();
+  };
+
+  const onReject = async (id: number) => {
+    const reason = window.prompt("Alasan reject SPB DO:");
+    if (!reason) return;
+    const res = await rejectSpbDo(id, reason);
+    if (res.error) return toast.error(res.error);
+    toast.success("SPB DO berhasil direject.");
+    fetchList();
+  };
+
+  const isMyApprovalTurn = (row: any) => {
+    return (row.approvals || []).some(
+      (a: any) => a.userid === userId && a.status === "pending",
+    );
   };
 
   return (
@@ -254,14 +325,16 @@ export default function SpbDoPage() {
                   <TableHead>Tanggal DO</TableHead>
                   <TableHead>Status Part</TableHead>
                   <TableHead>PIC</TableHead>
+                  <TableHead>Approval</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={9}
                       className="text-center text-muted-foreground"
                     >
                       Memuat data...
@@ -270,7 +343,7 @@ export default function SpbDoPage() {
                 ) : rows.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={9}
                       className="text-center text-muted-foreground"
                     >
                       Belum ada data SPB-DO.
@@ -289,8 +362,30 @@ export default function SpbDoPage() {
                       </TableCell>
                       <TableCell>{row.do_status_part || "-"}</TableCell>
                       <TableCell>{row.do_pic || "-"}</TableCell>
+                      <TableCell>{row.approval_status || "open"}</TableCell>
                       <TableCell>
                         {new Date(row.created_at).toLocaleDateString("id-ID")}
+                      </TableCell>
+                      <TableCell>
+                        {row.approval_status === "open" &&
+                          isMyApprovalTurn(row) && (
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onApprove(row.id)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => onReject(row.id)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          )}
                       </TableCell>
                     </TableRow>
                   ))
@@ -404,6 +499,26 @@ export default function SpbDoPage() {
                   value={doPic}
                   onChange={(e) => setDoPic(e.target.value)}
                 />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Template Approval</Label>
+                <Select
+                  value={approvalTemplateId}
+                  onValueChange={setApprovalTemplateId}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pilih template approval" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {approvalTemplates.map((tpl) => (
+                      <SelectItem key={tpl.id} value={String(tpl.id)}>
+                        {tpl.name}
+                        {tpl.cabang_id ? " (Site)" : " (Global)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

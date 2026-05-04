@@ -72,6 +72,7 @@ import {
 } from "@/services/barang-actions";
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
+import { toYmdLocal } from "@/lib/utils";
 
 interface Barang {
   id: number;
@@ -291,10 +292,7 @@ export default function BarangClient({
     );
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Master Barang");
-    XLSX.writeFile(
-      wb,
-      `MASTER_BARANG_${new Date().toISOString().split("T")[0]}.xlsx`,
-    );
+    XLSX.writeFile(wb, `MASTER_BARANG_${toYmdLocal()}.xlsx`);
   };
 
   return (

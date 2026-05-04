@@ -40,6 +40,7 @@ import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import { MRDetailSheet } from "@/components/mr/mr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
+import { completedFilterStatuses } from "@/lib/document-status";
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
@@ -113,7 +114,11 @@ export default function MaterialRequestPage() {
     }
 
     if (statusFilter !== "all") {
-      query = query.eq("mr_status", statusFilter);
+      if (statusFilter === "completed") {
+        query = query.in("mr_status", completedFilterStatuses());
+      } else {
+        query = query.eq("mr_status", statusFilter);
+      }
     }
 
     if (priorityFilter !== "all") {
@@ -213,19 +218,12 @@ export default function MaterialRequestPage() {
             Rejected
           </Badge>
         );
+      case "completed":
       case "done":
-        return (
-          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-semibold text-[10px] uppercase"
-          >
-            Closed
+          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -395,27 +393,29 @@ export default function MaterialRequestPage() {
                 <SelectItem value="open">Open (Pending)</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="done">Done / Receipt</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
               </SelectContent>
             </Select>
 
-            <Select
-              value={accurateFilter}
-              onValueChange={(val) => {
-                setAccurateFilter(val);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-40 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Accurate" />
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Accurate</SelectItem>
-                <SelectItem value="yes">Sudah Input</SelectItem>
-                <SelectItem value="no">Belum Input</SelectItem>
-              </SelectContent>
-            </Select>
+            {/* ACCURATE_HIDDEN: filter disembunyikan */}
+            {false && (
+              <Select
+                value={accurateFilter}
+                onValueChange={(val) => {
+                  setAccurateFilter(val);
+                  setPage(1);
+                }}
+              >
+                <SelectTrigger className="h-9 w-full sm:w-40 border-input bg-background text-xs font-bold text-foreground">
+                  <SelectValue placeholder="Accurate" />
+                </SelectTrigger>
+                <SelectContent className="rounded-md">
+                  <SelectItem value="all">Semua Accurate</SelectItem>
+                  <SelectItem value="yes">Sudah Input</SelectItem>
+                  <SelectItem value="no">Belum Input</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
 
             <Button
               variant="ghost"
@@ -494,9 +494,12 @@ export default function MaterialRequestPage() {
                 >
                   Status
                 </TableHead>
-                <TableHead className="w-32.5 font-bold text-[10px] uppercase text-muted-foreground text-center">
-                  Accurate
-                </TableHead>
+                {/* ACCURATE_HIDDEN */}
+                {false && (
+                  <TableHead className="w-32.5 font-bold text-[10px] uppercase text-muted-foreground text-center">
+                    Accurate
+                  </TableHead>
+                )}
                 <TableHead className="text-right w-20 pr-6 font-bold text-[10px] uppercase text-muted-foreground">
                   Aksi
                 </TableHead>
@@ -505,7 +508,7 @@ export default function MaterialRequestPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} className="h-40 text-center">
+                  <TableCell colSpan={7} className="h-40 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                       <span className="text-[10px] font-bold text-muted-foreground uppercase">
@@ -517,7 +520,7 @@ export default function MaterialRequestPage() {
               ) : mrs.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={8}
+                    colSpan={7}
                     className="h-40 text-center text-muted-foreground italic text-sm"
                   >
                     {statusFilter !== "all" ||
@@ -605,14 +608,17 @@ export default function MaterialRequestPage() {
                           )}
                         </div>
                       </TableCell>
-                      <TableCell className="text-center">
-                        <Badge
-                          variant={mr.accurate ? "default" : "secondary"}
-                          className="text-[10px] font-bold uppercase"
-                        >
-                          {mr.accurate ? "Sudah" : "Belum"}
-                        </Badge>
-                      </TableCell>
+                      {/* ACCURATE_HIDDEN */}
+                      {false && (
+                        <TableCell className="text-center">
+                          <Badge
+                            variant={mr.accurate ? "default" : "secondary"}
+                            className="text-[10px] font-bold uppercase"
+                          >
+                            {mr.accurate ? "Sudah" : "Belum"}
+                          </Badge>
+                        </TableCell>
+                      )}
                       <TableCell
                         className="text-right pr-6"
                         onClick={(e) => e.stopPropagation()}

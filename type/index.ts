@@ -25,7 +25,13 @@ export type ApprovalType =
   | "Material Request"
   | "Purchase Request"
   | "Purchase Order"
-  | "Item Transfer";
+  | "Receive Item"
+  | "Item Transfer"
+  | "Stock Out - SPB"
+  | "Stock Out - SPB PO"
+  | "Stock Out - SPB DO"
+  | "Stock Out - SPB Invoice"
+  | "Return SPB";
 
 export interface ApprovalTemplate {
   id: number;

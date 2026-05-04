@@ -40,7 +40,7 @@ import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { useDebounce } from "use-debounce";
 import { createPurchaseRequest } from "@/services/procurement-actions";
-import { cn } from "@/lib/utils";
+import { cn, toYmdLocal } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 
@@ -57,9 +57,7 @@ export default function CreatePRPage() {
 
   // Form State
   const [prKode, setPrKode] = useState("");
-  const [prTanggal, setPrTanggal] = useState(
-    new Date().toISOString().split("T")[0],
-  );
+  const [prTanggal, setPrTanggal] = useState(toYmdLocal());
   const [selectedMrId, setSelectedMrId] = useState<number | null>(null);
   const [mrItems, setMrItems] = useState<any[]>([]);
   const [sharestockAllocations, setSharestockAllocations] = useState<any[]>([]);

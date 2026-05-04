@@ -11,6 +11,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { DatePicker } from "@/components/date-picker";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -24,8 +31,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { createClient } from "@/lib/supabase/client";
-import { createSpb, generateSpbKode } from "@/services/spb-actions";
+import {
+  createSpb,
+  getStockOutApprovalTemplates,
+} from "@/services/spb-actions";
 import { useRouter } from "next/navigation";
+import { toYmdLocal } from "@/lib/utils";
 
 type Barang = {
   id: number;
@@ -45,6 +56,12 @@ type SpbItem = {
   dtl_spb_part_name: string;
   dtl_spb_part_satuan: string;
   dtl_spb_qty: number;
+};
+
+type ApprovalTemplateOption = {
+  id: number;
+  name: string;
+  cabang_id: number | null;
 };
 
 export default function SpbCreatePage() {
@@ -68,6 +85,10 @@ export default function SpbCreatePage() {
   const [remark, setRemark] = useState("");
   const [gudang, setGudang] = useState("");
   const [cabangId, setCabangId] = useState<number | null>(null);
+  const [approvalTemplateId, setApprovalTemplateId] = useState<string>("");
+  const [approvalTemplates, setApprovalTemplates] = useState<
+    ApprovalTemplateOption[]
+  >([]);
 
   const [partPickerOpen, setPartPickerOpen] = useState(false);
   const [partSearch, setPartSearch] = useState("");
@@ -120,6 +141,16 @@ export default function SpbCreatePage() {
     if (profile?.cabang_id) {
       setCabangId(profile.cabang_id);
 
+      const tplRes = await getStockOutApprovalTemplates(
+        "spb",
+        profile.cabang_id,
+      );
+      if (tplRes.error) {
+        toast.error(tplRes.error);
+      } else {
+        setApprovalTemplates((tplRes.data || []) as ApprovalTemplateOption[]);
+      }
+
       if (!resolvedGudang) {
         const { data: cabangData } = await supabase
           .from("cabang")
@@ -127,13 +158,6 @@ export default function SpbCreatePage() {
           .eq("id", profile.cabang_id)
           .maybeSingle();
         resolvedGudang = cabangData?.nama_cabang || "";
-      }
-
-      const kodeRes = await generateSpbKode(profile.cabang_id);
-      if (kodeRes.error) {
-        toast.error(kodeRes.error);
-      } else {
-        setSpbNo(kodeRes.data || "");
       }
     }
 
@@ -253,12 +277,15 @@ export default function SpbCreatePage() {
     if (!brand.trim()) return toast.error("Brand wajib diisi.");
     if (!hm || Number(hm) <= 0) return toast.error("HM harus lebih dari 0.");
     if (!items.length) return toast.error("Tambahkan minimal 1 item.");
+    if (!approvalTemplateId)
+      return toast.error("Template approval wajib dipilih.");
 
     setLoading(true);
 
     const res = await createSpb({
       spb_no: spbNo,
-      spb_tanggal: spbTanggal.toISOString(),
+      approval_template_id: Number(approvalTemplateId),
+      spb_tanggal: toYmdLocal(spbTanggal),
       spb_no_wo: noWo || undefined,
       spb_section: section,
       spb_pic_gmi: picGmi,
@@ -301,20 +328,7 @@ export default function SpbCreatePage() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <div className="space-y-2">
             <Label>No SPB</Label>
-            <div className="flex gap-2">
-              <Input value={spbNo} disabled />
-              <Button
-                variant="outline"
-                onClick={async () => {
-                  if (!cabangId) return;
-                  const kodeRes = await generateSpbKode(cabangId);
-                  if (kodeRes.error) toast.error(kodeRes.error);
-                  else setSpbNo(kodeRes.data || "");
-                }}
-              >
-                Refresh
-              </Button>
-            </div>
+            <Input value={spbNo} onChange={(e) => setSpbNo(e.target.value)} />
           </div>
 
           <div className="space-y-2">
@@ -329,6 +343,26 @@ export default function SpbCreatePage() {
               onChange={(e) => setGudang(e.target.value)}
               disabled
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label>Template Approval</Label>
+            <Select
+              value={approvalTemplateId}
+              onValueChange={setApprovalTemplateId}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Pilih template approval" />
+              </SelectTrigger>
+              <SelectContent>
+                {approvalTemplates.map((tpl) => (
+                  <SelectItem key={tpl.id} value={String(tpl.id)}>
+                    {tpl.name}
+                    {tpl.cabang_id ? " (Site)" : " (Global)"}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           <div className="space-y-2">

@@ -91,7 +91,7 @@ export default function ReceiveItemPage() {
 
     let query = supabase.from("receives").select(
       `
-          id, ri_kode, ri_tanggal, ri_pic, ri_keterangan, created_at,
+          id, ri_kode, ri_tanggal, ri_pic, ri_keterangan, ri_status, created_at,
           cabang(id, nama_cabang),
           pos(id, po_kode),
           receive_items(id)
@@ -312,6 +312,9 @@ export default function ReceiveItemPage() {
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   PIC
                 </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center w-28">
+                  Status
+                </TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center w-24">
                   Items
                 </TableHead>
@@ -320,7 +323,7 @@ export default function ReceiveItemPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center">
+                  <TableCell colSpan={7} className="h-32 text-center">
                     <div className="flex items-center justify-center gap-2 text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
                       <span className="text-xs font-medium">Memuat...</span>
@@ -329,7 +332,7 @@ export default function ReceiveItemPage() {
                 </TableRow>
               ) : receives.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-40 text-center">
+                  <TableCell colSpan={7} className="h-40 text-center">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <PackageCheck className="h-8 w-8 opacity-30" />
                       <p className="text-xs font-medium">
@@ -380,6 +383,20 @@ export default function ReceiveItemPage() {
                         <User className="h-3 w-3 shrink-0" />
                         {ri.ri_pic}
                       </div>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Badge
+                        variant={
+                          ri.ri_status === "completed"
+                            ? "default"
+                            : ri.ri_status === "rejected"
+                              ? "destructive"
+                              : "secondary"
+                        }
+                        className="text-[10px] font-bold uppercase"
+                      >
+                        {ri.ri_status || "open"}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge

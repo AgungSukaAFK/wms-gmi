@@ -42,11 +42,19 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import { createReceive } from "@/services/procurement-actions";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { DatePickerString } from "@/components/date-picker-string";
+import { toYmdLocal } from "@/lib/utils";
 
 interface ReceiveItem {
   po_item_id: number;
@@ -77,15 +85,15 @@ export default function CreateReceivePage() {
   const [debouncedPoSearch] = useDebounce(poSearch, 300);
   const [poPopoverOpen, setPoPopoverOpen] = useState(false);
   const [selectedPo, setSelectedPo] = useState<any>(null);
+  const [templates, setTemplates] = useState<any[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
 
   // Items
   const [items, setItems] = useState<ReceiveItem[]>([]);
 
   // RI Header
   const [riKode, setRiKode] = useState("");
-  const [riTanggal, setRiTanggal] = useState(
-    new Date().toISOString().split("T")[0],
-  );
+  const [riTanggal, setRiTanggal] = useState(toYmdLocal());
   const [riKeterangan, setRiKeterangan] = useState("");
 
   useEffect(() => {
@@ -109,7 +117,23 @@ export default function CreateReceivePage() {
       .select("*, cabang(id, nama_cabang)")
       .eq("id", user.id)
       .single();
-    if (profile) setUserProfile(profile);
+
+    if (profile) {
+      setUserProfile(profile);
+
+      const { data: templateData } = await supabase
+        .from("approval_templates")
+        .select("id, name")
+        .eq("type", "Receive Item")
+        .or(`cabang_id.eq.${profile.cabang_id},cabang_id.is.null`)
+        .order("name", { ascending: true });
+
+      const safeTemplates = templateData || [];
+      setTemplates(safeTemplates);
+      if (safeTemplates.length > 0) {
+        setSelectedTemplateId(String(safeTemplates[0].id));
+      }
+    }
   };
 
   const fetchApprovedPOs = async () => {
@@ -181,6 +205,8 @@ export default function CreateReceivePage() {
   const handleSubmit = async () => {
     if (!riKode.trim()) return toast.error("Kode RI wajib diisi");
     if (!selectedPo) return toast.error("Pilih Purchase Order");
+    if (!selectedTemplateId)
+      return toast.error("Template approval wajib dipilih");
     const activeItems = items.filter((i) => i.qty_receive > 0);
     if (activeItems.length === 0)
       return toast.error("Tidak ada item yang akan diterima (qty = 0 semua)");
@@ -194,6 +220,7 @@ export default function CreateReceivePage() {
         ri_pic: userProfile?.nama || "",
         ri_tanggal: riTanggal,
         ri_keterangan: riKeterangan || undefined,
+        approval_template_id: Number(selectedTemplateId),
         items: activeItems.map((item) => ({
           part_id: item.part_id,
           part_number: item.part_number,
@@ -301,6 +328,40 @@ export default function CreateReceivePage() {
                   onChange={setRiTanggal}
                   className="h-10 font-bold text-sm"
                 />
+              </div>
+            </div>
+
+            {/* Approval Template */}
+            <div className="space-y-2">
+              <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                Template Approval <span className="text-destructive">*</span>
+              </Label>
+              <div className="flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                <Select
+                  value={selectedTemplateId}
+                  onValueChange={setSelectedTemplateId}
+                >
+                  <SelectTrigger className="h-10 font-bold text-xs">
+                    <SelectValue placeholder="Pilih template approval" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {templates.length === 0 ? (
+                      <SelectItem value="__no_template__" disabled>
+                        Template Receive Item belum tersedia
+                      </SelectItem>
+                    ) : (
+                      templates.map((template) => (
+                        <SelectItem
+                          key={template.id}
+                          value={String(template.id)}
+                        >
+                          {template.name}
+                        </SelectItem>
+                      ))
+                    )}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -544,7 +605,7 @@ export default function CreateReceivePage() {
                     ) : (
                       <>
                         <CheckCircle2 className="h-4 w-4" />
-                        Simpan Penerimaan
+                        Simpan & Ajukan Approval
                       </>
                     )}
                   </Button>

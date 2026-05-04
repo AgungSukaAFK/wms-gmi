@@ -44,6 +44,7 @@ import { toast } from "sonner";
 import { approvePO, rejectPO } from "@/services/procurement-actions";
 import { cn } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 
 interface PODetailSheetProps {
   poId: number | null;
@@ -63,6 +64,7 @@ export function PODetailSheet({
   const [poItems, setPoItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [canViewPrice, setCanViewPrice] = useState(false);
 
   // Approval states
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -81,7 +83,15 @@ export function PODetailSheet({
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) setCurrentUser(user);
+    if (user) {
+      setCurrentUser(user);
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("id, roles:user_roles(roles(name,label))")
+        .eq("id", user.id)
+        .single();
+      setCanViewPrice(canViewPOPrice(profile));
+    }
   };
 
   const fetchDetails = async () => {
@@ -227,13 +237,11 @@ export function PODetailSheet({
             Rejected
           </Badge>
         );
+      case "completed":
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase text-muted-foreground"
-          >
-            Closed
+          <Badge className="bg-success/10 text-success border-none font-bold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -536,16 +544,21 @@ export function PODetailSheet({
                         <div className="flex items-center justify-between bg-muted/60 px-4 py-2.5 border-b border-border">
                           <div className="flex items-center gap-2">
                             <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-                            <span className="text-[11px] font-bold text-foreground uppercase">
+                            <span className="text-[11px] font-bold text-foreground uppercase wrap-break-word">
                               {group.vendor?.vendor_name ??
                                 "Vendor Belum Ditentukan"}
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="text-[10px] font-bold text-foreground">
-                              {formatCurrency(total)}
+                              {maskedPriceText(
+                                canViewPrice,
+                                formatCurrency(total),
+                              )}
                             </span>
-                            {po?.po_status === "approved" && (
+                            {["approved", "completed"].includes(
+                              po?.po_status,
+                            ) && (
                               <Button
                                 variant="ghost"
                                 size="sm"
@@ -592,17 +605,25 @@ export function PODetailSheet({
                                   className="border-b border-border/30 hover:bg-muted/20"
                                 >
                                   <TableCell className="pl-4 py-2.5">
-                                    <span className="text-[9px] font-mono font-bold text-muted-foreground">
+                                    <span
+                                      className="inline-block max-w-full rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono font-extrabold text-foreground break-all"
+                                      title={item.part_number}
+                                    >
                                       {item.part_number}
                                     </span>
                                   </TableCell>
-                                  <TableCell className="py-2.5">
-                                    <p className="text-[10px] font-bold text-foreground uppercase leading-tight">
+                                  <TableCell className="py-2.5 min-w-0">
+                                    <p
+                                      className="text-[10px] font-medium text-muted-foreground leading-tight truncate"
+                                      title={item.part_name}
+                                    >
                                       {item.part_name}
                                     </p>
                                     <p className="text-[9px] text-muted-foreground font-medium">
-                                      {formatCurrency(item.harga)} /{" "}
-                                      {item.satuan}
+                                      {maskedPriceText(
+                                        canViewPrice,
+                                        `${formatCurrency(item.harga)} / ${item.satuan}`,
+                                      )}
                                     </p>
                                   </TableCell>
                                   <TableCell className="text-right py-2.5">

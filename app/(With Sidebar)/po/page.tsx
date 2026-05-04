@@ -43,6 +43,7 @@ import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { PODetailSheet } from "@/components/po/po-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
+import { completedFilterStatuses } from "@/lib/document-status";
 
 export default function POListPage() {
   const supabase = createClient();
@@ -89,6 +90,9 @@ export default function POListPage() {
           isModerator: (profile.roles as any[]).some(
             (r) => r.roles.name === "moderator",
           ),
+          isPurchasing: (profile.roles as any[]).some(
+            (r) => r.roles.name === "purchasing",
+          ),
         });
       }
     }
@@ -122,7 +126,11 @@ export default function POListPage() {
     }
 
     if (statusFilter !== "all") {
-      query = query.eq("po_status", statusFilter);
+      if (statusFilter === "completed") {
+        query = query.in("po_status", completedFilterStatuses());
+      } else {
+        query = query.eq("po_status", statusFilter);
+      }
     }
 
     if (receiveStatusFilter !== "all") {
@@ -231,13 +239,11 @@ export default function POListPage() {
             Rejected
           </Badge>
         );
+      case "completed":
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-semibold text-[10px] uppercase text-muted-foreground"
-          >
-            Closed
+          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -308,11 +314,13 @@ export default function POListPage() {
               </p>
             </div>
           </div>
-          <Link href="/po/create">
-            <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
-              <Plus className="h-4 w-4" /> Buat PO Baru
-            </Button>
-          </Link>
+          {(userProfile?.isAdmin || userProfile?.isPurchasing) && (
+            <Link href="/po/create">
+              <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
+                <Plus className="h-4 w-4" /> Buat PO Baru
+              </Button>
+            </Link>
+          )}
         </div>
       </Content>
 
@@ -371,7 +379,7 @@ export default function POListPage() {
                 <SelectItem value="open">Pending Approval</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
                 <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
               </SelectContent>
             </Select>
 

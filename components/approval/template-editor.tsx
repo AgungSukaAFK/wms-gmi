@@ -63,6 +63,16 @@ import {
 } from "@/type";
 import { toast } from "sonner";
 
+type StepProfile = {
+  nama?: string;
+  email?: string;
+};
+
+type EditorStep = Partial<ApprovalTemplateStep> & {
+  local_id: string;
+  profiles?: StepProfile | null;
+};
+
 interface TemplateEditorProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -80,16 +90,27 @@ export function TemplateEditor({
   userProfile,
   onSuccess,
 }: TemplateEditorProps) {
+  const createStepId = () =>
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState("");
   const [type, setType] = useState<ApprovalType>("Material Request");
   const [cabangId, setCabangId] = useState<string>("");
-  const [steps, setSteps] = useState<Partial<ApprovalTemplateStep>[]>([]);
+  const [steps, setSteps] = useState<EditorStep[]>([]);
   const [profiles, setProfiles] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
-  const [profileSearchValue, setProfileSearchValue] = useState("");
-  const [debouncedSearch] = useDebounce(profileSearchValue, 500);
+  const [activeStepId, setActiveStepId] = useState<string | null>(null);
+  const [stepSearchValues, setStepSearchValues] = useState<
+    Record<string, string>
+  >({});
+  const activeSearchValue = activeStepId
+    ? (stepSearchValues[activeStepId] ?? "")
+    : "";
+  const [debouncedSearch] = useDebounce(activeSearchValue, 500);
 
   useEffect(() => {
     if (open) {
@@ -97,6 +118,8 @@ export function TemplateEditor({
         setName(template.name || "");
         setType(template.type);
         setCabangId(template.cabang_id ? template.cabang_id.toString() : "all");
+        setStepSearchValues({});
+        setActiveStepId(null);
         fetchSteps(template.id);
       } else {
         setName("");
@@ -107,15 +130,23 @@ export function TemplateEditor({
             : "all",
         );
         setSteps([]);
+        setStepSearchValues({});
+        setActiveStepId(null);
       }
     }
   }, [open, template, userProfile]);
 
   useEffect(() => {
-    if (open) {
+    if (open && activeStepId) {
       fetchProfiles(debouncedSearch);
     }
-  }, [debouncedSearch, open]);
+  }, [debouncedSearch, open, activeStepId]);
+
+  useEffect(() => {
+    if (open) {
+      fetchProfiles("");
+    }
+  }, [open]);
 
   const fetchSteps = async (templateId: number) => {
     const { data } = await supabase
@@ -123,7 +154,11 @@ export function TemplateEditor({
       .select("*, profiles(nama, email)")
       .eq("template_id", templateId)
       .order("step_order");
-    setSteps(data || []);
+    const mappedSteps: EditorStep[] = (data || []).map((step: any) => ({
+      ...step,
+      local_id: createStepId(),
+    }));
+    setSteps(mappedSteps);
   };
 
   const fetchProfiles = async (search: string) => {
@@ -153,51 +188,83 @@ export function TemplateEditor({
 
   const addStep = (type: "user" | "requester") => {
     const nextOrder = steps.length + 1;
-    setSteps([
-      ...steps,
-      {
-        step_order: nextOrder,
-        approver_type: type,
-        level: "menyetujui" as ApprovalLevel,
-        user_id: null,
-      },
-    ]);
+    const newStep: EditorStep = {
+      local_id: createStepId(),
+      step_order: nextOrder,
+      approver_type: type,
+      level: "menyetujui" as ApprovalLevel,
+      user_id: null,
+    };
+    setSteps((prev) => [...prev, newStep]);
   };
 
-  const removeStep = (index: number) => {
-    const newSteps = steps.filter((_, i) => i !== index);
-    const updatedSteps = newSteps.map((step, i) => ({
-      ...step,
-      step_order: i + 1,
-    }));
-    setSteps(updatedSteps);
+  const removeStep = (stepId: string) => {
+    setSteps((prev) => {
+      const newSteps = prev.filter((step) => step.local_id !== stepId);
+      return newSteps.map((step, i) => ({
+        ...step,
+        step_order: i + 1,
+      }));
+    });
+    setStepSearchValues((prev) => {
+      const next = { ...prev };
+      delete next[stepId];
+      return next;
+    });
+    setActiveStepId((prev) => (prev === stepId ? null : prev));
   };
 
   const updateStep = (
-    index: number,
-    updates: Partial<ApprovalTemplateStep>,
+    stepId: string,
+    updates: Partial<ApprovalTemplateStep> & { profiles?: StepProfile | null },
   ) => {
-    const newSteps = [...steps];
-    newSteps[index] = { ...newSteps[index], ...updates };
-    setSteps(newSteps);
+    setSteps((prev) =>
+      prev.map((step) =>
+        step.local_id === stepId ? { ...step, ...updates } : step,
+      ),
+    );
   };
 
   const moveStep = (index: number, direction: "up" | "down") => {
     if (direction === "up" && index === 0) return;
     if (direction === "down" && index === steps.length - 1) return;
 
-    const newSteps = [...steps];
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    [newSteps[index], newSteps[targetIndex]] = [
-      newSteps[targetIndex],
-      newSteps[index],
-    ];
+    setSteps((prev) => {
+      const newSteps = [...prev];
+      const targetIndex = direction === "up" ? index - 1 : index + 1;
+      [newSteps[index], newSteps[targetIndex]] = [
+        newSteps[targetIndex],
+        newSteps[index],
+      ];
 
-    const updatedSteps = newSteps.map((step, i) => ({
-      ...step,
-      step_order: i + 1,
+      return newSteps.map((step, i) => ({
+        ...step,
+        step_order: i + 1,
+      }));
+    });
+  };
+
+  const handleStepSearchChange = (stepId: string, value: string) => {
+    setStepSearchValues((prev) => ({
+      ...prev,
+      [stepId]: value,
     }));
-    setSteps(updatedSteps);
+  };
+
+  const handleStepPopoverOpenChange = (stepId: string, isOpen: boolean) => {
+    if (!isOpen) {
+      setActiveStepId((prev) => (prev === stepId ? null : prev));
+      return;
+    }
+
+    setActiveStepId(stepId);
+    if (!(stepId in stepSearchValues)) {
+      setStepSearchValues((prev) => ({
+        ...prev,
+        [stepId]: "",
+      }));
+    }
+    fetchProfiles(stepSearchValues[stepId] ?? "");
   };
 
   const handleSave = async () => {
@@ -228,6 +295,33 @@ export function TemplateEditor({
     try {
       let templateId = template?.id;
       const finalCabangId = cabangId === "all" ? null : parseInt(cabangId);
+
+      // Keep uniqueness check for site-specific templates only.
+      // Global templates are allowed to have more than one entry per type.
+      if (finalCabangId !== null) {
+        let duplicateQuery = supabase
+          .from("approval_templates")
+          .select("id")
+          .eq("type", type)
+          .eq("cabang_id", finalCabangId)
+          .limit(1);
+
+        if (templateId) {
+          duplicateQuery = duplicateQuery.neq("id", templateId);
+        }
+
+        const { data: duplicateTemplate, error: duplicateError } =
+          await duplicateQuery.maybeSingle();
+
+        if (duplicateError) throw duplicateError;
+
+        if (duplicateTemplate) {
+          toast.error(
+            `Template untuk jenis \"${type}\" di lokasi ini sudah ada. Silakan edit template yang sudah ada.`,
+          );
+          return;
+        }
+      }
 
       if (!templateId) {
         const { data: newTemplate, error: tError } = await supabase
@@ -271,7 +365,13 @@ export function TemplateEditor({
       onOpenChange(false);
     } catch (error: any) {
       console.error(error);
-      toast.error(error.message || "Gagal menyimpan template");
+      if (error?.code === "23505") {
+        toast.error(
+          "Template untuk kombinasi jenis dokumen dan lokasi tersebut sudah ada (khusus lokasi non-global).",
+        );
+      } else {
+        toast.error(error.message || "Gagal menyimpan template");
+      }
     } finally {
       setLoading(false);
     }
@@ -344,7 +444,21 @@ export function TemplateEditor({
                     Purchase Request
                   </SelectItem>
                   <SelectItem value="Purchase Order">Purchase Order</SelectItem>
+                  <SelectItem value="Receive Item">Receive Item</SelectItem>
                   <SelectItem value="Item Transfer">Item Transfer</SelectItem>
+                  <SelectItem value="Stock Out - SPB">
+                    Stock Out - SPB
+                  </SelectItem>
+                  <SelectItem value="Stock Out - SPB PO">
+                    Stock Out - SPB PO
+                  </SelectItem>
+                  <SelectItem value="Stock Out - SPB DO">
+                    Stock Out - SPB DO
+                  </SelectItem>
+                  <SelectItem value="Stock Out - SPB Invoice">
+                    Stock Out - SPB Invoice
+                  </SelectItem>
+                  <SelectItem value="Return SPB">Return SPB</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -396,7 +510,7 @@ export function TemplateEditor({
                 ) : (
                   steps.map((step, index) => (
                     <div
-                      key={index}
+                      key={step.local_id}
                       className="flex gap-3 items-center bg-white p-2 rounded-lg border border-slate-200 group shadow-sm transition-all hover:border-blue-200"
                     >
                       <div className="flex flex-col items-center min-w-[32px] shrink-0">
@@ -431,7 +545,15 @@ export function TemplateEditor({
                               Requester
                             </div>
                           ) : (
-                            <Popover>
+                            <Popover
+                              open={activeStepId === step.local_id}
+                              onOpenChange={(isOpen) =>
+                                handleStepPopoverOpenChange(
+                                  step.local_id,
+                                  isOpen,
+                                )
+                              }
+                            >
                               <PopoverTrigger asChild>
                                 <Button
                                   variant="outline"
@@ -440,9 +562,11 @@ export function TemplateEditor({
                                 >
                                   <span className="truncate flex-1 text-left">
                                     {step.user_id
-                                      ? profiles.find(
+                                      ? step.profiles?.nama ||
+                                        profiles.find(
                                           (p) => p.id === step.user_id,
-                                        )?.nama || "User terpilih"
+                                        )?.nama ||
+                                        "User terpilih"
                                       : "Pilih User..."}
                                   </span>
                                   <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-40" />
@@ -458,9 +582,12 @@ export function TemplateEditor({
                                   <input
                                     className="flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
                                     placeholder="Cari user (nama/email)..."
-                                    value={profileSearchValue}
+                                    value={
+                                      stepSearchValues[step.local_id] ?? ""
+                                    }
                                     onChange={(e) =>
-                                      setProfileSearchValue(
+                                      handleStepSearchChange(
+                                        step.local_id,
                                         e.currentTarget.value,
                                       )
                                     }
@@ -482,7 +609,14 @@ export function TemplateEditor({
                                     <div
                                       key={p.id}
                                       onClick={() => {
-                                        updateStep(index, { user_id: p.id });
+                                        updateStep(step.local_id, {
+                                          user_id: p.id,
+                                          profiles: {
+                                            nama: p.nama,
+                                            email: p.email,
+                                          },
+                                        });
+                                        setActiveStepId(null);
                                       }}
                                       className={cn(
                                         "flex flex-col items-start gap-1 px-3 py-2 cursor-pointer transition-all rounded-md border border-transparent mb-0.5 last:mb-0",
@@ -539,7 +673,7 @@ export function TemplateEditor({
                           <Select
                             value={step.level}
                             onValueChange={(val: any) =>
-                              updateStep(index, { level: val })
+                              updateStep(step.local_id, { level: val })
                             }
                           >
                             <SelectTrigger className="bg-white h-9 text-[12px] border-slate-200 font-bold text-slate-700 rounded-md shadow-none hover:bg-slate-50 transition-colors">
@@ -561,7 +695,7 @@ export function TemplateEditor({
                             variant="ghost"
                             size="icon"
                             className="h-8 w-8 text-slate-200 hover:text-red-500 hover:bg-red-50 transition-all"
-                            onClick={() => removeStep(index)}
+                            onClick={() => removeStep(step.local_id)}
                           >
                             <Trash2 className="h-4 w-4" />
                           </Button>

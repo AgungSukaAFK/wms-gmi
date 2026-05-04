@@ -41,11 +41,14 @@ import {
 import {
   updateDeliveryDocument,
   updateDeliveryTracking,
+  updateDeliveryTrackingModerator,
   finalizeDelivery,
 } from "@/services/inventory-actions";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { Textarea } from "@/components/ui/textarea";
+import { normalizeDocumentStatus } from "@/lib/document-status";
 
 interface DeliveryDetailSheetProps {
   deliveryId: number | null;
@@ -70,7 +73,12 @@ export function DeliveryDetailSheet({
   const [currentUserCabangId, setCurrentUserCabangId] = useState<number | null>(
     null,
   );
+  const [currentUserRoleNames, setCurrentUserRoleNames] = useState<string[]>(
+    [],
+  );
   const [finalizing, setFinalizing] = useState(false);
+  const [moderatorTrackingStatus, setModeratorTrackingStatus] = useState("");
+  const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
 
   useEffect(() => {
     if (open && deliveryId) {
@@ -87,10 +95,14 @@ export function DeliveryDetailSheet({
       if (user) {
         const { data: profile } = await supabase
           .from("profiles")
-          .select("cabang_id")
+          .select("cabang_id, user_roles(roles(name))")
           .eq("id", user.id)
           .single();
         setCurrentUserCabangId(profile?.cabang_id ?? null);
+        const roleNames = (profile?.user_roles || [])
+          .map((row: any) => row?.roles?.name)
+          .filter((name: string | undefined): name is string => Boolean(name));
+        setCurrentUserRoleNames(roleNames);
       }
     };
     fetchCurrentUser();
@@ -114,6 +126,8 @@ export function DeliveryDetailSheet({
         .eq("id", deliveryId)
         .single();
       setDelivery(dlvData);
+      setModeratorTrackingStatus(dlvData?.tracking_status || "created");
+      setModeratorTrackingNote(dlvData?.tracking_note || "");
 
       const { data: itemsData } = await supabase
         .from("delivery_items")
@@ -168,19 +182,12 @@ export function DeliveryDetailSheet({
             Approved
           </Badge>
         );
+      case "completed":
       case "done":
-        return (
-          <Badge className="bg-slate-900 text-white font-bold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase text-slate-400"
-          >
-            Closed
+          <Badge className="bg-emerald-600 text-white font-bold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -198,6 +205,7 @@ export function DeliveryDetailSheet({
     { id: "ready_pickup", label: "Siap Diambil" },
     { id: "in_transit", label: "Dalam Pengiriman" },
     { id: "delivered", label: "Barang Diterima" },
+    { id: "completed", label: "Selesai Final" },
   ];
   const TRACKING_ORDER = TRACKING_STEPS.map((s) => s.id);
 
@@ -213,7 +221,8 @@ export function DeliveryDetailSheet({
   const handleAdvanceTracking = async () => {
     if (!delivery) return;
     const ci = TRACKING_ORDER.indexOf(delivery.tracking_status || "created");
-    if (ci < 0 || ci >= TRACKING_ORDER.length - 1) return;
+    const deliveredIndex = TRACKING_ORDER.indexOf("delivered");
+    if (ci < 0 || ci >= deliveredIndex) return;
     const nextStatus = TRACKING_ORDER[ci + 1];
     setUpdating(true);
     const result = await updateDeliveryTracking(delivery.id, nextStatus);
@@ -223,6 +232,24 @@ export function DeliveryDetailSheet({
       if (onUpdate) onUpdate();
     } else {
       toast.error(result.error || "Gagal memperbarui status");
+    }
+    setUpdating(false);
+  };
+
+  const handleModeratorTrackingSave = async () => {
+    if (!delivery) return;
+    setUpdating(true);
+    const result = await updateDeliveryTrackingModerator(
+      delivery.id,
+      moderatorTrackingStatus,
+      moderatorTrackingNote,
+    );
+    if (result.success) {
+      toast.success("Tracking status dan catatan berhasil diperbarui");
+      fetchDetails();
+      if (onUpdate) onUpdate();
+    } else {
+      toast.error(result.error || "Gagal memperbarui tracking moderator");
     }
     setUpdating(false);
   };
@@ -261,6 +288,17 @@ export function DeliveryDetailSheet({
     Boolean(currentUserId) &&
     delivery?.uid_receiver === currentUserId &&
     ["done", "closed"].includes(delivery?.status);
+
+  const isModeratorOrAdmin = currentUserRoleNames.some(
+    (role) => role === "moderator" || role === "admin",
+  );
+
+  const currentTrackingIndex = TRACKING_ORDER.indexOf(
+    delivery?.tracking_status || "created",
+  );
+  const deliveredIndex = TRACKING_ORDER.indexOf("delivered");
+  const canAdvanceTracking =
+    currentTrackingIndex >= 0 && currentTrackingIndex < deliveredIndex;
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -427,7 +465,7 @@ export function DeliveryDetailSheet({
                       );
                     })}
                   </div>
-                  {delivery?.tracking_status !== "delivered" && (
+                  {canAdvanceTracking && (
                     <Button
                       variant="outline"
                       size="sm"
@@ -443,8 +481,99 @@ export function DeliveryDetailSheet({
                       Lanjutkan ke Tahap Berikutnya
                     </Button>
                   )}
+
+                  {delivery?.tracking_note && (
+                    <div className="rounded-lg border border-orange-200 bg-white p-3">
+                      <p className="text-[9px] font-bold text-orange-700 uppercase mb-1">
+                        Catatan Tracking
+                      </p>
+                      <p className="text-[11px] font-medium text-slate-700 whitespace-pre-wrap">
+                        {delivery.tracking_note}
+                      </p>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* Moderator Tracking Override */}
+              {isModeratorOrAdmin && (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="h-4 w-1 bg-indigo-500 rounded-full" />
+                    <h3 className="text-[11px] font-bold text-slate-900 uppercase tracking-tight">
+                      Tracking Moderator/Admin
+                    </h3>
+                  </div>
+                  <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3">
+                    <Select
+                      value={moderatorTrackingStatus}
+                      onValueChange={setModeratorTrackingStatus}
+                      disabled={updating}
+                    >
+                      <SelectTrigger className="h-10 bg-white border-indigo-200 font-bold text-xs uppercase text-slate-700 rounded-lg">
+                        <SelectValue placeholder="Pilih status tracking" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem
+                          value="created"
+                          className="text-xs font-bold uppercase"
+                        >
+                          Delivery Dibuat
+                        </SelectItem>
+                        <SelectItem
+                          value="packing"
+                          className="text-xs font-bold uppercase"
+                        >
+                          Packing
+                        </SelectItem>
+                        <SelectItem
+                          value="ready_pickup"
+                          className="text-xs font-bold uppercase"
+                        >
+                          Siap Diambil
+                        </SelectItem>
+                        <SelectItem
+                          value="in_transit"
+                          className="text-xs font-bold uppercase"
+                        >
+                          Dalam Pengiriman
+                        </SelectItem>
+                        <SelectItem
+                          value="delivered"
+                          className="text-xs font-bold uppercase"
+                        >
+                          Barang Diterima
+                        </SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Textarea
+                      value={moderatorTrackingNote}
+                      onChange={(event) =>
+                        setModeratorTrackingNote(event.target.value)
+                      }
+                      placeholder="Catatan tracking custom (opsional)"
+                      className="min-h-20 bg-white border-indigo-200 text-xs"
+                      disabled={updating}
+                    />
+
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="w-full gap-2 text-xs font-bold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                      onClick={handleModeratorTrackingSave}
+                      disabled={updating}
+                    >
+                      {updating ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="h-3.5 w-3.5" />
+                      )}
+                      Simpan Tracking + Catatan
+                    </Button>
+                  </div>
+                </div>
+              )}
 
               {/* Status Management */}
               <div className="space-y-3">
@@ -456,7 +585,7 @@ export function DeliveryDetailSheet({
                 </div>
                 <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-3 shadow-inner">
                   <Select
-                    value={delivery?.status}
+                    value={normalizeDocumentStatus(delivery?.status)}
                     onValueChange={handleStatusChange}
                     disabled={updating}
                   >
@@ -484,16 +613,10 @@ export function DeliveryDetailSheet({
                         Approved
                       </SelectItem>
                       <SelectItem
-                        value="done"
+                        value="completed"
                         className="text-xs font-bold uppercase text-slate-900"
                       >
-                        Done
-                      </SelectItem>
-                      <SelectItem
-                        value="closed"
-                        className="text-xs font-bold uppercase text-slate-400"
-                      >
-                        Closed
+                        Completed
                       </SelectItem>
                     </SelectContent>
                   </Select>

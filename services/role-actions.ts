@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
 /**
@@ -49,7 +49,10 @@ export async function getUserRoles(userId: string) {
 
   if (error) return { error: error.message, data: null };
   // Flattening data
-  return { data: data?.map((r: any) => r.roles).filter(Boolean) ?? [], error: null };
+  return {
+    data: data?.map((r: any) => r.roles).filter(Boolean) ?? [],
+    error: null,
+  };
 }
 
 /**
@@ -59,25 +62,79 @@ export async function updateUserRoles(userId: string, roleIds: number[]) {
   const supabase = await createClient();
 
   // Hapus semua role lama
-  const { error: deleteError } = await supabase
+  // Verify caller is moderator or admin
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Unauthorized" };
+
+  const { data: callerRoles } = await supabase
     .from("user_roles")
-    .delete()
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  const roleNames = (callerRoles ?? []).map((r: any) => r.roles?.name);
+  const isAllowed =
+    roleNames.includes("moderator") || roleNames.includes("admin");
+  if (!isAllowed)
+    return {
+      error:
+        "Unauthorized: hanya moderator atau admin yang dapat mengubah roles.",
+    };
+
+  // Prefer service-role client, fallback to JWT client on local env without key.
+  let writeClient: any = supabase;
+  try {
+    writeClient = createAdminClient();
+  } catch {
+    writeClient = supabase;
+  }
+
+  const { data: existingRoles, error: existingRolesError } = await writeClient
+    .from("user_roles")
+    .select("role_id")
     .eq("user_id", userId);
 
-  if (deleteError) return { error: deleteError.message };
+  if (existingRolesError) return { error: existingRolesError.message };
 
-  // Insert role baru
-  if (roleIds.length > 0) {
-    const inserts = roleIds.map((roleId) => ({
+  const requestedRoleIds = Array.from(new Set(roleIds)).sort((a, b) => a - b);
+  const currentRoleIds = Array.from(
+    new Set((existingRoles || []).map((r: any) => Number(r.role_id))),
+  ) as number[];
+  currentRoleIds.sort((a, b) => a - b);
+
+  const currentRoleIdSet = new Set(currentRoleIds);
+  const requestedRoleIdSet = new Set(requestedRoleIds);
+
+  const roleIdsToAdd = requestedRoleIds.filter(
+    (roleId) => !currentRoleIdSet.has(roleId),
+  );
+  const roleIdsToRemove = currentRoleIds.filter(
+    (roleId) => !requestedRoleIdSet.has(roleId),
+  );
+
+  // Insert first to avoid data loss if insert fails.
+  if (roleIdsToAdd.length > 0) {
+    const inserts = roleIdsToAdd.map((roleId) => ({
       user_id: userId,
       role_id: roleId,
     }));
 
-    const { error: insertError } = await supabase
+    const { error: insertError } = await writeClient
       .from("user_roles")
       .insert(inserts);
 
     if (insertError) return { error: insertError.message };
+  }
+
+  if (roleIdsToRemove.length > 0) {
+    const { error: deleteError } = await writeClient
+      .from("user_roles")
+      .delete()
+      .eq("user_id", userId)
+      .in("role_id", roleIdsToRemove);
+
+    if (deleteError) return { error: deleteError.message };
   }
 
   revalidatePath("/users");
@@ -127,7 +184,7 @@ export async function getRolePermissions(roleId: number) {
 
 export async function setRolePermissions(
   roleId: number,
-  permissions: { page_path: string; cabang_id: number | null }[]
+  permissions: { page_path: string; cabang_id: number | null }[],
 ) {
   const supabase = await createClient();
 

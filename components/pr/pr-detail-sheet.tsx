@@ -69,6 +69,7 @@ import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { MyAlertDialog } from "@/components/dialog-confirm";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { normalizeDocumentStatus } from "@/lib/document-status";
 
 interface PRDetailSheetProps {
   prId: string | number | null;
@@ -349,19 +350,12 @@ export function PRDetailSheet({
             Rejected
           </Badge>
         );
+      case "completed":
       case "done":
-        return (
-          <Badge className="bg-slate-900 text-white font-bold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase text-slate-400"
-          >
-            Closed
+          <Badge className="bg-slate-900 text-white font-bold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -580,7 +574,7 @@ export function PRDetailSheet({
                 </div>
                 <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-3 shadow-inner">
                   <Select
-                    value={pr?.pr_status}
+                    value={normalizeDocumentStatus(pr?.pr_status)}
                     onValueChange={handleStatusChange}
                     disabled={updating}
                   >
@@ -614,16 +608,10 @@ export function PRDetailSheet({
                         Rejected
                       </SelectItem>
                       <SelectItem
-                        value="done"
+                        value="completed"
                         className="text-xs font-bold uppercase text-slate-900"
                       >
-                        Done
-                      </SelectItem>
-                      <SelectItem
-                        value="closed"
-                        className="text-xs font-bold uppercase text-slate-400"
-                      >
-                        Closed
+                        Completed
                       </SelectItem>
                     </SelectContent>
                   </Select>

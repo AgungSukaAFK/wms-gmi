@@ -14,6 +14,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Command,
   CommandEmpty,
   CommandGroup,
@@ -45,13 +52,17 @@ import {
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
+  approveSpbPo,
   createSpbPo,
+  getStockOutApprovalTemplates,
   getSpbDetailsBySpbId,
   getSpbOptionsForPo,
   getSpbPoList,
+  rejectSpbPo,
 } from "@/services/spb-actions";
 import { useDebounce } from "use-debounce";
-import { cn } from "@/lib/utils";
+import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 type SpbOption = { id: number; spb_no: string; spb_status: string };
 type SpbDetail = {
@@ -62,7 +73,14 @@ type SpbDetail = {
   dtl_spb_part_satuan: string;
 };
 
+type ApprovalTemplateOption = {
+  id: number;
+  name: string;
+  cabang_id: number | null;
+};
+
 export default function SpbPoPage() {
+  const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -84,8 +102,13 @@ export default function SpbPoPage() {
   const [poNo, setPoNo] = useState("");
   const [soNo, setSoNo] = useState("");
   const [soDate, setSoDate] = useState("");
+  const [approvalTemplateId, setApprovalTemplateId] = useState("");
+  const [approvalTemplates, setApprovalTemplates] = useState<
+    ApprovalTemplateOption[]
+  >([]);
   const [submitting, setSubmitting] = useState(false);
   const [openCreateModal, setOpenCreateModal] = useState(false);
+  const [userId, setUserId] = useState("");
 
   const selectedSpb = useMemo(
     () => spbOptions.find((s) => String(s.id) === selectedSpbId),
@@ -124,9 +147,31 @@ export default function SpbPoPage() {
   }, [debouncedSearch, page, limit]);
 
   useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) setUserId(user.id);
+    };
+    loadUser();
+  }, [supabase]);
+
+  useEffect(() => {
     if (!openCreateModal) return;
     fetchSpbOptions(debouncedSpbOptionSearch);
   }, [openCreateModal, debouncedSpbOptionSearch]);
+
+  useEffect(() => {
+    const loadTemplates = async () => {
+      if (!openCreateModal) return;
+      const res = await getStockOutApprovalTemplates("spb_po");
+      if (!res.error) {
+        setApprovalTemplates((res.data || []) as ApprovalTemplateOption[]);
+      }
+    };
+
+    loadTemplates();
+  }, [openCreateModal]);
 
   useEffect(() => {
     const loadDetails = async () => {
@@ -157,6 +202,8 @@ export default function SpbPoPage() {
   const submit = async () => {
     if (!selectedSpbId) return toast.error("Pilih SPB.");
     if (!poNo.trim()) return toast.error("No PO wajib diisi.");
+    if (!approvalTemplateId)
+      return toast.error("Template approval wajib dipilih.");
     if (!selectedDetailIds.length) return toast.error("Pilih minimal 1 item.");
 
     setSubmitting(true);
@@ -164,7 +211,8 @@ export default function SpbPoPage() {
       spb_id: Number(selectedSpbId),
       po_no: poNo,
       so_no: soNo || undefined,
-      so_date: soDate ? new Date(soDate).toISOString() : undefined,
+      so_date: soDate ? ymdToLocalStartIso(soDate) : undefined,
+      approval_template_id: Number(approvalTemplateId),
       details: selectedDetailIds.map((id) => ({ spb_dtl_id: id })),
     });
     setSubmitting(false);
@@ -184,6 +232,7 @@ export default function SpbPoPage() {
     setPoNo("");
     setSoNo("");
     setSoDate("");
+    setApprovalTemplateId("");
     setSelectedSpbId("");
     setSelectedSpbLabel("");
     setSpbOptionSearch("");
@@ -197,6 +246,28 @@ export default function SpbPoPage() {
     if (!open) {
       resetCreateForm();
     }
+  };
+
+  const onApprove = async (id: number) => {
+    const res = await approveSpbPo(id);
+    if (res.error) return toast.error(res.error);
+    toast.success("Approval SPB PO berhasil diproses.");
+    fetchList();
+  };
+
+  const onReject = async (id: number) => {
+    const reason = window.prompt("Alasan reject SPB PO:");
+    if (!reason) return;
+    const res = await rejectSpbPo(id, reason);
+    if (res.error) return toast.error(res.error);
+    toast.success("SPB PO berhasil direject.");
+    fetchList();
+  };
+
+  const isMyApprovalTurn = (row: any) => {
+    return (row.approvals || []).some(
+      (a: any) => a.userid === userId && a.status === "pending",
+    );
   };
 
   return (
@@ -253,14 +324,16 @@ export default function SpbPoPage() {
                   <TableHead>SO Date</TableHead>
                   <TableHead>Lokasi</TableHead>
                   <TableHead>Item Count</TableHead>
+                  <TableHead>Approval</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={9}
                       className="text-center text-muted-foreground"
                     >
                       Memuat data...
@@ -269,7 +342,7 @@ export default function SpbPoPage() {
                 ) : rows.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={9}
                       className="text-center text-muted-foreground"
                     >
                       Belum ada data SPB-PO.
@@ -288,8 +361,30 @@ export default function SpbPoPage() {
                       </TableCell>
                       <TableCell>{row.spb?.spb_gudang || "-"}</TableCell>
                       <TableCell>{row.details?.length || 0}</TableCell>
+                      <TableCell>{row.approval_status || "open"}</TableCell>
                       <TableCell>
                         {new Date(row.created_at).toLocaleDateString("id-ID")}
+                      </TableCell>
+                      <TableCell>
+                        {row.approval_status === "open" &&
+                          isMyApprovalTurn(row) && (
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onApprove(row.id)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => onReject(row.id)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          )}
                       </TableCell>
                     </TableRow>
                   ))
@@ -403,6 +498,26 @@ export default function SpbPoPage() {
               <div className="space-y-2">
                 <Label>No SO</Label>
                 <Input value={soNo} onChange={(e) => setSoNo(e.target.value)} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Template Approval</Label>
+                <Select
+                  value={approvalTemplateId}
+                  onValueChange={setApprovalTemplateId}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pilih template approval" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {approvalTemplates.map((tpl) => (
+                      <SelectItem key={tpl.id} value={String(tpl.id)}>
+                        {tpl.name}
+                        {tpl.cabang_id ? " (Site)" : " (Global)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

@@ -2,6 +2,10 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import {
+  completedFilterStatuses,
+  toCompletedIfLegacy,
+} from "@/lib/document-status";
 
 /**
  * JOB COSTING SERVICES
@@ -20,9 +24,12 @@ export async function getJobCostingList(params?: {
 
   let query = supabase
     .from("job_costing")
-    .select("*, cabang(nama_cabang), job_costing_items(id, unit_price, qty)", {
-      count: "exact",
-    })
+    .select(
+      "*, cabang!job_costing_cabang_id_fkey(nama_cabang), job_costing_items(id, unit_price, qty)",
+      {
+        count: "exact",
+      },
+    )
     .order("created_at", { ascending: false });
 
   if (params?.search) {
@@ -31,7 +38,11 @@ export async function getJobCostingList(params?: {
     );
   }
   if (params?.status && params.status !== "all") {
-    query = query.eq("status", params.status);
+    if (params.status === "completed") {
+      query = query.in("status", completedFilterStatuses());
+    } else {
+      query = query.eq("status", params.status);
+    }
   }
   if (params?.cabang_id) {
     query = query.eq("cabang_id", params.cabang_id);
@@ -48,7 +59,9 @@ export async function getJobCostingById(id: number) {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("job_costing")
-    .select("*, cabang(nama_cabang), job_costing_items(*, po:po_id(po_kode))")
+    .select(
+      "*, cabang!job_costing_cabang_id_fkey(nama_cabang), finish_part_cabang:cabang!job_costing_finish_part_cabang_id_fkey(nama_cabang), job_costing_items(*, source_cabang:cabang!job_costing_items_source_cabang_id_fkey(nama_cabang), po:po_id(po_kode))",
+    )
     .eq("id", id)
     .single();
 
@@ -151,9 +164,12 @@ export async function createJobCosting(data: {
   job_kode: string;
   cabang_id: number;
   description: string;
+  finish_part_id: number;
+  finish_part_cabang_id: number;
+  qty_finish_part: number;
   finish_part?: string;
   job_tanggal?: string;
-  status?: "open" | "approved" | "closed" | "rejected";
+  status?: "open" | "approved" | "closed" | "completed" | "rejected";
   notes?: string;
   items: {
     part_id?: number | null;
@@ -164,6 +180,7 @@ export async function createJobCosting(data: {
     unit: string;
     unit_price: number;
     po_id?: number | null;
+    source_cabang_id: number;
     notes?: string;
   }[];
 }) {
@@ -174,6 +191,38 @@ export async function createJobCosting(data: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Tidak terautentikasi." };
 
+  if (!data.finish_part_id || data.finish_part_id <= 0) {
+    return { error: "Finish part wajib dipilih." };
+  }
+
+  if (!data.finish_part_cabang_id || data.finish_part_cabang_id <= 0) {
+    return { error: "Cabang tujuan finish part wajib dipilih." };
+  }
+
+  if (!Number.isFinite(data.qty_finish_part) || data.qty_finish_part <= 0) {
+    return { error: "Qty finish part wajib lebih dari 0." };
+  }
+
+  if (!data.items?.length) {
+    return { error: "Tambahkan minimal satu item bahan." };
+  }
+
+  for (const item of data.items) {
+    if (!item.part_id || item.part_id <= 0) {
+      return { error: "Part item wajib dipilih." };
+    }
+    if (!item.source_cabang_id || item.source_cabang_id <= 0) {
+      return {
+        error: `Cabang asal part ${item.part_number || "-"} wajib dipilih.`,
+      };
+    }
+    if (!Number.isFinite(item.qty) || item.qty <= 0) {
+      return {
+        error: `Qty part ${item.part_number || item.part_name || "-"} wajib lebih dari 0.`,
+      };
+    }
+  }
+
   // Check duplicate kode
   const { data: existing } = await supabase
     .from("job_costing")
@@ -181,6 +230,51 @@ export async function createJobCosting(data: {
     .eq("job_kode", data.job_kode)
     .maybeSingle();
   if (existing) return { error: "Kode Job sudah digunakan." };
+
+  const sourceStockSnapshots: Array<{
+    stockId: number;
+    partId: number;
+    cabangId: number;
+    oldQty: number;
+    newQty: number;
+  }> = [];
+
+  for (const item of data.items) {
+    const { data: stockRow, error: stockErr } = await supabase
+      .from("stock")
+      .select("id, qty, part_id, cabang_id")
+      .eq("part_id", item.part_id)
+      .eq("cabang_id", item.source_cabang_id)
+      .single();
+
+    if (stockErr || !stockRow) {
+      return {
+        error: `Stok part ${item.part_number || item.part_name || "-"} tidak ditemukan pada cabang asal terpilih.`,
+      };
+    }
+
+    const currentQty = Number(stockRow.qty) || 0;
+    if (currentQty < item.qty) {
+      return {
+        error: `Stok part ${item.part_number || item.part_name || "-"} tidak mencukupi di cabang asal (tersedia: ${currentQty}, diminta: ${item.qty}).`,
+      };
+    }
+
+    sourceStockSnapshots.push({
+      stockId: Number(stockRow.id),
+      partId: Number(stockRow.part_id),
+      cabangId: Number(stockRow.cabang_id),
+      oldQty: currentQty,
+      newQty: currentQty - item.qty,
+    });
+  }
+
+  const { data: finishPartStock } = await supabase
+    .from("stock")
+    .select("id, qty")
+    .eq("part_id", data.finish_part_id)
+    .eq("cabang_id", data.finish_part_cabang_id)
+    .maybeSingle();
 
   const total_cost = data.items.reduce(
     (sum, item) => sum + item.qty * item.unit_price,
@@ -193,11 +287,14 @@ export async function createJobCosting(data: {
       job_kode: data.job_kode,
       cabang_id: data.cabang_id,
       description: data.description,
+      finish_part_id: data.finish_part_id,
+      finish_part_cabang_id: data.finish_part_cabang_id,
+      qty_finish_part: data.qty_finish_part,
       finish_part: data.finish_part || null,
       job_tanggal: data.job_tanggal || null,
       notes: data.notes || null,
       total_cost,
-      status: data.status || "open",
+      status: toCompletedIfLegacy(data.status || "open"),
       created_by: user.id,
     })
     .select()
@@ -216,15 +313,146 @@ export async function createJobCosting(data: {
       unit: item.unit,
       unit_price: item.unit_price,
       po_id: item.po_id || null,
+      source_cabang_id: item.source_cabang_id,
       notes: item.notes || null,
     }));
     const { error: itemError } = await supabase
       .from("job_costing_items")
       .insert(itemRows);
-    if (itemError) return { error: itemError.message };
+    if (itemError) {
+      await supabase.from("job_costing").delete().eq("id", job.id);
+      return { error: itemError.message };
+    }
+  }
+
+  const appliedSourceChanges: Array<{ stockId: number; oldQty: number }> = [];
+  let finishPartRollback:
+    | { stockId: number; oldQty: number }
+    | { inserted: true; partId: number; cabangId: number }
+    | null = null;
+
+  for (const snap of sourceStockSnapshots) {
+    const { error: stockUpdateErr } = await supabase
+      .from("stock")
+      .update({ qty: snap.newQty })
+      .eq("id", snap.stockId);
+
+    if (stockUpdateErr) {
+      for (const applied of appliedSourceChanges) {
+        await supabase
+          .from("stock")
+          .update({ qty: applied.oldQty })
+          .eq("id", applied.stockId);
+      }
+      await supabase.from("job_costing").delete().eq("id", job.id);
+      return {
+        error: `Gagal update stok bahan: ${stockUpdateErr.message}`,
+      };
+    }
+
+    appliedSourceChanges.push({ stockId: snap.stockId, oldQty: snap.oldQty });
+
+    await supabase.from("stock_movements").insert({
+      part_id: snap.partId,
+      cabang_id: snap.cabangId,
+      qty_change: -Math.abs(snap.oldQty - snap.newQty),
+      type: "JC_OUT",
+      reference_id: data.job_kode,
+      notes: "Pengurangan bahan Job Costing",
+      created_by: user.id,
+    });
+  }
+
+  if (finishPartStock?.id) {
+    const oldQty = Number(finishPartStock.qty) || 0;
+    const { error: finishErr } = await supabase
+      .from("stock")
+      .update({ qty: oldQty + data.qty_finish_part })
+      .eq("id", finishPartStock.id);
+
+    if (finishErr) {
+      for (const applied of appliedSourceChanges) {
+        await supabase
+          .from("stock")
+          .update({ qty: applied.oldQty })
+          .eq("id", applied.stockId);
+      }
+      await supabase.from("job_costing").delete().eq("id", job.id);
+      return {
+        error: `Gagal menambah stok finish part: ${finishErr.message}`,
+      };
+    }
+
+    finishPartRollback = { stockId: Number(finishPartStock.id), oldQty };
+  } else {
+    const { error: finishInsertErr } = await supabase.from("stock").insert({
+      part_id: data.finish_part_id,
+      cabang_id: data.finish_part_cabang_id,
+      qty: data.qty_finish_part,
+    });
+
+    if (finishInsertErr) {
+      for (const applied of appliedSourceChanges) {
+        await supabase
+          .from("stock")
+          .update({ qty: applied.oldQty })
+          .eq("id", applied.stockId);
+      }
+      await supabase.from("job_costing").delete().eq("id", job.id);
+      return {
+        error: `Gagal membuat stok finish part: ${finishInsertErr.message}`,
+      };
+    }
+
+    finishPartRollback = {
+      inserted: true,
+      partId: data.finish_part_id,
+      cabangId: data.finish_part_cabang_id,
+    };
+  }
+
+  const { error: finishMovementErr } = await supabase
+    .from("stock_movements")
+    .insert({
+      part_id: data.finish_part_id,
+      cabang_id: data.finish_part_cabang_id,
+      qty_change: data.qty_finish_part,
+      type: "JC_IN",
+      reference_id: data.job_kode,
+      notes: "Penambahan finish part Job Costing",
+      created_by: user.id,
+    });
+
+  if (finishMovementErr) {
+    if (finishPartRollback && "stockId" in finishPartRollback) {
+      await supabase
+        .from("stock")
+        .update({ qty: finishPartRollback.oldQty })
+        .eq("id", finishPartRollback.stockId);
+    } else if (finishPartRollback && "inserted" in finishPartRollback) {
+      await supabase
+        .from("stock")
+        .delete()
+        .eq("part_id", finishPartRollback.partId)
+        .eq("cabang_id", finishPartRollback.cabangId)
+        .eq("qty", data.qty_finish_part);
+    }
+
+    for (const applied of appliedSourceChanges) {
+      await supabase
+        .from("stock")
+        .update({ qty: applied.oldQty })
+        .eq("id", applied.stockId);
+    }
+
+    await supabase.from("job_costing").delete().eq("id", job.id);
+    return {
+      error: `Gagal mencatat mutasi stok: ${finishMovementErr.message}`,
+    };
   }
 
   revalidatePath("/job-costing");
+  revalidatePath("/stock");
   return { success: true, data: job };
 }
 
@@ -232,14 +460,18 @@ export async function updateJobCostingStatus(id: number, status: string) {
   const access = await canManageJobCostingStatus();
   if (!access.allowed) return { error: access.error };
 
-  if (!["open", "approved", "closed", "rejected"].includes(status)) {
+  const normalizedStatus = toCompletedIfLegacy(status);
+
+  if (
+    !["open", "approved", "completed", "rejected"].includes(normalizedStatus)
+  ) {
     return { error: "Status tidak valid." };
   }
 
   const supabase = await createClient();
   const { error } = await supabase
     .from("job_costing")
-    .update({ status })
+    .update({ status: normalizedStatus })
     .eq("id", id);
   if (error) return { error: error.message };
   revalidatePath("/job-costing");

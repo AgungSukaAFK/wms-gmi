@@ -38,6 +38,7 @@ import { useDebounce } from "use-debounce";
 import { DeliveryDetailSheet } from "@/components/delivery/delivery-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import Link from "next/link";
+import { completedFilterStatuses } from "@/lib/document-status";
 
 export default function DeliveriesPage() {
   const supabase = createClient();
@@ -102,7 +103,13 @@ export default function DeliveriesPage() {
         `dlv_kode.ilike.%${debouncedSearch}%,pic.ilike.%${debouncedSearch}%`,
       );
     }
-    if (statusFilter !== "all") query = query.eq("status", statusFilter);
+    if (statusFilter !== "all") {
+      if (statusFilter === "completed") {
+        query = query.in("status", completedFilterStatuses());
+      } else {
+        query = query.eq("status", statusFilter);
+      }
+    }
     if (locationFilter !== "all")
       query = query.eq("dari_cabang_id", locationFilter);
     if (dateFrom) query = query.gte("created_at", dateFrom);
@@ -155,19 +162,12 @@ export default function DeliveriesPage() {
             Approved
           </Badge>
         );
+      case "completed":
       case "done":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
       case "closed":
         return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase text-muted-foreground"
-          >
-            Closed
+          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
+            Completed
           </Badge>
         );
       default:
@@ -236,8 +236,7 @@ export default function DeliveriesPage() {
                 <SelectItem value="all">Semua Status</SelectItem>
                 <SelectItem value="open">Open</SelectItem>
                 <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="done">Done</SelectItem>
-                <SelectItem value="closed">Closed</SelectItem>
+                <SelectItem value="completed">Completed</SelectItem>
               </SelectContent>
             </Select>
 

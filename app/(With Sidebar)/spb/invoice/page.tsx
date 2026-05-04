@@ -31,6 +31,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -46,12 +53,16 @@ import {
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
+  approveSpbInvoice,
   createSpbInvoice,
+  getStockOutApprovalTemplates,
   getSpbDoDetailsByDoId,
   getSpbDoOptionsForInvoice,
   getSpbInvoiceList,
+  rejectSpbInvoice,
 } from "@/services/spb-actions";
-import { cn } from "@/lib/utils";
+import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 type DoOption = {
   id: number;
@@ -74,7 +85,14 @@ type DoDetailRow = {
   } | null;
 };
 
+type ApprovalTemplateOption = {
+  id: number;
+  name: string;
+  cabang_id: number | null;
+};
+
 export default function SpbInvoicePage() {
+  const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -96,8 +114,13 @@ export default function SpbInvoicePage() {
   const [invoiceNo, setInvoiceNo] = useState("");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [emailDate, setEmailDate] = useState("");
+  const [approvalTemplateId, setApprovalTemplateId] = useState("");
+  const [approvalTemplates, setApprovalTemplates] = useState<
+    ApprovalTemplateOption[]
+  >([]);
   const [submitting, setSubmitting] = useState(false);
   const [openCreateModal, setOpenCreateModal] = useState(false);
+  const [userId, setUserId] = useState("");
 
   const selectedDo = useMemo(
     () => doOptions.find((s) => String(s.id) === selectedDoId),
@@ -136,9 +159,31 @@ export default function SpbInvoicePage() {
   }, [debouncedSearch, page, limit]);
 
   useEffect(() => {
+    const loadUser = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (user?.id) setUserId(user.id);
+    };
+    loadUser();
+  }, [supabase]);
+
+  useEffect(() => {
     if (!openCreateModal) return;
     fetchDoOptions();
   }, [openCreateModal, debouncedDoOptionSearch]);
+
+  useEffect(() => {
+    const loadTemplates = async () => {
+      if (!openCreateModal) return;
+      const res = await getStockOutApprovalTemplates("spb_invoice");
+      if (!res.error) {
+        setApprovalTemplates((res.data || []) as ApprovalTemplateOption[]);
+      }
+    };
+
+    loadTemplates();
+  }, [openCreateModal]);
 
   useEffect(() => {
     const loadDetails = async () => {
@@ -169,18 +214,17 @@ export default function SpbInvoicePage() {
   const submit = async () => {
     if (!selectedDoId) return toast.error("Pilih SPB-DO.");
     if (!invoiceNo.trim()) return toast.error("No Invoice wajib diisi.");
+    if (!approvalTemplateId)
+      return toast.error("Template approval wajib dipilih.");
     if (!selectedDetailIds.length) return toast.error("Pilih minimal 1 item.");
 
     setSubmitting(true);
     const res = await createSpbInvoice({
       spb_do_id: Number(selectedDoId),
       invoice_no: invoiceNo,
-      invoice_date: invoiceDate
-        ? new Date(invoiceDate).toISOString()
-        : undefined,
-      invoice_email_date: emailDate
-        ? new Date(emailDate).toISOString()
-        : undefined,
+      invoice_date: invoiceDate ? ymdToLocalStartIso(invoiceDate) : undefined,
+      invoice_email_date: emailDate ? ymdToLocalStartIso(emailDate) : undefined,
+      approval_template_id: Number(approvalTemplateId),
       details: selectedDetailIds.map((id) => ({ spb_do_dtl_id: id })),
     });
     setSubmitting(false);
@@ -200,6 +244,7 @@ export default function SpbInvoicePage() {
     setInvoiceNo("");
     setInvoiceDate("");
     setEmailDate("");
+    setApprovalTemplateId("");
     setSelectedDoId("");
     setSelectedDoLabel("");
     setDoOptionSearch("");
@@ -213,6 +258,28 @@ export default function SpbInvoicePage() {
     if (!open) {
       resetCreateForm();
     }
+  };
+
+  const onApprove = async (id: number) => {
+    const res = await approveSpbInvoice(id);
+    if (res.error) return toast.error(res.error);
+    toast.success("Approval invoice berhasil diproses.");
+    fetchList();
+  };
+
+  const onReject = async (id: number) => {
+    const reason = window.prompt("Alasan reject Invoice SPB:");
+    if (!reason) return;
+    const res = await rejectSpbInvoice(id, reason);
+    if (res.error) return toast.error(res.error);
+    toast.success("Invoice SPB berhasil direject.");
+    fetchList();
+  };
+
+  const isMyApprovalTurn = (row: any) => {
+    return (row.approvals || []).some(
+      (a: any) => a.userid === userId && a.status === "pending",
+    );
   };
 
   return (
@@ -269,14 +336,16 @@ export default function SpbInvoicePage() {
                   <TableHead>No Invoice</TableHead>
                   <TableHead>Tanggal Invoice</TableHead>
                   <TableHead>Tanggal Email</TableHead>
+                  <TableHead>Approval</TableHead>
                   <TableHead>Created</TableHead>
+                  <TableHead>Aksi</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {loading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={9}
                       className="text-center text-muted-foreground"
                     >
                       Memuat data...
@@ -285,7 +354,7 @@ export default function SpbInvoicePage() {
                 ) : rows.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={7}
+                      colSpan={9}
                       className="text-center text-muted-foreground"
                     >
                       Belum ada data invoice.
@@ -314,8 +383,30 @@ export default function SpbInvoicePage() {
                             )
                           : "-"}
                       </TableCell>
+                      <TableCell>{row.approval_status || "open"}</TableCell>
                       <TableCell>
                         {new Date(row.created_at).toLocaleDateString("id-ID")}
+                      </TableCell>
+                      <TableCell>
+                        {row.approval_status === "open" &&
+                          isMyApprovalTurn(row) && (
+                            <div className="flex gap-1">
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onApprove(row.id)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => onReject(row.id)}
+                              >
+                                Reject
+                              </Button>
+                            </div>
+                          )}
                       </TableCell>
                     </TableRow>
                   ))
@@ -432,6 +523,26 @@ export default function SpbInvoicePage() {
               <div className="space-y-2">
                 <Label>Tanggal Email</Label>
                 <DatePickerString value={emailDate} onChange={setEmailDate} />
+              </div>
+
+              <div className="space-y-2">
+                <Label>Template Approval</Label>
+                <Select
+                  value={approvalTemplateId}
+                  onValueChange={setApprovalTemplateId}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder="Pilih template approval" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {approvalTemplates.map((tpl) => (
+                      <SelectItem key={tpl.id} value={String(tpl.id)}>
+                        {tpl.name}
+                        {tpl.cabang_id ? " (Site)" : " (Global)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 

@@ -37,6 +37,7 @@ import {
   Users,
   UsersRound,
   Archive,
+  Building2,
   PackageCheck,
   Truck,
   FileText,
@@ -80,6 +81,7 @@ const data = {
     },
   ],
   navMaster: [
+    { title: "Cabang", url: "/cabang", icon: Building2 },
     { title: "Barang", url: "/barang", icon: Boxes },
     { title: "Vendors", url: "/vendors", icon: Briefcase },
     { title: "Customers", url: "/customers", icon: UsersRound },
@@ -210,6 +212,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     return isModerator;
   });
 
+  const masterItems = data.navMaster.filter((item) => {
+    if (item.url === "/cabang") return isModerator;
+    return true;
+  });
+
   const markActive = React.useCallback(
     (items: any[]) => {
       const matchingUrls = items
@@ -329,7 +336,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         />
         <NavMain
           label="Data Master"
-          items={markActive(data.navMaster)}
+          items={markActive(masterItems)}
           collapsed={collapsedGroups.master}
           onToggle={() => toggleGroup("master")}
         />

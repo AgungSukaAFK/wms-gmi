@@ -2,10 +2,12 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { toCompletedIfLegacy } from "@/lib/document-status";
 
 const DELIVERY_ACTIVE_STATUSES = [
   "open",
   "approved",
+  "completed",
   "done",
   "closed",
 ] as const;
@@ -79,7 +81,20 @@ export async function createDelivery(data: {
     data: { user },
   } = await supabase.auth.getUser();
 
-  const deliveryCode = data.dlv_kode?.trim() || generateDeliveryCode();
+  const deliveryCode = data.dlv_kode?.trim();
+  if (!deliveryCode) {
+    return { error: "Kode Delivery wajib diisi manual." };
+  }
+
+  const { data: existingDelivery } = await supabase
+    .from("deliveries")
+    .select("id")
+    .eq("dlv_kode", deliveryCode)
+    .maybeSingle();
+
+  if (existingDelivery) {
+    return { error: "Kode Delivery sudah digunakan. Gunakan kode lain." };
+  }
 
   let mrItemIds = hasMrItemColumn
     ? Array.from(
@@ -341,6 +356,82 @@ export async function updateDeliveryTracking(
   return { success: true };
 }
 
+export async function updateDeliveryTrackingModerator(
+  deliveryId: number,
+  trackingStatus: string,
+  trackingNote: string,
+) {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { error: "Session expired" };
+  }
+
+  const TRACKING_ORDER = [
+    "created",
+    "packing",
+    "ready_pickup",
+    "in_transit",
+    "delivered",
+  ] as const;
+
+  if (!TRACKING_ORDER.includes(trackingStatus as any)) {
+    return { error: "Status tracking tidak valid" };
+  }
+
+  const { data: roleRows, error: roleError } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  if (roleError) {
+    return { error: roleError.message };
+  }
+
+  const roleNames = (roleRows || [])
+    .map((row: any) => row?.roles?.name)
+    .filter((role: string | undefined): role is string => Boolean(role));
+
+  const isModeratorOrAdmin = roleNames.some(
+    (role) => role === "moderator" || role === "admin",
+  );
+
+  if (!isModeratorOrAdmin) {
+    return {
+      error:
+        "Hanya moderator/admin yang dapat override status dan catatan tracking.",
+    };
+  }
+
+  const safeTrackingNote = trackingNote?.trim() || null;
+  if (safeTrackingNote && safeTrackingNote.length > 1000) {
+    return { error: "Catatan tracking maksimal 1000 karakter." };
+  }
+
+  const { error: updateError } = await supabase
+    .from("deliveries")
+    .update({
+      tracking_status: trackingStatus,
+      tracking_note: safeTrackingNote,
+      tracking_note_updated_by: user.id,
+      tracking_note_updated_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", deliveryId);
+
+  if (updateError) {
+    return { error: updateError.message };
+  }
+
+  revalidatePath("/deliveries");
+  revalidatePath("/share-stock");
+  return { success: true };
+}
+
 /**
  * FINALIZE DELIVERY
  * Called by admin from destination warehouse when tracking_status = 'delivered'.
@@ -369,14 +460,46 @@ export async function finalizeDelivery(
   const { data: delivery, error: dlvError } = await supabase
     .from("deliveries")
     .select(
-      "id, dlv_kode, ke_cabang_id, dari_cabang_id, tracking_status, signature_receiver_id",
+      "id, dlv_kode, ke_cabang_id, dari_cabang_id, tracking_status, signature_receiver_id, status",
     )
     .eq("id", deliveryId)
     .single();
   if (dlvError || !delivery) return { error: "Delivery tidak ditemukan" };
 
-  if (delivery.signature_receiver_id)
-    return { error: "Delivery sudah diselesaikan sebelumnya" };
+  if (delivery.signature_receiver_id) {
+    if (
+      delivery.status === "completed" &&
+      delivery.tracking_status === "completed"
+    ) {
+      return {
+        success: true,
+        alreadyFinalized: true,
+      };
+    }
+
+    const { error: syncCompletedError } = await supabase
+      .from("deliveries")
+      .update({
+        status: "completed",
+        tracking_status: "completed",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", deliveryId);
+
+    if (syncCompletedError) {
+      return { error: syncCompletedError.message };
+    }
+
+    revalidatePath("/deliveries");
+    revalidatePath("/share-stock");
+    revalidatePath("/mr");
+    revalidatePath("/stock");
+    return {
+      success: true,
+      alreadyFinalized: true,
+    };
+  }
+
   if (delivery.tracking_status !== "delivered")
     return {
       error:
@@ -442,16 +565,21 @@ export async function finalizeDelivery(
   }
 
   // Update delivery: signature + status
-  await supabase
+  const { error: finalizeUpdateError } = await supabase
     .from("deliveries")
     .update({
       signature_receiver_id: signatureId,
       signed_by_receiver_at: new Date().toISOString(),
       uid_receiver: user.id,
-      status: "done",
+      status: "completed",
+      tracking_status: "completed",
       updated_at: new Date().toISOString(),
     })
     .eq("id", deliveryId);
+
+  if (finalizeUpdateError) {
+    return { error: finalizeUpdateError.message };
+  }
 
   // Sync share stock statuses
   const mrItemIds = Array.from(
@@ -585,7 +713,7 @@ export async function bypassShareStockCompletion(mrItemId: number) {
 export async function updateDeliveryDocument(
   deliveryId: number,
   updates: {
-    status?: "open" | "done" | "closed";
+    status?: "open" | "approved" | "done" | "closed" | "completed";
     no_resi?: string | null;
     ekspedisi?: string;
     jumlah_koli?: number;
@@ -598,7 +726,7 @@ export async function updateDeliveryDocument(
   };
 
   if (updates.status) {
-    payload.status = updates.status;
+    payload.status = toCompletedIfLegacy(updates.status);
   }
 
   if (updates.no_resi !== undefined) {
@@ -666,9 +794,9 @@ export async function updateDeliveryReceiverSignature(
     return { error: "Tanda tangan penerima sudah tersimpan" };
   }
 
-  if (!["done", "closed"].includes(delivery.status)) {
+  if (!["completed", "done", "closed"].includes(delivery.status)) {
     return {
-      error: "Penerima hanya dapat sign setelah delivery berstatus done/closed",
+      error: "Penerima hanya dapat sign setelah delivery berstatus completed",
     };
   }
 
@@ -763,15 +891,4 @@ async function syncShareStockStatuses(mrItemIds: number[]) {
         .eq("id", mrItem.id);
     }),
   );
-}
-
-function generateDeliveryCode() {
-  const now = new Date();
-  const y = now.getFullYear();
-  const m = String(now.getMonth() + 1).padStart(2, "0");
-  const d = String(now.getDate()).padStart(2, "0");
-  const h = String(now.getHours()).padStart(2, "0");
-  const min = String(now.getMinutes()).padStart(2, "0");
-  const s = String(now.getSeconds()).padStart(2, "0");
-  return `DLV/${y}${m}${d}/${h}${min}${s}`;
 }

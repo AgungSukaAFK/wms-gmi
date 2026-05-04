@@ -56,9 +56,10 @@ import { toast } from "sonner";
 import { createPurchaseOrder } from "@/services/procurement-actions";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
-import { cn } from "@/lib/utils";
+import { cn, toYmdLocal } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { DatePickerString } from "@/components/date-picker-string";
+import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 
 type Step = 1 | 2 | 3;
 
@@ -82,6 +83,7 @@ export default function CreatePOPage() {
 
   // User & auth
   const [userProfile, setUserProfile] = useState<any>(null);
+  const [canViewPrice, setCanViewPrice] = useState(false);
 
   // Step 1 — Select PR
   const [prs, setPrs] = useState<any[]>([]);
@@ -106,9 +108,7 @@ export default function CreatePOPage() {
 
   // Step 3 — PO Header
   const [poKode, setPoKode] = useState("");
-  const [poTanggal, setPoTanggal] = useState(
-    new Date().toISOString().split("T")[0],
-  );
+  const [poTanggal, setPoTanggal] = useState(toYmdLocal());
   const [poEstimasi, setPoEstimasi] = useState("");
   const [poPaymentTerm, setPoPaymentTerm] = useState("");
   const [paymentTermCustom, setPaymentTermCustom] = useState(false);
@@ -146,6 +146,7 @@ export default function CreatePOPage() {
       .single();
     if (profile) {
       setUserProfile(profile);
+      setCanViewPrice(canViewPOPrice(profile));
 
       const { data: templateData } = await supabase
         .from("approval_templates")
@@ -555,32 +556,41 @@ export default function CreatePOPage() {
                         </span>
                       </TableCell>
                       <TableCell className="py-2 align-middle">
-                        <div className="flex items-center h-8 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
-                          <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
-                            Rp
-                          </span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            className="flex-1 h-full px-2 text-xs font-bold bg-transparent outline-none"
-                            value={
-                              item.harga === 0
-                                ? ""
-                                : new Intl.NumberFormat("id-ID").format(
-                                    item.harga,
-                                  )
-                            }
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(/[^0-9]/g, "");
-                              updateItemField(
-                                idx,
-                                "harga",
-                                raw ? parseInt(raw, 10) : 0,
-                              );
-                            }}
-                            placeholder="0"
-                          />
-                        </div>
+                        {canViewPrice ? (
+                          <div className="flex items-center h-8 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
+                            <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
+                              Rp
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              className="flex-1 h-full px-2 text-xs font-bold bg-transparent outline-none"
+                              value={
+                                item.harga === 0
+                                  ? ""
+                                  : new Intl.NumberFormat("id-ID").format(
+                                      item.harga,
+                                    )
+                              }
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(
+                                  /[^0-9]/g,
+                                  "",
+                                );
+                                updateItemField(
+                                  idx,
+                                  "harga",
+                                  raw ? parseInt(raw, 10) : 0,
+                                );
+                              }}
+                              placeholder="0"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex items-center h-8 rounded-md border border-input bg-muted/40 px-2 text-xs font-bold text-muted-foreground uppercase">
+                            Restricted
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell className="py-2 pr-4 align-middle">
                         <Popover
@@ -664,7 +674,7 @@ export default function CreatePOPage() {
                 Total Estimasi Nilai PO
               </span>
               <span className="text-sm font-black text-foreground">
-                {formatCurrency(totalNilai)}
+                {maskedPriceText(canViewPrice, formatCurrency(totalNilai))}
               </span>
             </div>
 
@@ -987,7 +997,7 @@ export default function CreatePOPage() {
               <div className="flex items-center justify-between text-sm font-black uppercase pt-2 border-t border-border">
                 <span>Total Estimasi Nilai</span>
                 <span className="text-primary">
-                  {formatCurrency(totalNilai)}
+                  {maskedPriceText(canViewPrice, formatCurrency(totalNilai))}
                 </span>
               </div>
             </div>

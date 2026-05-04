@@ -2,6 +2,8 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { canViewPOPrice, maskPOPriceItems } from "@/lib/po-price-access";
+import { toCompletedIfLegacy } from "@/lib/document-status";
 
 // ============================================================
 // PRIVATE HELPERS (server-side, uses authenticated server client)
@@ -16,15 +18,35 @@ async function _buildApprovalFlow(
   type: string,
   cabang_id: number,
   requesterId: string,
+  templateId?: number,
 ): Promise<any[]> {
-  const { data: template } = await supabase
+  let templateQuery = supabase
     .from("approval_templates")
-    .select("id")
-    .eq("type", type)
-    .eq("cabang_id", cabang_id)
-    .single();
+    .select("id, cabang_id")
+    .eq("type", type);
+
+  if (templateId) {
+    templateQuery = templateQuery.eq("id", templateId);
+  } else {
+    templateQuery = templateQuery
+      .or(`cabang_id.eq.${cabang_id},cabang_id.is.null`)
+      .order("cabang_id", { ascending: false, nullsFirst: false })
+      .order("updated_at", { ascending: false })
+      .limit(1);
+  }
+
+  const { data: templateRows } = await templateQuery;
+  const template = Array.isArray(templateRows) ? templateRows[0] : templateRows;
 
   if (!template) return [];
+
+  if (
+    template.cabang_id !== null &&
+    typeof template.cabang_id === "number" &&
+    template.cabang_id !== cabang_id
+  ) {
+    return [];
+  }
 
   const { data: steps } = await supabase
     .from("approval_template_steps")
@@ -102,7 +124,11 @@ export async function createMaterialRequest(data: {
   mr_pic: string;
   mr_pic_id: string;
   mr_tanggal: string;
+  mr_due_date?: string;
+  mr_priority?: string;
+  mr_remarks?: string;
   accurate?: boolean;
+  approvals?: any[];
   items: {
     part_id: number;
     part_number: string;
@@ -114,18 +140,43 @@ export async function createMaterialRequest(data: {
 }) {
   const supabase = await createClient();
 
+  const mrKode = data.mr_kode?.trim();
+  if (!mrKode) {
+    return { error: "Kode MR wajib diisi manual." };
+  }
+
+  const { data: existingMr } = await supabase
+    .from("mrs")
+    .select("id")
+    .eq("mr_kode", mrKode)
+    .maybeSingle();
+
+  if (existingMr) {
+    return { error: "Kode MR sudah digunakan. Gunakan kode lain." };
+  }
+
+  const mrApprovals = data.approvals ?? [];
+
   // 1. Insert MR Header
   const { data: mr, error: mrError } = await supabase
     .from("mrs")
     .insert([
       {
-        mr_kode: data.mr_kode,
+        mr_kode: mrKode,
         cabang_id: data.cabang_id,
         mr_pic: data.mr_pic,
         mr_pic_id: data.mr_pic_id,
         mr_tanggal: data.mr_tanggal,
+        mr_due_date: data.mr_due_date ?? null,
+        mr_priority: data.mr_priority ?? null,
+        mr_remarks: data.mr_remarks ?? null,
         accurate: data.accurate ?? false,
-        mr_status: "open",
+        mr_status:
+          mrApprovals.length === 0 ||
+          mrApprovals.every((a: any) => a.status !== "pending")
+            ? "approved"
+            : "open",
+        approvals: mrApprovals as any,
       },
     ])
     .select()
@@ -221,7 +272,7 @@ export async function approveMR(
     .from("mrs")
     .update({
       approvals,
-      mr_status: status as any,
+      mr_status: toCompletedIfLegacy(status) as any,
     })
     .eq("id", mrId);
 
@@ -293,6 +344,21 @@ export async function createPurchaseRequest(data: {
 }) {
   const supabase = await createClient();
 
+  const prKode = data.pr_kode?.trim();
+  if (!prKode) {
+    return { error: "Kode PR wajib diisi manual." };
+  }
+
+  const { data: existingPr } = await supabase
+    .from("prs")
+    .select("id")
+    .eq("pr_kode", prKode)
+    .maybeSingle();
+
+  if (existingPr) {
+    return { error: "Kode PR sudah digunakan. Gunakan kode lain." };
+  }
+
   const prApprovals = data.approvals ?? [];
 
   // Insert PR Header
@@ -300,7 +366,7 @@ export async function createPurchaseRequest(data: {
     .from("prs")
     .insert([
       {
-        pr_kode: data.pr_kode,
+        pr_kode: prKode,
         cabang_id: data.cabang_id,
         pr_pic_id: data.pr_pic_id,
         pr_tanggal: data.pr_tanggal,
@@ -338,10 +404,11 @@ export async function createPurchaseRequest(data: {
  */
 export async function updatePRStatus(prId: number, status: string) {
   const supabase = await createClient();
+  const normalizedStatus = toCompletedIfLegacy(status);
   const { error } = await supabase
     .from("prs")
     .update({
-      pr_status: status as any,
+      pr_status: normalizedStatus as any,
       updated_at: new Date().toISOString(),
     })
     .eq("id", prId);
@@ -552,6 +619,7 @@ export async function createReceive(data: {
   ri_pic: string;
   ri_tanggal: string;
   ri_keterangan?: string;
+  approval_template_id: number;
   items: {
     part_id: number;
     part_number: string;
@@ -565,17 +633,59 @@ export async function createReceive(data: {
 }) {
   const supabase = await createClient();
 
+  const riKode = data.ri_kode?.trim();
+  if (!riKode) {
+    return { error: "Kode Receive wajib diisi manual." };
+  }
+
+  const { data: existingRi } = await supabase
+    .from("receives")
+    .select("id")
+    .eq("ri_kode", riKode)
+    .maybeSingle();
+
+  if (existingRi) {
+    return { error: "Kode Receive sudah digunakan. Gunakan kode lain." };
+  }
+
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  if (!data.approval_template_id) {
+    return { error: "Template approval wajib dipilih." };
+  }
+
+  const approvals = await _buildApprovalFlow(
+    supabase,
+    "Receive Item",
+    data.cabang_id,
+    user.id,
+    data.approval_template_id,
+  );
+
+  if (!approvals.length) {
+    return {
+      error:
+        "Template approval Receive Item tidak valid atau tidak tersedia untuk site ini.",
+    };
+  }
+
   // 1. Insert Receive Header
   const { data: ri, error: riError } = await supabase
     .from("receives")
     .insert([
       {
-        ri_kode: data.ri_kode,
+        ri_kode: riKode,
         po_id: data.po_id,
         cabang_id: data.cabang_id,
         ri_pic: data.ri_pic,
         ri_tanggal: data.ri_tanggal,
         ri_keterangan: data.ri_keterangan ?? null,
+        approval_template_id: data.approval_template_id,
+        approvals: approvals as any,
+        ri_status: "open",
       },
     ])
     .select()
@@ -601,9 +711,34 @@ export async function createReceive(data: {
     .insert(itemsToInsert);
   if (itemsError) return { error: itemsError.message };
 
-  // 3. Per-item: update po_items.qty_received + stock + mr_items.qty_received
-  for (const item of data.items) {
-    // 3a. Update po_items.qty_received
+  // Stock posting happens after final approval step reaches completed.
+  revalidatePath("/receive");
+  revalidatePath("/po");
+  return { success: true };
+}
+
+async function _applyReceiveCompletion(receiveId: number, supabase: any) {
+  const { data: ri } = await supabase
+    .from("receives")
+    .select("id, po_id")
+    .eq("id", receiveId)
+    .single();
+
+  if (!ri) {
+    return { error: "Receive tidak ditemukan" };
+  }
+
+  const { data: receiveItems } = await supabase
+    .from("receive_items")
+    .select("po_id, mr_id, part_id, part_number, qty, po_item_id")
+    .eq("ri_id", receiveId);
+
+  if (!receiveItems || receiveItems.length === 0) {
+    return { error: "Receive items tidak ditemukan" };
+  }
+
+  // Per-item: update po_items.qty_received + stock + mr_items.qty_received
+  for (const item of receiveItems) {
     if (item.po_item_id) {
       const { data: poItem } = await supabase
         .from("po_items")
@@ -618,7 +753,6 @@ export async function createReceive(data: {
       }
     }
 
-    // 3b. Update stock via adjustItemStock helper (logs movement)
     await adjustItemStock(
       item.mr_id,
       item.part_id,
@@ -630,7 +764,6 @@ export async function createReceive(data: {
       "received",
     );
 
-    // 3c. Update mr_items.qty_received (capped at qty_request)
     const { data: mrItem } = await supabase
       .from("mr_items")
       .select("qty_request, qty_received")
@@ -650,22 +783,27 @@ export async function createReceive(data: {
     }
   }
 
-  // 4. Recalculate MR statuses for all affected MRs
-  const affectedMrIds = [...new Set(data.items.map((i) => i.mr_id))];
+  const affectedMrIds = [...new Set(receiveItems.map((i: any) => i.mr_id))];
   for (const mrId of affectedMrIds) {
     const { data: mrItems } = await supabase
       .from("mr_items")
       .select("qty_request, qty_received")
       .eq("mr_id", mrId);
     if (mrItems) {
-      const totalRequest = mrItems.reduce((s, i) => s + i.qty_request, 0);
-      const totalReceived = mrItems.reduce((s, i) => s + i.qty_received, 0);
+      const totalRequest = mrItems.reduce(
+        (s: number, i: any) => s + i.qty_request,
+        0,
+      );
+      const totalReceived = mrItems.reduce(
+        (s: number, i: any) => s + i.qty_received,
+        0,
+      );
       const mrStatus =
         totalReceived <= 0
           ? "open"
           : totalReceived < totalRequest
-            ? "approved" // partial: still approved/in-progress
-            : "closed"; // fully received
+            ? "approved"
+            : "completed";
       await supabase
         .from("mrs")
         .update({ mr_status: mrStatus as any })
@@ -673,44 +811,202 @@ export async function createReceive(data: {
     }
   }
 
-  // 5. Recalculate PO receive_status
   const { data: allPoItems } = await supabase
     .from("po_items")
     .select("qty, qty_received")
-    .eq("po_id", data.po_id);
+    .eq("po_id", ri.po_id);
+
   if (allPoItems) {
-    const allReceived = allPoItems.every((i) => i.qty_received >= i.qty);
-    const someReceived = allPoItems.some((i) => i.qty_received > 0);
+    const allReceived = allPoItems.every((i: any) => i.qty_received >= i.qty);
+    const someReceived = allPoItems.some((i: any) => i.qty_received > 0);
     const poReceiveStatus = allReceived
       ? "complete"
       : someReceived
         ? "partial"
         : "pending";
-    await supabase
-      .from("pos")
-      .update({ po_receive_status: poReceiveStatus })
-      .eq("id", data.po_id);
 
-    // If PO receipt is complete, close the linked PR as fulfillment is done.
+    const poUpdatePayload: Record<string, string> = {
+      po_receive_status: poReceiveStatus,
+    };
+
+    if (poReceiveStatus === "complete") {
+      poUpdatePayload.po_status = "completed";
+    }
+
+    await supabase.from("pos").update(poUpdatePayload).eq("id", ri.po_id);
+
     if (poReceiveStatus === "complete") {
       const { data: poHeader } = await supabase
         .from("pos")
         .select("pr_id")
-        .eq("id", data.po_id)
+        .eq("id", ri.po_id)
         .maybeSingle();
 
       if (poHeader?.pr_id) {
         await supabase
           .from("prs")
-          .update({ pr_status: "closed" as any })
+          .update({ pr_status: "completed" as any })
           .eq("id", poHeader.pr_id);
       }
     }
   }
 
+  return { success: true };
+}
+
+export async function approveReceive(riId: number, signatureUrl: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  if (!signatureUrl?.trim()) {
+    return { error: "Tanda tangan approval wajib dipilih." };
+  }
+
+  const { data: receive } = await supabase
+    .from("receives")
+    .select("id, approvals, ri_status")
+    .eq("id", riId)
+    .single();
+  if (!receive) return { error: "Receive tidak ditemukan" };
+
+  if (receive.ri_status === "completed") {
+    return { error: "Receive sudah completed." };
+  }
+  if (receive.ri_status === "rejected") {
+    return { error: "Receive sudah rejected dan tidak bisa di-approve." };
+  }
+
+  const { data: userProfile } = await supabase
+    .from("profiles")
+    .select("*, cabang(nama_cabang)")
+    .eq("id", user.id)
+    .single();
+
+  const updatedApprovals = _processStep(
+    receive.approvals ?? [],
+    user.id,
+    userProfile,
+    "approved",
+  );
+
+  const pendingIndex = updatedApprovals.findIndex(
+    (a: any) =>
+      a.userid === user.id && a.status === "approved" && !a.signature_url,
+  );
+
+  if (pendingIndex === -1) {
+    return { error: "Anda tidak memiliki step approval aktif." };
+  }
+
+  updatedApprovals[pendingIndex].signature_url = signatureUrl;
+
+  const isAllDone = updatedApprovals.every((a: any) => a.status !== "pending");
+
+  if (isAllDone) {
+    const completionResult = await _applyReceiveCompletion(riId, supabase);
+    if ((completionResult as any)?.error) {
+      return completionResult;
+    }
+  }
+
+  const { error: updateError } = await supabase
+    .from("receives")
+    .update({
+      approvals: updatedApprovals as any,
+      ri_status: isAllDone ? "completed" : "open",
+      rejection_reason: null,
+      completed_at: isAllDone ? new Date().toISOString() : null,
+    })
+    .eq("id", riId);
+
+  if (updateError) return { error: updateError.message };
+
   revalidatePath("/receive");
   revalidatePath("/po");
   revalidatePath("/stock");
+  revalidatePath("/mr");
+  return { success: true, isAllDone };
+}
+
+export async function rejectReceive(
+  riId: number,
+  reason: string,
+  signatureUrl: string,
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  if (!reason?.trim()) {
+    return { error: "Alasan penolakan wajib diisi." };
+  }
+
+  if (!signatureUrl?.trim()) {
+    return { error: "Tanda tangan penolakan wajib dipilih." };
+  }
+
+  const { data: receive } = await supabase
+    .from("receives")
+    .select("id, approvals, ri_status")
+    .eq("id", riId)
+    .single();
+  if (!receive) return { error: "Receive tidak ditemukan" };
+
+  if (receive.ri_status === "completed") {
+    return { error: "Receive sudah completed dan tidak bisa ditolak." };
+  }
+
+  if (receive.ri_status === "rejected") {
+    return { error: "Receive sudah rejected." };
+  }
+
+  const { data: userProfile } = await supabase
+    .from("profiles")
+    .select("*, cabang(nama_cabang)")
+    .eq("id", user.id)
+    .single();
+
+  const updatedApprovals = _processStep(
+    receive.approvals ?? [],
+    user.id,
+    userProfile,
+    "rejected",
+    reason.trim(),
+  );
+
+  const rejectedIndex = updatedApprovals.findIndex(
+    (a: any) =>
+      a.userid === user.id &&
+      a.status === "rejected" &&
+      a.notes === reason.trim() &&
+      !a.signature_url,
+  );
+
+  if (rejectedIndex === -1) {
+    return { error: "Anda tidak memiliki step approval aktif." };
+  }
+
+  updatedApprovals[rejectedIndex].signature_url = signatureUrl;
+
+  const { error: updateError } = await supabase
+    .from("receives")
+    .update({
+      approvals: updatedApprovals as any,
+      ri_status: "rejected",
+      rejection_reason: reason.trim(),
+      completed_at: null,
+    })
+    .eq("id", riId);
+
+  if (updateError) return { error: updateError.message };
+
+  revalidatePath("/receive");
+  revalidatePath("/po");
   return { success: true };
 }
 
@@ -888,6 +1184,49 @@ export async function createPurchaseOrder(data: {
 }) {
   const supabase = await createClient();
 
+  const poKode = data.po_kode?.trim();
+  if (!poKode) {
+    return { error: "Kode PO wajib diisi manual." };
+  }
+
+  const { data: existingPo } = await supabase
+    .from("pos")
+    .select("id")
+    .eq("po_kode", poKode)
+    .maybeSingle();
+
+  if (existingPo) {
+    return { error: "Kode PO sudah digunakan. Gunakan kode lain." };
+  }
+
+  // Defense in depth: non-Purchasing payload cannot persist price values.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  let canViewPrice = false;
+  if (user?.id) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("id, user_roles(roles(name,label))")
+      .eq("id", user.id)
+      .single();
+
+    const normalizedProfile = profile
+      ? {
+          ...profile,
+          user_roles: (profile.user_roles || []).map((ur: any) => ({
+            ...ur,
+            roles: Array.isArray(ur.roles) ? ur.roles[0] : ur.roles,
+          })),
+        }
+      : null;
+
+    canViewPrice = canViewPOPrice(normalizedProfile);
+  }
+
+  const normalizedItems = maskPOPriceItems(data.items, canViewPrice);
+
   // 1. Use provided approvals or fall back to auto-build
   const approvals =
     data.approvals ??
@@ -903,7 +1242,7 @@ export async function createPurchaseOrder(data: {
     .from("pos")
     .insert([
       {
-        po_kode: data.po_kode,
+        po_kode: poKode,
         pr_id: data.pr_id,
         po_pic: data.po_pic,
         po_tanggal: data.po_tanggal,
@@ -921,7 +1260,7 @@ export async function createPurchaseOrder(data: {
   if (poError) return { error: poError.message };
 
   // 3. Insert PO items
-  const itemsToInsert = data.items.map((item) => ({
+  const itemsToInsert = normalizedItems.map((item) => ({
     po_id: po.id,
     mr_id: item.mr_id,
     part_id: item.part_id,

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
+import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 
 export default function POPrintPage() {
   const { id } = useParams();
@@ -17,6 +18,7 @@ export default function POPrintPage() {
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [vendorLabel, setVendorLabel] = useState<string>("Semua Vendor");
+  const [canViewPrice, setCanViewPrice] = useState(false);
 
   useEffect(() => {
     if (id) fetchData();
@@ -24,6 +26,20 @@ export default function POPrintPage() {
 
   const fetchData = async () => {
     setLoading(true);
+
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (user) {
+      const { data: profile } = await supabase
+        .from("profiles")
+        .select("id, roles:user_roles(roles(name,label))")
+        .eq("id", user.id)
+        .single();
+      setCanViewPrice(canViewPOPrice(profile));
+    } else {
+      setCanViewPrice(false);
+    }
 
     const vendorParam = searchParams.get("vendor_id");
 
@@ -304,10 +320,16 @@ export default function POPrintPage() {
                         {item.satuan}
                       </td>
                       <td className="border border-slate-900 p-2 text-right">
-                        {formatCurrency(Number(item.harga || 0))}
+                        {maskedPriceText(
+                          canViewPrice,
+                          formatCurrency(Number(item.harga || 0)),
+                        )}
                       </td>
                       <td className="border border-slate-900 p-2 text-right font-bold">
-                        {formatCurrency(subtotal)}
+                        {maskedPriceText(
+                          canViewPrice,
+                          formatCurrency(subtotal),
+                        )}
                       </td>
                     </tr>
                   );
@@ -332,7 +354,10 @@ export default function POPrintPage() {
                     Total
                   </td>
                   <td className="border border-slate-900 p-2 text-right font-black text-sm">
-                    {formatCurrency(totalNominal)}
+                    {maskedPriceText(
+                      canViewPrice,
+                      formatCurrency(totalNominal),
+                    )}
                   </td>
                 </tr>
               </tfoot>

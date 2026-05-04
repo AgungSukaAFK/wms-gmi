@@ -17,14 +17,15 @@ export async function signIn(formData: FormData) {
   // Check if identifier is NRP (doesn't contain @)
   if (!identifier.includes("@")) {
     console.log("Attempting NRP lookup for:", identifier);
-    
+
     // Create a pure, cookie-less client for the NRP lookup to avoid conflicts with expired browser cookies
-    const { createClient: createBasicClient } = await import('@supabase/supabase-js');
+    const { createClient: createBasicClient } =
+      await import("@supabase/supabase-js");
     const anonSupabase = createBasicClient(
-        process.env.NEXT_PUBLIC_SUPABASE_URL!,
-        process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY!
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY!,
     );
-    
+
     const { data: profile, error: profileError } = await anonSupabase
       .from("profiles")
       .select("email")
@@ -33,19 +34,37 @@ export async function signIn(formData: FormData) {
 
     if (profileError || !profile) {
       console.error("NRP lookup error:", profileError);
-      return { error: profileError?.message || "NRP tidak terdaftar atau kredensial salah." };
+      return {
+        error:
+          profileError?.message || "NRP tidak terdaftar atau kredensial salah.",
+      };
     }
     email = profile.email;
     console.log("NRP lookup success. Email:", email);
   }
 
-  const { error } = await supabase.auth.signInWithPassword({
+  const { data: signInData, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   });
 
   if (error) {
     return { error: error.message };
+  }
+
+  // Check if account has been activated by admin
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("is_active")
+    .eq("id", signInData.user.id)
+    .single();
+
+  if (!profile?.is_active) {
+    await supabase.auth.signOut();
+    return {
+      error:
+        "Akun Anda belum diaktifkan oleh admin. Silakan hubungi administrator.",
+    };
   }
 
   revalidatePath("/", "layout");
@@ -79,7 +98,10 @@ export async function signUp(formData: FormData) {
     return { error: error.message };
   }
 
-  // Success. Middleware will handle redirection after user logs in.
+  // Immediately sign out — new accounts are inactive until approved by admin.
+  // Without this, Supabase auto-signs-in the user after signUp.
+  await supabase.auth.signOut();
+
   return { success: true };
 }
 
@@ -98,7 +120,9 @@ export async function signOut() {
  */
 export async function getUserProfile() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
 
   if (!user) return null;
 

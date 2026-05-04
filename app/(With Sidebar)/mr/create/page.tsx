@@ -27,6 +27,7 @@ import {
 import { useRouter } from "next/navigation";
 import { MRItemSelector, MRItem } from "@/components/mr/mr-item-selector";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { createMaterialRequest } from "@/services/procurement-actions";
 import {
   Popover,
   PopoverContent,
@@ -45,6 +46,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
+import { toYmdLocal } from "@/lib/utils";
 
 export default function CreateMRPage() {
   const router = useRouter();
@@ -58,9 +60,7 @@ export default function CreateMRPage() {
 
   // Form State
   const [mrKode, setMrKode] = useState("");
-  const [mrTanggal, setMrTanggal] = useState(
-    new Date().toISOString().split("T")[0],
-  );
+  const [mrTanggal, setMrTanggal] = useState(toYmdLocal());
   const [mrDueDate, setMrDueDate] = useState("");
   const [mrPriority, setMrPriority] = useState("P3");
   const [mrRemarks, setMrRemarks] = useState("");
@@ -173,36 +173,30 @@ export default function CreateMRPage() {
         };
       });
 
-      const { data: newMr, error: mrError } = await supabase
-        .from("mrs")
-        .insert({
-          mr_kode: mrKode,
-          cabang_id: userProfile.cabang_id,
-          mr_pic: userProfile.nama,
-          mr_pic_id: userProfile.id,
-          mr_tanggal: mrTanggal,
-          mr_due_date: mrDueDate,
-          mr_status: approvalData.length > 1 ? "open" : "approved",
-          mr_priority: mrPriority,
-          mr_remarks: mrRemarks,
-          accurate: mrAccurate,
-          approvals: approvalData,
-        })
-        .select()
-        .single();
+      const result = await createMaterialRequest({
+        mr_kode: mrKode.trim(),
+        cabang_id: userProfile.cabang_id,
+        mr_pic: userProfile.nama,
+        mr_pic_id: userProfile.id,
+        mr_tanggal: mrTanggal,
+        mr_due_date: mrDueDate,
+        mr_priority: mrPriority,
+        mr_remarks: mrRemarks,
+        accurate: mrAccurate,
+        approvals: approvalData,
+        items: items.map((item) => ({
+          part_id: item.part_id,
+          part_number: item.part_number,
+          part_name: item.part_name,
+          satuan: item.satuan,
+          qty_request: item.qty,
+        })),
+      });
 
-      if (mrError) throw mrError;
+      if (result.error) {
+        throw new Error(result.error);
+      }
 
-      const itemsToInsert = items.map((item) => ({
-        mr_id: newMr.id,
-        part_id: item.part_id,
-        part_number: item.part_number,
-        part_name: item.part_name,
-        satuan: item.satuan,
-        qty_request: item.qty,
-      }));
-
-      await supabase.from("mr_items").insert(itemsToInsert);
       toast.success("Material Request berhasil dibuat");
       router.push("/mr");
     } catch (err: any) {
@@ -361,25 +355,28 @@ export default function CreateMRPage() {
                 onChange={(e) => setMrRemarks(e.target.value)}
               />
             </div>
-            <div className="flex items-center gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-md">
-              <Checkbox
-                id="mr-accurate"
-                checked={mrAccurate}
-                onCheckedChange={(v) => setMrAccurate(Boolean(v))}
-                className="border-amber-400 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
-              />
-              <label
-                htmlFor="mr-accurate"
-                className="cursor-pointer select-none"
-              >
-                <p className="text-[10px] font-bold text-amber-700 uppercase tracking-tight leading-none">
-                  Sudah Input ke Accurate
-                </p>
-                <p className="text-[9px] text-amber-500 font-medium mt-0.5">
-                  Centang jika dokumen ini sudah terdata di sistem Accurate
-                </p>
-              </label>
-            </div>
+            {/* ACCURATE_HIDDEN: hidden per request, default always false */}
+            {false && (
+              <div className="flex items-center gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-md">
+                <Checkbox
+                  id="mr-accurate"
+                  checked={mrAccurate}
+                  onCheckedChange={(v) => setMrAccurate(Boolean(v))}
+                  className="border-amber-400 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
+                />
+                <label
+                  htmlFor="mr-accurate"
+                  className="cursor-pointer select-none"
+                >
+                  <p className="text-[10px] font-bold text-amber-700 uppercase tracking-tight leading-none">
+                    Sudah Input ke Accurate
+                  </p>
+                  <p className="text-[9px] text-amber-500 font-medium mt-0.5">
+                    Centang jika dokumen ini sudah terdata di sistem Accurate
+                  </p>
+                </label>
+              </div>
+            )}
           </div>
 
           {/* Column 3: Dates */}
