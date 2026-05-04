@@ -16,6 +16,7 @@ import {
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "./nav-user";
 import { Button } from "@/components/ui/button";
+import { getUnreadNotificationsCount } from "@/services/notification-actions";
 import {
   GalleryVerticalEnd,
   Bot,
@@ -75,6 +76,11 @@ const data = {
       icon: LayoutDashboard,
     },
     {
+      title: "Notifikasi",
+      url: "/notifications",
+      icon: Bell,
+    },
+    {
       title: "Signature Manager",
       url: "/signatures",
       icon: FileSignature,
@@ -126,6 +132,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   const [user, setUser] = React.useState<any>(null);
   const [profile, setProfile] = React.useState<any>(null);
+  const [unreadCount, setUnreadCount] = React.useState(0);
   type CollapsedGroups = {
     admin: boolean;
     main: boolean;
@@ -147,20 +154,20 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     help: false,
   };
   const [collapsedGroups, setCollapsedGroups] = React.useState<CollapsedGroups>(
-    () => {
-      if (typeof window !== "undefined") {
-        const saved = window.localStorage.getItem("sidebarCollapsedGroups");
-        if (saved) {
-          try {
-            return { ...defaultCollapsedGroups, ...JSON.parse(saved) };
-          } catch {
-            // ignore parse error
-          }
-        }
-      }
-      return defaultCollapsedGroups;
-    },
+    defaultCollapsedGroups,
   );
+
+  // Load persisted sidebar state from localStorage after mount (client only)
+  React.useEffect(() => {
+    const saved = window.localStorage.getItem("sidebarCollapsedGroups");
+    if (saved) {
+      try {
+        setCollapsedGroups((prev) => ({ ...prev, ...JSON.parse(saved) }));
+      } catch {
+        // ignore parse error
+      }
+    }
+  }, []);
 
   // Determine if all groups are collapsed
   const allCollapsed = React.useMemo(
@@ -199,6 +206,10 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           };
           setProfile(flattenedProfile);
         }
+
+        // Fetch unread notifications count
+        const { count } = await getUnreadNotificationsCount();
+        setUnreadCount(count);
       }
     };
     getUser();
@@ -330,7 +341,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           />
         )}
         <NavMain
-          items={markActive(data.navMain)}
+          items={markActive(data.navMain).map((item) =>
+            item.url === "/notifications"
+              ? { ...item, badge: unreadCount }
+              : item,
+          )}
           collapsed={collapsedGroups.main}
           onToggle={() => toggleGroup("main")}
         />

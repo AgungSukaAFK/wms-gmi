@@ -4,6 +4,19 @@ Dokumen ini adalah acuan utama implementasi revisi fitur agar model AI/coder bis
 
 Tanggal baseline: 2026-05-04
 
+## Dokumen Operasional Wajib
+
+Sebelum mengerjakan fitur baru yang menyentuh database, baca dulu:
+
+- [SUPABASE_ENVIRONMENT.md](SUPABASE_ENVIRONMENT.md)
+
+Ringkasan penting:
+
+1. Local pakai Supabase local.
+2. Production/online pakai Supabase di VPS.
+3. Setiap perubahan schema harus dibuat migration dan dijalankan juga di VPS.
+4. Setiap laporan fitur wajib menyebutkan apakah ada SQL yang harus dijalankan di Supabase VPS.
+
 ---
 
 ## Tujuan

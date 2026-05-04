@@ -4,6 +4,10 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { canViewPOPrice, maskPOPriceItems } from "@/lib/po-price-access";
 import { toCompletedIfLegacy } from "@/lib/document-status";
+import {
+  notifyApprovers,
+  notifyDocumentOwner,
+} from "@/services/notification-actions";
 
 // ============================================================
 // PRIVATE HELPERS (server-side, uses authenticated server client)
@@ -195,6 +199,13 @@ export async function createMaterialRequest(data: {
     .insert(itemsToInsert);
   if (itemsError) return { error: itemsError.message };
 
+  // Notify pending approvers
+  if (mrApprovals.length > 0) {
+    notifyApprovers(mrApprovals, "MR", mr.id, mr.mr_kode, `/mr/${mr.id}`).catch(
+      console.error,
+    );
+  }
+
   revalidatePath("/mr");
   return { success: true, data: mr };
 }
@@ -278,6 +289,25 @@ export async function approveMR(
 
   if (updateError) return { error: updateError.message };
 
+  // Notify owner about approval progress
+  notifyDocumentOwner(
+    mr.mr_pic_id,
+    isLastStep ? "document_completed" : "approved",
+    "MR",
+    mrId,
+    mr.mr_kode,
+    `/mr/${mrId}`,
+    approvals[currentStepIndex].nama,
+  ).catch(console.error);
+
+  // If more steps remain, notify the next pending approver
+  if (!isLastStep) {
+    const remaining = approvals.filter((a: any) => a.status === "pending");
+    notifyApprovers(remaining, "MR", mrId, mr.mr_kode, `/mr/${mrId}`).catch(
+      console.error,
+    );
+  }
+
   revalidatePath("/mr");
   return { success: true };
 }
@@ -294,7 +324,7 @@ export async function rejectMR(mrId: number, reason: string) {
 
   const { data: mr } = await supabase
     .from("mrs")
-    .select("approvals")
+    .select("mr_kode, mr_pic_id, approvals")
     .eq("id", mrId)
     .single();
   if (!mr) return { error: "MR not found" };
@@ -317,6 +347,19 @@ export async function rejectMR(mrId: number, reason: string) {
     .eq("id", mrId);
 
   if (error) return { error: error.message };
+
+  // Notify document owner about rejection
+  const rejecter = currentStepIndex !== -1 ? approvals[currentStepIndex] : null;
+  notifyDocumentOwner(
+    mr.mr_pic_id,
+    "rejected",
+    "MR",
+    mrId,
+    mr.mr_kode,
+    `/mr/${mrId}`,
+    rejecter?.nama,
+    reason,
+  ).catch(console.error);
 
   revalidatePath("/mr");
   return { success: true };
