@@ -13,6 +13,8 @@ import {
 } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -20,12 +22,31 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Shield, Loader2, Save, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
   getRolePermissions,
   setRolePermissions,
+  createRole,
+  deleteRole,
 } from "@/services/role-actions";
 import type { Role } from "@/type";
 
@@ -68,6 +89,20 @@ export default function RoleManagementClient({
   >([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+
+  // Roles list (mutable)
+  const [roles, setRoles] = useState<Role[]>(initialRoles);
+
+  // Add role dialog
+  const [addDialogOpen, setAddDialogOpen] = useState(false);
+  const [newRoleName, setNewRoleName] = useState("");
+  const [newRoleLabel, setNewRoleLabel] = useState("");
+  const [newRoleDesc, setNewRoleDesc] = useState("");
+  const [isCreating, setIsCreating] = useState(false);
+
+  // Delete role confirm
+  const [deleteTarget, setDeleteTarget] = useState<Role | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     if (selectedRoleId) {
@@ -112,6 +147,52 @@ export default function RoleManagementClient({
       toast.success("Permission berhasil diperbarui");
     } else {
       toast.error("Gagal menyimpan: " + result.error);
+    }
+  };
+
+  const handleCreateRole = async () => {
+    if (!newRoleName.trim() || !newRoleLabel.trim()) {
+      toast.error("Name dan Label wajib diisi");
+      return;
+    }
+    setIsCreating(true);
+    const result = await createRole({
+      name: newRoleName,
+      label: newRoleLabel,
+      description: newRoleDesc || undefined,
+    });
+    setIsCreating(false);
+
+    if (result.success) {
+      toast.success("Role berhasil ditambahkan");
+      setAddDialogOpen(false);
+      setNewRoleName("");
+      setNewRoleLabel("");
+      setNewRoleDesc("");
+      // Reload page data
+      window.location.reload();
+    } else {
+      toast.error("Gagal menambah role: " + result.error);
+    }
+  };
+
+  const handleDeleteRole = async () => {
+    if (!deleteTarget) return;
+    setIsDeleting(true);
+    const result = await deleteRole(deleteTarget.id);
+    setIsDeleting(false);
+    setDeleteTarget(null);
+
+    if (result.success) {
+      toast.success(`Role "${deleteTarget.label}" dihapus`);
+      setRoles((prev) => prev.filter((r) => r.id !== deleteTarget.id));
+      if (selectedRoleId === deleteTarget.id) {
+        setSelectedRoleId(
+          roles.find((r) => r.id !== deleteTarget.id)?.id ?? null,
+        );
+      }
+    } else {
+      toast.error("Gagal menghapus role: " + result.error);
     }
   };
 
@@ -165,7 +246,7 @@ export default function RoleManagementClient({
                   <SelectValue placeholder="Pilih Role" />
                 </SelectTrigger>
                 <SelectContent>
-                  {initialRoles.map((r) => (
+                  {roles.map((r) => (
                     <SelectItem
                       key={r.id}
                       value={r.id.toString()}
@@ -297,7 +378,7 @@ export default function RoleManagementClient({
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {initialRoles.map((role) => (
+                {roles.map((role) => (
                   <Card
                     key={role.id}
                     className="border-border bg-background shadow-sm rounded-md"
@@ -317,8 +398,8 @@ export default function RoleManagementClient({
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="text-destructive h-8 w-8"
-                        disabled
+                        className="text-destructive h-8 w-8 hover:bg-destructive/10"
+                        onClick={() => setDeleteTarget(role)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>
@@ -329,7 +410,7 @@ export default function RoleManagementClient({
                 <Button
                   variant="outline"
                   className="h-17 border-dashed border-2 border-input bg-muted/20 flex flex-col gap-1 items-center justify-center"
-                  disabled
+                  onClick={() => setAddDialogOpen(true)}
                 >
                   <Plus className="h-4 w-4 text-muted-foreground" />
                   <span className="text-xs font-medium text-muted-foreground">
@@ -341,6 +422,117 @@ export default function RoleManagementClient({
           </TabsContent>
         </Tabs>
       </Content>
+
+      {/* Dialog: Tambah Role */}
+      <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-sm font-bold uppercase">
+              Tambah Role Baru
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                Name (slug) <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                value={newRoleName}
+                onChange={(e) => setNewRoleName(e.target.value)}
+                placeholder="cth: warehouse_staff"
+                className="h-9 text-sm font-medium"
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Huruf kecil dan underscore, tanpa spasi.
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                Label (tampilan) <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                value={newRoleLabel}
+                onChange={(e) => setNewRoleLabel(e.target.value)}
+                placeholder="cth: Warehouse Staff"
+                className="h-9 text-sm font-medium"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                Deskripsi
+              </Label>
+              <Input
+                value={newRoleDesc}
+                onChange={(e) => setNewRoleDesc(e.target.value)}
+                placeholder="Opsional..."
+                className="h-9 text-sm font-medium"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setAddDialogOpen(false)}
+              className="text-xs font-bold h-9"
+            >
+              Batal
+            </Button>
+            <Button
+              onClick={handleCreateRole}
+              disabled={isCreating}
+              className="text-xs font-bold h-9 gap-2"
+            >
+              {isCreating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="h-4 w-4" />
+              )}
+              Tambah Role
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* AlertDialog: Konfirmasi Hapus Role */}
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => {
+          if (!open) setDeleteTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="text-sm font-bold uppercase">
+              Hapus Role?
+            </AlertDialogTitle>
+            <AlertDialogDescription className="text-xs">
+              Role{" "}
+              <span className="font-semibold text-foreground">
+                {deleteTarget?.label}
+              </span>{" "}
+              akan dihapus permanen. User yang memiliki role ini akan kehilangan
+              aksesnya.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel className="text-xs font-bold h-9">
+              Batal
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteRole}
+              disabled={isDeleting}
+              className="bg-destructive hover:bg-destructive/90 text-xs font-bold h-9 gap-2"
+            >
+              {isDeleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="h-4 w-4" />
+              )}
+              Hapus
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

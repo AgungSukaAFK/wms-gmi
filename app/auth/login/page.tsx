@@ -2,7 +2,7 @@
 
 "use client";
 
-import { Suspense, useState, useEffect } from "react";
+import { Suspense, useState, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
@@ -24,6 +24,7 @@ function LoginContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const searchParams = useSearchParams();
+  const redirectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (searchParams.get("error") === "account_inactive") {
@@ -32,6 +33,14 @@ function LoginContent() {
       );
     }
   }, [searchParams]);
+
+  useEffect(() => {
+    return () => {
+      if (redirectTimerRef.current) {
+        clearTimeout(redirectTimerRef.current);
+      }
+    };
+  }, []);
 
   const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -49,7 +58,7 @@ function LoginContent() {
       if (result?.success) {
         toast.success("Login berhasil! Mengarahkan ke dashboard...");
         // Use full-page navigation to ensure fresh session state on protected pages.
-        setTimeout(() => {
+        redirectTimerRef.current = setTimeout(() => {
           window.location.assign("/dashboard");
         }, 500);
       }

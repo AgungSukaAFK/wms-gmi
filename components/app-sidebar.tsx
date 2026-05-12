@@ -3,7 +3,7 @@
 "use client";
 
 import * as React from "react";
-import { redirect, usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
   Sidebar,
@@ -128,7 +128,7 @@ const data = {
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const currentPath = usePathname();
-  const supabase = createClient();
+  const router = useRouter();
 
   const [user, setUser] = React.useState<any>(null);
   const [profile, setProfile] = React.useState<any>(null);
@@ -176,11 +176,19 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   );
 
   React.useEffect(() => {
+    let isMounted = true;
+
     const getUser = async () => {
+      const supabase = createClient();
       const { data, error } = await supabase.auth.getUser();
+
+      if (!isMounted) return;
+
       if (!data.user && !error) {
-        redirect("/auth/login");
+        router.push("/auth/login");
+        return;
       }
+
       if (data.user) {
         setUser(data.user);
 
@@ -198,6 +206,8 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           .eq("id", data.user.id)
           .single();
 
+        if (!isMounted) return;
+
         if (profileWithRoles) {
           // Transform the nested join into a flat roles array
           const flattenedProfile = {
@@ -209,11 +219,17 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
         // Fetch unread notifications count
         const { count } = await getUnreadNotificationsCount();
+        if (!isMounted) return;
         setUnreadCount(count);
       }
     };
+
     getUser();
-  }, [supabase]);
+
+    return () => {
+      isMounted = false;
+    };
+  }, [router]);
 
   const isModerator = profile?.roles?.some((r: any) => r.name === "moderator");
   const isAdmin = profile?.roles?.some((r: any) => r.name === "admin");

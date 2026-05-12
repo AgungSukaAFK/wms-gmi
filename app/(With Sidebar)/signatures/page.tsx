@@ -44,6 +44,8 @@ import { Badge } from "@/components/ui/badge";
 import type { UserSignature } from "@/type";
 import { createClient } from "@/lib/supabase/client";
 
+const MAX_SIGNATURES = 2;
+
 export default function SignatureManagerPage() {
   const [signatures, setSignatures] = useState<UserSignature[]>([]);
   const [profileName, setProfileName] = useState("");
@@ -91,8 +93,8 @@ export default function SignatureManagerPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      if (signatures.length >= 10) {
-        toast.error("Batas maksimal 10 tanda tangan telah tercapai.");
+      if (signatures.length >= MAX_SIGNATURES) {
+        toast.error("Batas maksimal 2 tanda tangan telah tercapai.");
         return;
       }
       const reader = new FileReader();
@@ -193,9 +195,9 @@ export default function SignatureManagerPage() {
                 Kuota Tersisa
               </p>
               <p className="text-lg font-bold text-foreground">
-                {10 - signatures.length}{" "}
+                {MAX_SIGNATURES - signatures.length}{" "}
                 <span className="text-xs text-muted-foreground font-semibold">
-                  / 10
+                  / {MAX_SIGNATURES}
                 </span>
               </p>
             </div>
@@ -205,11 +207,11 @@ export default function SignatureManagerPage() {
                 accept="image/*"
                 className="hidden"
                 onChange={handleFileChange}
-                disabled={signatures.length >= 10}
+                disabled={signatures.length >= MAX_SIGNATURES}
               />
               <div
                 className={`inline-flex items-center justify-center gap-2 rounded-md font-bold text-xs h-9 px-4 uppercase transition-all shadow-sm ${
-                  signatures.length >= 10
+                  signatures.length >= MAX_SIGNATURES
                     ? "bg-muted text-muted-foreground cursor-not-allowed"
                     : "bg-primary text-primary-foreground hover:bg-primary/90 active:scale-95"
                 }`}

@@ -70,8 +70,8 @@ export default function MRPrintPage() {
   }
 
   return (
-    <Content>
-      <div className="bg-white min-h-screen p-0 sm:p-8 font-serif">
+    <Content className="mr-print-content">
+      <div className="mr-print-page bg-white min-h-screen p-0 sm:p-8 font-serif">
         {/* Back Button (Hidden on Print) */}
         <div className="fixed top-4 left-4 print:hidden flex gap-2">
           <Button
@@ -91,7 +91,7 @@ export default function MRPrintPage() {
           </Button>
         </div>
 
-        <div className="max-w-[210mm] mx-auto bg-white p-[15mm] border-0 sm:border shadow-none sm:shadow-lg relative">
+        <div className="mr-print-sheet max-w-[210mm] mx-auto bg-white p-[15mm] border-0 sm:border shadow-none sm:shadow-lg relative">
           {/* Header Section */}
           <div className="flex justify-between items-start border-b-2 border-slate-900 pb-6 mb-8">
             <div className="space-y-1">
@@ -306,17 +306,68 @@ export default function MRPrintPage() {
 
         <style jsx global>{`
           @media print {
+            [data-slot="sidebar"],
+            [data-slot="sidebar-gap"],
+            [data-slot="sidebar-container"],
+            [data-slot="sidebar-rail"],
+            [data-slot="sidebar-trigger"] {
+              display: none !important;
+            }
+            [data-slot="sidebar-wrapper"],
+            [data-slot="sidebar-inset"] {
+              display: block !important;
+              width: 100% !important;
+              max-width: 100% !important;
+              margin: 0 !important;
+              padding: 0 !important;
+              border-radius: 0 !important;
+              box-shadow: none !important;
+            }
+            [data-slot="sidebar-inset"] > header {
+              display: none !important;
+            }
+            [data-slot="sidebar-inset"] > div {
+              display: block !important;
+              padding: 0 !important;
+              margin: 0 !important;
+              overflow: visible !important;
+            }
+            [data-slot="sidebar-inset"] > div > div {
+              display: block !important;
+              width: 100% !important;
+            }
             body {
               background-color: white !important;
               padding: 0 !important;
               margin: 0 !important;
+            }
+            .mr-print-content {
+              border: none !important;
+              border-radius: 0 !important;
+              box-shadow: none !important;
+              padding: 0 !important;
+              background: white !important;
+            }
+            .mr-print-content [data-slot="card-content"] {
+              padding: 0 !important;
+            }
+            .mr-print-page {
+              min-height: auto !important;
+              padding: 0 !important;
+            }
+            .mr-print-sheet {
+              max-width: none !important;
+              width: 100% !important;
+              margin: 0 !important;
+              padding: 4mm !important;
+              border: none !important;
             }
             .fixed {
               display: none !important;
             }
             @page {
               size: A4;
-              margin: 10mm;
+              margin: 6mm;
             }
             .shadow-lg {
               box-shadow: none !important;

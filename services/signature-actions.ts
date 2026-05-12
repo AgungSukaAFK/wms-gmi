@@ -13,11 +13,16 @@ export async function createSignature(formData: {
   accountPassword: string;
   signaturePassword: string;
 }) {
+  const MAX_SIGNATURES = 2;
   const supabase = await createClient();
 
   // 1. Dapatkan user saat ini
-  const { data: { user }, error: userError } = await supabase.auth.getUser();
-  if (userError || !user) return { error: "Sesi tidak valid. Silakan login kembali." };
+  const {
+    data: { user },
+    error: userError,
+  } = await supabase.auth.getUser();
+  if (userError || !user)
+    return { error: "Sesi tidak valid. Silakan login kembali." };
 
   // 2. Verifikasi Password Akun (Re-authentication trick)
   const { error: authError } = await supabase.auth.signInWithPassword({
@@ -26,38 +31,60 @@ export async function createSignature(formData: {
   });
   if (authError) return { error: "Password akun salah. Verifikasi gagal." };
 
+  // 2b. Batasi kuota tanda tangan per user
+  const { count, error: countError } = await supabase
+    .from("user_signatures")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", user.id);
+
+  if (countError) {
+    return { error: "Gagal memeriksa kuota tanda tangan." };
+  }
+
+  if ((count ?? 0) >= MAX_SIGNATURES) {
+    return {
+      error: `Batas maksimal ${MAX_SIGNATURES} tanda tangan telah tercapai.`,
+    };
+  }
+
   // 3. Ambil Nama Profile otomatis
   let { data: profile, error: profFetchError } = await supabase
     .from("profiles")
     .select("nama")
     .eq("id", user.id)
     .single();
-  
+
   // Auto-fix: Jika profile tidak ditemukan, coba buatkan
-  if (profFetchError?.code === 'PGRST116' || !profile) {
+  if (profFetchError?.code === "PGRST116" || !profile) {
     console.log("Repairing missing profile in createSignature for:", user.id);
     const { data: newProfile, error: repairError } = await supabase
       .from("profiles")
       .insert({
         id: user.id,
-        nama: user.user_metadata?.nama || user.email?.split('@')[0] || "User",
+        nama: user.user_metadata?.nama || user.email?.split("@")[0] || "User",
         email: user.email!,
-        is_active: true
+        is_active: true,
       })
       .select("nama")
       .single();
-    
-    if (repairError) return { error: `Gagal memperbaiki profil: ${(repairError as any).message}` };
+
+    if (repairError)
+      return {
+        error: `Gagal memperbaiki profil: ${(repairError as any).message}`,
+      };
     profile = newProfile;
   }
 
   const printedName = profile?.nama || "Unknown User";
 
   // 4. Hash Password Signature
-  const signaturePasswordHash = await bcrypt.hash(formData.signaturePassword, 10);
+  const signaturePasswordHash = await bcrypt.hash(
+    formData.signaturePassword,
+    10,
+  );
 
   // 5. Upload Gambar ke Storage
-  const fileExt = formData.imageFile.name.split('.').pop();
+  const fileExt = formData.imageFile.name.split(".").pop();
   const fileName = `${Date.now()}.${fileExt}`;
   const filePath = `${user.id}/${fileName}`;
 
@@ -71,20 +98,18 @@ export async function createSignature(formData: {
   }
 
   // Dapatkan Public URL (Penting: Jika bucket private, gunakan signed URL di client)
-  const { data: { publicUrl } } = supabase.storage
-    .from("signatures")
-    .getPublicUrl(filePath);
+  const {
+    data: { publicUrl },
+  } = supabase.storage.from("signatures").getPublicUrl(filePath);
 
   // 6. Simpan Metadata ke Database
-  const { error: dbError } = await supabase
-    .from("user_signatures")
-    .insert({
-      user_id: user.id,
-      image_url: publicUrl,
-      printed_name: printedName,
-      label: formData.label,
-      password_hash: signaturePasswordHash,
-    });
+  const { error: dbError } = await supabase.from("user_signatures").insert({
+    user_id: user.id,
+    image_url: publicUrl,
+    printed_name: printedName,
+    label: formData.label,
+    password_hash: signaturePasswordHash,
+  });
 
   if (dbError) {
     console.error("DB error:", dbError);
@@ -102,7 +127,9 @@ export async function createSignature(formData: {
  */
 export async function getMySignatures() {
   const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) return { data: [], error: "Unauthorized" };
 
   const { data, error } = await supabase
@@ -147,11 +174,16 @@ export async function toggleSignatureVisibility(id: string, isHidden: boolean) {
 /**
  * Verifikasi Password Signature dengan Lockout Mechanism
  */
-export async function verifySignaturePassword(signatureId: string, plainPassword: string) {
+export async function verifySignaturePassword(
+  signatureId: string,
+  plainPassword: string,
+) {
   const supabase = await createClient();
-  
+
   // 1. Dapatkan user saat ini
-  const { data: { user } } = await supabase.auth.getUser();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
   if (!user) return { success: false, error: "Unauthorized" };
 
   // 2. Ambil Signature dan Profile User (termasuk status aktif & failed attempts)
@@ -162,7 +194,8 @@ export async function verifySignaturePassword(signatureId: string, plainPassword
     .eq("user_id", user.id)
     .single();
 
-  if (sigError || !signatureData) return { success: false, error: "Tanda tangan tidak ditemukan" };
+  if (sigError || !signatureData)
+    return { success: false, error: "Tanda tangan tidak ditemukan" };
 
   const { data: profile, error: profError } = await supabase
     .from("profiles")
@@ -172,42 +205,55 @@ export async function verifySignaturePassword(signatureId: string, plainPassword
 
   if (profError || !profile) {
     console.error("Profile security check error:", profError);
-    
+
     // Auto-fix: Jika profile tidak ditemukan (PGRST116), coba buatkan profile dasar
-    if (profError?.code === 'PGRST116' || !profile) {
-      console.log("Attempting to auto-create missing profile for user:", user.id);
+    if (profError?.code === "PGRST116" || !profile) {
+      console.log(
+        "Attempting to auto-create missing profile for user:",
+        user.id,
+      );
       const { data: newProfile, error: createError } = await supabase
         .from("profiles")
         .insert({
           id: user.id,
-          nama: user.user_metadata?.nama || user.email?.split('@')[0] || "User",
+          nama: user.user_metadata?.nama || user.email?.split("@")[0] || "User",
           email: user.email!,
           is_active: true,
-          signature_failed_attempts: 0
+          signature_failed_attempts: 0,
         })
         .select()
         .single();
-      
+
       if (createError) {
-        return { success: false, error: `Gagal membuat profil otomatis: ${createError.message}` };
+        return {
+          success: false,
+          error: `Gagal membuat profil otomatis: ${createError.message}`,
+        };
       }
-      
+
       return verifySignaturePassword(signatureId, plainPassword); // Pecobaan ulang setelah repair
     }
 
-    return { success: false, error: `Gagal memuat profil keamanan: ${(profError as any)?.message || 'Unknown Error'}` };
+    return {
+      success: false,
+      error: `Gagal memuat profil keamanan: ${(profError as any)?.message || "Unknown Error"}`,
+    };
   }
 
   // 3. Cek apakah akun sudah nonaktif
   if (!profile.is_active) {
-    return { 
-      success: false, 
-      error: "AKUN NONAKTIF: Akun Anda telah terkunci karena terlalu banyak percobaan salah. Silakan hubungi Administrator." 
+    return {
+      success: false,
+      error:
+        "AKUN NONAKTIF: Akun Anda telah terkunci karena terlalu banyak percobaan salah. Silakan hubungi Administrator.",
     };
   }
 
   // 4. Verifikasi Password
-  const isMatch = await bcrypt.compare(plainPassword, signatureData.password_hash);
+  const isMatch = await bcrypt.compare(
+    plainPassword,
+    signatureData.password_hash,
+  );
 
   if (!isMatch) {
     const newAttempts = (profile.signature_failed_attempts || 0) + 1;
@@ -216,22 +262,23 @@ export async function verifySignaturePassword(signatureId: string, plainPassword
     // Update failed attempts & potentially deactivate
     await supabase
       .from("profiles")
-      .update({ 
+      .update({
         signature_failed_attempts: newAttempts,
-        is_active: !isLockout
+        is_active: !isLockout,
       })
       .eq("id", user.id);
 
     if (isLockout) {
-      return { 
-        success: false, 
-        error: "ACCOUNT LOCKED: Anda telah salah memasukkan password sebanyak 5 kali. Akun Anda telah dinonaktifkan." 
+      return {
+        success: false,
+        error:
+          "ACCOUNT LOCKED: Anda telah salah memasukkan password sebanyak 5 kali. Akun Anda telah dinonaktifkan.",
       };
     }
 
-    return { 
-      success: false, 
-      error: `Password salah. Sisa percobaan: ${5 - newAttempts} kali lagi.` 
+    return {
+      success: false,
+      error: `Password salah. Sisa percobaan: ${5 - newAttempts} kali lagi.`,
     };
   }
 

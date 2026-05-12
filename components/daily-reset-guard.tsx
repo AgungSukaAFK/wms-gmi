@@ -18,12 +18,13 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
   const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
+    let isMounted = true;
+
     const initSession = async () => {
       const supabase = createClient();
 
       // 1. Cek apakah harus reset harian
       if (isNewDay()) {
-        console.log("Daily reset triggered: New day detected.");
         clearSession();
         await supabase.auth.signOut();
         router.push("/auth/login");
@@ -33,8 +34,6 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
       // 2. Jika store kosong ATAU user berganti akun, fetch ulang data dari DB
       const shouldReinitialize = !profile || profile.id !== userId;
       if (shouldReinitialize && userId) {
-        console.log("Re-initializing session store...");
-
         const { data: profileData } = await supabase
           .from("profiles")
           .select("*, cabang(id, nama_cabang, kode_cabang)")
@@ -59,10 +58,16 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
         }
       }
 
-      setIsInitializing(false);
+      if (isMounted) {
+        setIsInitializing(false);
+      }
     };
 
     initSession();
+
+    return () => {
+      isMounted = false;
+    };
   }, [userId, isNewDay, clearSession, setSession, profile, router]);
 
   if (isInitializing) {
