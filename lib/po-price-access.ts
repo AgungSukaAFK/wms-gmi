@@ -2,9 +2,15 @@ type RoleHolder = {
   roles?: Array<{
     name?: string;
     label?: string;
-    roles?: { name?: string; label?: string };
+    roles?:
+      | { name?: string; label?: string }
+      | Array<{ name?: string; label?: string }>;
   }>;
-  user_roles?: Array<{ roles?: { name?: string; label?: string } }>;
+  user_roles?: Array<{
+    roles?:
+      | { name?: string; label?: string }
+      | Array<{ name?: string; label?: string }>;
+  }>;
 };
 
 const normalizeRole = (value?: string | null) =>
@@ -13,14 +19,23 @@ const normalizeRole = (value?: string | null) =>
 export function extractRoleNames(profile?: RoleHolder | null): string[] {
   if (!profile) return [];
 
+  const pickRoleName = (
+    role?:
+      | { name?: string; label?: string }
+      | Array<{ name?: string; label?: string }>,
+  ) => {
+    if (Array.isArray(role)) {
+      return normalizeRole(role[0]?.name || role[0]?.label);
+    }
+    return normalizeRole(role?.name || role?.label);
+  };
+
   const fromRoles = (profile.roles || [])
-    .map((r) =>
-      normalizeRole(r?.name || r?.label || r?.roles?.name || r?.roles?.label),
-    )
+    .map((r) => normalizeRole(r?.name || r?.label) || pickRoleName(r?.roles))
     .filter(Boolean);
 
   const fromUserRoles = (profile.user_roles || [])
-    .map((r) => normalizeRole(r?.roles?.name || r?.roles?.label))
+    .map((r) => pickRoleName(r?.roles))
     .filter(Boolean);
 
   return Array.from(new Set([...fromRoles, ...fromUserRoles]));

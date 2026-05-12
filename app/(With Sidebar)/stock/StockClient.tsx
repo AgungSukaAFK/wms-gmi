@@ -234,7 +234,7 @@ export default function StockClient({
                   Total Stock
                 </TableHead>
                 <TableHead className="w-30 text-center text-[10px] font-black uppercase text-muted-foreground">
-                  Total Stok
+                  Rata/Site
                 </TableHead>
                 <TableHead className="w-15 pr-6" />
               </TableRow>
@@ -278,12 +278,16 @@ export default function StockClient({
                         <span
                           className={cn(
                             "text-sm font-black",
-                            part.total_qty > 0
+                            part.active_locations > 0 && part.total_qty > 0
                               ? "text-foreground"
                               : "text-muted-foreground/40",
                           )}
                         >
-                          {part.total_qty}
+                          {part.active_locations > 0
+                            ? (part.total_qty / part.active_locations).toFixed(
+                                1,
+                              )
+                            : "0.0"}
                         </span>
                         <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">
                           {part.part_satuan}

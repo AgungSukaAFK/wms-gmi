@@ -250,9 +250,9 @@ export default function MRPrintPage() {
             <p className="text-[10px] font-bold uppercase text-slate-400 mb-6 text-center tracking-[0.2em]">
               Dokumen ini ditandatangani secara digital oleh:
             </p>
-            <div className="grid grid-cols-3 gap-y-12 gap-x-8">
+            <div className="flex flex-wrap justify-center gap-x-8 gap-y-12">
               {mr.approvals?.map((app: any, idx: number) => (
-                <div key={idx} className="flex flex-col items-center">
+                <div key={idx} className="flex w-45 flex-col items-center">
                   <div className="text-[9px] font-bold text-slate-500 uppercase mb-2 h-4">
                     {app.role || "Pemeriksa"}
                   </div>
@@ -260,7 +260,7 @@ export default function MRPrintPage() {
                     {app.status === "approved" && app.signature_url ? (
                       <img
                         src={app.signature_url}
-                        className="max-h-full max-w-full object-contain mix-blend-multiply"
+                        className="max-h-14 max-w-27.5 object-contain mix-blend-multiply"
                         alt="signature"
                       />
                     ) : (

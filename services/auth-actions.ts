@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
+import { cookies } from "next/headers";
 
 /**
  * Sign In with optional NRP support
@@ -68,6 +69,18 @@ export async function signIn(formData: FormData) {
   }
 
   revalidatePath("/", "layout");
+
+  // Set daily session cookie — proxy uses this to enforce once-per-day login
+  const cookieStore = await cookies();
+  const today = new Date().toISOString().split("T")[0]; // YYYY-MM-DD UTC
+  cookieStore.set("wms_login_date", today, {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax",
+    path: "/",
+    maxAge: 60 * 60 * 48, // 2 days so proxy can still read it the next day to force re-login
+  });
+
   return { success: true };
 }
 
