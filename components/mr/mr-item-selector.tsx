@@ -161,13 +161,13 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
                     className="w-full text-left p-2 hover:bg-slate-50 transition-all rounded-md group disabled:opacity-50"
                   >
                     <div className="flex justify-between items-center gap-4">
-                      <div className="flex flex-col">
-                        <span className="text-xs font-semibold text-slate-900 leading-none mb-0.5">
-                          {r.part_name}
-                        </span>
-                        <code className="text-[10px] text-slate-400">
+                      <div className="flex flex-col min-w-0">
+                        <code className="text-xs font-bold text-slate-900 leading-none mb-0.5">
                           {r.part_number}
                         </code>
+                        <span className="text-[10px] text-slate-400 truncate">
+                          {r.part_name}
+                        </span>
                       </div>
                       <Badge
                         variant="outline"

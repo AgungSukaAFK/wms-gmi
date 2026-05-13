@@ -670,14 +670,16 @@ export default function MaterialRequestPage() {
                           >
                             <FileText className="h-3.5 w-3.5" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-all shadow-none"
-                            onClick={(e) => handleDeleteClick(e, mr)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
+                          {userProfile?.isModerator && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-all shadow-none"
+                              onClick={(e) => handleDeleteClick(e, mr)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

@@ -332,6 +332,7 @@ export default function CreateDeliveryPage() {
     try {
       const result = await createDelivery({
         dlv_kode: dlvKode,
+        mr_id: selectedMr?.id ?? undefined,
         dari_cabang_id: dariCabang,
         ke_cabang_id: keCabang,
         shipment_type: shipmentType,

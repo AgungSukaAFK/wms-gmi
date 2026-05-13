@@ -1616,12 +1616,28 @@ export async function deleteMR(mrId: number) {
   if (prCount && prCount > 0)
     return { error: "MR sudah memiliki PR, tidak dapat dihapus." };
 
+  // Cek via deliveries.mr_id (delivery baru sudah pakai ini)
   const { count: dlvCount } = await supabase
     .from("deliveries")
     .select("id", { count: "exact", head: true })
     .eq("mr_id", mrId);
   if (dlvCount && dlvCount > 0)
     return { error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus." };
+
+  // Cek via delivery_items → mr_items (untuk data lama yang mr_id-nya NULL)
+  const { data: mrItemRows } = await supabase
+    .from("mr_items")
+    .select("id")
+    .eq("mr_id", mrId);
+  const mrItemIds = (mrItemRows || []).map((r: any) => r.id);
+  if (mrItemIds.length > 0) {
+    const { count: dlvItemCount } = await supabase
+      .from("delivery_items")
+      .select("id", { count: "exact", head: true })
+      .in("mr_item_id", mrItemIds);
+    if (dlvItemCount && dlvItemCount > 0)
+      return { error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus." };
+  }
 
   await supabase.from("mr_items").delete().eq("mr_id", mrId);
 

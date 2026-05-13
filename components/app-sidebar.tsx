@@ -320,15 +320,15 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   return (
     <Sidebar collapsible="icon" {...props}>
       <SidebarHeader>
-        <div className="flex items-center space-x-2 px-2 py-4">
-          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
+        <div className="flex items-center gap-2 px-2 py-4 overflow-hidden">
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground font-bold">
             W
           </div>
-          <div className="flex flex-col gap-0.5 leading-none">
-            <span className="font-semibold text-lg tracking-tight">
+          <div className="flex flex-col gap-0.5 leading-none overflow-hidden group-data-[state=collapsed]:hidden">
+            <span className="font-semibold text-lg tracking-tight truncate">
               WMS-GMI
             </span>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs text-muted-foreground truncate">
               Internal System
             </span>
           </div>

@@ -301,20 +301,23 @@ export default function MRDetailPage({
     !!isPendingApprover && nextApproverRole === "menyetujui";
 
   useEffect(() => {
-    if (!barangPopoverOpen || !debouncedBarangSearch) {
+    if (!barangPopoverOpen) {
       setBarangResults([]);
       return;
     }
     const searchBarang = async () => {
       setBarangLoading(true);
-      const { data } = await supabase
+      let query = supabase
         .from("barang")
         .select("id, part_number, part_name, part_satuan")
-        .or(
-          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
-        )
         .order("part_name")
         .limit(15);
+      if (debouncedBarangSearch) {
+        query = query.or(
+          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+        );
+      }
+      const { data } = await query;
       setBarangResults(data || []);
       setBarangLoading(false);
     };
@@ -962,8 +965,8 @@ export default function MRDetailPage({
                       <Plus className="h-4 w-4" /> Tambah Barang
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-80 p-0" align="start">
-                    <div className="p-2 border-b border-border">
+                  <PopoverContent className="w-80 p-0 flex flex-col max-h-[220px] overflow-hidden" align="start">
+                    <div className="p-2 border-b border-border shrink-0">
                       <div className="relative">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
                         <Input
@@ -975,16 +978,14 @@ export default function MRDetailPage({
                         />
                       </div>
                     </div>
-                    <div className="max-h-60 overflow-y-auto p-1">
+                    <div className="overflow-y-auto p-1 flex-1">
                       {barangLoading ? (
-                        <div className="flex items-center justify-center py-6">
+                        <div className="flex items-center justify-center py-4">
                           <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
                         </div>
                       ) : barangResults.length === 0 ? (
-                        <p className="text-center text-[11px] text-muted-foreground py-6 italic">
-                          {debouncedBarangSearch
-                            ? "Barang tidak ditemukan."
-                            : "Ketik untuk mencari barang."}
+                        <p className="text-center text-[11px] text-muted-foreground py-4 italic">
+                          Barang tidak ditemukan.
                         </p>
                       ) : (
                         barangResults.map((b) => (
