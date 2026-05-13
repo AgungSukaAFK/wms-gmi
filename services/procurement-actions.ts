@@ -82,6 +82,8 @@ async function _buildApprovalFlow(
       nama: profile?.nama || "Unknown",
       email: profile?.email || "",
       level: step.step_order,
+      // "menyetujui" | "mengetahui" — preserved from template step
+      approval_role: isRequester ? "menyetujui" : (step.level ?? "menyetujui"),
       processed_at: null,
       notes: null,
       snapshot: null,
@@ -360,6 +362,138 @@ export async function rejectMR(mrId: number, reason: string) {
     rejecter?.nama,
     reason,
   ).catch(console.error);
+
+  revalidatePath("/mr");
+  return { success: true };
+}
+
+type MrEditPayload = {
+  mr_tanggal?: string;
+  mr_priority?: string;
+  mr_remarks?: string;
+  updatedItems?: { id: number; qty_request: number }[];
+  newItems?: {
+    part_id: number;
+    part_number: string;
+    part_name: string;
+    satuan: string;
+    qty_request: number;
+  }[];
+  deletedItemIds?: number[];
+};
+
+/**
+ * Edit MR (header + items) by an approver whose level is "menyetujui".
+ * After editing, approval resets from step index 1 (requester/step-0 stays).
+ */
+export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired." };
+
+  const { data: mr, error: mrError } = await supabase
+    .from("mrs")
+    .select("id, mr_kode, mr_pic_id, mr_status, approvals")
+    .eq("id", mrId)
+    .single();
+
+  if (mrError || !mr) return { error: "MR tidak ditemukan." };
+  if (mr.mr_status !== "open")
+    return { error: "MR sudah tidak dalam status open." };
+
+  const approvals: any[] = mr.approvals ?? [];
+  // Handle both field schemas:
+  // - MR create page  → user_id  + level ("menyetujui"/"mengetahui")
+  // - _buildApprovalFlow → userid + approval_role
+  const myStepIndex = approvals.findIndex(
+    (a) =>
+      (a.userid === user.id || a.user_id === user.id) &&
+      a.status === "pending",
+  );
+
+  if (myStepIndex === -1)
+    return { error: "Bukan giliran Anda untuk approval MR ini." };
+
+  // "mengetahui" tidak boleh edit — check both field names
+  const myRole =
+    approvals[myStepIndex].approval_role ??
+    approvals[myStepIndex].level ??
+    "menyetujui";
+  if (myRole === "mengetahui")
+    return { error: "Level 'Mengetahui' tidak dapat mengedit isi MR." };
+
+  // 1. Update MR header fields (only fields explicitly provided)
+  const headerPatch: Record<string, any> = {};
+  if (payload.mr_tanggal !== undefined) headerPatch.mr_tanggal = payload.mr_tanggal;
+  if (payload.mr_priority !== undefined) headerPatch.mr_priority = payload.mr_priority;
+  if (payload.mr_remarks !== undefined) headerPatch.mr_remarks = payload.mr_remarks;
+
+  if (Object.keys(headerPatch).length > 0) {
+    const { error: headerErr } = await supabase
+      .from("mrs")
+      .update(headerPatch)
+      .eq("id", mrId);
+    if (headerErr) return { error: `Gagal update header MR: ${headerErr.message}` };
+  }
+
+  // 2. Delete removed items
+  if (payload.deletedItemIds && payload.deletedItemIds.length > 0) {
+    const { error: delErr } = await supabase
+      .from("mr_items")
+      .delete()
+      .in("id", payload.deletedItemIds)
+      .eq("mr_id", mrId);
+    if (delErr) return { error: `Gagal hapus item: ${delErr.message}` };
+  }
+
+  // 3. Update qty existing items
+  if (payload.updatedItems && payload.updatedItems.length > 0) {
+    for (const item of payload.updatedItems) {
+      const { error: itemErr } = await supabase
+        .from("mr_items")
+        .update({ qty_request: item.qty_request })
+        .eq("id", item.id)
+        .eq("mr_id", mrId);
+      if (itemErr) return { error: `Gagal update item: ${itemErr.message}` };
+    }
+  }
+
+  // 4. Insert new items
+  if (payload.newItems && payload.newItems.length > 0) {
+    const toInsert = payload.newItems.map((i) => ({ ...i, mr_id: mrId }));
+    const { error: insertErr } = await supabase.from("mr_items").insert(toInsert);
+    if (insertErr) return { error: `Gagal tambah item: ${insertErr.message}` };
+  }
+
+  // 5. Reset approvals dari index 1 ke atas (skip step-0 / requester / pembuat)
+  const resetApprovals = approvals.map((a, idx) => {
+    if (idx === 0) return a;
+    return {
+      ...a,
+      status: "pending",
+      processed_at: null,
+      signature_url: null,
+      notes: null,
+      snapshot: null,
+    };
+  });
+
+  const { error: updateErr } = await supabase
+    .from("mrs")
+    .update({ approvals: resetApprovals as any })
+    .eq("id", mrId);
+
+  if (updateErr) return { error: updateErr.message };
+
+  // Notify next pending approver (step index 1)
+  const nextPending = resetApprovals
+    .slice(1)
+    .filter((a) => a.status === "pending");
+  notifyApprovers(nextPending, "MR", mrId, mr.mr_kode, `/mr/${mrId}`).catch(
+    console.error,
+  );
 
   revalidatePath("/mr");
   return { success: true };

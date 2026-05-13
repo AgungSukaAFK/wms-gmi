@@ -33,7 +33,26 @@ import {
   Info,
   Truck,
   ShoppingCart,
+  Pencil,
+  RotateCcw,
+  Save,
+  Search,
+  Plus,
 } from "lucide-react";
+import { useDebounce } from "use-debounce";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -43,11 +62,14 @@ import {
   DialogDescription,
   DialogFooter,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { approveMR, rejectMR } from "@/services/procurement-actions";
+import {
+  approveMR,
+  rejectMR,
+  editMrByApprover,
+} from "@/services/procurement-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -80,6 +102,31 @@ export default function MRDetailPage({
 
   // Fulfillment states (allocation)
   const [allocations, setAllocations] = useState<any[]>([]);
+
+  // Edit-by-approver state
+  const [editMode, setEditMode] = useState(false);
+  const [saving, setSaving] = useState(false);
+  // Header edit fields
+  const [editTanggal, setEditTanggal] = useState("");
+  const [editPriority, setEditPriority] = useState("");
+  const [editRemarks, setEditRemarks] = useState("");
+  // Items edit
+  type EditableItem = {
+    id?: number;
+    part_id?: number;
+    part_number: string;
+    part_name: string;
+    satuan: string;
+    qty_request: number;
+  };
+  const [editItemsList, setEditItemsList] = useState<EditableItem[]>([]);
+  const [deletedItemIds, setDeletedItemIds] = useState<number[]>([]);
+  // Barang search (for adding new items in edit mode)
+  const [barangSearch, setBarangSearch] = useState("");
+  const [debouncedBarangSearch] = useDebounce(barangSearch, 300);
+  const [barangResults, setBarangResults] = useState<any[]>([]);
+  const [barangPopoverOpen, setBarangPopoverOpen] = useState(false);
+  const [barangLoading, setBarangLoading] = useState(false);
 
   useEffect(() => {
     if (mrId) {
@@ -237,12 +284,129 @@ export default function MRDetailPage({
       ? mr?.approvals?.find((a: any) => a.status === "pending")
       : null;
   const isPendingApprover =
-    currentUser && nextApprover && nextApprover.user_id === currentUser.id;
+    currentUser &&
+    nextApprover &&
+    (nextApprover.user_id === currentUser.id ||
+      nextApprover.userid === currentUser.id);
   const isLastApprover =
     mr?.approvals &&
     nextApprover &&
     mr.approvals.findIndex((a: any) => a.status === "pending") ===
       mr.approvals.length - 1;
+
+  // "menyetujui" approver bisa edit isi MR; "mengetahui" hanya bisa lihat + approve
+  const nextApproverRole =
+    nextApprover?.approval_role ?? nextApprover?.level ?? "menyetujui";
+  const isPendingApproverMenyetujui =
+    !!isPendingApprover && nextApproverRole === "menyetujui";
+
+  useEffect(() => {
+    if (!barangPopoverOpen || !debouncedBarangSearch) {
+      setBarangResults([]);
+      return;
+    }
+    const searchBarang = async () => {
+      setBarangLoading(true);
+      const { data } = await supabase
+        .from("barang")
+        .select("id, part_number, part_name, part_satuan")
+        .or(
+          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+        )
+        .order("part_name")
+        .limit(15);
+      setBarangResults(data || []);
+      setBarangLoading(false);
+    };
+    searchBarang();
+  }, [debouncedBarangSearch, barangPopoverOpen]);
+
+  const enterEditMode = () => {
+    setEditTanggal(
+      mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "",
+    );
+    setEditPriority(mr?.mr_priority || "");
+    setEditRemarks(mr?.mr_remarks || "");
+    setEditItemsList(
+      items.map((i) => ({
+        id: i.id,
+        part_id: i.part_id,
+        part_number: i.part_number,
+        part_name: i.part_name,
+        satuan: i.satuan,
+        qty_request: i.qty_request,
+      })),
+    );
+    setDeletedItemIds([]);
+    setBarangSearch("");
+    setBarangResults([]);
+    setEditMode(true);
+  };
+
+  const handleSaveEdit = async () => {
+    const updatedItems = editItemsList
+      .filter((e) => e.id !== undefined)
+      .map((e) => ({ id: e.id!, qty_request: e.qty_request }));
+    const newItems = editItemsList
+      .filter((e) => e.id === undefined)
+      .map((e) => ({
+        part_id: e.part_id!,
+        part_number: e.part_number,
+        part_name: e.part_name,
+        satuan: e.satuan,
+        qty_request: e.qty_request,
+      }));
+
+    setSaving(true);
+    const res = await editMrByApprover(Number(mrId), {
+      mr_tanggal: editTanggal || undefined,
+      mr_priority: editPriority || undefined,
+      mr_remarks: editRemarks || undefined,
+      updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
+      newItems: newItems.length > 0 ? newItems : undefined,
+      deletedItemIds: deletedItemIds.length > 0 ? deletedItemIds : undefined,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setSaving(false);
+      return;
+    }
+    toast.success("Perubahan disimpan. Approval diulang dari step awal approver.");
+    setEditMode(false);
+    fetchDetails();
+    setSaving(false);
+  };
+
+  const deleteEditItem = (index: number) => {
+    const item = editItemsList[index];
+    if (item.id !== undefined) {
+      setDeletedItemIds((prev) => [...prev, item.id!]);
+    }
+    setEditItemsList((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const addEditItem = (barang: any) => {
+    setEditItemsList((prev) => [
+      ...prev,
+      {
+        id: undefined,
+        part_id: barang.id,
+        part_number: barang.part_number,
+        part_name: barang.part_name,
+        satuan: barang.part_satuan,
+        qty_request: 1,
+      },
+    ]);
+    setBarangSearch("");
+    setBarangResults([]);
+    setBarangPopoverOpen(false);
+  };
+
+  const updateEditItemQty = (index: number, qty: number) => {
+    setEditItemsList((prev) =>
+      prev.map((e, i) => (i === index ? { ...e, qty_request: qty } : e)),
+    );
+  };
 
   const handleReject = async () => {
     if (!rejectionReason.trim()) {
@@ -385,20 +549,66 @@ export default function MRDetailPage({
               </p>
             </div>
           </div>
-          <Button
-            onClick={() => window.open(`/mr/print/${mrId}`, "_blank")}
-            variant="outline"
-            size="sm"
-            className="gap-2 font-semibold shrink-0"
-          >
-            <Printer className="h-4 w-4" /> Cetak MR
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            {isPendingApproverMenyetujui && !editMode && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-2 font-semibold border-blue-200 text-blue-600 hover:bg-blue-50"
+                onClick={enterEditMode}
+              >
+                <Pencil className="h-4 w-4" /> Edit Isi MR
+              </Button>
+            )}
+            {editMode && (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="gap-2 font-semibold text-muted-foreground"
+                  onClick={() => setEditMode(false)}
+                  disabled={saving}
+                >
+                  <RotateCcw className="h-4 w-4" /> Batal
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-2 font-semibold"
+                  onClick={handleSaveEdit}
+                  disabled={saving}
+                >
+                  {saving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  Simpan Perubahan
+                </Button>
+              </>
+            )}
+            <Button
+              onClick={() => window.open(`/mr/print/${mrId}`, "_blank")}
+              variant="outline"
+              size="sm"
+              className="gap-2 font-semibold"
+            >
+              <Printer className="h-4 w-4" /> Cetak MR
+            </Button>
+          </div>
         </div>
       </Content>
 
       <div className="col-span-12 grid grid-cols-12 gap-4 md:gap-6 items-start">
         <div className="col-span-12 lg:col-span-8 space-y-4 md:space-y-6">
           <Content title="Informasi Utama">
+            {editMode && (
+              <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-2.5">
+                <p className="text-[11px] font-semibold text-blue-700">
+                  Mode Edit aktif — ubah field yang diperlukan lalu klik{" "}
+                  <strong>Simpan Perubahan</strong>.
+                </p>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
               <div className="space-y-1.5">
                 <Label className="text-[11px] font-bold uppercase text-muted-foreground">
@@ -430,11 +640,20 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-muted-foreground" />
-                  <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
-                    {new Date(
-                      mr?.mr_tanggal || mr?.created_at,
-                    ).toLocaleDateString()}
-                  </div>
+                  {editMode ? (
+                    <Input
+                      type="date"
+                      value={editTanggal}
+                      onChange={(e) => setEditTanggal(e.target.value)}
+                      className="h-10 w-full text-sm font-semibold"
+                    />
+                  ) : (
+                    <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
+                      {new Date(
+                        mr?.mr_tanggal || mr?.created_at,
+                      ).toLocaleDateString()}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -444,9 +663,26 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-center gap-2">
                   <Tag className="w-4 h-4 text-muted-foreground" />
-                  <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
-                    {getPriorityBadge(mr?.mr_priority)}
-                  </div>
+                  {editMode ? (
+                    <Select
+                      value={editPriority}
+                      onValueChange={setEditPriority}
+                    >
+                      <SelectTrigger className="h-10 w-full text-sm font-semibold">
+                        <SelectValue placeholder="Pilih prioritas..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="P1">P1 - Emergency</SelectItem>
+                        <SelectItem value="P2">P2 - High</SelectItem>
+                        <SelectItem value="P3">P3 - Normal</SelectItem>
+                        <SelectItem value="P4">P4 - Low</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
+                      {getPriorityBadge(mr?.mr_priority)}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -456,9 +692,18 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-start gap-2">
                   <MessageSquare className="w-4 h-4 text-muted-foreground mt-2.5" />
-                  <div className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm min-h-20 whitespace-pre-wrap font-medium text-foreground leading-relaxed">
-                    {mr?.mr_remarks || "-"}
-                  </div>
+                  {editMode ? (
+                    <Textarea
+                      value={editRemarks}
+                      onChange={(e) => setEditRemarks(e.target.value)}
+                      className="min-h-20 text-sm font-medium resize-none"
+                      placeholder="Keterangan..."
+                    />
+                  ) : (
+                    <div className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm min-h-20 whitespace-pre-wrap font-medium text-foreground leading-relaxed">
+                      {mr?.mr_remarks || "-"}
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -469,6 +714,9 @@ export default function MRDetailPage({
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow className="h-12">
+                    {editMode && (
+                      <TableHead className="w-10 text-center text-[10px] font-bold uppercase text-muted-foreground" />
+                    )}
                     <TableHead className="w-12 text-center text-[10px] font-bold uppercase text-muted-foreground">
                       No
                     </TableHead>
@@ -484,147 +732,291 @@ export default function MRDetailPage({
                     <TableHead className="text-right text-[10px] font-bold uppercase text-muted-foreground pr-4">
                       Qty Req
                     </TableHead>
-                    {/* Fulfillment Columns (Only show when approved) */}
-                    {(mr?.mr_status === "approved" ||
-                      mr?.mr_status === "done" ||
-                      mr?.mr_status === "closed") && (
-                      <>
-                        <TableHead className="text-[10px] font-bold uppercase text-muted-foreground px-4">
-                          Share Stock
-                        </TableHead>
-                        <TableHead className="text-[10px] font-bold uppercase text-muted-foreground px-4 pr-6">
-                          Purchase (PR)
-                        </TableHead>
-                      </>
-                    )}
+                    {/* Fulfillment Columns (Only show when approved and not in edit) */}
+                    {!editMode &&
+                      (mr?.mr_status === "approved" ||
+                        mr?.mr_status === "done" ||
+                        mr?.mr_status === "closed") && (
+                        <>
+                          <TableHead className="text-[10px] font-bold uppercase text-muted-foreground px-4">
+                            Share Stock
+                          </TableHead>
+                          <TableHead className="text-[10px] font-bold uppercase text-muted-foreground px-4 pr-6">
+                            Purchase (PR)
+                          </TableHead>
+                        </>
+                      )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {items.map((item, idx) => {
-                    const itemPrs = prRecords.filter(
-                      (p) => p.part_id === item.part_id,
-                    );
-                    const itemDeliveries = deliveryRecords.filter(
-                      (d) => d.part_id === item.part_id,
-                    );
-
-                    return (
-                      <TableRow
-                        key={item.id}
-                        className="h-16 hover:bg-muted/30 group"
-                      >
-                        <TableCell className="text-center text-xs font-bold text-muted-foreground">
-                          {idx + 1}
+                  {editMode ? (
+                    editItemsList.length === 0 ? (
+                      <TableRow>
+                        <TableCell
+                          colSpan={5}
+                          className="text-center text-[11px] text-muted-foreground py-6"
+                        >
+                          Belum ada barang. Tambahkan di bawah.
                         </TableCell>
-                        <TableCell className="font-mono text-[11px] font-bold text-muted-foreground uppercase">
-                          {item.part_number}
-                        </TableCell>
-                        <TableCell>
-                          <span className="text-sm font-bold text-foreground uppercase">
-                            {item.part_name}
-                          </span>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          <Badge
-                            variant="outline"
-                            className="text-[9px] font-bold text-muted-foreground h-5 uppercase"
-                          >
-                            {item.satuan}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-right font-black text-foreground pr-4 text-base">
-                          {item.qty_request}
-                        </TableCell>
-
-                        {/* Fulfillment Status Visualization */}
-                        {(mr?.mr_status === "approved" ||
-                          mr?.mr_status === "done" ||
-                          mr?.mr_status === "closed") && (
-                          <>
-                            {/* Share Stock Details */}
-                            <TableCell className="px-4">
-                              {item.qty_sharestock_total > 0 ? (
-                                <div className="space-y-1.5">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-sm font-black text-success">
-                                      {item.qty_sharestock_total}
-                                    </span>
-                                    {itemDeliveries.length > 0 ? (
-                                      <Badge className="bg-success/10 text-success border-none text-[8px] h-3.5 font-black uppercase">
-                                        Processed
-                                      </Badge>
-                                    ) : (
-                                      <Badge
-                                        variant="outline"
-                                        className="text-[8px] h-3.5 text-muted-foreground border-border font-bold uppercase"
-                                      >
-                                        Pending
-                                      </Badge>
-                                    )}
-                                  </div>
-                                  {itemDeliveries.map((d, i) => (
-                                    <div
-                                      key={i}
-                                      className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground hover:text-primary transition-colors cursor-default"
-                                    >
-                                      <Truck className="h-2.5 w-2.5" />
-                                      {d.deliveries?.dlv_kode} (
-                                      {d.qty_on_delivery})
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground/40 text-[10px] font-bold uppercase italic">
-                                  -
-                                </span>
-                              )}
-                            </TableCell>
-
-                            {/* PR Details */}
-                            <TableCell className="px-4 pr-6">
-                              {item.qty_pr > 0 ? (
-                                <div className="space-y-1.5">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-sm font-black text-primary">
-                                      {item.qty_pr}
-                                    </span>
-                                    {itemPrs.length > 0 ? (
-                                      <Badge className="bg-primary/10 text-primary border-none text-[8px] h-3.5 font-black uppercase">
-                                        Processed
-                                      </Badge>
-                                    ) : (
-                                      <Badge
-                                        variant="outline"
-                                        className="text-[8px] h-3.5 text-muted-foreground border-border font-bold uppercase"
-                                      >
-                                        Pending
-                                      </Badge>
-                                    )}
-                                  </div>
-                                  {itemPrs.map((p, i) => (
-                                    <div
-                                      key={i}
-                                      className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground hover:text-primary transition-colors cursor-default"
-                                    >
-                                      <ShoppingCart className="h-2.5 w-2.5" />
-                                      {p.prs?.pr_kode} ({p.qty})
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <span className="text-muted-foreground/40 text-[10px] font-bold uppercase italic">
-                                  -
-                                </span>
-                              )}
-                            </TableCell>
-                          </>
-                        )}
                       </TableRow>
-                    );
-                  })}
+                    ) : (
+                      editItemsList.map((item, idx) => (
+                        <TableRow
+                          key={item.id ?? `new-${idx}`}
+                          className={`h-14 hover:bg-muted/30 ${item.id === undefined ? "bg-blue-50/30" : ""}`}
+                        >
+                          <TableCell className="text-center w-10">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                              onClick={() => deleteEditItem(idx)}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </Button>
+                          </TableCell>
+                          <TableCell className="text-center text-xs font-bold text-muted-foreground">
+                            {idx + 1}
+                          </TableCell>
+                          <TableCell className="font-mono text-[11px] font-bold text-muted-foreground uppercase">
+                            {item.part_number}
+                            {item.id === undefined && (
+                              <Badge className="ml-1.5 text-[7px] h-3.5 bg-blue-100 text-blue-600 border-none font-black uppercase">
+                                Baru
+                              </Badge>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm font-bold text-foreground uppercase">
+                              {item.part_name}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] font-bold text-muted-foreground h-5 uppercase"
+                            >
+                              {item.satuan}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right pr-4">
+                            <Input
+                              type="number"
+                              min={1}
+                              value={item.qty_request}
+                              onChange={(e) =>
+                                updateEditItemQty(
+                                  idx,
+                                  Math.max(1, Number(e.target.value)),
+                                )
+                              }
+                              className="h-8 w-24 text-right text-sm font-bold ml-auto"
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))
+                    )
+                  ) : (
+                    items.map((item, idx) => {
+                      const itemPrs = prRecords.filter(
+                        (p) => p.part_id === item.part_id,
+                      );
+                      const itemDeliveries = deliveryRecords.filter(
+                        (d) => d.part_id === item.part_id,
+                      );
+
+                      return (
+                        <TableRow
+                          key={item.id}
+                          className="h-16 hover:bg-muted/30 group"
+                        >
+                          <TableCell className="text-center text-xs font-bold text-muted-foreground">
+                            {idx + 1}
+                          </TableCell>
+                          <TableCell className="font-mono text-[11px] font-bold text-muted-foreground uppercase">
+                            {item.part_number}
+                          </TableCell>
+                          <TableCell>
+                            <span className="text-sm font-bold text-foreground uppercase">
+                              {item.part_name}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] font-bold text-muted-foreground h-5 uppercase"
+                            >
+                              {item.satuan}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-right pr-4">
+                            <span className="font-black text-foreground text-base">
+                              {item.qty_request}
+                            </span>
+                          </TableCell>
+
+                          {/* Fulfillment Status Visualization */}
+                          {(mr?.mr_status === "approved" ||
+                            mr?.mr_status === "done" ||
+                            mr?.mr_status === "closed") && (
+                            <>
+                              {/* Share Stock Details */}
+                              <TableCell className="px-4">
+                                {item.qty_sharestock_total > 0 ? (
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-sm font-black text-success">
+                                        {item.qty_sharestock_total}
+                                      </span>
+                                      {itemDeliveries.length > 0 ? (
+                                        <Badge className="bg-success/10 text-success border-none text-[8px] h-3.5 font-black uppercase">
+                                          Processed
+                                        </Badge>
+                                      ) : (
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[8px] h-3.5 text-muted-foreground border-border font-bold uppercase"
+                                        >
+                                          Pending
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {itemDeliveries.map((d, i) => (
+                                      <div
+                                        key={i}
+                                        className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground hover:text-primary transition-colors cursor-default"
+                                      >
+                                        <Truck className="h-2.5 w-2.5" />
+                                        {d.deliveries?.dlv_kode} (
+                                        {d.qty_on_delivery})
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground/40 text-[10px] font-bold uppercase italic">
+                                    -
+                                  </span>
+                                )}
+                              </TableCell>
+
+                              {/* PR Details */}
+                              <TableCell className="px-4 pr-6">
+                                {item.qty_pr > 0 ? (
+                                  <div className="space-y-1.5">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-sm font-black text-primary">
+                                        {item.qty_pr}
+                                      </span>
+                                      {itemPrs.length > 0 ? (
+                                        <Badge className="bg-primary/10 text-primary border-none text-[8px] h-3.5 font-black uppercase">
+                                          Processed
+                                        </Badge>
+                                      ) : (
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[8px] h-3.5 text-muted-foreground border-border font-bold uppercase"
+                                        >
+                                          Pending
+                                        </Badge>
+                                      )}
+                                    </div>
+                                    {itemPrs.map((p, i) => (
+                                      <div
+                                        key={i}
+                                        className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground hover:text-primary transition-colors cursor-default"
+                                      >
+                                        <ShoppingCart className="h-2.5 w-2.5" />
+                                        {p.prs?.pr_kode} ({p.qty})
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="text-muted-foreground/40 text-[10px] font-bold uppercase italic">
+                                    -
+                                  </span>
+                                )}
+                              </TableCell>
+                            </>
+                          )}
+                        </TableRow>
+                      );
+                    })
+                  )}
                 </TableBody>
               </Table>
             </div>
+
+            {/* Add barang button — only visible in edit mode */}
+            {editMode && (
+              <div className="mt-3">
+                <Popover
+                  open={barangPopoverOpen}
+                  onOpenChange={setBarangPopoverOpen}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2 text-blue-600 border-blue-200 hover:bg-blue-50 font-semibold"
+                    >
+                      <Plus className="h-4 w-4" /> Tambah Barang
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80 p-0" align="start">
+                    <div className="p-2 border-b border-border">
+                      <div className="relative">
+                        <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                        <Input
+                          autoFocus
+                          placeholder="Cari part number / nama barang..."
+                          className="pl-8 h-9 text-sm"
+                          value={barangSearch}
+                          onChange={(e) => setBarangSearch(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                    <div className="max-h-60 overflow-y-auto p-1">
+                      {barangLoading ? (
+                        <div className="flex items-center justify-center py-6">
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : barangResults.length === 0 ? (
+                        <p className="text-center text-[11px] text-muted-foreground py-6 italic">
+                          {debouncedBarangSearch
+                            ? "Barang tidak ditemukan."
+                            : "Ketik untuk mencari barang."}
+                        </p>
+                      ) : (
+                        barangResults.map((b) => (
+                          <button
+                            key={b.id}
+                            className="w-full text-left px-2.5 py-1.5 hover:bg-muted/60 rounded-md transition-colors"
+                            onClick={() => addEditItem(b)}
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold font-mono uppercase text-foreground truncate">
+                                  {b.part_number}
+                                </p>
+                                <p className="text-[10px] text-muted-foreground truncate">
+                                  {b.part_name}
+                                </p>
+                              </div>
+                              <Badge
+                                variant="outline"
+                                className="text-[9px] font-bold h-4 px-1.5 shrink-0 text-muted-foreground uppercase"
+                              >
+                                {b.part_satuan}
+                              </Badge>
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </PopoverContent>
+                </Popover>
+              </div>
+            )}
           </Content>
 
           {isPendingApprover && isLastApprover && (
