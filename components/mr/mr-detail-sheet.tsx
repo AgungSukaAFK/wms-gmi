@@ -18,7 +18,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   Loader2,
   Package,
@@ -27,34 +26,10 @@ import {
   MessageSquare,
   X,
   ExternalLink,
-  Pencil,
-  RotateCcw,
-  Save,
-  Trash2,
-  Search,
-  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
-import { useDebounce } from "use-debounce";
-import {
-  updateMRAccurate,
-  editMrByApprover,
-} from "@/services/procurement-actions";
+import { updateMRAccurate } from "@/services/procurement-actions";
 import { toast } from "sonner";
 
 interface MRDetailSheetProps {
@@ -75,43 +50,8 @@ export function MRDetailSheet({
   const [loading, setLoading] = useState(false);
   const [updatingAccurate, setUpdatingAccurate] = useState(false);
 
-  // Edit-by-approver state
-  const [userId, setUserId] = useState<string | null>(null);
-  const [editMode, setEditMode] = useState(false);
-  const [saving, setSaving] = useState(false);
-  // Header edit fields
-  const [editTanggal, setEditTanggal] = useState("");
-  const [editPriority, setEditPriority] = useState("");
-  const [editRemarks, setEditRemarks] = useState("");
-  // Items edit
-  type EditableItem = {
-    id?: number;
-    part_id?: number;
-    part_number: string;
-    part_name: string;
-    satuan: string;
-    qty_request: number;
-  };
-  const [editItemsList, setEditItemsList] = useState<EditableItem[]>([]);
-  const [deletedItemIds, setDeletedItemIds] = useState<number[]>([]);
-  // Barang search
-  const [barangSearch, setBarangSearch] = useState("");
-  const [debouncedBarangSearch] = useDebounce(barangSearch, 300);
-  const [barangResults, setBarangResults] = useState<any[]>([]);
-  const [barangPopoverOpen, setBarangPopoverOpen] = useState(false);
-  const [barangLoading, setBarangLoading] = useState(false);
-
-  useEffect(() => {
-    const loadUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      setUserId(user?.id ?? null);
-    };
-    loadUser();
-  }, []);
-
   useEffect(() => {
     if (open && mrId) {
-      setEditMode(false);
       fetchDetails();
     }
   }, [open, mrId]);
@@ -134,131 +74,6 @@ export function MRDetailSheet({
 
     setItems(itemsData || []);
     setLoading(false);
-  };
-
-  // Compute whether current user has a pending "menyetujui" step.
-  // Field name differs by MR origin:
-  //   - create page  → user_id  + level ("menyetujui"/"mengetahui")
-  //   - _buildApprovalFlow → userid + approval_role
-  const myPendingStep =
-    userId && mr?.mr_status === "open"
-      ? (mr?.approvals ?? []).find(
-          (a: any) =>
-            (a.userid === userId || a.user_id === userId) &&
-            a.status === "pending",
-        )
-      : null;
-
-  const myApprovalRole =
-    myPendingStep?.approval_role ?? myPendingStep?.level ?? "menyetujui";
-
-  const isMyTurnMenyetujui =
-    !!myPendingStep && myApprovalRole === "menyetujui";
-
-  useEffect(() => {
-    if (!barangPopoverOpen || !debouncedBarangSearch) {
-      setBarangResults([]);
-      return;
-    }
-    const searchBarang = async () => {
-      setBarangLoading(true);
-      const { data } = await supabase
-        .from("barang")
-        .select("id, part_number, part_name, part_satuan")
-        .or(
-          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
-        )
-        .order("part_name")
-        .limit(15);
-      setBarangResults(data || []);
-      setBarangLoading(false);
-    };
-    searchBarang();
-  }, [debouncedBarangSearch, barangPopoverOpen]);
-
-  const enterEditMode = () => {
-    setEditTanggal(mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "");
-    setEditPriority(mr?.mr_priority || "");
-    setEditRemarks(mr?.mr_remarks || "");
-    setEditItemsList(
-      items.map((i) => ({
-        id: i.id,
-        part_id: i.part_id,
-        part_number: i.part_number,
-        part_name: i.part_name,
-        satuan: i.satuan,
-        qty_request: i.qty_request,
-      })),
-    );
-    setDeletedItemIds([]);
-    setBarangSearch("");
-    setBarangResults([]);
-    setEditMode(true);
-  };
-
-  const handleSaveEdit = async () => {
-    const updatedItems = editItemsList
-      .filter((e) => e.id !== undefined)
-      .map((e) => ({ id: e.id!, qty_request: e.qty_request }));
-    const newItems = editItemsList
-      .filter((e) => e.id === undefined)
-      .map((e) => ({
-        part_id: e.part_id!,
-        part_number: e.part_number,
-        part_name: e.part_name,
-        satuan: e.satuan,
-        qty_request: e.qty_request,
-      }));
-
-    setSaving(true);
-    const res = await editMrByApprover(Number(mrId), {
-      mr_tanggal: editTanggal || undefined,
-      mr_priority: editPriority || undefined,
-      mr_remarks: editRemarks || undefined,
-      updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
-      newItems: newItems.length > 0 ? newItems : undefined,
-      deletedItemIds: deletedItemIds.length > 0 ? deletedItemIds : undefined,
-    });
-    if (res.error) {
-      toast.error(res.error);
-      setSaving(false);
-      return;
-    }
-    toast.success("Perubahan disimpan. Approval diulang dari step awal approver.");
-    setEditMode(false);
-    await fetchDetails();
-    setSaving(false);
-  };
-
-  const deleteEditItem = (index: number) => {
-    const item = editItemsList[index];
-    if (item.id !== undefined) {
-      setDeletedItemIds((prev) => [...prev, item.id!]);
-    }
-    setEditItemsList((prev) => prev.filter((_, i) => i !== index));
-  };
-
-  const addEditItem = (barang: any) => {
-    setEditItemsList((prev) => [
-      ...prev,
-      {
-        id: undefined,
-        part_id: barang.id,
-        part_number: barang.part_number,
-        part_name: barang.part_name,
-        satuan: barang.part_satuan,
-        qty_request: 1,
-      },
-    ]);
-    setBarangSearch("");
-    setBarangResults([]);
-    setBarangPopoverOpen(false);
-  };
-
-  const updateEditItemQty = (index: number, qty: number) => {
-    setEditItemsList((prev) =>
-      prev.map((e, i) => (i === index ? { ...e, qty_request: qty } : e)),
-    );
   };
 
   const getStatusBadge = (status: string) => {
@@ -376,7 +191,6 @@ export function MRDetailSheet({
         </Badge>
       );
     }
-    // "menyetujui" or undefined (old data)
     return (
       <Badge
         variant="outline"
@@ -385,12 +199,6 @@ export function MRDetailSheet({
         Menyetujui
       </Badge>
     );
-  };
-
-  const handlePrint = () => {
-    if (mrId) {
-      window.open(`/mr/print/${mrId}`, "_blank");
-    }
   };
 
   const nextApprover =
@@ -460,7 +268,6 @@ export function MRDetailSheet({
             </SheetHeader>
 
             <div className="flex-1 overflow-y-auto p-8 space-y-10 pb-20 bg-background">
-              {/* Section: Priority & Remarks Info */}
               {mr?.mr_remarks && (
                 <div className="bg-muted/40 border border-border rounded-lg p-3 space-y-2 overflow-hidden wrap-break-word">
                   <div className="flex items-center gap-2">
@@ -476,110 +283,18 @@ export function MRDetailSheet({
               )}
 
               {/* Section: Items */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <div className="h-4 w-1 bg-primary rounded-full shrink-0" />
-                    <h3 className="text-[11px] font-bold text-foreground uppercase">
-                      Daftar Barang
-                    </h3>
-                  </div>
-                  {/* Tombol Edit — hanya untuk approver "menyetujui" yang sedang pending */}
-                  {!editMode && isMyTurnMenyetujui && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 gap-1.5 text-[10px] font-bold uppercase border-blue-200 text-blue-600 hover:bg-blue-50"
-                      onClick={enterEditMode}
-                    >
-                      <Pencil className="h-3 w-3" /> Edit Isi MR
-                    </Button>
-                  )}
-                  {editMode && (
-                    <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        className="h-7 gap-1 text-[10px] font-bold uppercase text-muted-foreground"
-                        onClick={() => setEditMode(false)}
-                        disabled={saving}
-                      >
-                        <RotateCcw className="h-3 w-3" /> Batal
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-7 gap-1.5 text-[10px] font-bold uppercase"
-                        onClick={handleSaveEdit}
-                        disabled={saving}
-                      >
-                        {saving ? (
-                          <Loader2 className="h-3 w-3 animate-spin" />
-                        ) : (
-                          <Save className="h-3 w-3" />
-                        )}
-                        Simpan
-                      </Button>
-                    </div>
-                  )}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-1 bg-primary rounded-full shrink-0" />
+                  <h3 className="text-[11px] font-bold text-foreground uppercase">
+                    Daftar Barang
+                  </h3>
                 </div>
-
-                {/* Edit mode: compact header fields */}
-                {editMode && (
-                  <div className="space-y-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
-                    <p className="text-[10px] font-semibold text-blue-700">
-                      Mode Edit — ubah data MR lalu klik <strong>Simpan</strong>. Approval akan diulang dari step awal approver.
-                    </p>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div className="space-y-1">
-                        <Label className="text-[9px] font-bold uppercase text-muted-foreground">
-                          Tanggal
-                        </Label>
-                        <Input
-                          type="date"
-                          value={editTanggal}
-                          onChange={(e) => setEditTanggal(e.target.value)}
-                          className="h-8 text-[11px] font-semibold"
-                        />
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-[9px] font-bold uppercase text-muted-foreground">
-                          Prioritas
-                        </Label>
-                        <Select
-                          value={editPriority}
-                          onValueChange={setEditPriority}
-                        >
-                          <SelectTrigger className="h-8 text-[11px] font-semibold">
-                            <SelectValue placeholder="Pilih..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="P1">P1 - Emergency</SelectItem>
-                            <SelectItem value="P2">P2 - High</SelectItem>
-                            <SelectItem value="P3">P3 - Normal</SelectItem>
-                            <SelectItem value="P4">P4 - Low</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      </div>
-                    </div>
-                    <div className="space-y-1">
-                      <Label className="text-[9px] font-bold uppercase text-muted-foreground">
-                        Keterangan / Remarks
-                      </Label>
-                      <Textarea
-                        value={editRemarks}
-                        onChange={(e) => setEditRemarks(e.target.value)}
-                        className="min-h-16 text-[11px] font-medium resize-none"
-                        placeholder="Keterangan..."
-                      />
-                    </div>
-                  </div>
-                )}
 
                 <div className="border border-border rounded-lg overflow-hidden shadow-sm bg-background">
                   <Table className="table-fixed w-full">
                     <TableHeader className="bg-muted/50">
                       <TableRow className="hover:bg-transparent h-9 border-b border-border">
-                        {editMode && <TableHead className="w-8" />}
                         <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4">
                           Part Number
                         </TableHead>
@@ -592,66 +307,7 @@ export function MRDetailSheet({
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {editMode ? (
-                        editItemsList.length === 0 ? (
-                          <TableRow>
-                            <TableCell
-                              colSpan={4}
-                              className="h-14 text-center text-muted-foreground text-[11px] italic"
-                            >
-                              Tambahkan barang di bawah.
-                            </TableCell>
-                          </TableRow>
-                        ) : (
-                          editItemsList.map((editItem, idx) => (
-                            <TableRow
-                              key={editItem.id ?? `new-${idx}`}
-                              className={`border-b border-border/40 last:border-0 align-middle ${editItem.id === undefined ? "bg-blue-50/20" : ""}`}
-                            >
-                              <TableCell className="w-8 text-center pl-2 pr-0">
-                                <Button
-                                  variant="ghost"
-                                  size="icon"
-                                  className="h-6 w-6 text-muted-foreground hover:text-destructive"
-                                  onClick={() => deleteEditItem(idx)}
-                                >
-                                  <Trash2 className="h-3 w-3" />
-                                </Button>
-                              </TableCell>
-                              <TableCell className="text-[11px] font-mono font-bold text-muted-foreground uppercase pl-2 py-2 whitespace-normal wrap-break-word">
-                                {editItem.part_number}
-                                {editItem.id === undefined && (
-                                  <Badge className="ml-1 text-[7px] h-3 bg-blue-100 text-blue-600 border-none font-black">
-                                    Baru
-                                  </Badge>
-                                )}
-                              </TableCell>
-                              <TableCell className="text-[11px] font-semibold text-foreground uppercase py-2 whitespace-normal wrap-break-word leading-snug">
-                                {editItem.part_name}
-                              </TableCell>
-                              <TableCell className="pr-3 py-1.5">
-                                <div className="flex items-center justify-end gap-1">
-                                  <Input
-                                    type="number"
-                                    min={1}
-                                    value={editItem.qty_request}
-                                    onChange={(e) =>
-                                      updateEditItemQty(
-                                        idx,
-                                        Math.max(1, Number(e.target.value)),
-                                      )
-                                    }
-                                    className="h-7 w-16 text-right text-[11px] font-bold"
-                                  />
-                                  <span className="text-[10px] text-muted-foreground font-medium shrink-0">
-                                    {editItem.satuan}
-                                  </span>
-                                </div>
-                              </TableCell>
-                            </TableRow>
-                          ))
-                        )
-                      ) : items.length === 0 ? (
+                      {items.length === 0 ? (
                         <TableRow>
                           <TableCell
                             colSpan={3}
@@ -684,76 +340,6 @@ export function MRDetailSheet({
                     </TableBody>
                   </Table>
                 </div>
-
-                {/* Add barang popover — only in edit mode */}
-                {editMode && (
-                  <Popover
-                    open={barangPopoverOpen}
-                    onOpenChange={setBarangPopoverOpen}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-1.5 text-[10px] font-bold uppercase text-blue-600 border-blue-200 hover:bg-blue-50"
-                      >
-                        <Plus className="h-3 w-3" /> Tambah Barang
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-72 p-0" align="start">
-                      <div className="p-2 border-b border-border">
-                        <div className="relative">
-                          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                          <Input
-                            autoFocus
-                            placeholder="Cari part number / nama..."
-                            className="pl-7 h-8 text-[11px]"
-                            value={barangSearch}
-                            onChange={(e) => setBarangSearch(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                      <div className="max-h-52 overflow-y-auto p-1">
-                        {barangLoading ? (
-                          <div className="flex items-center justify-center py-5">
-                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                          </div>
-                        ) : barangResults.length === 0 ? (
-                          <p className="text-center text-[10px] text-muted-foreground py-5 italic">
-                            {debouncedBarangSearch
-                              ? "Barang tidak ditemukan."
-                              : "Ketik untuk mencari."}
-                          </p>
-                        ) : (
-                          barangResults.map((b) => (
-                            <button
-                              key={b.id}
-                              className="w-full text-left px-2.5 py-1.5 hover:bg-muted/60 rounded-md transition-colors"
-                              onClick={() => addEditItem(b)}
-                            >
-                              <div className="flex items-center justify-between gap-2">
-                                <div className="min-w-0">
-                                  <p className="text-[11px] font-bold font-mono uppercase text-foreground truncate">
-                                    {b.part_number}
-                                  </p>
-                                  <p className="text-[10px] text-muted-foreground truncate">
-                                    {b.part_name}
-                                  </p>
-                                </div>
-                                <Badge
-                                  variant="outline"
-                                  className="text-[9px] font-bold h-4 px-1.5 shrink-0 text-muted-foreground uppercase"
-                                >
-                                  {b.part_satuan}
-                                </Badge>
-                              </div>
-                            </button>
-                          ))
-                        )}
-                      </div>
-                    </PopoverContent>
-                  </Popover>
-                )}
               </div>
 
               {/* Section: Approval Progress */}
@@ -766,9 +352,10 @@ export function MRDetailSheet({
                 </div>
                 <div className="space-y-2.5 min-w-0">
                   {mr?.approvals
-                    ?.sort((a: any, b: any) =>
-                      (a.step_order ?? a.level ?? 0) -
-                      (b.step_order ?? b.level ?? 0),
+                    ?.sort(
+                      (a: any, b: any) =>
+                        (a.step_order ?? a.level ?? 0) -
+                        (b.step_order ?? b.level ?? 0),
                     )
                     .map((approval: any, idx: number) => {
                       const isApproved = approval.status === "approved";
@@ -816,7 +403,6 @@ export function MRDetailSheet({
                               </div>
                             </div>
 
-                            {/* Approval role badge — check both schemas */}
                             <div className="flex items-center gap-1.5">
                               {getApprovalRoleBadge(
                                 approval.approval_role ?? approval.level,
@@ -885,7 +471,6 @@ export function MRDetailSheet({
             </div>
 
             <div className="p-6 border-t border-border bg-muted/40 space-y-4 shadow-sm mt-auto">
-              {/* ACCURATE_HIDDEN: tombol toggle disembunyikan, nilai selalu false */}
               {false && (
                 <button
                   onClick={handleToggleAccurate}

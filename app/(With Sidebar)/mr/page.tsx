@@ -23,6 +23,7 @@ import {
   Navigation2,
   Clock,
   AlertTriangle,
+  Trash2,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -41,6 +42,18 @@ import { Separator } from "@/components/ui/separator";
 import { MRDetailSheet } from "@/components/mr/mr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import { deleteMR } from "@/services/procurement-actions";
+import { toast } from "sonner";
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
@@ -284,9 +297,34 @@ export default function MaterialRequestPage() {
     return nextStep ? nextStep.nama : null;
   };
 
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [mrToDelete, setMrToDelete] = useState<{ id: number; kode: string } | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
   const handleRowClick = (id: number) => {
     setSelectedMrId(id);
     setDetailOpen(true);
+  };
+
+  const handleDeleteClick = (e: React.MouseEvent, mr: any) => {
+    e.stopPropagation();
+    setMrToDelete({ id: mr.id, kode: mr.mr_kode });
+    setDeleteDialogOpen(true);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!mrToDelete) return;
+    setDeleting(true);
+    const res = await deleteMR(mrToDelete.id);
+    setDeleting(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(`MR ${mrToDelete.kode} berhasil dihapus.`);
+    setDeleteDialogOpen(false);
+    setMrToDelete(null);
+    fetchData();
   };
 
   return (
@@ -500,7 +538,7 @@ export default function MaterialRequestPage() {
                     Accurate
                   </TableHead>
                 )}
-                <TableHead className="text-right w-20 pr-6 font-bold text-[10px] uppercase text-muted-foreground">
+                <TableHead className="text-right w-24 pr-4 font-bold text-[10px] uppercase text-muted-foreground">
                   Aksi
                 </TableHead>
               </TableRow>
@@ -620,16 +658,27 @@ export default function MaterialRequestPage() {
                         </TableCell>
                       )}
                       <TableCell
-                        className="text-right pr-6"
+                        className="text-right pr-4"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-md transition-all shadow-none"
-                        >
-                          <FileText className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-md transition-all shadow-none"
+                            onClick={() => handleRowClick(mr.id)}
+                          >
+                            <FileText className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-all shadow-none"
+                            onClick={(e) => handleDeleteClick(e, mr)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </TableCell>
                     </TableRow>
                   );
@@ -659,6 +708,32 @@ export default function MaterialRequestPage() {
         open={detailOpen}
         onOpenChange={setDetailOpen}
       />
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Material Request?</AlertDialogTitle>
+            <AlertDialogDescription>
+              MR <span className="font-bold text-foreground">{mrToDelete?.kode}</span> akan dihapus permanen.
+              Tindakan ini tidak dapat dibatalkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Ya, Hapus"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

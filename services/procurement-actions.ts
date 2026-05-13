@@ -1598,3 +1598,36 @@ export async function deletePO(poId: number) {
   revalidatePath("/po");
   return { success: true };
 }
+
+/**
+ * DELETE MR — hanya boleh jika belum ada PR atau Delivery/Share Stock yang dibuat.
+ */
+export async function deleteMR(mrId: number) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired." };
+
+  const { count: prCount } = await supabase
+    .from("pr_items")
+    .select("id", { count: "exact", head: true })
+    .eq("mr_id", mrId);
+  if (prCount && prCount > 0)
+    return { error: "MR sudah memiliki PR, tidak dapat dihapus." };
+
+  const { count: dlvCount } = await supabase
+    .from("deliveries")
+    .select("id", { count: "exact", head: true })
+    .eq("mr_id", mrId);
+  if (dlvCount && dlvCount > 0)
+    return { error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus." };
+
+  await supabase.from("mr_items").delete().eq("mr_id", mrId);
+
+  const { error } = await supabase.from("mrs").delete().eq("id", mrId);
+  if (error) return { error: `Gagal hapus MR: ${error.message}` };
+
+  revalidatePath("/mr");
+  return { success: true };
+}
