@@ -47,12 +47,16 @@ import {
   Loader2,
   Users,
   Search,
+  KeyRound,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
   toggleUserStatus,
   updateUserDetail,
   deleteUserProfile,
+  resetUserPassword,
 } from "@/services/user-actions";
 import type { Role } from "@/type";
 
@@ -96,6 +100,13 @@ export default function UserTableClient({
   const [editRoleIds, setEditRoleIds] = useState<number[]>([]);
   const [rolesTouched, setRolesTouched] = useState(false);
   const [editCabangId, setEditCabangId] = useState("");
+
+  const [resetPasswordUser, setResetPasswordUser] = useState<UserProfile | null>(null);
+  const [isResetModalOpen, setIsResetModalOpen] = useState(false);
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   const filteredUsers = useMemo(() => {
     const searchLower = search.toLowerCase();
@@ -200,6 +211,37 @@ export default function UserTableClient({
       toast.success("User berhasil dihapus");
     } else {
       toast.error("Gagal menghapus user: " + result.error);
+    }
+  };
+
+  const handleOpenResetPassword = (user: UserProfile) => {
+    setResetPasswordUser(user);
+    setNewPassword("");
+    setConfirmPassword("");
+    setShowPassword(false);
+    setIsResetModalOpen(true);
+  };
+
+  const handleResetPassword = async () => {
+    if (!resetPasswordUser) return;
+    if (newPassword !== confirmPassword) {
+      toast.error("Password dan konfirmasi tidak cocok.");
+      return;
+    }
+    if (newPassword.length < 6) {
+      toast.error("Password minimal 6 karakter.");
+      return;
+    }
+
+    setIsResetting(true);
+    const result = await resetUserPassword(resetPasswordUser.id, newPassword);
+    setIsResetting(false);
+
+    if (result.success) {
+      toast.success(`Password ${resetPasswordUser.nama} berhasil direset.`);
+      setIsResetModalOpen(false);
+    } else {
+      toast.error("Gagal reset password: " + result.error);
     }
   };
 
@@ -379,6 +421,10 @@ export default function UserTableClient({
                             <UserCog className="mr-2 h-4 w-4" />
                             Edit Roles & Cabang
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleOpenResetPassword(user)}>
+                            <KeyRound className="mr-2 h-4 w-4" />
+                            Reset Password
+                          </DropdownMenuItem>
                           <DropdownMenuItem
                             onClick={() => handleToggleStatus(user)}
                           >
@@ -545,6 +591,71 @@ export default function UserTableClient({
                 </>
               ) : (
                 "Simpan Perubahan"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={isResetModalOpen} onOpenChange={setIsResetModalOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Reset Password</DialogTitle>
+            <DialogDescription>
+              Set password baru untuk <strong>{resetPasswordUser?.nama}</strong>.
+              User tidak perlu konfirmasi email.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-4">
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold">Password Baru</Label>
+              <div className="relative">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  placeholder="Minimal 6 karakter"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                  className="pr-10 text-sm"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowPassword((v) => !v)}
+                >
+                  {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold">Konfirmasi Password</Label>
+              <Input
+                type={showPassword ? "text" : "password"}
+                placeholder="Ulangi password baru"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="text-sm"
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsResetModalOpen(false)}
+              disabled={isResetting}
+            >
+              Batal
+            </Button>
+            <Button onClick={handleResetPassword} disabled={isResetting}>
+              {isResetting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Mereset...
+                </>
+              ) : (
+                "Reset Password"
               )}
             </Button>
           </DialogFooter>

@@ -211,6 +211,53 @@ export async function updateUserDetail(
 }
 
 /**
+ * Reset user password — moderator only, uses service-role admin client
+ */
+export async function resetUserPassword(userId: string, newPassword: string) {
+  if (!newPassword || newPassword.length < 6) {
+    return { error: "Password minimal 6 karakter." };
+  }
+
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Tidak terautentikasi." };
+  }
+
+  const { data: callerRoles } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  const roleNames = (callerRoles ?? []).map((r: any) => r.roles?.name);
+  if (!roleNames.includes("moderator")) {
+    return { error: "Unauthorized: hanya moderator yang dapat reset password." };
+  }
+
+  let adminClient: any;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return { error: "Admin client tidak tersedia. Pastikan SUPABASE_SERVICE_ROLE_KEY sudah dikonfigurasi." };
+  }
+
+  const { error } = await adminClient.auth.admin.updateUserById(userId, {
+    password: newPassword,
+  });
+
+  if (error) {
+    return { error: error.message };
+  }
+
+  return { success: true };
+}
+
+/**
  * Delete user profile (and auth user via trigger if configured,
  * but here we just handle profiles for safety)
  */
