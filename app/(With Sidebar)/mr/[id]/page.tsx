@@ -187,6 +187,7 @@ export default function MRDetailPage({
     if (itemsData) {
       const initialAllocations = itemsData.map((item: any) => ({
         mr_item_id: item.id,
+        part_number: item.part_number,
         part_name: item.part_name,
         qty_request: item.qty_request,
         qty_sharestock_total: item.qty_sharestock_total || 0,
@@ -781,7 +782,7 @@ export default function MRDetailPage({
                           <TableCell className="text-center text-xs font-bold text-muted-foreground">
                             {idx + 1}
                           </TableCell>
-                          <TableCell className="font-mono text-[11px] font-bold text-muted-foreground uppercase">
+                          <TableCell className="font-mono text-sm font-black text-foreground uppercase tracking-wide">
                             {item.part_number}
                             {item.id === undefined && (
                               <Badge className="ml-1.5 text-[7px] h-3.5 bg-blue-100 text-blue-600 border-none font-black uppercase">
@@ -836,7 +837,7 @@ export default function MRDetailPage({
                           <TableCell className="text-center text-xs font-bold text-muted-foreground">
                             {idx + 1}
                           </TableCell>
-                          <TableCell className="font-mono text-[11px] font-bold text-muted-foreground uppercase">
+                          <TableCell className="font-mono text-sm font-black text-foreground uppercase tracking-wide">
                             {item.part_number}
                           </TableCell>
                           <TableCell>
@@ -1046,8 +1047,8 @@ export default function MRDetailPage({
                   >
                     <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                       <div className="min-w-0">
-                        <h4 className="text-base font-bold text-foreground uppercase tracking-tight">
-                          {alloc.part_name}
+                        <h4 className="text-base font-black text-foreground uppercase tracking-wide font-mono">
+                          {alloc.part_number}
                         </h4>
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <span className="rounded-md border border-border bg-muted/50 px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">

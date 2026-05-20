@@ -606,7 +606,7 @@ export function PODetailSheet({
                                 >
                                   <TableCell className="pl-4 py-2.5">
                                     <span
-                                      className="inline-block max-w-full rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono font-extrabold text-foreground break-all"
+                                      className="inline-block max-w-full rounded bg-muted px-1.5 py-0.5 text-sm font-mono font-black text-foreground break-all tracking-wide"
                                       title={item.part_number}
                                     >
                                       {item.part_number}

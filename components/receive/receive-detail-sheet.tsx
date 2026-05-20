@@ -181,7 +181,7 @@ export function ReceiveDetailSheet({
       if (pendingAction === "approve") {
         const result = await approveReceive(receiveId, signature.image_url);
         if (!result?.success) {
-          toast.error(result?.error || "Gagal menyetujui receive");
+          toast.error(('error' in result && result.error) || "Gagal menyetujui receive");
         } else {
           const isAllDone = "isAllDone" in result && result.isAllDone;
           toast.success(
@@ -463,7 +463,7 @@ export function ReceiveDetailSheet({
                             className="border-b border-border/50 h-11 hover:bg-muted/20"
                           >
                             <TableCell className="pl-4">
-                              <span className="text-[11px] font-black font-mono uppercase tracking-wide text-foreground">
+                              <span className="text-sm font-black font-mono uppercase tracking-wide text-foreground">
                                 {item.part_number}
                               </span>
                             </TableCell>

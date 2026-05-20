@@ -651,7 +651,7 @@ export function PRDetailSheet({
                         >
                           <TableCell className="pl-4 py-3 align-top">
                             <div className="flex flex-col">
-                              <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-tighter leading-none">
+                              <span className="text-sm font-black font-mono text-slate-900 uppercase tracking-wide leading-none">
                                 {item.part_number}
                               </span>
                               <span className="text-[11px] font-bold text-slate-900 mt-1">
@@ -660,7 +660,7 @@ export function PRDetailSheet({
                             </div>
                           </TableCell>
                           <TableCell className="py-3 align-top">
-                            <span className="block whitespace-normal wrap-break-word text-[11px] font-bold text-slate-800 uppercase leading-tight">
+                            <span className="block whitespace-normal wrap-break-word text-[10px] font-medium text-slate-400 uppercase leading-tight">
                               {item.part_name}
                             </span>
                           </TableCell>
@@ -750,10 +750,10 @@ export function PRDetailSheet({
                         >
                           <div className="flex justify-between items-start">
                             <div className="space-y-1">
-                              <p className="text-[10px] font-mono font-bold text-slate-400 leading-none group-hover:text-green-600 transition-colors uppercase tracking-tight">
+                              <p className="text-sm font-black font-mono text-slate-900 leading-none group-hover:text-green-600 transition-colors uppercase tracking-wide">
                                 {item.part_number}
                               </p>
-                              <p className="text-[11px] font-bold text-slate-800 uppercase line-clamp-1 leading-snug">
+                              <p className="text-[10px] font-medium text-slate-400 uppercase line-clamp-1 leading-snug">
                                 {item.part_name}
                               </p>
                             </div>
@@ -909,7 +909,10 @@ export function PRDetailSheet({
                 {prItems.map((item) => (
                   <tr key={item.id} className="bg-white">
                     <td className="px-3 py-2.5">
-                      <p className="font-bold text-slate-800 uppercase text-[10px] leading-tight">
+                      <p className="font-black text-slate-900 uppercase text-sm font-mono leading-tight tracking-wide">
+                        {item.part_number}
+                      </p>
+                      <p className="text-[10px] font-medium text-slate-400 uppercase mt-0.5 leading-tight">
                         {item.part_name}
                       </p>
                       <p className="text-[9px] text-slate-400 font-mono mt-0.5">

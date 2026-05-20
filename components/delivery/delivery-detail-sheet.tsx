@@ -765,7 +765,7 @@ export function DeliveryDetailSheet({
                         >
                           <TableCell className="pl-4 py-3 align-top">
                             <div className="flex flex-col">
-                              <span className="text-[10px] font-mono font-bold text-slate-400 uppercase tracking-tighter leading-none">
+                              <span className="text-sm font-black font-mono text-slate-900 uppercase tracking-wide leading-none">
                                 {item.barang.part_number}
                               </span>
                               <span className="text-[11px] font-bold text-slate-900 mt-1">
@@ -774,7 +774,7 @@ export function DeliveryDetailSheet({
                             </div>
                           </TableCell>
                           <TableCell className="py-3 align-top">
-                            <span className="block whitespace-normal text-[11px] font-bold text-slate-800 uppercase leading-tight">
+                            <span className="block whitespace-normal text-[10px] font-medium text-slate-400 uppercase leading-tight">
                               {item.barang.part_name}
                             </span>
                           </TableCell>
