@@ -5,6 +5,14 @@ import RoleManagementClient from "./RoleManagementClient";
 import { redirect } from "next/navigation";
 
 export default async function RoleManagementPage() {
+  // Halaman Role & Permission disembunyikan sementara (fitur matrix belum dipakai).
+  // Akses langsung via URL pun dialihkan ke dashboard. Untuk mengaktifkan kembali:
+  // ubah PAGE_HIDDEN menjadi false, lalu kembalikan link di sidebar (app-sidebar.tsx).
+  const PAGE_HIDDEN = true as boolean;
+  if (PAGE_HIDDEN) {
+    redirect("/dashboard");
+  }
+
   const supabase = await createClient();
 
   // Proteksi: Hanya Moderator yang boleh masuk ke sini
@@ -45,6 +53,7 @@ export default async function RoleManagementPage() {
   const { data: cabangList } = await supabase
     .from("cabang")
     .select("id, nama_cabang")
+    .eq("is_active", true)
     .order("nama_cabang");
 
   return (

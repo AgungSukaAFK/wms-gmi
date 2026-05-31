@@ -43,6 +43,7 @@ import Link from "next/link";
 import { PRDetailSheet } from "@/components/pr/pr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
+import { MultiSelect } from "@/components/ui/multi-select";
 
 export default function PRListPage() {
   const supabase = createClient();
@@ -55,9 +56,9 @@ export default function PRListPage() {
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [accurateFilter, setAccurateFilter] = useState<string>("all");
-  const [locationFilter, setLocationFilter] = useState<string>("all");
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [sortOrder, setSortOrder] = useState<string>("newest");
@@ -110,20 +111,19 @@ export default function PRListPage() {
       query = query.ilike("pr_kode", `%${debouncedSearch}%`);
     }
 
-    if (statusFilter !== "all") {
-      if (statusFilter === "completed") {
-        query = query.in("pr_status", completedFilterStatuses());
-      } else {
-        query = query.eq("pr_status", statusFilter);
-      }
+    if (statusFilters.length > 0) {
+      const expanded = statusFilters.flatMap((s) =>
+        s === "completed" ? completedFilterStatuses() : [s],
+      );
+      query = query.in("pr_status", Array.from(new Set(expanded)));
     }
 
     if (accurateFilter !== "all") {
       query = query.eq("accurate", accurateFilter === "yes");
     }
 
-    if (locationFilter !== "all") {
-      query = query.eq("cabang_id", locationFilter);
+    if (locationFilters.length > 0) {
+      query = query.in("cabang_id", locationFilters);
     }
 
     if (dateFrom) {
@@ -161,9 +161,9 @@ export default function PRListPage() {
     fetchPRs();
   }, [
     debouncedSearch,
-    statusFilter,
+    statusFilters,
     accurateFilter,
-    locationFilter,
+    locationFilters,
     dateFrom,
     dateTo,
     sortOrder,
@@ -173,9 +173,9 @@ export default function PRListPage() {
 
   const resetFilters = () => {
     setSearchQuery("");
-    setStatusFilter("all");
+    setStatusFilters([]);
     setAccurateFilter("all");
-    setLocationFilter("all");
+    setLocationFilters([]);
     setDateFrom("");
     setDateTo("");
     setSortOrder("newest");
@@ -184,7 +184,7 @@ export default function PRListPage() {
 
   const setMyLocationFilter = () => {
     if (userProfile?.cabang_id) {
-      setLocationFilter(userProfile.cabang_id.toString());
+      setLocationFilters([userProfile.cabang_id.toString()]);
       setPage(1);
     }
   };
@@ -195,9 +195,9 @@ export default function PRListPage() {
   };
 
   const hasActiveFilters =
-    statusFilter !== "all" ||
+    statusFilters.length > 0 ||
     accurateFilter !== "all" ||
-    locationFilter !== "all" ||
+    locationFilters.length > 0 ||
     dateFrom !== "" ||
     dateTo !== "" ||
     sortOrder !== "newest";
@@ -291,47 +291,37 @@ export default function PRListPage() {
               />
             </div>
 
-            <Select
-              value={locationFilter}
-              onValueChange={(val) => {
-                setLocationFilter(val);
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Lokasi"
+              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <div className="flex items-center gap-2">
-                  <MapPin className="h-3 w-3 text-muted-foreground" />
-                  <SelectValue placeholder="Semua Lokasi" />
-                </div>
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Lokasi</SelectItem>
-                {availableCabang.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: c.id.toString(),
+              }))}
+            />
 
-            <Select
-              value={statusFilter}
-              onValueChange={(val) => {
-                setStatusFilter(val);
+            <MultiSelect
+              className="w-full sm:w-40"
+              placeholder="Semua Status"
+              selected={statusFilters}
+              onChange={(vals) => {
+                setStatusFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-40 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="open">Open</SelectItem>
-                <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-              </SelectContent>
-            </Select>
+              options={[
+                { label: "Open", value: "open" },
+                { label: "Approved", value: "approved" },
+                { label: "Rejected", value: "rejected" },
+                { label: "Completed", value: "completed" },
+              ]}
+            />
 
             <Select
               value={accurateFilter}

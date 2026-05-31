@@ -60,6 +60,24 @@ export async function proxy(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/login") ||
     request.nextUrl.pathname === "/";
 
+  // 3b. Sudah login tapi membuka halaman auth entry (login/sign-up/forgot/landing)
+  //     → langsung arahkan ke dashboard. Halaman fungsional seperti /auth/confirm,
+  //     /auth/update-password, /auth/error dikecualikan agar tetap bisa diakses.
+  const pathname = request.nextUrl.pathname;
+  const isAuthEntryRoute =
+    pathname === "/" ||
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/auth/login") ||
+    pathname.startsWith("/auth/sign-up") ||
+    pathname.startsWith("/auth/forgot-password");
+
+  if (user && isAuthEntryRoute) {
+    const redirectUrl = request.nextUrl.clone();
+    redirectUrl.pathname = "/dashboard";
+    redirectUrl.search = "";
+    return NextResponse.redirect(redirectUrl);
+  }
+
   // 4. Unauthenticated user → redirect to login
   if (!user && !isAuthRoute) {
     const redirectUrl = request.nextUrl.clone();

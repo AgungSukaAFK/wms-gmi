@@ -26,6 +26,7 @@ import { Badge } from "@/components/ui/badge";
 import { ApprovalTemplate, ApprovalType } from "@/type";
 import { TemplateEditor } from "@/components/approval/template-editor";
 import { Content } from "@/components/content";
+import { MultiSelect } from "@/components/ui/multi-select";
 
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useDebounce } from "use-debounce";
@@ -45,8 +46,8 @@ export default function ApprovalTemplatesPage() {
   // Pagination & Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
-  const [typeFilter, setTypeFilter] = useState<string>("all");
-  const [cabangFilter, setCabangFilter] = useState<string>("all");
+  const [typeFilters, setTypeFilters] = useState<string[]>([]);
+  const [cabangFilters, setCabangFilters] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
@@ -79,7 +80,7 @@ export default function ApprovalTemplatesPage() {
           setUserProfile(processedProfile);
 
           if (processedProfile.isAdmin && !processedProfile.isModerator) {
-            setCabangFilter(processedProfile.cabang_id.toString());
+            setCabangFilters([processedProfile.cabang_id.toString()]);
           }
         }
       }
@@ -90,6 +91,7 @@ export default function ApprovalTemplatesPage() {
       const { data: cabangData } = await supabase
         .from("cabang")
         .select("*")
+        .eq("is_active", true)
         .order("nama_cabang");
       setCabang(cabangData || []);
     }
@@ -103,15 +105,21 @@ export default function ApprovalTemplatesPage() {
       query = query.ilike("name", `%${debouncedSearch}%`);
     }
 
-    if (typeFilter !== "all") {
-      query = query.eq("type", typeFilter);
+    if (typeFilters.length > 0) {
+      query = query.in("type", typeFilters);
     }
 
-    if (cabangFilter !== "all") {
-      if (cabangFilter === "global") {
+    if (cabangFilters.length > 0) {
+      const hasGlobal = cabangFilters.includes("global");
+      const cabangIds = cabangFilters
+        .filter((v) => v !== "global")
+        .map((v) => parseInt(v));
+      if (hasGlobal && cabangIds.length > 0) {
+        query = query.or(`cabang_id.is.null,cabang_id.in.(${cabangIds.join(",")})`);
+      } else if (hasGlobal) {
         query = query.is("cabang_id", null);
       } else {
-        query = query.eq("cabang_id", parseInt(cabangFilter));
+        query = query.in("cabang_id", cabangIds);
       }
     }
 
@@ -134,7 +142,7 @@ export default function ApprovalTemplatesPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, typeFilter, cabangFilter, page, limit]);
+  }, [debouncedSearch, typeFilters, cabangFilters, page, limit]);
 
   const handleAddTemplate = () => {
     setSelectedTemplate(null);
@@ -187,64 +195,50 @@ export default function ApprovalTemplatesPage() {
             />
           </div>
           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select
-              value={typeFilter}
-              onValueChange={(val) => {
-                setTypeFilter(val);
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Jenis"
+              searchable
+              selected={typeFilters}
+              onChange={(vals) => {
+                setTypeFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <SelectValue placeholder="Jenis Dokumen" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Jenis</SelectItem>
-                <SelectItem value="Material Request">
-                  Material Request
-                </SelectItem>
-                <SelectItem value="Purchase Request">
-                  Purchase Request
-                </SelectItem>
-                <SelectItem value="Purchase Order">Purchase Order</SelectItem>
-                <SelectItem value="Receive Item">Receive Item</SelectItem>
-                <SelectItem value="Item Transfer">Item Transfer</SelectItem>
-                <SelectItem value="Stock Out - SPB">Stock Out - SPB</SelectItem>
-                <SelectItem value="Stock Out - SPB PO">
-                  Stock Out - SPB PO
-                </SelectItem>
-                <SelectItem value="Stock Out - SPB DO">
-                  Stock Out - SPB DO
-                </SelectItem>
-                <SelectItem value="Stock Out - SPB Invoice">
-                  Stock Out - SPB Invoice
-                </SelectItem>
-                <SelectItem value="Return SPB">Return SPB</SelectItem>
-              </SelectContent>
-            </Select>
+              options={[
+                { label: "Material Request", value: "Material Request" },
+                { label: "Purchase Request", value: "Purchase Request" },
+                { label: "Purchase Order", value: "Purchase Order" },
+                { label: "Receive Item", value: "Receive Item" },
+                { label: "Item Transfer", value: "Item Transfer" },
+                { label: "Stock Out - SPB", value: "Stock Out - SPB" },
+                { label: "Stock Out - SPB PO", value: "Stock Out - SPB PO" },
+                { label: "Stock Out - SPB DO", value: "Stock Out - SPB DO" },
+                {
+                  label: "Stock Out - SPB Invoice",
+                  value: "Stock Out - SPB Invoice",
+                },
+                { label: "Return SPB", value: "Return SPB" },
+              ]}
+            />
 
-            <Select
-              value={cabangFilter}
-              onValueChange={(val) => {
-                setCabangFilter(val);
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Lokasi: Semua"
+              searchable
+              disabled={userProfile?.isAdmin && !userProfile?.isModerator}
+              selected={cabangFilters}
+              onChange={(vals) => {
+                setCabangFilters(vals);
                 setPage(1);
               }}
-              disabled={userProfile?.isAdmin && !userProfile?.isModerator}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <SelectValue placeholder="Lokasi" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Lokasi: Semua</SelectItem>
-                <SelectItem value="global" className="font-bold text-primary">
-                  Global (Semua Lokasi)
-                </SelectItem>
-                {cabang.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={[
+                { label: "Global (Semua Lokasi)", value: "global" },
+                ...cabang.map((c) => ({
+                  label: c.nama_cabang,
+                  value: c.id.toString(),
+                })),
+              ]}
+            />
           </div>
         </div>
       </Content>

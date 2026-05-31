@@ -73,6 +73,8 @@ import {
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
 import { toYmdLocal } from "@/lib/utils";
+import { useAuthStore } from "@/stores/auth-store";
+import { canEditStock } from "@/lib/stock-permissions";
 
 interface Barang {
   id: number;
@@ -84,6 +86,7 @@ interface Barang {
 
 interface StockDetail {
   id: number;
+  cabang_id: number;
   nama_cabang: string;
   qty: number;
   min_qty: number;
@@ -116,6 +119,8 @@ export default function BarangClient({
   // Search & Filters
   const [search, setSearch] = useState(initialQuery);
   const [debouncedSearch] = useDebounce(search, 500);
+
+  const profile = useAuthStore((s) => s.profile);
 
   // Modals & States
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -732,17 +737,19 @@ export default function BarangClient({
                         </div>
 
                         <div className="flex items-center gap-1 pr-1">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-8 w-8 p-0 rounded-lg hover:bg-primary/5 hover:text-primary transition-colors border border-transparent hover:border-primary/10"
-                            onClick={() => {
-                              setEditingStock(stock);
-                              setIsStockEditOpen(true);
-                            }}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
+                          {canEditStock(profile, stock.cabang_id) && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-8 w-8 p-0 rounded-lg hover:bg-primary/5 hover:text-primary transition-colors border border-transparent hover:border-primary/10"
+                              onClick={() => {
+                                setEditingStock(stock);
+                                setIsStockEditOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="sm"

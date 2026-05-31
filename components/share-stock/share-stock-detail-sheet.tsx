@@ -301,6 +301,10 @@ export function ShareStockDetailSheet({
       <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 overflow-hidden text-slate-900 shadow-2xl">
         {loading && !mr ? (
           <div className="flex-1 flex items-center justify-center bg-white">
+            <SheetTitle className="sr-only">Memuat Data Share Stock</SheetTitle>
+            <SheetDescription className="sr-only">
+              Sedang memuat detail share stock.
+            </SheetDescription>
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-green-600" />
               <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
@@ -324,6 +328,9 @@ export function ShareStockDetailSheet({
                 <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
                   {mr?.mr_kode}
                 </SheetTitle>
+                <SheetDescription className="sr-only">
+                  Detail share stock untuk {mr?.mr_kode}.
+                </SheetDescription>
                 <div className="flex flex-col gap-1.5 mt-3">
                   <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
                     <User className="h-3.5 w-3.5 text-slate-400" /> {mr?.mr_pic}

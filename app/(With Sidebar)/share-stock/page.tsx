@@ -40,6 +40,7 @@ import { useDebounce } from "use-debounce";
 import { Separator } from "@/components/ui/separator";
 import { ShareStockDetailSheet } from "@/components/share-stock/share-stock-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
 
 export default function ShareStockPage() {
   const supabase = createClient();
@@ -57,7 +58,7 @@ export default function ShareStockPage() {
   const [limit, setLimit] = useState(25);
 
   // Advanced Filters
-  const [locationFilter, setLocationFilter] = useState<string>("all");
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
@@ -92,9 +93,12 @@ export default function ShareStockPage() {
     // Fetch MRs that have at least one item with share stock requirements
     let query = supabase
       .from("mrs")
-      .select("*, cabang(nama_cabang), mr_items!inner(qty_sharestock_total)", {
-        count: "exact",
-      })
+      .select(
+        "*, cabang(nama_cabang), mr_items!inner(qty_sharestock_total, mr_sharestock_allocations(source_cabang_id, source_cabang:cabang!source_cabang_id(nama_cabang)))",
+        {
+          count: "exact",
+        },
+      )
       .gt("mr_items.qty_sharestock_total", 0);
 
     if (debouncedSearch) {
@@ -105,7 +109,8 @@ export default function ShareStockPage() {
     if (statusFilter !== "all") query = query.eq("mr_status", statusFilter);
     if (priorityFilter !== "all")
       query = query.eq("mr_priority", priorityFilter);
-    if (locationFilter !== "all") query = query.eq("cabang_id", locationFilter);
+    if (locationFilters.length > 0)
+      query = query.in("cabang_id", locationFilters);
     if (dateFrom) query = query.gte("mr_tanggal", dateFrom);
     if (dateTo) query = query.lte("mr_tanggal", dateTo);
 
@@ -133,7 +138,7 @@ export default function ShareStockPage() {
     debouncedSearch,
     statusFilter,
     priorityFilter,
-    locationFilter,
+    locationFilters,
     dateFrom,
     dateTo,
     page,
@@ -230,6 +235,18 @@ export default function ShareStockPage() {
     }
   };
 
+  // Kumpulkan daftar gudang pemasok (source cabang) unik dari semua alokasi item share stock
+  const getSupplierCabangs = (mr: any): string[] => {
+    const names = new Set<string>();
+    (mr.mr_items || []).forEach((item: any) => {
+      (item.mr_sharestock_allocations || []).forEach((alloc: any) => {
+        const name = alloc.source_cabang?.nama_cabang;
+        if (name) names.add(name);
+      });
+    });
+    return Array.from(names);
+  };
+
   return (
     <>
       {/* Section 1: Header */}
@@ -268,28 +285,21 @@ export default function ShareStockPage() {
               />
             </div>
 
-            <Select
-              value={locationFilter}
-              onValueChange={(val) => {
-                setLocationFilter(val);
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Lokasi"
+              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <div className="flex items-center gap-2">
-                  <MapPin className="h-3 w-3 text-muted-foreground" />
-                  <SelectValue placeholder="Semua Lokasi" />
-                </div>
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Lokasi</SelectItem>
-                {availableCabang.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: c.id.toString(),
+              }))}
+            />
 
             <Button
               variant="ghost"
@@ -299,7 +309,7 @@ export default function ShareStockPage() {
                 setSearchQuery("");
                 setStatusFilter("all");
                 setPriorityFilter("all");
-                setLocationFilter("all");
+                setLocationFilters([]);
                 setDateFrom("");
                 setDateTo("");
                 setPage(1);
@@ -351,6 +361,12 @@ export default function ShareStockPage() {
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Personnel / Source
                 </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Gudang Asal (Pemasok)
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Gudang Tujuan (Peminta)
+                </TableHead>
                 <TableHead className="w-35 text-[10px] font-black uppercase text-muted-foreground text-center">
                   Tanggal MR
                 </TableHead>
@@ -367,7 +383,7 @@ export default function ShareStockPage() {
                   .map((_, idx) => (
                     <TableRow key={idx}>
                       <TableCell
-                        colSpan={5}
+                        colSpan={7}
                         className="h-20 animate-pulse bg-muted/20"
                       />
                     </TableRow>
@@ -375,7 +391,7 @@ export default function ShareStockPage() {
               ) : mrs.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={7}
                     className="h-48 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
                   >
                     DATA SHARE STOCK TIDAK DITEMUKAN
@@ -416,6 +432,36 @@ export default function ShareStockPage() {
                           <MapPin className="h-3 w-3" />{" "}
                           {mr.cabang?.nama_cabang}
                         </div>
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      {(() => {
+                        const suppliers = getSupplierCabangs(mr);
+                        if (suppliers.length === 0)
+                          return (
+                            <span className="text-[10px] font-medium text-muted-foreground/40 uppercase">
+                              —
+                            </span>
+                          );
+                        return (
+                          <div className="flex flex-col gap-1">
+                            {suppliers.map((name) => (
+                              <div
+                                key={name}
+                                className="flex items-center gap-1.5 text-[11px] font-bold text-foreground uppercase"
+                              >
+                                <Navigation2 className="h-3 w-3 text-primary" />{" "}
+                                {name}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      })()}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground uppercase">
+                        <MapPin className="h-3 w-3 text-success" />{" "}
+                        {mr.cabang?.nama_cabang}
                       </div>
                     </TableCell>
                     <TableCell className="text-center">

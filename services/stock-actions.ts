@@ -13,7 +13,12 @@ export async function updateStock(
 ) {
   const supabase = await createClient();
 
-  // 1. Get current stock for change calculation
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false, error: "Session expired" };
+
+  // 1. Get current stock for change calculation & cabang scope check
   const { data: currentStock } = await supabase
     .from("stock")
     .select("qty, part_id, cabang_id")
@@ -21,6 +26,41 @@ export async function updateStock(
     .single();
 
   if (!currentStock) return { success: false, error: "Stock record not found" };
+
+  // RBAC: hanya PPIC, PJO, atau Moderator yang boleh mengubah min/max stock.
+  // PPIC & PJO hanya untuk gudang di lokasinya sendiri; Moderator global.
+  const { data: roleRows } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  const roles = (roleRows || [])
+    .map((r: any) => r.roles?.name)
+    .filter(Boolean);
+  const isModerator = roles.includes("moderator");
+  const isPpicOrPjo = roles.includes("ppic") || roles.includes("pjo");
+
+  if (!isModerator && !isPpicOrPjo) {
+    return {
+      success: false,
+      error:
+        "Akses ditolak. Hanya PPIC, PJO, atau Moderator yang dapat mengubah stok.",
+    };
+  }
+
+  if (!isModerator) {
+    const { data: profile } = await supabase
+      .from("profiles")
+      .select("cabang_id")
+      .eq("id", user.id)
+      .single();
+    if (!profile?.cabang_id || profile.cabang_id !== currentStock.cabang_id) {
+      return {
+        success: false,
+        error:
+          "Akses ditolak. PPIC/PJO hanya dapat mengubah stok di gudang lokasinya sendiri.",
+      };
+    }
+  }
 
   const qtyChange = data.qty - currentStock.qty;
 

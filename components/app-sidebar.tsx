@@ -41,6 +41,7 @@ import {
   Building2,
   PackageCheck,
   Truck,
+  ArrowLeftRight,
   FileText,
   FileSpreadsheet,
   ShoppingCart,
@@ -95,6 +96,7 @@ const data = {
   navInventory: [
     { title: "Stock", url: "/stock", icon: Archive },
     { title: "Delivery", url: "/deliveries", icon: Truck },
+    { title: "Transfer Item", url: "/transfer-item", icon: ArrowLeftRight },
     { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
     { title: "Job Costing", url: "/job-costing", icon: Calculator },
   ],
@@ -235,6 +237,9 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const isAdmin = profile?.roles?.some((r: any) => r.name === "admin");
 
   const adminItems = data.navAdmin.filter((item) => {
+    // Halaman Role & Permission disembunyikan sementara (matrix belum dipakai).
+    // Untuk mengaktifkan kembali: hapus baris di bawah ini.
+    if (item.url === "/role-management") return false;
     if (item.url === "/approval-templates") return isModerator || isAdmin;
     return isModerator;
   });

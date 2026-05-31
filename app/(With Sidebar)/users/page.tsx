@@ -46,10 +46,11 @@ export default async function UsersPage() {
     .select("*, cabang(nama_cabang), user_roles(roles(*))")
     .order("created_at", { ascending: false });
 
-  // Fetch cabang list for the edit modal
+  // Fetch cabang list for the edit/create modal (hanya cabang aktif)
   const { data: cabangList, error: cabangError } = await supabase
     .from("cabang")
     .select("id, nama_cabang")
+    .eq("is_active", true)
     .order("nama_cabang");
 
   // Fetch all available roles for the editor

@@ -39,6 +39,7 @@ import Link from "next/link";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { ReceiveDetailSheet } from "@/components/receive/receive-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
 
 export default function ReceiveItemPage() {
   const supabase = createClient();
@@ -51,7 +52,7 @@ export default function ReceiveItemPage() {
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
-  const [locationFilter, setLocationFilter] = useState("all");
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [sortOrder, setSortOrder] = useState("newest");
@@ -103,8 +104,8 @@ export default function ReceiveItemPage() {
       query = query.ilike("ri_kode", `%${debouncedSearch}%`);
     }
 
-    if (locationFilter !== "all") {
-      query = query.eq("cabang_id", locationFilter);
+    if (locationFilters.length > 0) {
+      query = query.in("cabang_id", locationFilters);
     }
 
     if (dateFrom) query = query.gte("ri_tanggal", dateFrom);
@@ -133,7 +134,7 @@ export default function ReceiveItemPage() {
     fetchReceives();
   }, [
     debouncedSearch,
-    locationFilter,
+    locationFilters,
     dateFrom,
     dateTo,
     sortOrder,
@@ -143,7 +144,7 @@ export default function ReceiveItemPage() {
 
   const resetFilters = () => {
     setSearchQuery("");
-    setLocationFilter("all");
+    setLocationFilters([]);
     setDateFrom("");
     setDateTo("");
     setSortOrder("newest");
@@ -151,7 +152,7 @@ export default function ReceiveItemPage() {
   };
 
   const hasActiveFilters =
-    locationFilter !== "all" ||
+    locationFilters.length > 0 ||
     dateFrom !== "" ||
     dateTo !== "" ||
     sortOrder !== "newest";
@@ -200,32 +201,21 @@ export default function ReceiveItemPage() {
               />
             </div>
 
-            <Select
-              value={locationFilter}
-              onValueChange={(v) => {
-                setLocationFilter(v);
+            <MultiSelect
+              className="w-44"
+              placeholder="Semua Lokasi"
+              icon={<Building2 className="h-3.5 w-3.5 text-muted-foreground" />}
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-44 text-xs font-bold">
-                <Building2 className="h-3.5 w-3.5 text-muted-foreground" />
-                <SelectValue placeholder="Semua Lokasi" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all" className="text-xs font-bold">
-                  Semua Lokasi
-                </SelectItem>
-                {availableCabang.map((c) => (
-                  <SelectItem
-                    key={c.id}
-                    value={c.id.toString()}
-                    className="text-xs font-bold"
-                  >
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: c.id.toString(),
+              }))}
+            />
 
             <Select
               value={sortOrder}

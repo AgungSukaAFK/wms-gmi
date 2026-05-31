@@ -6,6 +6,7 @@ import {
   SheetContent,
   SheetHeader,
   SheetTitle,
+  SheetDescription,
 } from "@/components/ui/sheet";
 import { createClient } from "@/lib/supabase/client";
 import {
@@ -49,6 +50,8 @@ import { updateStock } from "@/services/stock-actions";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useAuthStore } from "@/stores/auth-store";
+import { canEditStock } from "@/lib/stock-permissions";
 
 interface StockDetailSheetProps {
   partId: string | number | null;
@@ -64,6 +67,7 @@ export function StockDetailSheet({
   onUpdate,
 }: StockDetailSheetProps) {
   const supabase = createClient();
+  const profile = useAuthStore((s) => s.profile);
   const [part, setPart] = useState<any>(null);
   const [locations, setLocations] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
@@ -206,6 +210,10 @@ export function StockDetailSheet({
         <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 shadow-2xl overflow-hidden">
           {loading && !part ? (
             <div className="flex-1 flex items-center justify-center bg-white">
+              <SheetTitle className="sr-only">Memuat Detail Stok</SheetTitle>
+              <SheetDescription className="sr-only">
+                Sedang memuat detail stok barang.
+              </SheetDescription>
               <Loader2 className="h-8 w-8 animate-spin text-slate-200" />
             </div>
           ) : (
@@ -220,6 +228,9 @@ export function StockDetailSheet({
                 <SheetTitle className="text-xl font-bold text-slate-900 leading-tight">
                   {part?.part_number}
                 </SheetTitle>
+                <SheetDescription className="sr-only">
+                  Detail stok dan riwayat mutasi untuk {part?.part_number}.
+                </SheetDescription>
                 <div className="flex items-center gap-2 mt-2">
                   <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600 font-mono text-xs">
                     {part?.id}
@@ -286,17 +297,19 @@ export function StockDetailSheet({
                               {loc.status}
                             </Badge>
                           </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 hover:bg-slate-100 rounded-lg text-slate-400"
-                            onClick={() => {
-                              setEditingStock(loc);
-                              setIsEditOpen(true);
-                            }}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
+                          {canEditStock(profile, loc.cabang_id) && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 hover:bg-slate-100 rounded-lg text-slate-400"
+                              onClick={() => {
+                                setEditingStock(loc);
+                                setIsEditOpen(true);
+                              }}
+                            >
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </div>
                     ))}

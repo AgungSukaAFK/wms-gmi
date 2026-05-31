@@ -44,7 +44,7 @@ import { Badge } from "@/components/ui/badge";
 import type { UserSignature } from "@/type";
 import { createClient } from "@/lib/supabase/client";
 
-const MAX_SIGNATURES = 2;
+const MAX_SIGNATURES = 6;
 
 export default function SignatureManagerPage() {
   const [signatures, setSignatures] = useState<UserSignature[]>([]);
@@ -94,7 +94,7 @@ export default function SignatureManagerPage() {
     const file = e.target.files?.[0];
     if (file) {
       if (signatures.length >= MAX_SIGNATURES) {
-        toast.error("Batas maksimal 2 tanda tangan telah tercapai.");
+        toast.error(`Batas maksimal ${MAX_SIGNATURES} tanda tangan telah tercapai.`);
         return;
       }
       const reader = new FileReader();

@@ -42,6 +42,7 @@ export async function createDelivery(data: {
   sender_name?: string; // handcarry_internal: free text carrier name
   eksternal_provider?: string; // handcarry_eksternal: Gojek | Grab | Maxim | Lalamove
   eksternal_id?: string; // handcarry_eksternal: order/booking ID
+  estimasi_hari?: number; // estimasi lama pengiriman dalam hari
   jumlah_koli: number;
   pic?: string;
   uid_pic?: string;
@@ -214,6 +215,7 @@ export async function createDelivery(data: {
         sender_name: data.sender_name || null,
         eksternal_provider: data.eksternal_provider || null,
         eksternal_id: data.eksternal_id || null,
+        estimasi_hari: data.estimasi_hari ?? 1,
         tracking_status: "created",
         mr_id: data.mr_id,
         dari_cabang_id: data.dari_cabang_id,

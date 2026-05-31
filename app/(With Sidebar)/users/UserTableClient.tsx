@@ -38,6 +38,7 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Content } from "@/components/content";
+import { MultiSelect } from "@/components/ui/multi-select";
 import {
   MoreHorizontal,
   ShieldCheck,
@@ -50,6 +51,7 @@ import {
   KeyRound,
   Eye,
   EyeOff,
+  UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -57,6 +59,7 @@ import {
   updateUserDetail,
   deleteUserProfile,
   resetUserPassword,
+  createUserAccount,
 } from "@/services/user-actions";
 import type { Role } from "@/type";
 
@@ -89,7 +92,7 @@ export default function UserTableClient({
 }: UserTableClientProps) {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [cabangFilter, setCabangFilter] = useState("all");
+  const [cabangFilters, setCabangFilters] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
@@ -108,6 +111,20 @@ export default function UserTableClient({
   const [showPassword, setShowPassword] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
+  // Create new account
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isCreating, setIsCreating] = useState(false);
+  const [createForm, setCreateForm] = useState({
+    nama: "",
+    email: "",
+    password: "",
+    nrp: "",
+    nomor_whatsapp: "",
+    cabang_id: "",
+  });
+  const [createRoleIds, setCreateRoleIds] = useState<number[]>([]);
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+
   const filteredUsers = useMemo(() => {
     const searchLower = search.toLowerCase();
 
@@ -123,15 +140,16 @@ export default function UserTableClient({
         (statusFilter === "inactive" && !u.is_active);
 
       const matchCabang =
-        cabangFilter === "all" || u.cabang_id?.toString() === cabangFilter;
+        cabangFilters.length === 0 ||
+        cabangFilters.includes(u.cabang_id?.toString() ?? "");
 
       return matchSearch && matchStatus && matchCabang;
     });
-  }, [users, search, statusFilter, cabangFilter]);
+  }, [users, search, statusFilter, cabangFilters]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, statusFilter, cabangFilter, pageSize]);
+  }, [search, statusFilter, cabangFilters, pageSize]);
 
   const totalCount = filteredUsers.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -245,6 +263,58 @@ export default function UserTableClient({
     }
   };
 
+  const openCreateModal = () => {
+    setCreateForm({
+      nama: "",
+      email: "",
+      password: "",
+      nrp: "",
+      nomor_whatsapp: "",
+      cabang_id: "",
+    });
+    setCreateRoleIds([]);
+    setShowCreatePassword(false);
+    setIsCreateModalOpen(true);
+  };
+
+  const toggleCreateRole = (roleId: number) => {
+    setCreateRoleIds((prev) =>
+      prev.includes(roleId)
+        ? prev.filter((id) => id !== roleId)
+        : [...prev, roleId],
+    );
+  };
+
+  const handleCreateAccount = async () => {
+    if (!createForm.nama.trim()) return toast.error("Nama wajib diisi.");
+    if (!createForm.email.trim()) return toast.error("Email wajib diisi.");
+    if (createForm.password.length < 6)
+      return toast.error("Password minimal 6 karakter.");
+    if (!createForm.cabang_id) return toast.error("Pilih cabang.");
+    if (createRoleIds.length === 0)
+      return toast.error("Pilih minimal satu role.");
+
+    setIsCreating(true);
+    const result = await createUserAccount({
+      nama: createForm.nama.trim(),
+      email: createForm.email.trim(),
+      password: createForm.password,
+      nrp: createForm.nrp.trim() || undefined,
+      nomor_whatsapp: createForm.nomor_whatsapp.trim() || undefined,
+      cabang_id: parseInt(createForm.cabang_id),
+      roleIds: createRoleIds,
+      is_active: true,
+    });
+    setIsCreating(false);
+
+    if (result.success) {
+      toast.success(`Akun ${createForm.nama} berhasil dibuat.`);
+      setIsCreateModalOpen(false);
+    } else {
+      toast.error("Gagal membuat akun: " + result.error);
+    }
+  };
+
   const getBadgeColor = (color: string | null | undefined) => {
     switch (color) {
       case "red":
@@ -287,9 +357,15 @@ export default function UserTableClient({
               </p>
             </div>
           </div>
-          <p className="text-xs font-semibold text-muted-foreground uppercase">
-            {filteredUsers.length} pengguna
-          </p>
+          <div className="flex items-center gap-3">
+            <p className="text-xs font-semibold text-muted-foreground uppercase">
+              {filteredUsers.length} pengguna
+            </p>
+            <Button onClick={openCreateModal} className="h-9 gap-2">
+              <UserPlus className="h-4 w-4" />
+              Buat Akun
+            </Button>
+          </div>
         </div>
       </Content>
 
@@ -316,19 +392,17 @@ export default function UserTableClient({
               </SelectContent>
             </Select>
 
-            <Select value={cabangFilter} onValueChange={setCabangFilter}>
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <SelectValue placeholder="Cabang" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Cabang</SelectItem>
-                {cabangList.map((cabang) => (
-                  <SelectItem key={cabang.id} value={cabang.id.toString()}>
-                    {cabang.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Cabang"
+              searchable
+              selected={cabangFilters}
+              onChange={setCabangFilters}
+              options={cabangList.map((cabang) => ({
+                label: cabang.nama_cabang,
+                value: cabang.id.toString(),
+              }))}
+            />
           </div>
         </div>
       </Content>
@@ -522,6 +596,167 @@ export default function UserTableClient({
           </div>
         </div>
       </Content>
+
+      <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>
+        <DialogContent className="sm:max-w-130 max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Buat Akun Pengguna Baru</DialogTitle>
+            <DialogDescription>
+              Akun langsung aktif dan bisa login tanpa verifikasi email.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 py-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">Nama Lengkap *</Label>
+                <Input
+                  placeholder="Nama pengguna"
+                  value={createForm.nama}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({ ...f, nama: e.target.value }))
+                  }
+                  className="text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">Email *</Label>
+                <Input
+                  type="email"
+                  placeholder="email@contoh.com"
+                  value={createForm.email}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({ ...f, email: e.target.value }))
+                  }
+                  className="text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold">Password *</Label>
+              <div className="relative">
+                <Input
+                  type={showCreatePassword ? "text" : "password"}
+                  placeholder="Minimal 6 karakter"
+                  value={createForm.password}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({ ...f, password: e.target.value }))
+                  }
+                  className="pr-10 text-sm"
+                />
+                <button
+                  type="button"
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowCreatePassword((v) => !v)}
+                >
+                  {showCreatePassword ? (
+                    <EyeOff className="h-4 w-4" />
+                  ) : (
+                    <Eye className="h-4 w-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">NRP (Opsional)</Label>
+                <Input
+                  placeholder="Nomor registrasi pegawai"
+                  value={createForm.nrp}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({ ...f, nrp: e.target.value }))
+                  }
+                  className="text-sm"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label className="text-sm font-semibold">
+                  No. WhatsApp (Opsional)
+                </Label>
+                <Input
+                  placeholder="0812xxxx"
+                  value={createForm.nomor_whatsapp}
+                  onChange={(e) =>
+                    setCreateForm((f) => ({
+                      ...f,
+                      nomor_whatsapp: e.target.value,
+                    }))
+                  }
+                  className="text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold">Penempatan Cabang *</Label>
+              <Select
+                value={createForm.cabang_id}
+                onValueChange={(v) =>
+                  setCreateForm((f) => ({ ...f, cabang_id: v }))
+                }
+              >
+                <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                  <SelectValue placeholder="Pilih Cabang" />
+                </SelectTrigger>
+                <SelectContent>
+                  {cabangList.map((c) => (
+                    <SelectItem key={c.id} value={c.id.toString()}>
+                      {c.nama_cabang}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-sm font-semibold">
+                User Roles (Multiple) *
+              </Label>
+              <div className="grid grid-cols-2 gap-3 p-3 border border-input rounded-md bg-muted/40">
+                {allRoles.map((role) => (
+                  <div key={role.id} className="flex items-center space-x-2">
+                    <Checkbox
+                      id={`create-role-${role.id}`}
+                      checked={createRoleIds.includes(role.id)}
+                      onCheckedChange={() => toggleCreateRole(role.id)}
+                    />
+                    <label
+                      htmlFor={`create-role-${role.id}`}
+                      className="text-xs font-medium leading-none cursor-pointer capitalize"
+                    >
+                      {role.label}
+                    </label>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+          </div>
+
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setIsCreateModalOpen(false)}
+              disabled={isCreating}
+            >
+              Batal
+            </Button>
+            <Button onClick={handleCreateAccount} disabled={isCreating}>
+              {isCreating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Membuat...
+                </>
+              ) : (
+                "Buat Akun"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isEditModalOpen} onOpenChange={setIsEditModalOpen}>
         <DialogContent className="sm:max-w-106.25">

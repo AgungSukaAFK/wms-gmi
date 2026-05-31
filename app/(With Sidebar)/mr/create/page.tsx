@@ -47,6 +47,7 @@ import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
+import { canCreateMR } from "@/lib/mr-permissions";
 
 export default function CreateMRPage() {
   const router = useRouter();
@@ -89,9 +90,19 @@ export default function CreateMRPage() {
 
       const { data: profile } = await supabase
         .from("profiles")
-        .select("*, cabang(id, nama_cabang)")
+        .select("*, cabang(id, nama_cabang), roles:user_roles(roles(name))")
         .eq("id", user.id)
         .single();
+
+      // Guard: role yang tidak diizinkan membuat MR dialihkan kembali ke list.
+      if (
+        profile &&
+        !canCreateMR((profile.roles as any[])?.map((r: any) => r.roles?.name))
+      ) {
+        toast.error("Akses ditolak. Role Anda tidak diizinkan membuat MR.");
+        router.push("/mr");
+        return;
+      }
 
       if (profile) {
         setUserProfile(profile);
@@ -420,7 +431,12 @@ export default function CreateMRPage() {
         <Separator className="my-4" />
 
         <div className="min-h-50">
-          <MRItemSelector items={items} onItemsChange={setItems} />
+          <MRItemSelector
+            items={items}
+            onItemsChange={setItems}
+            cabangId={userProfile?.cabang_id ?? null}
+            onCancelMR={() => router.push("/mr")}
+          />
         </div>
       </Content>
 

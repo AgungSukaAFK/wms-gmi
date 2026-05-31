@@ -211,6 +211,134 @@ export async function updateUserDetail(
 }
 
 /**
+ * Buat akun pengguna baru — moderator only, pakai service-role admin client.
+ *
+ * Membuat auth user (email_confirm langsung true agar bisa login tanpa
+ * verifikasi email). Trigger `handle_new_user` otomatis membuat baris profiles
+ * + role default; setelah itu kita set ulang role persis sesuai pilihan dan
+ * lengkapi nomor_whatsapp.
+ */
+export async function createUserAccount(data: {
+  nama: string;
+  email: string;
+  password: string;
+  nrp?: string;
+  nomor_whatsapp?: string;
+  cabang_id: number;
+  roleIds: number[];
+  is_active?: boolean;
+}) {
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+  if (authError || !user) {
+    return { error: "Tidak terautentikasi." };
+  }
+
+  // Hanya moderator yang boleh membuat akun baru.
+  const { data: callerRoles } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  const roleNames = (callerRoles ?? []).map((r: any) => r.roles?.name);
+  if (!roleNames.includes("moderator")) {
+    return { error: "Unauthorized: hanya moderator yang dapat membuat akun." };
+  }
+
+  // Validasi input
+  const nama = data.nama?.trim();
+  const email = data.email?.trim().toLowerCase();
+  if (!nama) return { error: "Nama wajib diisi." };
+  if (!email) return { error: "Email wajib diisi." };
+  if (!data.password || data.password.length < 6) {
+    return { error: "Password minimal 6 karakter." };
+  }
+  if (!data.cabang_id) return { error: "Cabang wajib dipilih." };
+  if (!data.roleIds || data.roleIds.length === 0) {
+    return { error: "Pilih minimal satu role." };
+  }
+
+  let adminClient: any;
+  try {
+    adminClient = createAdminClient();
+  } catch {
+    return {
+      error:
+        "Admin client tidak tersedia. Pastikan SUPABASE_SERVICE_ROLE_KEY sudah dikonfigurasi.",
+    };
+  }
+
+  const nrp = data.nrp?.trim() || null;
+
+  // Cek keunikan NRP sebelum membuat akun (memberi pesan yang jelas).
+  if (nrp) {
+    const { data: existing } = await adminClient
+      .from("profiles")
+      .select("id")
+      .eq("nrp", nrp)
+      .maybeSingle();
+    if (existing) {
+      return { error: "NRP sudah digunakan oleh pengguna lain." };
+    }
+  }
+
+  // 1. Buat auth user. Trigger handle_new_user akan membuat profiles + role default.
+  const { data: created, error: createError } =
+    await adminClient.auth.admin.createUser({
+      email,
+      password: data.password,
+      email_confirm: true,
+      user_metadata: {
+        nama,
+        nrp,
+        cabang_id: data.cabang_id,
+        is_active: data.is_active ?? true,
+      },
+    });
+
+  if (createError) {
+    return { error: createError.message };
+  }
+
+  const newUserId = created?.user?.id;
+  if (!newUserId) {
+    return { error: "Gagal membuat akun: user id tidak ditemukan." };
+  }
+
+  // 2. Lengkapi nomor_whatsapp (trigger tidak mengisinya).
+  if (data.nomor_whatsapp?.trim()) {
+    await adminClient
+      .from("profiles")
+      .update({ nomor_whatsapp: data.nomor_whatsapp.trim() })
+      .eq("id", newUserId);
+  }
+
+  // 3. Set role persis sesuai pilihan: hapus role default dari trigger, lalu
+  //    masukkan role yang dipilih.
+  await adminClient.from("user_roles").delete().eq("user_id", newUserId);
+
+  const roleInserts = Array.from(new Set(data.roleIds)).map((roleId) => ({
+    user_id: newUserId,
+    role_id: roleId,
+  }));
+  const { error: roleError } = await adminClient
+    .from("user_roles")
+    .insert(roleInserts);
+
+  if (roleError) {
+    return {
+      error: `Akun dibuat, tetapi gagal mengatur role: ${roleError.message}`,
+    };
+  }
+
+  revalidatePath("/users");
+  return { success: true };
+}
+
+/**
  * Reset user password — moderator only, uses service-role admin client
  */
 export async function resetUserPassword(userId: string, newPassword: string) {

@@ -14,11 +14,8 @@ import {
   Plus,
   Trash2,
   Package,
-  Layers,
-  X,
-  Target,
-  Minus,
   Loader2,
+  AlertTriangle,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Badge } from "@/components/ui/badge";
@@ -30,7 +27,17 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { toast } from "sonner";
 import Link from "next/link";
+import { getMrItemConstraint } from "@/services/procurement-actions";
 
 interface Barang {
   id: number;
@@ -47,18 +54,47 @@ export interface MRItem {
   qty: number;
 }
 
+interface StockCap {
+  allowedMax: number | null; // null = tidak diketahui (cabang tujuan tak tersedia)
+  currentQty: number;
+  maxQty: number;
+  hasPolicy: boolean; // false = max_qty belum dikonfigurasi (belum ada kebijakan)
+}
+
+interface DupModalState {
+  barang: Barang;
+  codes: string[];
+  cap: StockCap;
+}
+
 interface MRItemSelectorProps {
   items: MRItem[];
   onItemsChange: (items: MRItem[]) => void;
+  /** Cabang tujuan MR (= cabang requester). Dipakai untuk deteksi duplikat & batas max stock. */
+  cabangId?: number | null;
+  /** Dipanggil jika user memilih membatalkan seluruh pembuatan MR dari modal duplikat. */
+  onCancelMR?: () => void;
 }
 
-export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
+export function MRItemSelector({
+  items,
+  onItemsChange,
+  cabangId,
+  onCancelMR,
+}: MRItemSelectorProps) {
   const supabase = createClient();
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 300);
   const [results, setResults] = useState<Barang[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Batas max stock per part_id
+  const [stockCaps, setStockCaps] = useState<Record<number, StockCap>>({});
+  // part_id yang sedang dicek constraint-nya (loading)
+  const [checkingPartId, setCheckingPartId] = useState<number | null>(null);
+  // Modal informasi duplikat PN
+  const [dupModal, setDupModal] = useState<DupModalState | null>(null);
 
   const fetchItems = async (q: string) => {
     setLoading(true);
@@ -83,29 +119,110 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
     }
   }, [debouncedSearch, open]);
 
-  const handleAddItem = (barang: Barang) => {
+  // Tambahkan item ke daftar (dengan menyimpan batas max stock-nya).
+  const addItemNow = (barang: Barang, cap: StockCap) => {
     if (items.some((i) => i.part_id === barang.id)) return;
+
+    const initialQty =
+      cap.allowedMax !== null ? Math.min(1, cap.allowedMax) : 1;
 
     const newItem: MRItem = {
       part_id: barang.id,
       part_number: barang.part_number,
       part_name: barang.part_name,
       satuan: barang.part_satuan,
-      qty: 1,
+      qty: initialQty,
     };
 
+    setStockCaps((prev) => ({ ...prev, [barang.id]: cap }));
     onItemsChange([...items, newItem]);
+  };
+
+  const handleAddItem = async (barang: Barang) => {
+    if (items.some((i) => i.part_id === barang.id)) return;
+
+    // Tutup popover pencarian dulu
     setOpen(false);
     setSearch("");
+
+    // Tanpa cabang tujuan, tidak bisa cek constraint — tambahkan langsung.
+    if (!cabangId) {
+      addItemNow(barang, {
+        allowedMax: null,
+        currentQty: 0,
+        maxQty: 0,
+        hasPolicy: false,
+      });
+      return;
+    }
+
+    setCheckingPartId(barang.id);
+    let res;
+    try {
+      res = await getMrItemConstraint(cabangId, barang.id);
+    } catch {
+      toast.error("Gagal memeriksa stok / duplikat. Coba lagi.");
+      setCheckingPartId(null);
+      return;
+    }
+    setCheckingPartId(null);
+
+    const cap: StockCap = {
+      allowedMax: res.stock.allowedMax,
+      currentQty: res.stock.currentQty,
+      maxQty: res.stock.maxQty,
+      hasPolicy: res.stock.hasPolicy,
+    };
+
+    // allowedMax 0 → tidak bisa diminta sama sekali.
+    if (cap.allowedMax === 0) {
+      if (!cap.hasPolicy) {
+        toast.error(
+          `Belum ada kebijakan max stock untuk ${barang.part_number} di gudang Anda. Hubungi PPIC/atasan untuk menetapkan batas stok.`,
+        );
+      } else {
+        toast.error(
+          `Stok ${barang.part_number} sudah mencapai batas maksimum di gudang Anda (${cap.currentQty}/${cap.maxQty}). Tidak bisa diminta.`,
+        );
+      }
+      return;
+    }
+
+    // Ada MR aktif yang sudah mengandung PN ini → tampilkan modal konfirmasi.
+    if (res.duplicateMrCodes.length > 0) {
+      setDupModal({ barang, codes: res.duplicateMrCodes, cap });
+      return;
+    }
+
+    addItemNow(barang, cap);
   };
 
   const removeItem = (part_id: number) => {
     onItemsChange(items.filter((i) => i.part_id !== part_id));
+    setStockCaps((prev) => {
+      const next = { ...prev };
+      delete next[part_id];
+      return next;
+    });
   };
 
   const updateItem = (part_id: number, updates: Partial<MRItem>) => {
     onItemsChange(
-      items.map((i) => (i.part_id === part_id ? { ...i, ...updates } : i)),
+      items.map((i) => {
+        if (i.part_id !== part_id) return i;
+        const merged = { ...i, ...updates };
+        // Clamp qty ke batas max stock jika ada kebijakan max.
+        const cap = stockCaps[part_id];
+        if (
+          updates.qty !== undefined &&
+          cap?.allowedMax !== null &&
+          cap?.allowedMax !== undefined &&
+          merged.qty > cap.allowedMax
+        ) {
+          merged.qty = cap.allowedMax;
+        }
+        return merged;
+      }),
     );
   };
 
@@ -125,8 +242,14 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
               variant="outline"
               size="sm"
               className="h-8 gap-2 font-medium"
+              disabled={checkingPartId !== null}
             >
-              <Plus className="h-3.5 w-3.5" /> Tambah Barang
+              {checkingPartId !== null ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Plus className="h-3.5 w-3.5" />
+              )}{" "}
+              Tambah Barang
             </Button>
           </PopoverTrigger>
           <PopoverContent
@@ -209,7 +332,7 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
               <TableHead className="w-[100px] font-semibold text-slate-500 text-xs text-center">
                 Unit
               </TableHead>
-              <TableHead className="w-[120px] font-semibold text-slate-500 text-xs text-center">
+              <TableHead className="w-35 font-semibold text-slate-500 text-xs text-center">
                 Quantity
               </TableHead>
               <TableHead className="w-[60px] text-center font-semibold text-slate-500 text-xs">
@@ -219,56 +342,68 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
           </TableHeader>
           <TableBody>
             {items.length > 0 ? (
-              items.map((item, index) => (
-                <TableRow
-                  key={item.part_id}
-                  className="h-12 hover:bg-slate-50/50 transition-colors"
-                >
-                  <TableCell className="text-center text-slate-400 text-xs font-medium">
-                    {index + 1}
-                  </TableCell>
-                  <TableCell className="py-2">
-                    <div className="flex flex-col">
-                      <span className="font-semibold text-slate-900 text-xs">
-                        {item.part_name}
+              items.map((item, index) => {
+                const cap = stockCaps[item.part_id];
+                const hasCap =
+                  cap?.allowedMax !== null && cap?.allowedMax !== undefined;
+                return (
+                  <TableRow
+                    key={item.part_id}
+                    className="h-12 hover:bg-slate-50/50 transition-colors"
+                  >
+                    <TableCell className="text-center text-slate-400 text-xs font-medium">
+                      {index + 1}
+                    </TableCell>
+                    <TableCell className="py-2">
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-900 text-xs">
+                          {item.part_name}
+                        </span>
+                        <code className="text-[10px] text-slate-400">
+                          {item.part_number}
+                        </code>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <span className="text-[10px] font-medium text-slate-500 uppercase">
+                        {item.satuan}
                       </span>
-                      <code className="text-[10px] text-slate-400">
-                        {item.part_number}
-                      </code>
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <span className="text-[10px] font-medium text-slate-500 uppercase">
-                      {item.satuan}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-center">
-                      <Input
-                        type="number"
-                        min="1"
-                        value={item.qty}
-                        onChange={(e) =>
-                          updateItem(item.part_id, {
-                            qty: parseInt(e.target.value) || 0,
-                          })
-                        }
-                        className="h-8 w-20 text-center font-medium text-xs rounded-md bg-white border-slate-200"
-                      />
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeItem(item.part_id)}
-                      className="h-7 w-7 text-slate-300 hover:text-red-500 rounded-md"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex flex-col items-center gap-0.5">
+                        <Input
+                          type="number"
+                          min="1"
+                          max={hasCap ? cap.allowedMax! : undefined}
+                          value={item.qty}
+                          onChange={(e) =>
+                            updateItem(item.part_id, {
+                              qty: parseInt(e.target.value) || 0,
+                            })
+                          }
+                          className="h-8 w-20 text-center font-medium text-xs rounded-md bg-white border-slate-200"
+                        />
+                        {hasCap && (
+                          <span className="text-[9px] font-medium text-amber-600">
+                            Maks {cap.allowedMax} (stok {cap.currentQty}/
+                            {cap.maxQty})
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => removeItem(item.part_id)}
+                        className="h-7 w-7 text-slate-300 hover:text-red-500 rounded-md"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
                 <TableCell colSpan={5} className="text-center">
@@ -281,6 +416,81 @@ export function MRItemSelector({ items, onItemsChange }: MRItemSelectorProps) {
           </TableBody>
         </Table>
       </div>
+
+      {/* Modal informasi duplikat PN */}
+      <Dialog
+        open={dupModal !== null}
+        onOpenChange={(o) => {
+          if (!o) setDupModal(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertTriangle className="h-5 w-5" /> PN Sudah Ada di MR Aktif
+            </DialogTitle>
+            <DialogDescription className="text-left">
+              PN{" "}
+              <span className="font-bold text-foreground">
+                {dupModal?.barang.part_number}
+              </span>{" "}
+              ({dupModal?.barang.part_name}) sudah terdapat pada MR aktif di
+              gudang tujuan Anda. Cek apakah permintaan ini benar-benar perlu
+              agar tidak terjadi pemesanan ganda.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+            <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1.5">
+              Terdapat di MR:
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {dupModal?.codes.map((code) => (
+                <Badge
+                  key={code}
+                  variant="outline"
+                  className="border-amber-300 bg-white text-amber-700 font-bold text-xs"
+                >
+                  {code}
+                </Badge>
+              ))}
+            </div>
+            <p className="text-[9px] text-amber-600/70 mt-2 italic">
+              Hanya kode MR yang ditampilkan. MR tersebut bisa jadi milik
+              departemen lain.
+            </p>
+          </div>
+
+          <DialogFooter className="flex-col gap-2 sm:flex-col sm:space-x-0">
+            <Button
+              className="w-full"
+              onClick={() => {
+                if (dupModal) addItemNow(dupModal.barang, dupModal.cap);
+                setDupModal(null);
+              }}
+            >
+              Tetap Tambahkan PN Ini
+            </Button>
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => setDupModal(null)}
+            >
+              Jangan Tambahkan PN Ini
+            </Button>
+            <Button
+              variant="ghost"
+              className="w-full text-destructive hover:text-destructive hover:bg-destructive/5"
+              onClick={() => {
+                setDupModal(null);
+                onCancelMR?.();
+              }}
+            >
+              Batalkan Pembuatan MR
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

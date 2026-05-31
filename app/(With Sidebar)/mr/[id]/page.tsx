@@ -89,6 +89,10 @@ export default function MRDetailPage({
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [cabangs, setCabangs] = useState<any[]>([]);
+  // Stok per PN per cabang: { [part_id]: { [cabang_id]: qty } }
+  const [stockByPart, setStockByPart] = useState<
+    Record<number, Record<number, number>>
+  >({});
 
   // Fulfillment Data
   const [prRecords, setPrRecords] = useState<any[]>([]);
@@ -147,6 +151,7 @@ export default function MRDetailPage({
     const { data } = await supabase
       .from("cabang")
       .select("id, nama_cabang")
+      .eq("is_active", true)
       .order("nama_cabang");
     setCabangs(data || []);
   };
@@ -187,6 +192,7 @@ export default function MRDetailPage({
     if (itemsData) {
       const initialAllocations = itemsData.map((item: any) => ({
         mr_item_id: item.id,
+        part_id: item.part_id,
         part_number: item.part_number,
         part_name: item.part_name,
         qty_request: item.qty_request,
@@ -195,6 +201,23 @@ export default function MRDetailPage({
         sharestocks: [],
       }));
       setAllocations(initialAllocations);
+
+      // Ambil stok per cabang untuk tiap PN (panduan alokasi share stock).
+      const partIds = Array.from(
+        new Set(itemsData.map((i: any) => i.part_id).filter(Boolean)),
+      );
+      if (partIds.length > 0) {
+        const { data: stockData } = await supabase
+          .from("stock")
+          .select("part_id, cabang_id, qty")
+          .in("part_id", partIds);
+        const map: Record<number, Record<number, number>> = {};
+        (stockData || []).forEach((s: any) => {
+          if (!map[s.part_id]) map[s.part_id] = {};
+          map[s.part_id][s.cabang_id] = s.qty;
+        });
+        setStockByPart(map);
+      }
     }
 
     setLoading(false);
@@ -493,6 +516,12 @@ export default function MRDetailPage({
     updateAllocation(itemId, newSS);
   };
 
+  // Stok PN tertentu yang tersedia di sebuah cabang sumber.
+  const getAvailableStock = (partId: number, cabangId: any): number => {
+    if (!cabangId) return 0;
+    return stockByPart[partId]?.[Number(cabangId)] ?? 0;
+  };
+
   const updateShareStockLine = (
     itemId: number,
     index: number,
@@ -502,7 +531,19 @@ export default function MRDetailPage({
     const alloc = allocations.find((a) => a.mr_item_id === itemId);
     if (!alloc) return;
     const newSS = [...alloc.sharestocks];
-    newSS[index] = { ...newSS[index], [field]: value };
+    const line = { ...newSS[index], [field]: value };
+
+    // Clamp qty agar tidak melebihi stok PN di gudang sumber terpilih, dan
+    // tidak boleh negatif.
+    const cabangId =
+      field === "source_cabang_id" ? value : line.source_cabang_id;
+    const avail = getAvailableStock(alloc.part_id, cabangId);
+    let q = Number(line.qty) || 0;
+    if (q < 0) q = 0;
+    if (cabangId && q > avail) q = avail;
+    line.qty = q;
+
+    newSS[index] = line;
     updateAllocation(itemId, newSS);
   };
 
@@ -1074,57 +1115,94 @@ export default function MRDetailPage({
 
                     {alloc.sharestocks.length > 0 && (
                       <div className="space-y-2.5 mt-2">
-                        {alloc.sharestocks.map((ss: any, idx: number) => (
-                          <div
-                            key={idx}
-                            className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_110px_44px] gap-2 items-center bg-muted/40 p-2.5 rounded-lg border border-border"
-                          >
-                            <select
-                              className="h-9 w-full rounded-md border border-input bg-background px-3 text-[11px] font-bold uppercase outline-none focus:ring-1 focus:ring-ring"
-                              value={ss.source_cabang_id}
-                              onChange={(e) =>
-                                updateShareStockLine(
-                                  alloc.mr_item_id,
-                                  idx,
-                                  "source_cabang_id",
-                                  e.target.value,
-                                )
-                              }
-                            >
-                              <option value="">Pilih Sumber...</option>
-                              {cabangs.map((c) => (
-                                <option key={c.id} value={c.id}>
-                                  {c.nama_cabang}
-                                </option>
-                              ))}
-                            </select>
-                            <Input
-                              type="number"
-                              placeholder="Qty"
-                              min="0"
-                              className="h-9 w-full text-center font-bold text-[11px]"
-                              value={ss.qty || ""}
-                              onChange={(e) =>
-                                updateShareStockLine(
-                                  alloc.mr_item_id,
-                                  idx,
-                                  "qty",
-                                  e.target.value,
-                                )
-                              }
-                            />
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive rounded-md"
-                              onClick={() =>
-                                removeShareStockLine(alloc.mr_item_id, idx)
-                              }
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </div>
-                        ))}
+                        {alloc.sharestocks.map((ss: any, idx: number) => {
+                          const avail = getAvailableStock(
+                            alloc.part_id,
+                            ss.source_cabang_id,
+                          );
+                          return (
+                            <div key={idx} className="space-y-1">
+                              <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_110px_44px] gap-2 items-center bg-muted/40 p-2.5 rounded-lg border border-border">
+                                <select
+                                  className="h-9 w-full rounded-md border border-input bg-background px-3 text-[11px] font-bold uppercase outline-none focus:ring-1 focus:ring-ring"
+                                  value={ss.source_cabang_id}
+                                  onChange={(e) =>
+                                    updateShareStockLine(
+                                      alloc.mr_item_id,
+                                      idx,
+                                      "source_cabang_id",
+                                      e.target.value,
+                                    )
+                                  }
+                                >
+                                  <option value="">Pilih Sumber...</option>
+                                  {cabangs.map((c) => {
+                                    const cAvail = getAvailableStock(
+                                      alloc.part_id,
+                                      c.id,
+                                    );
+                                    return (
+                                      <option
+                                        key={c.id}
+                                        value={c.id}
+                                        disabled={cAvail <= 0}
+                                      >
+                                        {c.nama_cabang} — {cAvail} stok
+                                        {cAvail <= 0 ? " (kosong)" : ""}
+                                      </option>
+                                    );
+                                  })}
+                                </select>
+                                <Input
+                                  type="number"
+                                  placeholder="Qty"
+                                  min="0"
+                                  max={avail || undefined}
+                                  className="h-9 w-full text-center font-bold text-[11px]"
+                                  value={ss.qty || ""}
+                                  onChange={(e) =>
+                                    updateShareStockLine(
+                                      alloc.mr_item_id,
+                                      idx,
+                                      "qty",
+                                      e.target.value,
+                                    )
+                                  }
+                                />
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-8 w-8 text-muted-foreground hover:text-destructive rounded-md"
+                                  onClick={() =>
+                                    removeShareStockLine(alloc.mr_item_id, idx)
+                                  }
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </div>
+                              {ss.source_cabang_id && (
+                                <p className="px-1 text-[10px] font-semibold text-muted-foreground">
+                                  Stok tersedia di gudang ini:{" "}
+                                  <span
+                                    className={
+                                      avail > 0
+                                        ? "text-success"
+                                        : "text-destructive"
+                                    }
+                                  >
+                                    {avail}
+                                  </span>
+                                  {Number(ss.qty) > avail && (
+                                    <span className="text-destructive">
+                                      {" "}
+                                      — qty melebihi stok!
+                                    </span>
+                                  )}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                   </div>

@@ -13,7 +13,7 @@ export async function createSignature(formData: {
   accountPassword: string;
   signaturePassword: string;
 }) {
-  const MAX_SIGNATURES = 2;
+  const MAX_SIGNATURES = 6;
   const supabase = await createClient();
 
   // 1. Dapatkan user saat ini

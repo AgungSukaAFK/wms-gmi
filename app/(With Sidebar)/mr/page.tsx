@@ -2,6 +2,8 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { canCreateMR } from "@/lib/mr-permissions";
+import { MultiSelect } from "@/components/ui/multi-select";
 import {
   Table,
   TableBody,
@@ -65,14 +67,14 @@ export default function MaterialRequestPage() {
   // Pagination & Filters
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
-  const [statusFilter, setStatusFilter] = useState<string>("all");
-  const [priorityFilter, setPriorityFilter] = useState<string>("all");
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
+  const [priorityFilters, setPriorityFilters] = useState<string[]>([]);
   const [accurateFilter, setAccurateFilter] = useState<string>("all");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
   // Advanced Filters
-  const [locationFilter, setLocationFilter] = useState<string>("all");
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
@@ -126,24 +128,24 @@ export default function MaterialRequestPage() {
       );
     }
 
-    if (statusFilter !== "all") {
-      if (statusFilter === "completed") {
-        query = query.in("mr_status", completedFilterStatuses());
-      } else {
-        query = query.eq("mr_status", statusFilter);
-      }
+    if (statusFilters.length > 0) {
+      // "completed" adalah status virtual yang diekspansi ke beberapa status nyata.
+      const expanded = statusFilters.flatMap((s) =>
+        s === "completed" ? completedFilterStatuses() : [s],
+      );
+      query = query.in("mr_status", Array.from(new Set(expanded)));
     }
 
-    if (priorityFilter !== "all") {
-      query = query.eq("mr_priority", priorityFilter);
+    if (priorityFilters.length > 0) {
+      query = query.in("mr_priority", priorityFilters);
     }
 
     if (accurateFilter !== "all") {
       query = query.eq("accurate", accurateFilter === "yes");
     }
 
-    if (locationFilter !== "all") {
-      query = query.eq("cabang_id", locationFilter);
+    if (locationFilters.length > 0) {
+      query = query.in("cabang_id", locationFilters);
     }
 
     if (dateFrom) {
@@ -177,10 +179,10 @@ export default function MaterialRequestPage() {
     fetchData();
   }, [
     debouncedSearch,
-    statusFilter,
-    priorityFilter,
+    statusFilters,
+    priorityFilters,
     accurateFilter,
-    locationFilter,
+    locationFilters,
     dateFrom,
     dateTo,
     page,
@@ -189,10 +191,10 @@ export default function MaterialRequestPage() {
 
   const resetFilters = () => {
     setSearchQuery("");
-    setStatusFilter("all");
-    setPriorityFilter("all");
+    setStatusFilters([]);
+    setPriorityFilters([]);
     setAccurateFilter("all");
-    setLocationFilter("all");
+    setLocationFilters([]);
     setDateFrom("");
     setDateTo("");
     setPage(1);
@@ -200,7 +202,7 @@ export default function MaterialRequestPage() {
 
   const setMyLocationFilter = () => {
     if (userProfile?.cabang_id) {
-      setLocationFilter(userProfile.cabang_id.toString());
+      setLocationFilters([userProfile.cabang_id.toString()]);
       setPage(1);
     }
   };
@@ -345,7 +347,9 @@ export default function MaterialRequestPage() {
             </div>
           </div>
 
-          {(userProfile?.isAdmin || userProfile?.isModerator) && (
+          {canCreateMR(
+            (userProfile?.roles as any[])?.map((r: any) => r.roles?.name),
+          ) && (
             <Link href="/mr/create">
               <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all">
                 <Plus className="h-4 w-4" /> BUAT MR BARU
@@ -371,69 +375,54 @@ export default function MaterialRequestPage() {
               />
             </div>
 
-            <Select
-              value={locationFilter}
-              onValueChange={(val) => {
-                setLocationFilter(val);
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Lokasi"
+              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <div className="flex items-center gap-2">
-                  <MapPin className="h-3 w-3 text-muted-foreground" />
-                  <SelectValue placeholder="Semua Lokasi" />
-                </div>
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Lokasi</SelectItem>
-                {availableCabang.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: c.id.toString(),
+              }))}
+            />
 
-            <Select
-              value={priorityFilter}
-              onValueChange={(val) => {
-                setPriorityFilter(val);
+            <MultiSelect
+              className="w-full sm:w-42.5"
+              placeholder="Semua Prioritas"
+              icon={<AlertTriangle className="h-3 w-3 text-muted-foreground" />}
+              selected={priorityFilters}
+              onChange={(vals) => {
+                setPriorityFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-42.5 border-input bg-background text-xs font-bold text-foreground">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="h-3 w-3 text-muted-foreground" />
-                  <SelectValue placeholder="Prioritas" />
-                </div>
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Prioritas</SelectItem>
-                <SelectItem value="P1">P1 - EMERGENCY</SelectItem>
-                <SelectItem value="P2">P2 - HIGH</SelectItem>
-                <SelectItem value="P3">P3 - NORMAL</SelectItem>
-                <SelectItem value="P4">P4 - LOW</SelectItem>
-              </SelectContent>
-            </Select>
+              options={[
+                { label: "P1 - EMERGENCY", value: "P1" },
+                { label: "P2 - HIGH", value: "P2" },
+                { label: "P3 - NORMAL", value: "P3" },
+                { label: "P4 - LOW", value: "P4" },
+              ]}
+            />
 
-            <Select
-              value={statusFilter}
-              onValueChange={(val) => {
-                setStatusFilter(val);
+            <MultiSelect
+              className="w-full sm:w-40"
+              placeholder="Semua Status"
+              selected={statusFilters}
+              onChange={(vals) => {
+                setStatusFilters(vals);
                 setPage(1);
               }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-40 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent className="rounded-md">
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="open">Open (Pending)</SelectItem>
-                <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="rejected">Rejected</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-              </SelectContent>
-            </Select>
+              options={[
+                { label: "Open (Pending)", value: "open" },
+                { label: "Approved", value: "approved" },
+                { label: "Rejected", value: "rejected" },
+                { label: "Completed", value: "completed" },
+              ]}
+            />
 
             {/* ACCURATE_HIDDEN: filter disembunyikan */}
             {false && (
@@ -561,9 +550,9 @@ export default function MaterialRequestPage() {
                     colSpan={7}
                     className="h-40 text-center text-muted-foreground italic text-sm"
                   >
-                    {statusFilter !== "all" ||
+                    {statusFilters.length > 0 ||
                     accurateFilter !== "all" ||
-                    locationFilter !== "all" ||
+                    locationFilters.length > 0 ||
                     dateFrom ||
                     dateTo
                       ? "Tidak ada data yang sesuai filter."

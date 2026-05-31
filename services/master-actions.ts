@@ -62,11 +62,13 @@ async function countReferences(
   return count || 0;
 }
 
+// Hanya cabang aktif — dipakai untuk dropdown (mis. pemilihan cabang saat sign-up).
 export async function getCabangList() {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("cabang")
     .select("*")
+    .eq("is_active", true)
     .order("nama_cabang");
 
   if (error) {

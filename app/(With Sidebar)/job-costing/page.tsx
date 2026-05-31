@@ -39,6 +39,7 @@ import { JobCostingDetailSheet } from "@/components/job-costing/job-costing-deta
 import { useAuthStore } from "@/stores/auth-store";
 import { toast } from "sonner";
 import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
 import {
   completedFilterStatuses,
   normalizeDocumentStatus,
@@ -66,8 +67,8 @@ export default function JobCostingListPage() {
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 400);
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [locationFilter, setLocationFilter] = useState("all");
+  const [statusFilters, setStatusFilters] = useState<string[]>([]);
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [sortOrder, setSortOrder] = useState("newest");
@@ -104,14 +105,14 @@ export default function JobCostingListPage() {
         `job_kode.ilike.%${debouncedSearch}%,description.ilike.%${debouncedSearch}%,finish_part.ilike.%${debouncedSearch}%`,
       );
     }
-    if (statusFilter !== "all") {
-      if (statusFilter === "completed") {
-        query = query.in("status", completedFilterStatuses());
-      } else {
-        query = query.eq("status", statusFilter);
-      }
+    if (statusFilters.length > 0) {
+      const expanded = statusFilters.flatMap((s) =>
+        s === "completed" ? completedFilterStatuses() : [s],
+      );
+      query = query.in("status", Array.from(new Set(expanded)));
     }
-    if (locationFilter !== "all") query = query.eq("cabang_id", locationFilter);
+    if (locationFilters.length > 0)
+      query = query.in("cabang_id", locationFilters);
     if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00`);
     if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59`);
 
@@ -133,8 +134,8 @@ export default function JobCostingListPage() {
     setLoading(false);
   }, [
     debouncedSearch,
-    statusFilter,
-    locationFilter,
+    statusFilters,
+    locationFilters,
     dateFrom,
     dateTo,
     sortOrder,
@@ -150,8 +151,8 @@ export default function JobCostingListPage() {
     setPage(1);
   }, [
     debouncedSearch,
-    statusFilter,
-    locationFilter,
+    statusFilters,
+    locationFilters,
     dateFrom,
     dateTo,
     sortOrder,
@@ -159,15 +160,15 @@ export default function JobCostingListPage() {
 
   const setMyLocationFilter = () => {
     if (profile?.cabang_id) {
-      setLocationFilter(String(profile.cabang_id));
+      setLocationFilters([String(profile.cabang_id)]);
       setPage(1);
     }
   };
 
   const hasFilters =
     debouncedSearch ||
-    statusFilter !== "all" ||
-    locationFilter !== "all" ||
+    statusFilters.length > 0 ||
+    locationFilters.length > 0 ||
     dateFrom !== "" ||
     dateTo !== "";
 
@@ -217,32 +218,36 @@ export default function JobCostingListPage() {
               />
             </div>
 
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="open">Open</SelectItem>
-                <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="completed">Completed</SelectItem>
-                <SelectItem value="rejected">Rejected</SelectItem>
-              </SelectContent>
-            </Select>
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Status"
+              selected={statusFilters}
+              onChange={(vals) => {
+                setStatusFilters(vals);
+                setPage(1);
+              }}
+              options={[
+                { label: "Open", value: "open" },
+                { label: "Approved", value: "approved" },
+                { label: "Completed", value: "completed" },
+                { label: "Rejected", value: "rejected" },
+              ]}
+            />
 
-            <Select value={locationFilter} onValueChange={setLocationFilter}>
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <SelectValue placeholder="Cabang" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Cabang</SelectItem>
-                {availableCabang.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Cabang"
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
+                setPage(1);
+              }}
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: String(c.id),
+              }))}
+            />
 
             {profile?.cabang_id && (
               <Button
@@ -274,8 +279,8 @@ export default function JobCostingListPage() {
                 className="h-9 text-xs gap-1.5 text-muted-foreground"
                 onClick={() => {
                   setSearchQuery("");
-                  setStatusFilter("all");
-                  setLocationFilter("all");
+                  setStatusFilters([]);
+                  setLocationFilters([]);
                   setDateFrom("");
                   setDateTo("");
                 }}

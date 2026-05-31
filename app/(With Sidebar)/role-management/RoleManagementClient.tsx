@@ -39,7 +39,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Shield, Loader2, Save, Plus, Trash2 } from "lucide-react";
+import { Shield, Loader2, Save, Plus, Trash2, HelpCircle } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
@@ -56,21 +62,91 @@ interface Cabang {
 }
 
 const AVAILABLE_PAGES = [
-  { path: "/dashboard", label: "Dashboard" },
-  { path: "/stock", label: "Inventory Monitoring" },
-  { path: "/receive", label: "Receiving (Barang Masuk)" },
-  { path: "/deliveries", label: "Deliveries (Barang Keluar)" },
-  { path: "/mr", label: "Material Request (MR)" },
-  { path: "/pr", label: "Purchase Requisition (PR)" },
-  { path: "/po", label: "Purchase Order (PO)" },
-  { path: "/spb", label: "SPB (Surat Permintaan Barang)" },
-  { path: "/return-spb", label: "Return SPB" },
-  { path: "/job-costing", label: "Job Costing" },
-  { path: "/barang", label: "Master Barang" },
-  { path: "/vendors", label: "Master Vendor" },
-  { path: "/customers", label: "Master Customer" },
-  { path: "/users", label: "User Management" },
-  { path: "/role-management", label: "Role & Permission" },
+  {
+    path: "/dashboard",
+    label: "Dashboard",
+    desc: "Melihat ringkasan & statistik gudang: KPI, stok kritis, dan grafik aktivitas.",
+  },
+  {
+    path: "/stock",
+    label: "Inventory Monitoring",
+    desc: "Monitoring stok per cabang. Lihat qty, dan (sesuai role) edit batas min/max stok.",
+  },
+  {
+    path: "/receive",
+    label: "Receiving (Barang Masuk)",
+    desc: "Penerimaan barang masuk dari PO; mencatat & menambah stok gudang.",
+  },
+  {
+    path: "/deliveries",
+    label: "Deliveries (Barang Keluar)",
+    desc: "Pengiriman/transfer barang keluar antar gudang beserta tracking-nya.",
+  },
+  {
+    path: "/share-stock",
+    label: "Share Stock",
+    desc: "Alokasi & transfer stok antar cabang untuk memenuhi Material Request.",
+  },
+  {
+    path: "/mr",
+    label: "Material Request (MR)",
+    desc: "Buat & kelola pengajuan kebutuhan barang (MR) per cabang.",
+  },
+  {
+    path: "/pr",
+    label: "Purchase Requisition (PR)",
+    desc: "Konversi MR menjadi permintaan pembelian (PR).",
+  },
+  {
+    path: "/po",
+    label: "Purchase Order (PO)",
+    desc: "Pembuatan & pengelolaan order pembelian ke vendor.",
+  },
+  {
+    path: "/spb",
+    label: "SPB (Surat Permintaan Barang)",
+    desc: "Alur barang keluar ke customer: create → PO → DO → Invoice → Report → Return.",
+  },
+  {
+    path: "/return-spb",
+    label: "Return SPB",
+    desc: "Pengembalian (retur) barang dari proses SPB.",
+  },
+  {
+    path: "/job-costing",
+    label: "Job Costing",
+    desc: "Perhitungan biaya material/part per proyek (job costing).",
+  },
+  {
+    path: "/barang",
+    label: "Master Barang",
+    desc: "Kelola data part/barang serta kebijakan stok (min/max) per cabang.",
+  },
+  {
+    path: "/vendors",
+    label: "Master Vendor",
+    desc: "Kelola data pemasok/vendor.",
+  },
+  {
+    path: "/customers",
+    label: "Master Customer",
+    desc: "Kelola data pelanggan/customer.",
+  },
+  {
+    path: "/cabang",
+    label: "Master Cabang",
+    desc: "Kelola data gudang/cabang (tambah, edit, aktif/non-aktifkan).",
+  },
+  {
+    path: "/users",
+    label: "User Management",
+    desc: "Kelola akun pengguna: status aktif, role, penempatan cabang, reset password.",
+  },
+  {
+    path: "/role-management",
+    label: "Role & Permission",
+    desc: "Atur matriks hak akses tiap role per halaman & cabang (halaman ini).",
+  },
 ];
 
 export default function RoleManagementClient({
@@ -197,7 +273,7 @@ export default function RoleManagementClient({
   };
 
   return (
-    <>
+    <TooltipProvider delayDuration={150}>
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -320,7 +396,26 @@ export default function RoleManagementClient({
                             className="hover:bg-muted/30"
                           >
                             <TableCell className="font-medium sticky left-0 bg-background z-10 border-r border-border">
-                              {page.label}
+                              <div className="flex items-center gap-1.5">
+                                <span>{page.label}</span>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <button
+                                      type="button"
+                                      className="text-muted-foreground/50 hover:text-primary transition-colors"
+                                      aria-label={`Penjelasan akses ${page.label}`}
+                                    >
+                                      <HelpCircle className="h-3.5 w-3.5" />
+                                    </button>
+                                  </TooltipTrigger>
+                                  <TooltipContent
+                                    side="right"
+                                    className="max-w-64 text-xs"
+                                  >
+                                    {page.desc}
+                                  </TooltipContent>
+                                </Tooltip>
+                              </div>
                               <div className="text-[10px] font-normal text-muted-foreground">
                                 {page.path}
                               </div>
@@ -533,6 +628,6 @@ export default function RoleManagementClient({
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </>
+    </TooltipProvider>
   );
 }

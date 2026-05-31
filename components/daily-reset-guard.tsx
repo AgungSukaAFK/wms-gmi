@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore } from "@/stores/auth-store";
 import { getUserPermissions } from "@/services/role-actions";
@@ -13,8 +12,7 @@ interface DailyResetGuardProps {
 }
 
 export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
-  const router = useRouter();
-  const { isNewDay, clearSession, setSession, profile } = useAuthStore();
+  const { setSession, profile, lastLoginDate } = useAuthStore();
   const [isInitializing, setIsInitializing] = useState(true);
 
   useEffect(() => {
@@ -23,16 +21,13 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
     const initSession = async () => {
       const supabase = createClient();
 
-      // 1. Cek apakah harus reset harian
-      if (isNewDay()) {
-        clearSession();
-        await supabase.auth.signOut();
-        router.push("/auth/login");
-        return;
-      }
-
-      // 2. Jika store kosong ATAU user berganti akun, fetch ulang data dari DB
-      const shouldReinitialize = !profile || profile.id !== userId;
+      // Daily re-login enforcement ditangani oleh proxy (cookie wms_login_date).
+      // Jika kita sampai di sini, sesi sudah valid untuk hari ini — jadi cukup
+      // pastikan store cache (profil/role/permission) ter-refresh:
+      // saat store kosong, ganti akun, ATAU sudah ganti hari.
+      const today = new Date().toLocaleDateString("sv-SE");
+      const shouldReinitialize =
+        !profile || profile.id !== userId || lastLoginDate !== today;
       if (shouldReinitialize && userId) {
         const { data: profileData } = await supabase
           .from("profiles")
@@ -68,7 +63,7 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
     return () => {
       isMounted = false;
     };
-  }, [userId, isNewDay, clearSession, setSession, profile, router]);
+  }, [userId, setSession, profile, lastLoginDate]);
 
   if (isInitializing) {
     return (

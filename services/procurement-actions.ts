@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { canViewPOPrice, maskPOPriceItems } from "@/lib/po-price-access";
 import { toCompletedIfLegacy } from "@/lib/document-status";
+import { canCreateMR } from "@/lib/mr-permissions";
 import {
   notifyApprovers,
   notifyDocumentOwner,
@@ -146,6 +147,23 @@ export async function createMaterialRequest(data: {
 }) {
   const supabase = await createClient();
 
+  // Guard: hanya role yang diizinkan (lihat MR_CREATE_ROLES) yang boleh bikin MR.
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Tidak terautentikasi." };
+
+  const { data: callerRoles } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  const roleNames = (callerRoles ?? [])
+    .map((r: any) => r.roles?.name)
+    .filter(Boolean);
+  if (!canCreateMR(roleNames)) {
+    return { error: "Akses ditolak. Role Anda tidak diizinkan membuat MR." };
+  }
+
   const mrKode = data.mr_kode?.trim();
   if (!mrKode) {
     return { error: "Kode MR wajib diisi manual." };
@@ -159,6 +177,48 @@ export async function createMaterialRequest(data: {
 
   if (existingMr) {
     return { error: "Kode MR sudah digunakan. Gunakan kode lain." };
+  }
+
+  // Guard batas maksimum stok: qty_request + stok saat ini tidak boleh
+  // melebihi max_qty masing-masing PN di gudang tujuan (cabang requester).
+  // Hanya berlaku untuk PN yang punya kebijakan max (max_qty > 0).
+  const partIds = data.items.map((i) => i.part_id);
+  if (partIds.length > 0) {
+    const { data: stockRows } = await supabase
+      .from("stock")
+      .select("part_id, qty, max_qty")
+      .eq("cabang_id", data.cabang_id)
+      .in("part_id", partIds);
+
+    const stockMap = new Map(
+      (stockRows || []).map((s: any) => [s.part_id, s]),
+    );
+
+    const violations: string[] = [];
+    for (const item of data.items) {
+      const s: any = stockMap.get(item.part_id);
+      const maxQty = s?.max_qty ?? 0;
+      const curQty = s?.qty ?? 0;
+      const allowedMax = Math.max(0, maxQty - curQty);
+      if (item.qty_request > allowedMax) {
+        if (maxQty <= 0) {
+          violations.push(
+            `${item.part_number}: belum ada kebijakan max stock di gudang ini, tidak bisa diminta`,
+          );
+        } else {
+          violations.push(
+            `${item.part_number}: maksimal ${allowedMax} (stok ${curQty}/${maxQty}), diminta ${item.qty_request}`,
+          );
+        }
+      }
+    }
+
+    if (violations.length > 0) {
+      return {
+        error:
+          "Qty melebihi batas maksimum stok gudang:\n" + violations.join("\n"),
+      };
+    }
   }
 
   const mrApprovals = data.approvals ?? [];
@@ -210,6 +270,59 @@ export async function createMaterialRequest(data: {
 
   revalidatePath("/mr");
   return { success: true, data: mr };
+}
+
+/**
+ * CEK CONSTRAINT SAAT MENAMBAHKAN PN KE MR
+ *
+ * Dipakai oleh form create MR ketika user menambahkan sebuah PN.
+ * Mengembalikan:
+ *  1. duplicateMrCodes — daftar KODE MR aktif (belum closed & bukan rejected)
+ *     di gudang tujuan yang sama yang sudah mengandung PN ini.
+ *     Hanya kode yang dikembalikan (tanpa id) agar tidak memberi akses ke MR
+ *     milik departemen lain.
+ *  2. stock — batas maksimum qty yang boleh diminta untuk PN ini di gudang
+ *     tujuan. allowedMax = max_qty - qty_saat_ini (minimal 0). Jika max_qty
+ *     tidak dikonfigurasi (0) maka allowedMax = null (tanpa batas).
+ */
+export async function getMrItemConstraint(cabangId: number, partId: number) {
+  const supabase = await createClient();
+
+  // 1. Deteksi duplikat: MR aktif di cabang yang sama mengandung PN ini.
+  const { data: dupRows } = await supabase
+    .from("mr_items")
+    .select("mrs!inner(mr_kode, mr_status, cabang_id)")
+    .eq("part_id", partId)
+    .eq("mrs.cabang_id", cabangId)
+    .in("mrs.mr_status", ["open", "approved", "done"]);
+
+  const duplicateMrCodes = Array.from(
+    new Set(
+      (dupRows || [])
+        .map((r: any) => r.mrs?.mr_kode)
+        .filter((k: any): k is string => Boolean(k)),
+    ),
+  );
+
+  // 2. Batas maksimum qty (max stock - stock saat ini) di gudang tujuan.
+  const { data: stockRow } = await supabase
+    .from("stock")
+    .select("qty, max_qty")
+    .eq("part_id", partId)
+    .eq("cabang_id", cabangId)
+    .maybeSingle();
+
+  const currentQty = stockRow?.qty ?? 0;
+  const maxQty = stockRow?.max_qty ?? 0;
+  const hasPolicy = maxQty > 0;
+  // Jika max_qty belum dikonfigurasi (0) berarti belum ada kebijakan stok dari
+  // atasan → PN tidak boleh diminta sama sekali (allowedMax = 0).
+  const allowedMax = Math.max(0, maxQty - currentQty);
+
+  return {
+    duplicateMrCodes,
+    stock: { currentQty, maxQty, allowedMax, hasPolicy },
+  };
 }
 
 /**

@@ -87,6 +87,8 @@ export default function CreateDeliveryPage() {
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
+  // Estimasi pengiriman (hari) — default 5 untuk ekspedisi, 1 untuk handcarry
+  const [estimasiHari, setEstimasiHari] = useState(5);
   const [jumlahKoli, setJumlahKoli] = useState(1);
   const [picUid, setPicUid] = useState<string>("");
   const [receiverUid, setReceiverUid] = useState<string>("");
@@ -355,6 +357,7 @@ export default function CreateDeliveryPage() {
             ? eksternalId || undefined
             : undefined,
         no_resi: shipmentType === "ekspedisi" ? noResi || undefined : undefined,
+        estimasi_hari: estimasiHari,
         jumlah_koli: jumlahKoli,
         uid_pic: picUid,
         uid_receiver: receiverUid,
@@ -597,14 +600,15 @@ export default function CreateDeliveryPage() {
               </Label>
               <Select
                 value={shipmentType}
-                onValueChange={(v) =>
-                  setShipmentType(
-                    v as
-                      | "handcarry_internal"
-                      | "handcarry_eksternal"
-                      | "ekspedisi",
-                  )
-                }
+                onValueChange={(v) => {
+                  const t = v as
+                    | "handcarry_internal"
+                    | "handcarry_eksternal"
+                    | "ekspedisi";
+                  setShipmentType(t);
+                  // Set estimasi default sesuai jenis pengiriman (user bisa override manual)
+                  setEstimasiHari(t === "ekspedisi" ? 5 : 1);
+                }}
               >
                 <SelectTrigger className="h-10 font-bold text-sm border-input bg-muted/40 focus:bg-background rounded-lg">
                   <SelectValue />
@@ -627,6 +631,26 @@ export default function CreateDeliveryPage() {
                   </SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5 px-0.5">
+                <CalendarIcon className="h-3 w-3" /> Estimasi (Hari)
+              </Label>
+              <Input
+                type="number"
+                min={1}
+                value={estimasiHari}
+                onChange={(e) =>
+                  setEstimasiHari(Math.max(1, parseInt(e.target.value) || 1))
+                }
+                className="h-10 font-bold text-sm border-input bg-muted/40 focus:bg-background rounded-lg"
+              />
+              <p className="text-[10px] text-muted-foreground/70 font-medium px-0.5">
+                Default {shipmentType === "ekspedisi" ? "5" : "1"} hari untuk{" "}
+                {shipmentType === "ekspedisi" ? "ekspedisi" : "handcarry"}. Bisa
+                diubah manual.
+              </p>
             </div>
           </div>
 
