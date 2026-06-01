@@ -49,18 +49,20 @@ import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
-import { createTransferItem } from "@/services/transfer-actions";
+import { createItemTransfer } from "@/services/item-transfer-actions";
 
-interface TIItem {
+interface ITItem {
   part_id: number;
   part_number: string;
   part_name: string;
   satuan: string;
   qty: number;
-  avail: number;
+  avail: number; // stok tersedia di gudang asal
+  dest_qty: number; // stok saat ini di gudang tujuan
+  dest_max: number; // max_qty di gudang tujuan
 }
 
-export default function CreateTransferItemPage() {
+export default function CreateItemTransferPage() {
   const supabase = createClient();
   const router = useRouter();
 
@@ -82,10 +84,10 @@ export default function CreateTransferItemPage() {
   const [receiverPopoverOpen, setReceiverPopoverOpen] = useState(false);
 
   // Form
-  const [tiKode, setTiKode] = useState("");
-  const [tiTanggal, setTiTanggal] = useState(toYmdLocal());
+  const [itKode, setItKode] = useState("");
+  const [itTanggal, setItTanggal] = useState(toYmdLocal());
   const [keCabang, setKeCabang] = useState<number | null>(null);
-  const [items, setItems] = useState<TIItem[]>([]);
+  const [items, setItems] = useState<ITItem[]>([]);
   const [remarks, setRemarks] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
 
@@ -177,6 +179,10 @@ export default function CreateTransferItemPage() {
       toast.error("Cabang asal tidak diketahui.");
       return;
     }
+    if (!keCabang) {
+      toast.error("Pilih gudang tujuan terlebih dahulu.");
+      return;
+    }
     // Ambil stok PN ini di gudang asal
     const { data: stock } = await supabase
       .from("stock")
@@ -191,6 +197,28 @@ export default function CreateTransferItemPage() {
       );
       return;
     }
+    // Ambil stok & batas max di gudang tujuan
+    const { data: destStock } = await supabase
+      .from("stock")
+      .select("qty, max_qty")
+      .eq("part_id", barang.id)
+      .eq("cabang_id", keCabang)
+      .maybeSingle();
+    const destQty = destStock?.qty ?? 0;
+    const destMax = destStock?.max_qty ?? 0;
+    if (destMax <= 0) {
+      toast.error(
+        `${barang.part_number} belum punya batas max stok di gudang tujuan. Belum bisa ditransfer.`,
+      );
+      return;
+    }
+    const headroom = destMax - destQty;
+    if (headroom <= 0) {
+      toast.error(
+        `Stok ${barang.part_number} di gudang tujuan sudah penuh (${destQty}/${destMax}).`,
+      );
+      return;
+    }
     setItems((prev) => [
       ...prev,
       {
@@ -200,17 +228,23 @@ export default function CreateTransferItemPage() {
         satuan: barang.part_satuan,
         qty: 1,
         avail,
+        dest_qty: destQty,
+        dest_max: destMax,
       },
     ]);
     setSearchOpen(false);
     setSearch("");
   };
 
+  // Batas maksimal qty yang boleh dikirim: stok asal & sisa kapasitas tujuan
+  const maxSendable = (i: ITItem) =>
+    Math.max(0, Math.min(i.avail, i.dest_max - i.dest_qty));
+
   const updateQty = (partId: number, qty: number) => {
     setItems((prev) =>
       prev.map((i) =>
         i.part_id === partId
-          ? { ...i, qty: Math.max(1, Math.min(qty || 1, i.avail)) }
+          ? { ...i, qty: Math.max(1, Math.min(qty || 1, maxSendable(i))) }
           : i,
       ),
     );
@@ -220,7 +254,7 @@ export default function CreateTransferItemPage() {
     setItems((prev) => prev.filter((i) => i.part_id !== partId));
 
   const validate = () => {
-    if (!tiKode.trim()) return "Kode Transfer Item wajib diisi.";
+    if (!itKode.trim()) return "Kode Item Transfer wajib diisi.";
     if (!keCabang) return "Pilih gudang tujuan.";
     if (items.length === 0) return "Tambahkan minimal satu item.";
     if (!picUid) return "PIC harus dipilih.";
@@ -272,9 +306,9 @@ export default function CreateTransferItemPage() {
         };
       });
 
-      const result = await createTransferItem({
-        ti_kode: tiKode.trim(),
-        ti_tanggal: tiTanggal,
+      const result = await createItemTransfer({
+        it_kode: itKode.trim(),
+        it_tanggal: itTanggal,
         dari_cabang_id: userProfile.cabang_id,
         ke_cabang_id: keCabang!,
         shipment_type: shipmentType,
@@ -309,8 +343,8 @@ export default function CreateTransferItemPage() {
       });
 
       if (result.error) throw new Error(result.error);
-      toast.success("Transfer Item berhasil dibuat");
-      router.push("/transfer-item");
+      toast.success("Item Transfer berhasil dibuat");
+      router.push("/item-transfer");
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -344,7 +378,7 @@ export default function CreateTransferItemPage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-              Buat Transfer Item
+              Buat Item Transfer
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
               Pindahkan stok dari gudang Anda ke gudang lain
@@ -357,11 +391,11 @@ export default function CreateTransferItemPage() {
       <Content>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Kode TI</Label>
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Kode IT</Label>
             <Input
-              placeholder="Input Kode TI..."
-              value={tiKode}
-              onChange={(e) => setTiKode(e.target.value)}
+              placeholder="Input Kode IT..."
+              value={itKode}
+              onChange={(e) => setItKode(e.target.value)}
               className="h-10 text-sm font-semibold uppercase"
             />
           </div>
@@ -369,7 +403,7 @@ export default function CreateTransferItemPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <CalendarIcon className="h-3 w-3" /> Tanggal
             </Label>
-            <DatePickerString value={tiTanggal} onChange={setTiTanggal} className="h-10" />
+            <DatePickerString value={itTanggal} onChange={setItTanggal} className="h-10" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
@@ -383,7 +417,18 @@ export default function CreateTransferItemPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <Building2 className="h-3 w-3 text-success" /> Gudang Tujuan
             </Label>
-            <Select value={keCabang?.toString()} onValueChange={(v) => setKeCabang(parseInt(v))}>
+            <Select
+              value={keCabang?.toString()}
+              onValueChange={(v) => {
+                setKeCabang(parseInt(v));
+                if (items.length > 0) {
+                  setItems([]);
+                  toast.info(
+                    "Daftar item direset karena gudang tujuan berubah.",
+                  );
+                }
+              }}
+            >
               <SelectTrigger className="h-10 text-sm font-bold">
                 <SelectValue placeholder="Pilih gudang tujuan..." />
               </SelectTrigger>
@@ -408,7 +453,15 @@ export default function CreateTransferItemPage() {
           </div>
           <Popover open={searchOpen} onOpenChange={setSearchOpen}>
             <PopoverTrigger asChild>
-              <Button variant="outline" size="sm" className="h-8 gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-8 gap-2"
+                disabled={!keCabang}
+                title={
+                  !keCabang ? "Pilih gudang tujuan terlebih dahulu" : undefined
+                }
+              >
                 <Plus className="h-3.5 w-3.5" /> Tambah Item
               </Button>
             </PopoverTrigger>
@@ -454,7 +507,8 @@ export default function CreateTransferItemPage() {
             <TableHeader className="bg-muted/50">
               <TableRow className="h-10 hover:bg-transparent">
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Part</TableHead>
-                <TableHead className="w-24 text-center text-[10px] font-black uppercase text-muted-foreground">Unit</TableHead>
+                <TableHead className="w-20 text-center text-[10px] font-black uppercase text-muted-foreground">Unit</TableHead>
+                <TableHead className="w-28 text-center text-[10px] font-black uppercase text-muted-foreground">Stok Tujuan</TableHead>
                 <TableHead className="w-36 text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
                 <TableHead className="w-14"></TableHead>
               </TableRow>
@@ -470,18 +524,28 @@ export default function CreateTransferItemPage() {
                     <TableCell className="text-center text-[10px] font-medium text-muted-foreground uppercase">
                       {item.satuan}
                     </TableCell>
+                    <TableCell className="text-center">
+                      <div className="flex flex-col items-center leading-tight">
+                        <span className="text-xs font-bold text-foreground">
+                          {item.dest_qty} / {item.dest_max}
+                        </span>
+                        <span className="text-[9px] font-medium text-muted-foreground">
+                          sisa {item.dest_max - item.dest_qty}
+                        </span>
+                      </div>
+                    </TableCell>
                     <TableCell>
                       <div className="flex flex-col items-center gap-0.5">
                         <Input
                           type="number"
                           min={1}
-                          max={item.avail}
+                          max={maxSendable(item)}
                           value={item.qty}
                           onChange={(e) => updateQty(item.part_id, parseInt(e.target.value))}
                           className="h-8 w-20 text-center text-xs"
                         />
                         <span className="text-[9px] font-medium text-amber-600">
-                          Maks {item.avail}
+                          Maks {maxSendable(item)} (asal {item.avail})
                         </span>
                       </div>
                     </TableCell>
@@ -494,8 +558,10 @@ export default function CreateTransferItemPage() {
                 ))
               ) : (
                 <TableRow className="h-24 hover:bg-transparent">
-                  <TableCell colSpan={4} className="text-center text-xs italic text-muted-foreground">
-                    Belum ada item.
+                  <TableCell colSpan={5} className="text-center text-xs italic text-muted-foreground">
+                    {keCabang
+                      ? "Belum ada item."
+                      : "Pilih gudang tujuan dulu untuk menambahkan barang."}
                   </TableCell>
                 </TableRow>
               )}
@@ -741,7 +807,7 @@ export default function CreateTransferItemPage() {
             <div className="bg-foreground p-5 rounded-lg flex flex-col items-center gap-3">
               <ShieldCheck className="h-6 w-6 text-success" />
               <p className="text-[10px] text-background/60 text-center font-medium">
-                Stok keluar dari gudang asal setelah TI disetujui penuh.
+                Stok keluar dari gudang asal setelah IT disetujui penuh.
               </p>
               <Button
                 className="w-full h-10 bg-background text-foreground hover:bg-muted font-bold text-sm"

@@ -96,7 +96,7 @@ const data = {
   navInventory: [
     { title: "Stock", url: "/stock", icon: Archive },
     { title: "Delivery", url: "/deliveries", icon: Truck },
-    { title: "Transfer Item", url: "/transfer-item", icon: ArrowLeftRight },
+    { title: "Item Transfer", url: "/item-transfer", icon: ArrowLeftRight },
     { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
     { title: "Job Costing", url: "/job-costing", icon: Calculator },
   ],

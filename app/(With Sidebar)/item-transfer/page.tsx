@@ -27,9 +27,9 @@ import {
   Calendar as CalendarIcon,
   ChevronRight,
 } from "lucide-react";
-import { TransferItemDetailSheet } from "@/components/transfer-item/transfer-item-detail-sheet";
+import { ItemTransferDetailSheet } from "@/components/item-transfer/item-transfer-detail-sheet";
 
-export default function TransferItemPage() {
+export default function ItemTransferPage() {
   const supabase = createClient();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
@@ -59,7 +59,7 @@ export default function TransferItemPage() {
   const fetchData = async () => {
     setLoading(true);
     let query = supabase
-      .from("transfer_items")
+      .from("item_transfers")
       .select(
         "*, dari:cabang!dari_cabang_id(nama_cabang), tujuan:cabang!ke_cabang_id(nama_cabang)",
         { count: "exact" },
@@ -67,7 +67,7 @@ export default function TransferItemPage() {
 
     if (debouncedSearch) {
       query = query.or(
-        `ti_kode.ilike.%${debouncedSearch}%,pic.ilike.%${debouncedSearch}%`,
+        `it_kode.ilike.%${debouncedSearch}%,pic.ilike.%${debouncedSearch}%`,
       );
     }
     if (statusFilters.length > 0) query = query.in("status", statusFilters);
@@ -138,7 +138,7 @@ export default function TransferItemPage() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-                Transfer Item
+                Item Transfer
               </h1>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
                 Pemindahan stok antar gudang
@@ -146,10 +146,10 @@ export default function TransferItemPage() {
             </div>
           </div>
           <Button
-            onClick={() => router.push("/transfer-item/create")}
+            onClick={() => router.push("/item-transfer/create")}
             className="shrink-0 gap-2 font-bold text-xs h-9 uppercase"
           >
-            <Plus className="h-4 w-4" /> Buat Transfer Item
+            <Plus className="h-4 w-4" /> Buat Item Transfer
           </Button>
         </div>
       </Content>
@@ -159,7 +159,7 @@ export default function TransferItemPage() {
           <div className="relative min-w-0 flex-1 xl:min-w-70">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
-              placeholder="Cari Kode TI atau PIC..."
+              placeholder="Cari Kode IT atau PIC..."
               className="pl-9 h-9 bg-muted/40 text-xs font-medium"
               value={searchQuery}
               onChange={(e) => {
@@ -206,7 +206,7 @@ export default function TransferItemPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode TI</TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode IT</TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Rute Gudang</TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">Tanggal</TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">Status</TableHead>
@@ -223,7 +223,7 @@ export default function TransferItemPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]">
-                    Belum ada Transfer Item
+                    Belum ada Item Transfer
                   </TableCell>
                 </TableRow>
               ) : (
@@ -237,7 +237,7 @@ export default function TransferItemPage() {
                     }}
                   >
                     <TableCell className="font-bold text-foreground uppercase text-sm">
-                      {r.ti_kode}
+                      {r.it_kode}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase">
@@ -249,8 +249,8 @@ export default function TransferItemPage() {
                     <TableCell className="text-center">
                       <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-foreground uppercase">
                         <CalendarIcon className="h-3.5 w-3.5 text-muted-foreground/40" />
-                        {r.ti_tanggal
-                          ? new Date(r.ti_tanggal).toLocaleDateString("id-ID", {
+                        {r.it_tanggal
+                          ? new Date(r.it_tanggal).toLocaleDateString("id-ID", {
                               day: "numeric",
                               month: "short",
                               year: "numeric",
@@ -280,13 +280,13 @@ export default function TransferItemPage() {
               setLimit(parseInt(val));
               setPage(1);
             }}
-            itemLabel="Transfer Item"
+            itemLabel="Item Transfer"
           />
         </div>
       </Content>
 
-      <TransferItemDetailSheet
-        tiId={selectedId}
+      <ItemTransferDetailSheet
+        itId={selectedId}
         open={detailOpen}
         onOpenChange={setDetailOpen}
         onUpdate={fetchData}
