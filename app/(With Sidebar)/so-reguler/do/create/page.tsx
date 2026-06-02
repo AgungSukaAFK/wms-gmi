@@ -28,21 +28,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import {
   ChevronLeft,
-  ArrowLeftRight,
-  Building2,
   Truck,
+  Building2,
+  UsersRound,
   Calendar as CalendarIcon,
   Search,
   Plus,
   Trash2,
   Loader2,
-  ShieldCheck,
   Package,
   User,
   ArrowRight,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -53,48 +52,40 @@ import {
   isEkspedisi,
   defaultEstimasiHari,
 } from "@/lib/shipment";
-import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
-import { createItemTransfer } from "@/services/item-transfer-actions";
+import { createDoReguler } from "@/services/do-reguler-actions";
 
-interface ITItem {
+interface DOItem {
   part_id: number;
   part_number: string;
   part_name: string;
   satuan: string;
   qty: number;
-  avail: number; // stok tersedia di gudang asal
-  dest_qty: number; // stok saat ini di gudang tujuan
-  dest_max: number; // max_qty di gudang tujuan
+  avail: number; // stok tersedia di gudang pengirim
 }
 
-export default function CreateItemTransferPage() {
+export default function CreateDoRegulerPage() {
   const supabase = createClient();
   const router = useRouter();
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [cabangs, setCabangs] = useState<any[]>([]);
-  const [users, setUsers] = useState<any[]>([]);
-
-  // PIC & Penerima (mengikuti Delivery)
-  const [picUid, setPicUid] = useState<string>("");
-  const [receiverUid, setReceiverUid] = useState<string>("");
-  const [picSearch, setPicSearch] = useState("");
-  const [receiverSearch, setReceiverSearch] = useState("");
-  const [debouncedPicSearch] = useDebounce(picSearch, 300);
-  const [debouncedReceiverSearch] = useDebounce(receiverSearch, 300);
-  const [picPopoverOpen, setPicPopoverOpen] = useState(false);
-  const [receiverPopoverOpen, setReceiverPopoverOpen] = useState(false);
+  const [customers, setCustomers] = useState<any[]>([]);
 
   // Form
-  const [itKode, setItKode] = useState("");
-  const [itTanggal, setItTanggal] = useState(toYmdLocal());
-  const [keCabang, setKeCabang] = useState<number | null>(null);
-  const [items, setItems] = useState<ITItem[]>([]);
+  const [doKode, setDoKode] = useState("");
+  const [doTanggal, setDoTanggal] = useState(toYmdLocal());
+  const [customerId, setCustomerId] = useState<number | null>(null);
+  const [customerName, setCustomerName] = useState("");
+  const [kodePo, setKodePo] = useState("");
+  const [items, setItems] = useState<DOItem[]>([]);
   const [remarks, setRemarks] = useState("");
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+  const [pic, setPic] = useState("");
+
+  // Customer picker
+  const [customerSearch, setCustomerSearch] = useState("");
+  const [debouncedCustomerSearch] = useDebounce(customerSearch, 300);
+  const [customerPopoverOpen, setCustomerPopoverOpen] = useState(false);
 
   // Shipment
   const [shipmentType, setShipmentType] = useState<ShipmentType>("ekspedisi_laut");
@@ -111,9 +102,6 @@ export default function CreateItemTransferPage() {
   const [debouncedSearch] = useDebounce(search, 300);
   const [results, setResults] = useState<any[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
-
-  // Signature
-  const [isSignatureOpen, setIsSignatureOpen] = useState(false);
 
   useEffect(() => {
     const init = async () => {
@@ -132,34 +120,30 @@ export default function CreateItemTransferPage() {
         .single();
       setUserProfile(profile);
 
-      const { data: cabangData } = await supabase
-        .from("cabang")
-        .select("id, nama_cabang")
-        .eq("is_active", true)
-        .order("nama_cabang");
-      setCabangs((cabangData || []).filter((c: any) => c.id !== profile?.cabang_id));
-
-      const { data: usersData } = await supabase
-        .from("profiles")
-        .select("id, nama, cabang_id, cabang(nama_cabang)")
-        .eq("is_active", true)
-        .order("nama");
-      setUsers(usersData || []);
-
-      if (profile) {
-        const { data: tpl } = await supabase
-          .from("approval_templates")
-          .select("*, steps:approval_template_steps(*, profiles(nama, email))")
-          .eq("type", "Item Transfer")
-          .or(`cabang_id.eq.${profile.cabang_id},cabang_id.is.null`)
-          .order("name");
-        setTemplates(tpl || []);
-        if (tpl && tpl.length > 0) setSelectedTemplateId(tpl[0].id.toString());
-      }
       setInitialLoading(false);
     };
     init();
   }, []);
+
+  // Search customer (server-side, dibatasi 20 hasil — tidak get-all)
+  useEffect(() => {
+    if (!customerPopoverOpen) return;
+    const run = async () => {
+      let q = supabase
+        .from("customers")
+        .select("id, customer_no, customer_name")
+        .eq("is_active", true)
+        .order("customer_name")
+        .limit(20);
+      if (debouncedCustomerSearch)
+        q = q.or(
+          `customer_name.ilike.%${debouncedCustomerSearch}%,customer_no.ilike.%${debouncedCustomerSearch}%`,
+        );
+      const { data } = await q;
+      setCustomers(data || []);
+    };
+    run();
+  }, [debouncedCustomerSearch, customerPopoverOpen]);
 
   // Search barang
   useEffect(() => {
@@ -179,14 +163,10 @@ export default function CreateItemTransferPage() {
   const addItem = async (barang: any) => {
     if (items.some((i) => i.part_id === barang.id)) return;
     if (!userProfile?.cabang_id) {
-      toast.error("Cabang asal tidak diketahui.");
+      toast.error("Gudang pengirim tidak diketahui.");
       return;
     }
-    if (!keCabang) {
-      toast.error("Pilih gudang tujuan terlebih dahulu.");
-      return;
-    }
-    // Ambil stok PN ini di gudang asal
+    // Ambil stok PN ini di gudang pengirim
     const { data: stock } = await supabase
       .from("stock")
       .select("qty")
@@ -196,29 +176,7 @@ export default function CreateItemTransferPage() {
     const avail = stock?.qty ?? 0;
     if (avail <= 0) {
       toast.error(
-        `Stok ${barang.part_number} di gudang Anda kosong. Tidak bisa ditransfer.`,
-      );
-      return;
-    }
-    // Ambil stok & batas max di gudang tujuan
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("qty, max_qty")
-      .eq("part_id", barang.id)
-      .eq("cabang_id", keCabang)
-      .maybeSingle();
-    const destQty = destStock?.qty ?? 0;
-    const destMax = destStock?.max_qty ?? 0;
-    if (destMax <= 0) {
-      toast.error(
-        `${barang.part_number} belum punya batas max stok di gudang tujuan. Belum bisa ditransfer.`,
-      );
-      return;
-    }
-    const headroom = destMax - destQty;
-    if (headroom <= 0) {
-      toast.error(
-        `Stok ${barang.part_number} di gudang tujuan sudah penuh (${destQty}/${destMax}).`,
+        `Stok ${barang.part_number} di gudang Anda kosong. Tidak bisa dikirim.`,
       );
       return;
     }
@@ -231,23 +189,24 @@ export default function CreateItemTransferPage() {
         satuan: barang.part_satuan,
         qty: 1,
         avail,
-        dest_qty: destQty,
-        dest_max: destMax,
       },
     ]);
     setSearchOpen(false);
     setSearch("");
   };
 
-  // Batas maksimal qty yang boleh dikirim: stok asal & sisa kapasitas tujuan
-  const maxSendable = (i: ITItem) =>
-    Math.max(0, Math.min(i.avail, i.dest_max - i.dest_qty));
-
   const updateQty = (partId: number, qty: number) => {
+    const target = items.find((i) => i.part_id === partId);
+    const requested = qty || 1;
+    if (target && requested > target.avail) {
+      toast.warning(
+        `${target.part_number}: maksimal ${target.avail} (tidak boleh lebih dari stok gudang pengirim).`,
+      );
+    }
     setItems((prev) =>
       prev.map((i) =>
         i.part_id === partId
-          ? { ...i, qty: Math.max(1, Math.min(qty || 1, maxSendable(i))) }
+          ? { ...i, qty: Math.max(1, Math.min(requested, i.avail)) }
           : i,
       ),
     );
@@ -257,12 +216,10 @@ export default function CreateItemTransferPage() {
     setItems((prev) => prev.filter((i) => i.part_id !== partId));
 
   const validate = () => {
-    if (!itKode.trim()) return "Kode Item Transfer wajib diisi.";
-    if (!keCabang) return "Pilih gudang tujuan.";
+    if (!doKode.trim()) return "Kode DO Reguler wajib diisi.";
+    if (!userProfile?.cabang_id) return "Gudang pengirim tidak diketahui.";
+    if (!customerId) return "Pilih customer tujuan.";
     if (items.length === 0) return "Tambahkan minimal satu item.";
-    if (!picUid) return "PIC harus dipilih.";
-    if (!receiverUid) return "Penerima harus dipilih.";
-    if (!selectedTemplateId) return "Pilih alur approval.";
     if (isEkspedisi(shipmentType) && !ekspedisiCourier.trim())
       return "Isi nama ekspedisi/kurir.";
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider.trim())
@@ -270,50 +227,17 @@ export default function CreateItemTransferPage() {
     return null;
   };
 
-  const handleSubmitClick = () => {
+  const handleSubmit = async () => {
     const err = validate();
     if (err) return toast.error(err);
-    setIsSignatureOpen(true);
-  };
-
-  const handleConfirmSignature = async (signature: any) => {
     setLoading(true);
     try {
-      const template = templates.find(
-        (t) => t.id.toString() === selectedTemplateId,
-      );
-      if (!template) throw new Error("Template tidak valid");
-
-      const sortedSteps = [...(template.steps || [])].sort(
-        (a: any, b: any) => a.step_order - b.step_order,
-      );
-      const approvalData = sortedSteps.map((step: any) => {
-        const isFirst = step.step_order === 1;
-        return {
-          step_id: step.id,
-          step_order: step.step_order,
-          level: step.level,
-          status: isFirst ? "approved" : "pending",
-          user_id: isFirst ? userProfile.id : step.user_id || null,
-          nama: isFirst
-            ? userProfile.nama
-            : step.profiles?.nama || "Unknown Approver",
-          email: isFirst ? userProfile.email : step.profiles?.email || "-",
-          role: isFirst
-            ? "Requester"
-            : step.level === "menyetujui"
-              ? "Approver"
-              : "Reviewer",
-          processed_at: isFirst ? new Date().toISOString() : null,
-          signature_url: isFirst ? signature.image_url : null,
-        };
-      });
-
-      const result = await createItemTransfer({
-        it_kode: itKode.trim(),
-        it_tanggal: itTanggal,
+      const result = await createDoReguler({
+        do_kode: doKode.trim(),
+        do_tanggal: doTanggal,
         dari_cabang_id: userProfile.cabang_id,
-        ke_cabang_id: keCabang!,
+        customer_id: customerId!,
+        kode_po: kodePo || undefined,
         shipment_type: shipmentType,
         ekspedisi:
           isEkspedisi(shipmentType)
@@ -322,20 +246,22 @@ export default function CreateItemTransferPage() {
               ? eksternalProvider
               : "Handcarry Internal",
         sender_name:
-          shipmentType === "handcarry_internal" ? senderName || undefined : undefined,
+          shipmentType === "handcarry_internal"
+            ? senderName || undefined
+            : undefined,
         eksternal_provider:
-          shipmentType === "handcarry_eksternal" ? eksternalProvider || undefined : undefined,
+          shipmentType === "handcarry_eksternal"
+            ? eksternalProvider || undefined
+            : undefined,
         eksternal_id:
-          shipmentType === "handcarry_eksternal" ? eksternalId || undefined : undefined,
+          shipmentType === "handcarry_eksternal"
+            ? eksternalId || undefined
+            : undefined,
         jumlah_koli: jumlahKoli,
         no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
         estimasi_hari: estimasiHari,
-        pic: picName || userProfile.nama,
-        uid_pic: picUid || undefined,
-        uid_receiver: receiverUid || undefined,
+        pic: pic || undefined,
         remarks: remarks || undefined,
-        signature_requester_id: signature.id,
-        approvals: approvalData,
         items: items.map((i) => ({
           part_id: i.part_id,
           part_number: i.part_number,
@@ -346,20 +272,14 @@ export default function CreateItemTransferPage() {
       });
 
       if (result.error) throw new Error(result.error);
-      toast.success("Item Transfer berhasil dibuat");
-      router.push("/item-transfer");
+      toast.success("DO Reguler berhasil dibuat");
+      router.push("/so-reguler/do");
     } catch (e: any) {
       toast.error(e.message);
     } finally {
       setLoading(false);
     }
   };
-
-  const selectedTemplate = templates.find(
-    (t) => t.id.toString() === selectedTemplateId,
-  );
-  const picName = users.find((u) => u.id === picUid)?.nama;
-  const receiverName = users.find((u) => u.id === receiverUid)?.nama;
 
   if (initialLoading) {
     return (
@@ -377,14 +297,14 @@ export default function CreateItemTransferPage() {
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="h-10 w-10 bg-primary rounded flex items-center justify-center text-primary-foreground">
-            <ArrowLeftRight className="h-5 w-5" />
+            <Truck className="h-5 w-5" />
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-              Buat Item Transfer
+              Buat DO Reguler
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-              Pindahkan stok dari gudang Anda ke gudang lain
+              Kirim stok dari gudang Anda ke customer (tanpa SPB)
             </p>
           </div>
         </div>
@@ -394,11 +314,11 @@ export default function CreateItemTransferPage() {
       <Content>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Kode IT</Label>
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Kode DO</Label>
             <Input
-              placeholder="Input Kode IT..."
-              value={itKode}
-              onChange={(e) => setItKode(e.target.value)}
+              placeholder="Input Kode DO..."
+              value={doKode}
+              onChange={(e) => setDoKode(e.target.value)}
               className="h-10 text-sm font-semibold uppercase"
             />
           </div>
@@ -406,11 +326,11 @@ export default function CreateItemTransferPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <CalendarIcon className="h-3 w-3" /> Tanggal
             </Label>
-            <DatePickerString value={itTanggal} onChange={setItTanggal} className="h-10" />
+            <DatePickerString value={doTanggal} onChange={setDoTanggal} className="h-10" />
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-              <Building2 className="h-3 w-3" /> Gudang Asal
+              <Building2 className="h-3 w-3" /> Gudang Pengirim
             </Label>
             <div className="h-10 rounded-md border border-input bg-muted/40 px-3 flex items-center text-sm font-bold uppercase">
               {userProfile?.cabang?.nama_cabang || "-"}
@@ -418,37 +338,72 @@ export default function CreateItemTransferPage() {
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-              <Building2 className="h-3 w-3 text-success" /> Gudang Tujuan
+              <UsersRound className="h-3 w-3 text-success" /> Customer Tujuan
             </Label>
-            <Select
-              value={keCabang?.toString()}
-              onValueChange={(v) => {
-                setKeCabang(parseInt(v));
-                if (items.length > 0) {
-                  setItems([]);
-                  toast.info(
-                    "Daftar item direset karena gudang tujuan berubah.",
-                  );
-                }
-              }}
-            >
-              <SelectTrigger className="h-10 text-sm font-bold">
-                <SelectValue placeholder="Pilih gudang tujuan..." />
-              </SelectTrigger>
-              <SelectContent>
-                {cabangs.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={customerPopoverOpen} onOpenChange={setCustomerPopoverOpen}>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="h-10 w-full justify-start font-bold text-sm">
+                  {customerName || "Pilih customer..."}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-80 p-0 overflow-hidden" align="start">
+                <div className="p-2 border-b bg-muted/40">
+                  <Input
+                    placeholder="Cari customer..."
+                    className="h-9 text-xs"
+                    value={customerSearch}
+                    onChange={(e) => setCustomerSearch(e.target.value)}
+                  />
+                </div>
+                <div className="max-h-62.5 overflow-y-auto p-1.5">
+                  {customers.map((c) => (
+                    <button
+                      key={c.id}
+                      onClick={() => {
+                        setCustomerId(c.id);
+                        setCustomerName(c.customer_name);
+                        setCustomerPopoverOpen(false);
+                        setCustomerSearch("");
+                      }}
+                      className="w-full text-left p-3 rounded-lg flex items-center justify-between group mb-1 hover:bg-muted"
+                    >
+                      <div className="flex flex-col">
+                        <span className="font-bold text-xs uppercase">{c.customer_name}</span>
+                        <span className="text-[9px] opacity-60">{c.customer_no}</span>
+                      </div>
+                      <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100" />
+                    </button>
+                  ))}
+                  {customers.length === 0 && (
+                    <div className="p-6 text-center text-xs text-muted-foreground italic">
+                      {debouncedCustomerSearch
+                        ? "Customer tidak ditemukan."
+                        : "Ketik untuk mencari customer..."}
+                    </div>
+                  )}
+                </div>
+              </PopoverContent>
+            </Popover>
           </div>
         </div>
       </Content>
 
-      {/* Items */}
+      {/* Kode PO + Items */}
       <Content>
+        <div className="mb-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+              <FileText className="h-3 w-3" /> Kode PO
+            </Label>
+            <Input
+              placeholder="Input Kode PO (opsional)..."
+              value={kodePo}
+              onChange={(e) => setKodePo(e.target.value)}
+              className="h-10 text-sm font-semibold uppercase"
+            />
+          </div>
+        </div>
+
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
             <Package className="h-4 w-4 text-muted-foreground" />
@@ -456,15 +411,7 @@ export default function CreateItemTransferPage() {
           </div>
           <Popover open={searchOpen} onOpenChange={setSearchOpen}>
             <PopoverTrigger asChild>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8 gap-2"
-                disabled={!keCabang}
-                title={
-                  !keCabang ? "Pilih gudang tujuan terlebih dahulu" : undefined
-                }
-              >
+              <Button variant="outline" size="sm" className="h-8 gap-2">
                 <Plus className="h-3.5 w-3.5" /> Tambah Item
               </Button>
             </PopoverTrigger>
@@ -511,7 +458,6 @@ export default function CreateItemTransferPage() {
               <TableRow className="h-10 hover:bg-transparent">
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Part</TableHead>
                 <TableHead className="w-20 text-center text-[10px] font-black uppercase text-muted-foreground">Unit</TableHead>
-                <TableHead className="w-28 text-center text-[10px] font-black uppercase text-muted-foreground">Stok Tujuan</TableHead>
                 <TableHead className="w-36 text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
                 <TableHead className="w-14"></TableHead>
               </TableRow>
@@ -527,28 +473,18 @@ export default function CreateItemTransferPage() {
                     <TableCell className="text-center text-[10px] font-medium text-muted-foreground uppercase">
                       {item.satuan}
                     </TableCell>
-                    <TableCell className="text-center">
-                      <div className="flex flex-col items-center leading-tight">
-                        <span className="text-xs font-bold text-foreground">
-                          {item.dest_qty} / {item.dest_max}
-                        </span>
-                        <span className="text-[9px] font-medium text-muted-foreground">
-                          sisa {item.dest_max - item.dest_qty}
-                        </span>
-                      </div>
-                    </TableCell>
                     <TableCell>
                       <div className="flex flex-col items-center gap-0.5">
                         <Input
                           type="number"
                           min={1}
-                          max={maxSendable(item)}
+                          max={item.avail}
                           value={item.qty}
                           onChange={(e) => updateQty(item.part_id, parseInt(e.target.value))}
                           className="h-8 w-20 text-center text-xs"
                         />
                         <span className="text-[9px] font-medium text-amber-600">
-                          Maks {maxSendable(item)} (asal {item.avail})
+                          Stok gudang {item.avail}
                         </span>
                       </div>
                     </TableCell>
@@ -561,10 +497,8 @@ export default function CreateItemTransferPage() {
                 ))
               ) : (
                 <TableRow className="h-24 hover:bg-transparent">
-                  <TableCell colSpan={5} className="text-center text-xs italic text-muted-foreground">
-                    {keCabang
-                      ? "Belum ada item."
-                      : "Pilih gudang tujuan dulu untuk menambahkan barang."}
+                  <TableCell colSpan={4} className="text-center text-xs italic text-muted-foreground">
+                    Belum ada item.
                   </TableCell>
                 </TableRow>
               )}
@@ -679,6 +613,13 @@ export default function CreateItemTransferPage() {
             <Input type="number" min={1} value={estimasiHari} onChange={(e) => setEstimasiHari(Math.max(1, parseInt(e.target.value) || 1))} className="h-10 text-sm" />
           </div>
 
+          <div className="space-y-1.5">
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+              <User className="h-3 w-3" /> PIC
+            </Label>
+            <Input value={pic} onChange={(e) => setPic(e.target.value)} placeholder="Penanggung jawab (opsional)" className="h-10 text-sm" />
+          </div>
+
           <div className="space-y-1.5 md:col-span-2 xl:col-span-3">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">Keterangan</Label>
             <Textarea value={remarks} onChange={(e) => setRemarks(e.target.value)} placeholder="Catatan tambahan (opsional)..." className="min-h-16 resize-none text-xs" />
@@ -686,150 +627,22 @@ export default function CreateItemTransferPage() {
         </div>
       </Content>
 
-      {/* PIC & Penerima */}
+      {/* Submit */}
       <Content>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-              <User className="h-3 w-3" /> Penanggung Jawab (PIC)
-            </Label>
-            <Popover open={picPopoverOpen} onOpenChange={setPicPopoverOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="h-10 w-full justify-start font-bold text-sm bg-muted/40">
-                  {picName || "Pilih PIC..."}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 p-0 overflow-hidden">
-                <div className="p-2 border-b bg-muted/40">
-                  <Input placeholder="Cari user..." className="h-9 text-xs" value={picSearch} onChange={(e) => setPicSearch(e.target.value)} />
-                </div>
-                <div className="max-h-62.5 overflow-y-auto p-1.5">
-                  {users
-                    .filter((u) => u.nama.toLowerCase().includes(debouncedPicSearch.toLowerCase()))
-                    .map((u) => (
-                      <button
-                        key={u.id}
-                        onClick={() => {
-                          setPicUid(u.id);
-                          setPicPopoverOpen(false);
-                          setPicSearch("");
-                        }}
-                        className="w-full text-left p-3 rounded-lg flex items-center justify-between group mb-1 hover:bg-muted"
-                      >
-                        <div className="flex flex-col">
-                          <span className="font-bold text-xs uppercase">{u.nama}</span>
-                          <span className="text-[9px] opacity-60">{u.cabang?.nama_cabang || "No Cabang"}</span>
-                        </div>
-                        <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100" />
-                      </button>
-                    ))}
-                </div>
-              </PopoverContent>
-            </Popover>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-              <User className="h-3 w-3" /> Penerima
-            </Label>
-            <Popover open={receiverPopoverOpen} onOpenChange={setReceiverPopoverOpen}>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="h-10 w-full justify-start font-bold text-sm bg-muted/40">
-                  {receiverName || "Pilih Penerima..."}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-80 p-0 overflow-hidden">
-                <div className="p-2 border-b bg-muted/40">
-                  <Input placeholder="Cari user..." className="h-9 text-xs" value={receiverSearch} onChange={(e) => setReceiverSearch(e.target.value)} />
-                </div>
-                <div className="max-h-62.5 overflow-y-auto p-1.5">
-                  {users
-                    .filter((u) => u.nama.toLowerCase().includes(debouncedReceiverSearch.toLowerCase()))
-                    .map((u) => (
-                      <button
-                        key={u.id}
-                        onClick={() => {
-                          setReceiverUid(u.id);
-                          setReceiverPopoverOpen(false);
-                          setReceiverSearch("");
-                        }}
-                        className="w-full text-left p-3 rounded-lg flex items-center justify-between group mb-1 hover:bg-muted"
-                      >
-                        <div className="flex flex-col">
-                          <span className="font-bold text-xs uppercase">{u.nama}</span>
-                          <span className="text-[9px] opacity-60">{u.cabang?.nama_cabang || "No Cabang"}</span>
-                        </div>
-                        <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100" />
-                      </button>
-                    ))}
-                </div>
-              </PopoverContent>
-            </Popover>
-          </div>
+        <div className="flex flex-col lg:flex-row justify-between gap-6 lg:items-center">
+          <p className="text-[11px] text-muted-foreground font-medium max-w-125">
+            DO Reguler tanpa approval. Stok langsung keluar dari gudang pengirim
+            saat DO dibuat. Pembatalan hanya oleh moderator (stok dikembalikan).
+          </p>
+          <Button
+            className="h-10 lg:w-70 font-bold text-sm uppercase"
+            onClick={handleSubmit}
+            disabled={loading}
+          >
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Buat DO Reguler"}
+          </Button>
         </div>
       </Content>
-
-      {/* Approval + submit */}
-      <Content>
-        <div className="flex flex-col lg:flex-row justify-between gap-6">
-          <div className="flex-1 space-y-1.5 max-w-full lg:max-w-125">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Alur Approval (Item Transfer)</Label>
-            <Select value={selectedTemplateId} onValueChange={setSelectedTemplateId}>
-              <SelectTrigger className="h-10 text-sm font-semibold">
-                <SelectValue placeholder="Pilih template approval..." />
-              </SelectTrigger>
-              <SelectContent>
-                {templates.map((t) => (
-                  <SelectItem key={t.id} value={t.id.toString()}>
-                    {t.name} ({t.steps?.length || 0} langkah)
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {templates.length === 0 && (
-              <p className="text-[10px] text-destructive font-medium">
-                Belum ada template approval tipe &quot;Item Transfer&quot;. Minta moderator/admin membuatnya di Approval Templates.
-              </p>
-            )}
-            {selectedTemplate && (
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {[...(selectedTemplate.steps || [])]
-                  .sort((a: any, b: any) => a.step_order - b.step_order)
-                  .map((s: any) => (
-                    <Badge key={s.id} variant="outline" className="text-[10px]">
-                      {s.step_order}.{" "}
-                      {s.approver_type === "requester"
-                        ? userProfile?.nama
-                        : s.profiles?.nama || "User"}
-                    </Badge>
-                  ))}
-              </div>
-            )}
-          </div>
-
-          <div className="w-full lg:w-70">
-            <div className="bg-foreground p-5 rounded-lg flex flex-col items-center gap-3">
-              <ShieldCheck className="h-6 w-6 text-success" />
-              <p className="text-[10px] text-background/60 text-center font-medium">
-                Stok keluar dari gudang asal setelah IT disetujui penuh.
-              </p>
-              <Button
-                className="w-full h-10 bg-background text-foreground hover:bg-muted font-bold text-sm"
-                onClick={handleSubmitClick}
-                disabled={loading}
-              >
-                {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "SIGN & SUBMIT"}
-              </Button>
-            </div>
-          </div>
-        </div>
-      </Content>
-
-      <MRSignatureDialog
-        open={isSignatureOpen}
-        onOpenChange={setIsSignatureOpen}
-        onConfirm={handleConfirmSignature}
-      />
     </>
   );
 }

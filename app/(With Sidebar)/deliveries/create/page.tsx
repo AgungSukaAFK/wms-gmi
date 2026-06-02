@@ -44,6 +44,12 @@ import { useDebounce } from "use-debounce";
 import { createDelivery } from "@/services/inventory-actions";
 import { cn, toYmdLocal } from "@/lib/utils";
 import {
+  type ShipmentType,
+  isEkspedisi,
+  defaultEstimasiHari,
+  SHIPMENT_LABEL,
+} from "@/lib/shipment";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -80,15 +86,13 @@ export default function CreateDeliveryPage() {
   const [dariCabang, setDariCabang] = useState<number | null>(null);
   const [keCabang, setKeCabang] = useState<number | null>(null);
   // Shipment type
-  const [shipmentType, setShipmentType] = useState<
-    "handcarry_internal" | "handcarry_eksternal" | "ekspedisi"
-  >("ekspedisi");
+  const [shipmentType, setShipmentType] = useState<ShipmentType>("ekspedisi_laut");
   const [senderName, setSenderName] = useState("");
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
-  // Estimasi pengiriman (hari) — default 5 untuk ekspedisi, 1 untuk handcarry
-  const [estimasiHari, setEstimasiHari] = useState(5);
+  // Estimasi pengiriman (hari) — default sesuai jenis pengiriman (laut 14, udara 5, handcarry 1)
+  const [estimasiHari, setEstimasiHari] = useState(14);
   const [jumlahKoli, setJumlahKoli] = useState(1);
   const [picUid, setPicUid] = useState<string>("");
   const [receiverUid, setReceiverUid] = useState<string>("");
@@ -319,7 +323,7 @@ export default function CreateDeliveryPage() {
     if (!keCabang) return toast.error("Cabang tujuan harus dipilih");
     if (dariCabang === keCabang)
       return toast.error("Cabang asal dan tujuan tidak boleh sama");
-    if (shipmentType === "ekspedisi" && !ekspedisiCourier)
+    if (isEkspedisi(shipmentType) && !ekspedisiCourier)
       return toast.error("Pilih kurir ekspedisi");
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider)
       return toast.error("Pilih layanan handcarry eksternal");
@@ -339,7 +343,7 @@ export default function CreateDeliveryPage() {
         ke_cabang_id: keCabang,
         shipment_type: shipmentType,
         ekspedisi:
-          shipmentType === "ekspedisi"
+          isEkspedisi(shipmentType)
             ? ekspedisiCourier
             : shipmentType === "handcarry_eksternal"
               ? eksternalProvider
@@ -356,7 +360,7 @@ export default function CreateDeliveryPage() {
           shipmentType === "handcarry_eksternal"
             ? eksternalId || undefined
             : undefined,
-        no_resi: shipmentType === "ekspedisi" ? noResi || undefined : undefined,
+        no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
         estimasi_hari: estimasiHari,
         jumlah_koli: jumlahKoli,
         uid_pic: picUid,
@@ -601,13 +605,10 @@ export default function CreateDeliveryPage() {
               <Select
                 value={shipmentType}
                 onValueChange={(v) => {
-                  const t = v as
-                    | "handcarry_internal"
-                    | "handcarry_eksternal"
-                    | "ekspedisi";
+                  const t = v as ShipmentType;
                   setShipmentType(t);
                   // Set estimasi default sesuai jenis pengiriman (user bisa override manual)
-                  setEstimasiHari(t === "ekspedisi" ? 5 : 1);
+                  setEstimasiHari(defaultEstimasiHari(t));
                 }}
               >
                 <SelectTrigger className="h-10 font-bold text-sm border-input bg-muted/40 focus:bg-background rounded-lg">
@@ -626,8 +627,11 @@ export default function CreateDeliveryPage() {
                   >
                     🛵 Handcarry Eksternal
                   </SelectItem>
-                  <SelectItem value="ekspedisi" className="font-bold text-xs">
-                    📦 Ekspedisi
+                  <SelectItem value="ekspedisi_laut" className="font-bold text-xs">
+                    🚢 Ekspedisi Laut
+                  </SelectItem>
+                  <SelectItem value="ekspedisi_udara" className="font-bold text-xs">
+                    ✈️ Ekspedisi Udara
                   </SelectItem>
                 </SelectContent>
               </Select>
@@ -647,9 +651,9 @@ export default function CreateDeliveryPage() {
                 className="h-10 font-bold text-sm border-input bg-muted/40 focus:bg-background rounded-lg"
               />
               <p className="text-[10px] text-muted-foreground/70 font-medium px-0.5">
-                Default {shipmentType === "ekspedisi" ? "5" : "1"} hari untuk{" "}
-                {shipmentType === "ekspedisi" ? "ekspedisi" : "handcarry"}. Bisa
-                diubah manual.
+                Default {defaultEstimasiHari(shipmentType)} hari untuk{" "}
+                {SHIPMENT_LABEL[shipmentType] || shipmentType}. Bisa diubah
+                manual.
               </p>
             </div>
           </div>
@@ -870,7 +874,7 @@ export default function CreateDeliveryPage() {
             </>
           )}
 
-          {shipmentType === "ekspedisi" && (
+          {isEkspedisi(shipmentType) && (
             <>
               <div className="space-y-1.5">
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5 px-0.5">

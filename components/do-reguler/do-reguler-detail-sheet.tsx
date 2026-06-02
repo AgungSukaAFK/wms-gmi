@@ -23,13 +23,12 @@ import {
   Loader2,
   ArrowRight,
   CheckCircle2,
-  XCircle,
   Truck,
   Package,
   User,
   Clock,
-  PackageCheck,
-  Printer,
+  FileText,
+  XCircle,
 } from "lucide-react";
 import {
   Select,
@@ -42,14 +41,11 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
-import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import {
-  approveItemTransfer,
-  rejectItemTransfer,
-  updateItemTransferTracking,
-  updateItemTransferTrackingModerator,
-  finalizeItemTransfer,
-} from "@/services/item-transfer-actions";
+  updateDoRegulerTracking,
+  updateDoRegulerTrackingModerator,
+  cancelDoReguler,
+} from "@/services/do-reguler-actions";
 
 const TRACKING_ORDER = [
   "created",
@@ -59,54 +55,49 @@ const TRACKING_ORDER = [
   "delivered",
 ];
 const TRACKING_LABEL: Record<string, string> = {
-  created: "Item Transfer Dibuat",
+  created: "DO Reguler Dibuat",
   packing: "Packing",
   ready_pickup: "Siap Diambil",
   in_transit: "Dalam Pengiriman",
   delivered: "Barang Diterima",
-  completed: "Selesai Final",
 };
-// Timeline lengkap (termasuk "completed") - mirip Delivery
-const TRACKING_FULL_ORDER = [...TRACKING_ORDER, "completed"];
 const isTrackingStepCompleted = (
   current: string | undefined,
   stepId: string,
 ) => {
-  const ci = TRACKING_FULL_ORDER.indexOf(current || "created");
-  const si = TRACKING_FULL_ORDER.indexOf(stepId);
+  const ci = TRACKING_ORDER.indexOf(current || "created");
+  const si = TRACKING_ORDER.indexOf(stepId);
   return ci > si;
 };
 
 interface Props {
-  itId: number | null;
+  doId: number | null;
   open: boolean;
   onOpenChange: (o: boolean) => void;
   onUpdate?: () => void;
 }
 
-export function ItemTransferDetailSheet({
-  itId,
+export function DoRegulerDetailSheet({
+  doId,
   open,
   onOpenChange,
   onUpdate,
 }: Props) {
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
-  const [it, setIt] = useState<any>(null);
+  const [doRow, setDoRow] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
   const [me, setMe] = useState<{ id: string; cabang_id: number | null } | null>(
     null,
   );
-  const [busy, setBusy] = useState(false);
-  const [sigOpen, setSigOpen] = useState(false);
-  const [sigMode, setSigMode] = useState<"approve" | "finalize" | null>(null);
   const [roleNames, setRoleNames] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
   const [moderatorTrackingStatus, setModeratorTrackingStatus] =
     useState("created");
   const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
 
   const fetchData = async () => {
-    if (!itId) return;
+    if (!doId) return;
     setLoading(true);
     const {
       data: { user },
@@ -123,44 +114,44 @@ export function ItemTransferDetailSheet({
         .filter((name: string | undefined): name is string => Boolean(name));
       setRoleNames(rNames);
     }
-    const { data: itData } = await supabase
-      .from("item_transfers")
+    const { data: doData } = await supabase
+      .from("do_reguler")
       .select(
-        "*, dari:cabang!dari_cabang_id(nama_cabang), tujuan:cabang!ke_cabang_id(nama_cabang)",
+        "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name, customer_no)",
       )
-      .eq("id", itId)
+      .eq("id", doId)
       .single();
-    setIt(itData);
-    setModeratorTrackingStatus(itData?.tracking_status || "created");
-    setModeratorTrackingNote(itData?.tracking_note || "");
+    setDoRow(doData);
+    setModeratorTrackingStatus(doData?.tracking_status || "created");
+    setModeratorTrackingNote(doData?.tracking_note || "");
     const { data: itemData } = await supabase
-      .from("item_transfer_items")
+      .from("do_reguler_items")
       .select("*")
-      .eq("it_id", itId);
+      .eq("do_id", doId);
     setItems(itemData || []);
     setLoading(false);
   };
 
   useEffect(() => {
-    if (open && itId) fetchData();
+    if (open && doId) fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, itId]);
+  }, [open, doId]);
 
-  const pendingApproval =
-    it?.approvals?.find((a: any) => a.status === "pending") || null;
-  const canApprove =
-    it?.status === "open" && pendingApproval && pendingApproval.user_id === me?.id;
-  const isSender = me?.cabang_id != null && me.cabang_id === it?.dari_cabang_id;
-  const isReceiver = me?.cabang_id != null && me.cabang_id === it?.ke_cabang_id;
+  const isModerator = roleNames.some((r) => r === "moderator");
+  const isModeratorOrAdmin = roleNames.some(
+    (r) => r === "moderator" || r === "admin",
+  );
+  const isCreator = doRow?.uid_requester === me?.id;
+  const isSenderStaff =
+    me?.cabang_id != null && me.cabang_id === doRow?.dari_cabang_id;
+
   const canTrack =
-    it?.status === "approved" && it?.tracking_status !== "completed" && isSender;
-  const canFinalize =
-    it?.status === "approved" &&
-    it?.tracking_status === "delivered" &&
-    isReceiver;
+    doRow?.status === "active" &&
+    doRow?.tracking_status !== "delivered" &&
+    (isModeratorOrAdmin || isCreator || isSenderStaff);
   const nextTracking =
-    it && TRACKING_ORDER.indexOf(it.tracking_status) >= 0
-      ? TRACKING_ORDER[TRACKING_ORDER.indexOf(it.tracking_status) + 1]
+    doRow && TRACKING_ORDER.indexOf(doRow.tracking_status) >= 0
+      ? TRACKING_ORDER[TRACKING_ORDER.indexOf(doRow.tracking_status) + 1]
       : null;
 
   const refresh = async () => {
@@ -168,58 +159,21 @@ export function ItemTransferDetailSheet({
     onUpdate?.();
   };
 
-  const onSign = async (signature: any) => {
-    if (!itId || !sigMode) return;
-    setBusy(true);
-    try {
-      const res =
-        sigMode === "approve"
-          ? await approveItemTransfer(itId, signature.image_url)
-          : await finalizeItemTransfer(itId, signature.id);
-      if ((res as any).error) throw new Error((res as any).error);
-      toast.success(
-        sigMode === "approve" ? "Berhasil menyetujui" : "Barang dikonfirmasi diterima",
-      );
-      setSigMode(null);
-      await refresh();
-    } catch (e: any) {
-      toast.error(e.message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleReject = async () => {
-    if (!itId) return;
-    const reason = window.prompt("Alasan penolakan:");
-    if (reason === null) return;
-    setBusy(true);
-    const res = await rejectItemTransfer(itId, reason || "-");
-    setBusy(false);
-    if ((res as any).error) return toast.error((res as any).error);
-    toast.success("Item Transfer ditolak");
-    await refresh();
-  };
-
   const handleTrack = async () => {
-    if (!itId || !nextTracking) return;
+    if (!doId || !nextTracking) return;
     setBusy(true);
-    const res = await updateItemTransferTracking(itId, nextTracking);
+    const res = await updateDoRegulerTracking(doId, nextTracking);
     setBusy(false);
     if ((res as any).error) return toast.error((res as any).error);
     toast.success(`Tracking: ${TRACKING_LABEL[nextTracking]}`);
     await refresh();
   };
 
-  const isModeratorOrAdmin = roleNames.some(
-    (role) => role === "moderator" || role === "admin",
-  );
-
   const handleModeratorTrackingSave = async () => {
-    if (!itId) return;
+    if (!doId) return;
     setBusy(true);
-    const res = await updateItemTransferTrackingModerator(
-      itId,
+    const res = await updateDoRegulerTrackingModerator(
+      doId,
       moderatorTrackingStatus,
       moderatorTrackingNote,
     );
@@ -229,12 +183,26 @@ export function ItemTransferDetailSheet({
     await refresh();
   };
 
+  const handleCancel = async () => {
+    if (!doId) return;
+    const reason = window.prompt(
+      "Alasan pembatalan DO (stok dikembalikan ke gudang pengirim):",
+    );
+    if (reason === null) return;
+    setBusy(true);
+    const res = await cancelDoReguler(doId, reason || "-");
+    setBusy(false);
+    if ((res as any).error) return toast.error((res as any).error);
+    toast.success("DO Reguler dibatalkan, stok dikembalikan");
+    await refresh();
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 overflow-hidden">
-        {loading || !it ? (
+        {loading || !doRow ? (
           <div className="flex-1 flex items-center justify-center">
-            <SheetTitle className="sr-only">Memuat Item Transfer</SheetTitle>
+            <SheetTitle className="sr-only">Memuat DO Reguler</SheetTitle>
             <SheetDescription className="sr-only">Memuat detail.</SheetDescription>
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
@@ -243,34 +211,45 @@ export function ItemTransferDetailSheet({
             <SheetHeader className="p-6 bg-muted/40 border-b space-y-3">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
-                  <Truck className="h-3.5 w-3.5" /> Item Transfer
+                  <Truck className="h-3.5 w-3.5" /> DO Reguler
                 </span>
                 <Badge
                   variant={
-                    it.status === "rejected"
+                    doRow.status === "cancelled"
                       ? "destructive"
-                      : it.status === "completed"
+                      : doRow.status === "completed"
                         ? "default"
                         : "outline"
                   }
                   className="text-[10px] uppercase font-bold"
                 >
-                  {it.status}
+                  {doRow.status === "active"
+                    ? "Aktif"
+                    : doRow.status === "completed"
+                      ? "Selesai"
+                      : "Dibatalkan"}
                 </Badge>
               </div>
               <SheetTitle className="text-xl font-bold uppercase tracking-tight">
-                {it.it_kode}
+                {doRow.do_kode}
               </SheetTitle>
               <SheetDescription className="sr-only">
-                Detail Item Transfer {it.it_kode}
+                Detail DO Reguler {doRow.do_kode}
               </SheetDescription>
               <div className="flex items-center gap-2 text-xs font-bold uppercase">
-                {it.dari?.nama_cabang}
+                {doRow.dari?.nama_cabang}
                 <ArrowRight className="h-3.5 w-3.5 text-primary" />
-                <span className="text-success">{it.tujuan?.nama_cabang}</span>
+                <span className="text-success">
+                  {doRow.customer?.customer_name}
+                </span>
               </div>
-              <div className="flex items-center gap-2 text-[10px] font-medium text-muted-foreground uppercase">
-                <User className="h-3 w-3" /> PIC: {it.pic || "-"}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-medium text-muted-foreground uppercase">
+                <span className="flex items-center gap-1">
+                  <FileText className="h-3 w-3" /> PO: {doRow.kode_po || "-"}
+                </span>
+                <span className="flex items-center gap-1">
+                  <User className="h-3 w-3" /> PIC: {doRow.pic || "-"}
+                </span>
               </div>
             </SheetHeader>
 
@@ -310,14 +289,14 @@ export function ItemTransferDetailSheet({
                 <h4 className="text-[10px] font-black uppercase text-muted-foreground mb-1 flex items-center gap-1.5">
                   <Truck className="h-3.5 w-3.5" /> Pengiriman
                 </h4>
-                <div className="flex justify-between"><span className="text-muted-foreground">Jenis</span><span className="font-semibold">{SHIPMENT_LABEL[it.shipment_type] || it.shipment_type}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Ekspedisi/Kurir</span><span className="font-semibold">{it.ekspedisi || "-"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Koli</span><span className="font-semibold">{it.jumlah_koli}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Estimasi</span><span className="font-semibold">{it.estimasi_hari} hari</span></div>
-                {it.no_resi && <div className="flex justify-between"><span className="text-muted-foreground">No. Resi</span><span className="font-semibold">{it.no_resi}</span></div>}
+                <div className="flex justify-between"><span className="text-muted-foreground">Jenis</span><span className="font-semibold">{SHIPMENT_LABEL[doRow.shipment_type] || doRow.shipment_type}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Ekspedisi/Kurir</span><span className="font-semibold">{doRow.ekspedisi || "-"}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Koli</span><span className="font-semibold">{doRow.jumlah_koli}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Estimasi</span><span className="font-semibold">{doRow.estimasi_hari} hari</span></div>
+                {doRow.no_resi && <div className="flex justify-between"><span className="text-muted-foreground">No. Resi</span><span className="font-semibold">{doRow.no_resi}</span></div>}
               </div>
 
-              {/* Tracking Timeline (mirip Delivery) */}
+              {/* Tracking Timeline */}
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-1 bg-orange-500 rounded-full" />
@@ -327,12 +306,12 @@ export function ItemTransferDetailSheet({
                 </div>
                 <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3">
                   <div className="space-y-2.5">
-                    {TRACKING_FULL_ORDER.map((stepId, idx) => {
+                    {TRACKING_ORDER.map((stepId, idx) => {
                       const completed = isTrackingStepCompleted(
-                        it.tracking_status,
+                        doRow.tracking_status,
                         stepId,
                       );
-                      const current = it.tracking_status === stepId;
+                      const current = doRow.tracking_status === stepId;
                       return (
                         <div key={stepId} className="flex items-center gap-3">
                           <div
@@ -390,28 +369,29 @@ export function ItemTransferDetailSheet({
                     </Button>
                   )}
 
-                  {it.status === "open" && (
-                    <p className="text-[10px] font-medium text-orange-700/80 bg-white border border-orange-200 rounded-lg p-2.5">
-                      Setujui Item Transfer dulu untuk mengubah status
-                      pengiriman.
+                  {doRow.status === "cancelled" && (
+                    <p className="text-[10px] font-medium text-destructive bg-white border border-destructive/30 rounded-lg p-2.5">
+                      DO ini sudah dibatalkan. Stok telah dikembalikan ke gudang
+                      pengirim.
+                      {doRow.cancel_reason ? ` Alasan: ${doRow.cancel_reason}` : ""}
                     </p>
                   )}
 
-                  {it.tracking_note && (
+                  {doRow.tracking_note && (
                     <div className="rounded-lg border border-orange-200 bg-white p-3">
                       <p className="text-[9px] font-bold text-orange-700 uppercase mb-1">
                         Catatan Tracking
                       </p>
                       <p className="text-[11px] font-medium text-slate-700 whitespace-pre-wrap">
-                        {it.tracking_note}
+                        {doRow.tracking_note}
                       </p>
                     </div>
                   )}
                 </div>
               </div>
 
-              {/* Tracking override moderator/admin (mirip Delivery) - hanya setelah approved */}
-              {isModeratorOrAdmin && it.status === "approved" && (
+              {/* Tracking override moderator/admin */}
+              {isModeratorOrAdmin && doRow.status !== "cancelled" && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="h-4 w-1 bg-indigo-500 rounded-full" />
@@ -466,97 +446,24 @@ export function ItemTransferDetailSheet({
                   </div>
                 </div>
               )}
-
-              {/* Approval timeline */}
-              <div>
-                <h4 className="text-[10px] font-black uppercase text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <CheckCircle2 className="h-3.5 w-3.5" /> Approval
-                </h4>
-                <div className="space-y-2">
-                  {(it.approvals || []).map((a: any, i: number) => (
-                    <div key={i} className="flex items-center justify-between text-xs">
-                      <span className="font-semibold">
-                        {a.step_order}. {a.nama}
-                        <span className="ml-1 text-[10px] text-muted-foreground">({a.role})</span>
-                      </span>
-                      <Badge
-                        variant={
-                          a.status === "approved"
-                            ? "default"
-                            : a.status === "rejected"
-                              ? "destructive"
-                              : "outline"
-                        }
-                        className="text-[9px] uppercase"
-                      >
-                        {a.status}
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-                {it.status === "rejected" && it.rejection_reason && (
-                  <p className="mt-2 text-[11px] text-destructive font-medium">
-                    Alasan: {it.rejection_reason}
-                  </p>
-                )}
-              </div>
             </div>
 
             {/* Actions */}
-            <div className="border-t p-4 space-y-2 bg-background">
-                {canApprove && (
-                  <div className="flex gap-2">
-                    <Button
-                      className="flex-1 gap-2"
-                      disabled={busy}
-                      onClick={() => {
-                        setSigMode("approve");
-                        setSigOpen(true);
-                      }}
-                    >
-                      <CheckCircle2 className="h-4 w-4" /> Setujui
-                    </Button>
-                    <Button
-                      variant="outline"
-                      className="flex-1 gap-2 text-destructive hover:text-destructive"
-                      disabled={busy}
-                      onClick={handleReject}
-                    >
-                      <XCircle className="h-4 w-4" /> Tolak
-                    </Button>
-                  </div>
-                )}
-                {canFinalize && (
-                  <Button
-                    className="w-full gap-2 bg-success text-success-foreground hover:bg-success/90"
-                    disabled={busy}
-                    onClick={() => {
-                      setSigMode("finalize");
-                      setSigOpen(true);
-                    }}
-                  >
-                    <PackageCheck className="h-4 w-4" /> Konfirmasi Barang Diterima
-                  </Button>
-                )}
+            {isModerator && doRow.status !== "cancelled" && (
+              <div className="border-t p-4 bg-background">
                 <Button
                   variant="outline"
-                  className="w-full gap-2"
-                  onClick={() =>
-                    itId && window.open(`/item-transfer/${itId}/print`, "_blank")
-                  }
+                  className="w-full gap-2 text-destructive hover:text-destructive"
+                  disabled={busy}
+                  onClick={handleCancel}
                 >
-                  <Printer className="h-4 w-4" /> Cetak
+                  <XCircle className="h-4 w-4" /> Batalkan DO (Kembalikan Stok)
                 </Button>
               </div>
+            )}
           </>
         )}
       </SheetContent>
-
-      <MRSignatureDialog
-        open={sigOpen}
-        onOpenChange={setSigOpen}
-        onConfirm={onSign}
-      />
     </Sheet>
   );
 }

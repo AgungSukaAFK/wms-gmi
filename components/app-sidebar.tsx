@@ -114,6 +114,9 @@ const data = {
     { title: "Invoice", url: "/spb/invoice", icon: BadgeDollarSign },
     { title: "Return SPB", url: "/return-spb", icon: Undo2 },
   ],
+  navSoReguler: [
+    { title: "DO Reguler", url: "/so-reguler/do", icon: Truck },
+  ],
   navSecondary: [
     {
       title: "Dokumentasi",
@@ -142,6 +145,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     inventory: boolean;
     procurement: boolean;
     stockOut: boolean;
+    soReguler: boolean;
     help: boolean;
   };
 
@@ -153,6 +157,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     inventory: false,
     procurement: false,
     stockOut: false,
+    soReguler: false,
     help: false,
   };
   const [collapsedGroups, setCollapsedGroups] = React.useState<CollapsedGroups>(
@@ -389,10 +394,16 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           onToggle={() => toggleGroup("procurement")}
         />
         <NavMain
-          label="Stock Out"
+          label="Stock Out Project"
           items={markActive(data.navStockOut)}
           collapsed={collapsedGroups.stockOut}
           onToggle={() => toggleGroup("stockOut")}
+        />
+        <NavMain
+          label="SO Reguler"
+          items={markActive(data.navSoReguler)}
+          collapsed={collapsedGroups.soReguler}
+          onToggle={() => toggleGroup("soReguler")}
         />
         <NavMain
           label="Bantuan"

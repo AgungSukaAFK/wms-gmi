@@ -211,7 +211,7 @@ export async function createDelivery(data: {
     .insert([
       {
         dlv_kode: deliveryCode,
-        shipment_type: data.shipment_type || "ekspedisi",
+        shipment_type: data.shipment_type || "ekspedisi_laut",
         sender_name: data.sender_name || null,
         eksternal_provider: data.eksternal_provider || null,
         eksternal_id: data.eksternal_id || null,

@@ -615,14 +615,14 @@ async function hasCustomerWriteAccess() {
 
   const roles = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
   const allowed = roles.some((r: string) =>
-    ["logistik", "marketing", "admin"].includes(r),
+    ["marketing", "moderator"].includes(r),
   );
 
   return {
     allowed,
     error: allowed
       ? null
-      : "Akses ditolak. Hanya logistik/marketing/admin yang diizinkan.",
+      : "Akses ditolak. Hanya marketing/moderator yang diizinkan.",
   };
 }
 

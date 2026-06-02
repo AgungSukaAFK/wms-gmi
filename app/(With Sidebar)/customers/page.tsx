@@ -107,7 +107,7 @@ export default function CustomersPage() {
 
     const roles = (data || []).map((r: any) => r.roles?.name).filter(Boolean);
     setCanWrite(
-      roles.some((r: string) => ["logistik", "marketing", "admin"].includes(r)),
+      roles.some((r: string) => ["marketing", "moderator"].includes(r)),
     );
   };
 

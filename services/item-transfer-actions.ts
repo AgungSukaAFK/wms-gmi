@@ -190,7 +190,7 @@ export async function createItemTransfer(data: {
         it_tanggal: data.it_tanggal,
         dari_cabang_id: data.dari_cabang_id,
         ke_cabang_id: data.ke_cabang_id,
-        shipment_type: data.shipment_type || "ekspedisi",
+        shipment_type: data.shipment_type || "ekspedisi_laut",
         ekspedisi: data.ekspedisi || null,
         sender_name: data.sender_name || null,
         eksternal_provider: data.eksternal_provider || null,

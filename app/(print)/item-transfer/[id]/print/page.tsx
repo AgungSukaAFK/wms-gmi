@@ -18,7 +18,9 @@ const TRACKING_LABEL: Record<string, string> = {
 const SHIPMENT_LABEL: Record<string, string> = {
   handcarry_internal: "Handcarry Internal",
   handcarry_eksternal: "Handcarry Eksternal",
-  ekspedisi: "Ekspedisi",
+  ekspedisi_laut: "Ekspedisi Laut",
+  ekspedisi_udara: "Ekspedisi Udara",
+  ekspedisi: "Ekspedisi", // legacy
 };
 
 export default function ItemTransferPrintPage() {
