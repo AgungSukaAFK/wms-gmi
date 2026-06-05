@@ -86,7 +86,8 @@ export default function CreateDeliveryPage() {
   const [dariCabang, setDariCabang] = useState<number | null>(null);
   const [keCabang, setKeCabang] = useState<number | null>(null);
   // Shipment type
-  const [shipmentType, setShipmentType] = useState<ShipmentType>("ekspedisi_laut");
+  const [shipmentType, setShipmentType] =
+    useState<ShipmentType>("ekspedisi_laut");
   const [senderName, setSenderName] = useState("");
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
@@ -342,12 +343,11 @@ export default function CreateDeliveryPage() {
         dari_cabang_id: dariCabang,
         ke_cabang_id: keCabang,
         shipment_type: shipmentType,
-        ekspedisi:
-          isEkspedisi(shipmentType)
-            ? ekspedisiCourier
-            : shipmentType === "handcarry_eksternal"
-              ? eksternalProvider
-              : "Handcarry Internal",
+        ekspedisi: isEkspedisi(shipmentType)
+          ? ekspedisiCourier
+          : shipmentType === "handcarry_eksternal"
+            ? eksternalProvider
+            : "Handcarry Internal",
         sender_name:
           shipmentType === "handcarry_internal"
             ? senderName || undefined
@@ -627,10 +627,16 @@ export default function CreateDeliveryPage() {
                   >
                     🛵 Handcarry Eksternal
                   </SelectItem>
-                  <SelectItem value="ekspedisi_laut" className="font-bold text-xs">
+                  <SelectItem
+                    value="ekspedisi_laut"
+                    className="font-bold text-xs"
+                  >
                     🚢 Ekspedisi Laut
                   </SelectItem>
-                  <SelectItem value="ekspedisi_udara" className="font-bold text-xs">
+                  <SelectItem
+                    value="ekspedisi_udara"
+                    className="font-bold text-xs"
+                  >
                     ✈️ Ekspedisi Udara
                   </SelectItem>
                 </SelectContent>
@@ -889,7 +895,7 @@ export default function CreateDeliveryPage() {
                   </SelectTrigger>
                   <SelectContent>
                     {[
-                      "NE",
+                      "JNE",
                       "J&T Express",
                       "SiCepat",
                       "Pos Indonesia",
