@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { Content } from "@/components/content";
 import {
   Table,
@@ -47,7 +47,28 @@ import {
 } from "@/services/stock-actions";
 
 const TEMPLATE_SHEET = "STOCK MIN MAX";
-const N = (s: unknown) => String(s ?? "").trim().toUpperCase();
+const N = (s: unknown) =>
+  String(s ?? "")
+    .trim()
+    .toUpperCase();
+
+function fmtDur(ms: number): string {
+  const s = Math.ceil(ms / 1000);
+  if (s <= 1) return "<1 dtk";
+  if (s < 60) return `${s} dtk`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m} mnt ${r} dtk` : `${m} mnt`;
+}
+
+/** Estimasi sisa waktu dari laju progres aktual. */
+function etaText(startMs: number, done: number, total: number): string {
+  if (!startMs || done <= 0 || total <= 0 || done >= total) return "";
+  const elapsed = Date.now() - startMs;
+  if (elapsed < 400) return ""; // tunggu data cukup agar estimasi tidak liar
+  const remain = (elapsed / done) * (total - done);
+  return `Estimasi ~${fmtDur(remain)}`;
+}
 import {
   Select,
   SelectContent,
@@ -100,9 +121,10 @@ export default function StockClient({
   );
 
   const [downloading, setDownloading] = useState(false);
-  const [dlProgress, setDlProgress] = useState<{ done: number; total: number } | null>(
-    null,
-  );
+  const [dlProgress, setDlProgress] = useState<{
+    done: number;
+    total: number;
+  } | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -113,6 +135,8 @@ export default function StockClient({
   } | null>(null);
   const [problems, setProblems] = useState<MinMaxProblemReport | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const dlStartRef = useRef(0);
+  const stageStartRef = useRef(0);
 
   const handleDownloadTemplate = async () => {
     setDownloading(true);
@@ -125,6 +149,7 @@ export default function StockClient({
       }
       const { cabang, total } = meta;
       setDlProgress({ done: 0, total });
+      dlStartRef.current = Date.now();
 
       // Gabungkan per part secara case-insensitive (barang bisa punya varian
       // huruf besar/kecil untuk part yang sama → jangan jadi baris duplikat).
@@ -147,7 +172,11 @@ export default function StockClient({
           const key = r.part_number.trim().toUpperCase();
           let p = parts.get(key);
           if (!p) {
-            p = { part_number: r.part_number, name: r.part_name, cab: new Map() };
+            p = {
+              part_number: r.part_number,
+              name: r.part_name,
+              cab: new Map(),
+            };
             parts.set(key, p);
           }
           if (!p.cab.has(r.cabang_id))
@@ -185,10 +214,16 @@ export default function StockClient({
       const guide = XLSX.utils.aoa_to_sheet([
         ["PETUNJUK PENGISIAN MIN / MAX STOCK"],
         [""],
-        ["1. Kolom QTY = stok saat ini, HANYA ACUAN. Tidak diubah saat import."],
+        [
+          "1. Kolom QTY = stok saat ini, HANYA ACUAN. Tidak diubah saat import.",
+        ],
         ["2. Kolom MIN / MAX = silakan diedit sesuai kebutuhan tiap cabang."],
-        ["3. JANGAN mengubah/menghapus kolom 'No. Barang' & 'Deskripsi Barang'."],
-        ["4. JANGAN menambah/menghapus/menggeser kolom. Isi angka bulat (>= 0)."],
+        [
+          "3. JANGAN mengubah/menghapus kolom 'No. Barang' & 'Deskripsi Barang'.",
+        ],
+        [
+          "4. JANGAN menambah/menghapus/menggeser kolom. Isi angka bulat (>= 0).",
+        ],
         ["5. Simpan tetap .xlsx, lalu upload via tombol 'Update Min/Max'."],
       ]);
       guide["!cols"] = [{ wch: 90 }];
@@ -239,7 +274,10 @@ export default function StockClient({
         return;
       }
       const header = (aoa[0] || []).map((h) => String(h ?? "").trim());
-      if (N(header[0]) !== "NO. BARANG" || N(header[1]) !== "DESKRIPSI BARANG") {
+      if (
+        N(header[0]) !== "NO. BARANG" ||
+        N(header[1]) !== "DESKRIPSI BARANG"
+      ) {
         toast.error(
           "Struktur tidak sesuai template: kolom 1 & 2 harus 'No. Barang' & 'Deskripsi Barang'.",
         );
@@ -254,11 +292,14 @@ export default function StockClient({
       header.forEach((name, idx) => {
         const up = name.toUpperCase();
         if (up.endsWith(" MIN")) colFor(name.slice(0, -4).trim()).min = idx;
-        else if (up.endsWith(" MAX")) colFor(name.slice(0, -4).trim()).max = idx;
+        else if (up.endsWith(" MAX"))
+          colFor(name.slice(0, -4).trim()).max = idx;
       });
       const cabNames = [...cols.keys()];
       if (cabNames.length === 0) {
-        toast.error("Tidak ada kolom MIN/MAX cabang. File tidak sesuai template.");
+        toast.error(
+          "Tidak ada kolom MIN/MAX cabang. File tidak sesuai template.",
+        );
         return;
       }
       const valid = new Set(cabangList.map((c: any) => N(c.nama_cabang)));
@@ -300,6 +341,7 @@ export default function StockClient({
       // 3. Stage per chunk (progress)
       batchCode = `MINMAX_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
       const CHUNK = 5000;
+      stageStartRef.current = Date.now();
       setUpProgress({ phase: "Mengunggah data", done: 0, total: rows.length });
       for (let i = 0; i < rows.length; i += CHUNK) {
         const res = await stageMinMaxChunk(batchCode, rows.slice(i, i + CHUNK));
@@ -316,7 +358,11 @@ export default function StockClient({
       }
 
       // 4. Validasi detail (server / DB)
-      setUpProgress({ phase: "Memvalidasi", done: rows.length, total: rows.length });
+      setUpProgress({
+        phase: "Memvalidasi",
+        done: rows.length,
+        total: rows.length,
+      });
       const val = await validateMinMaxBatch(batchCode);
       if (!val.success) {
         setUploadError(val.error);
@@ -331,13 +377,19 @@ export default function StockClient({
         rep.duplicate_count;
       if (blocking > 0) {
         setProblems(rep);
-        toast.error("Ditemukan data yang salah — tidak ada perubahan diterapkan.");
+        toast.error(
+          "Ditemukan data yang salah — tidak ada perubahan diterapkan.",
+        );
         await clearMinMaxBatch(batchCode);
         return;
       }
 
       // 5. Terapkan
-      setUpProgress({ phase: "Menerapkan", done: rows.length, total: rows.length });
+      setUpProgress({
+        phase: "Menerapkan",
+        done: rows.length,
+        total: rows.length,
+      });
       const ap = await applyMinMaxBatch(batchCode);
       if (!ap.success) {
         setUploadError(ap.error);
@@ -479,6 +531,14 @@ export default function StockClient({
                 {dlProgress.total > 0
                   ? `${Math.min(100, Math.round((dlProgress.done / dlProgress.total) * 100))}%`
                   : ""}
+                {(() => {
+                  const e = etaText(
+                    dlStartRef.current,
+                    dlProgress.done,
+                    dlProgress.total,
+                  );
+                  return e ? ` · ${e}` : "";
+                })()}
               </span>
             </div>
             <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -687,9 +747,9 @@ export default function StockClient({
               Update Min/Max
             </DialogTitle>
             <DialogDescription className="text-xs">
-              Upload file Excel hasil edit. File <b>harus</b> berasal dari tombol{" "}
-              <b>Template Min/Max</b> (struktur kolom tidak boleh diubah). Hanya
-              kolom MIN/MAX yang diterapkan — QTY tidak disentuh.
+              Upload file Excel hasil edit. File <b>harus</b> berasal dari
+              tombol <b>Template Min/Max</b> (struktur kolom tidak boleh
+              diubah). Hanya kolom MIN/MAX yang diterapkan — QTY tidak disentuh.
             </DialogDescription>
           </DialogHeader>
 
@@ -725,6 +785,16 @@ export default function StockClient({
                     {upProgress.total > 0
                       ? `${upProgress.done.toLocaleString("id-ID")}/${upProgress.total.toLocaleString("id-ID")}`
                       : ""}
+                    {upProgress.phase === "Mengunggah data"
+                      ? (() => {
+                          const e = etaText(
+                            stageStartRef.current,
+                            upProgress.done,
+                            upProgress.total,
+                          );
+                          return e ? ` · ${e}` : "";
+                        })()
+                      : ""}
                   </span>
                 </div>
                 <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -757,13 +827,15 @@ export default function StockClient({
             {problems && (
               <div className="max-h-56 space-y-3 overflow-y-auto rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-[11px] leading-relaxed">
                 <p className="font-bold text-destructive">
-                  Ditemukan data yang salah. Tidak ada perubahan yang diterapkan —
-                  perbaiki lalu upload ulang.
+                  Ditemukan data yang salah. Tidak ada perubahan yang diterapkan
+                  — perbaiki lalu upload ulang.
                 </p>
                 <p className="font-semibold text-foreground">
-                  Ringkasan — Part tak terdaftar: {problems.unmatched_parts_count} ·
-                  Cabang tak dikenal: {problems.unmatched_cabang_count} · Duplikat:{" "}
-                  {problems.duplicate_count} · Negatif: {problems.negative_count}
+                  Ringkasan — Part tak terdaftar:{" "}
+                  {problems.unmatched_parts_count} · Cabang tak dikenal:{" "}
+                  {problems.unmatched_cabang_count} · Duplikat:{" "}
+                  {problems.duplicate_count} · Negatif:{" "}
+                  {problems.negative_count}
                 </p>
 
                 {problems.unmatched_parts_count > 0 && (
@@ -813,8 +885,8 @@ export default function StockClient({
                     <ul className="text-muted-foreground">
                       {problems.negatives.map((n, i) => (
                         <li key={i}>
-                          Baris {n.source_row}: {n.part_number} @ {n.nama_cabang}{" "}
-                          (min {n.min_qty}, max {n.max_qty})
+                          Baris {n.source_row}: {n.part_number} @{" "}
+                          {n.nama_cabang} (min {n.min_qty}, max {n.max_qty})
                         </li>
                       ))}
                     </ul>
