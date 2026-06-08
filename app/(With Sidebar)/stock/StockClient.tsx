@@ -112,6 +112,7 @@ export default function StockClient({
     total: number;
   } | null>(null);
   const [problems, setProblems] = useState<MinMaxProblemReport | null>(null);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   const handleDownloadTemplate = async () => {
     setDownloading(true);
@@ -125,9 +126,15 @@ export default function StockClient({
       const { cabang, total } = meta;
       setDlProgress({ done: 0, total });
 
+      // Gabungkan per part secara case-insensitive (barang bisa punya varian
+      // huruf besar/kecil untuk part yang sama → jangan jadi baris duplikat).
       const parts = new Map<
         string,
-        { name: string; cab: Map<number, [number, number, number]> }
+        {
+          part_number: string;
+          name: string;
+          cab: Map<number, [number, number, number]>;
+        }
       >();
       const PAGE = 1000;
       for (let off = 0; off < Math.max(total, 1); off += PAGE) {
@@ -137,12 +144,14 @@ export default function StockClient({
           return;
         }
         for (const r of res.rows) {
-          let p = parts.get(r.part_number);
+          const key = r.part_number.trim().toUpperCase();
+          let p = parts.get(key);
           if (!p) {
-            p = { name: r.part_name, cab: new Map() };
-            parts.set(r.part_number, p);
+            p = { part_number: r.part_number, name: r.part_name, cab: new Map() };
+            parts.set(key, p);
           }
-          p.cab.set(r.cabang_id, [r.qty, r.min_qty, r.max_qty]);
+          if (!p.cab.has(r.cabang_id))
+            p.cab.set(r.cabang_id, [r.qty, r.min_qty, r.max_qty]);
         }
         setDlProgress({ done: Math.min(off + PAGE, total), total });
         if (res.rows.length < PAGE) break;
@@ -156,9 +165,9 @@ export default function StockClient({
           `${c.nama_cabang} MAX`,
         );
       const aoa: (string | number)[][] = [header];
-      for (const pn of [...parts.keys()].sort()) {
-        const p = parts.get(pn)!;
-        const line: (string | number)[] = [pn, p.name];
+      for (const key of [...parts.keys()].sort()) {
+        const p = parts.get(key)!;
+        const line: (string | number)[] = [p.part_number, p.name];
         for (const c of cabang) {
           const v = p.cab.get(c.id);
           if (v) line.push(v[0], v[1], v[2]);
@@ -203,6 +212,7 @@ export default function StockClient({
     }
     setUploading(true);
     setProblems(null);
+    setUploadError(null);
     let batchCode = "";
     try {
       // 1. Parse & validasi struktur (client-side)
@@ -289,12 +299,12 @@ export default function StockClient({
 
       // 3. Stage per chunk (progress)
       batchCode = `MINMAX_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-      const CHUNK = 2000;
+      const CHUNK = 5000;
       setUpProgress({ phase: "Mengunggah data", done: 0, total: rows.length });
       for (let i = 0; i < rows.length; i += CHUNK) {
         const res = await stageMinMaxChunk(batchCode, rows.slice(i, i + CHUNK));
         if (!res.success) {
-          toast.error(res.error || "Gagal mengunggah data.");
+          setUploadError(res.error || "Gagal mengunggah data.");
           await clearMinMaxBatch(batchCode);
           return;
         }
@@ -309,7 +319,7 @@ export default function StockClient({
       setUpProgress({ phase: "Memvalidasi", done: rows.length, total: rows.length });
       const val = await validateMinMaxBatch(batchCode);
       if (!val.success) {
-        toast.error(val.error);
+        setUploadError(val.error);
         await clearMinMaxBatch(batchCode);
         return;
       }
@@ -330,7 +340,7 @@ export default function StockClient({
       setUpProgress({ phase: "Menerapkan", done: rows.length, total: rows.length });
       const ap = await applyMinMaxBatch(batchCode);
       if (!ap.success) {
-        toast.error(ap.error);
+        setUploadError(ap.error);
         return;
       }
       toast.success(
@@ -342,8 +352,8 @@ export default function StockClient({
       setUploadOpen(false);
       setUploadFile(null);
       router.refresh();
-    } catch {
-      toast.error("Gagal memproses file.");
+    } catch (e: any) {
+      setUploadError(e?.message || "Gagal memproses file.");
       if (batchCode) await clearMinMaxBatch(batchCode);
     } finally {
       setUploading(false);
@@ -670,7 +680,7 @@ export default function StockClient({
           if (!o) setUploadFile(null);
         }}
       >
-        <DialogContent className="w-[calc(100%-2rem)] max-w-105 rounded-2xl p-6">
+        <DialogContent className="max-h-[85vh] w-[calc(100%-2rem)] max-w-105 overflow-y-auto rounded-2xl p-6">
           <DialogHeader className="mb-4">
             <DialogTitle className="flex items-center gap-2 text-xl font-bold">
               <FileSpreadsheet className="h-5 w-5 text-success" />
@@ -695,6 +705,7 @@ export default function StockClient({
                 onChange={(e) => {
                   setUploadFile(e.target.files?.[0] ?? null);
                   setProblems(null);
+                  setUploadError(null);
                 }}
                 className="h-10 cursor-pointer border-input bg-background text-xs file:mr-3 file:font-bold"
               />
@@ -730,12 +741,29 @@ export default function StockClient({
               </div>
             )}
 
+            {/* Error server / sistem (bisa di-scroll) */}
+            {uploadError && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                <p className="mb-1 text-[11px] font-bold text-destructive">
+                  Gagal memproses
+                </p>
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all text-[11px] leading-relaxed text-muted-foreground">
+                  {uploadError}
+                </pre>
+              </div>
+            )}
+
             {/* Laporan error detail (jika ada) */}
             {problems && (
               <div className="max-h-56 space-y-3 overflow-y-auto rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-[11px] leading-relaxed">
                 <p className="font-bold text-destructive">
                   Ditemukan data yang salah. Tidak ada perubahan yang diterapkan —
                   perbaiki lalu upload ulang.
+                </p>
+                <p className="font-semibold text-foreground">
+                  Ringkasan — Part tak terdaftar: {problems.unmatched_parts_count} ·
+                  Cabang tak dikenal: {problems.unmatched_cabang_count} · Duplikat:{" "}
+                  {problems.duplicate_count} · Negatif: {problems.negative_count}
                 </p>
 
                 {problems.unmatched_parts_count > 0 && (
