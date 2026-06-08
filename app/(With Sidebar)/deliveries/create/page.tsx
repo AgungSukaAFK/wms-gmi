@@ -964,10 +964,15 @@ export default function CreateDeliveryPage() {
                 </Badge>
               )}
             </div>
-            <Popover
-              open={shareStockPopoverOpen}
-              onOpenChange={setShareStockPopoverOpen}
-            >
+            {selectedMr ? (
+              <span className="text-[9px] font-bold uppercase text-muted-foreground/60 flex items-center gap-1.5">
+                <Info className="h-3 w-3" /> Item terkunci sesuai alokasi MR
+              </span>
+            ) : (
+              <Popover
+                open={shareStockPopoverOpen}
+                onOpenChange={setShareStockPopoverOpen}
+              >
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
@@ -1025,7 +1030,8 @@ export default function CreateDeliveryPage() {
                     ))}
                 </div>
               </PopoverContent>
-            </Popover>
+              </Popover>
+            )}
           </div>
 
           {deliveryItems.length === 0 ? (
@@ -1084,14 +1090,16 @@ export default function CreateDeliveryPage() {
                         {item.satuan}
                       </TableCell>
                       <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-muted-foreground hover:text-destructive rounded-md"
-                          onClick={() => handleRemoveItem(idx)}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        {!selectedMr && (
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-7 w-7 text-muted-foreground hover:text-destructive rounded-md"
+                            onClick={() => handleRemoveItem(idx)}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
