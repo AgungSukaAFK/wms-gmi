@@ -3,7 +3,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useDebounce } from "use-debounce";
-import { Edit2, FileWarning, Plus, Search, Trash2 } from "lucide-react";
+import {
+  Edit2,
+  FileWarning,
+  Plus,
+  Printer,
+  Search,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -354,6 +361,16 @@ export default function SpbPage() {
                             Edit
                           </Button>
                         )}
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() =>
+                            window.open(`/spb/print/${row.id}`, "_blank")
+                          }
+                        >
+                          <Printer className="mr-1.5 h-3.5 w-3.5" />
+                          Cetak
+                        </Button>
                         {row.approval_status === "open" &&
                           isMyApprovalTurn(row) && (
                             <>

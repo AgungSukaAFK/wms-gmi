@@ -5,6 +5,7 @@ import {
   Check,
   ChevronsUpDown,
   Plus,
+  Printer,
   Search,
   ShoppingCart,
 } from "lucide-react";
@@ -366,25 +367,37 @@ export default function SpbPoPage() {
                         {new Date(row.created_at).toLocaleDateString("id-ID")}
                       </TableCell>
                       <TableCell>
-                        {row.approval_status === "open" &&
-                          isMyApprovalTurn(row) && (
-                            <div className="flex gap-1">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => onApprove(row.id)}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => onReject(row.id)}
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          )}
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              window.open(`/spb/po/print/${row.id}`, "_blank")
+                            }
+                          >
+                            <Printer className="mr-1.5 h-3.5 w-3.5" />
+                            Cetak
+                          </Button>
+                          {row.approval_status === "open" &&
+                            isMyApprovalTurn(row) && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => onApprove(row.id)}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => onReject(row.id)}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))

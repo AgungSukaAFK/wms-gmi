@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useDebounce } from "use-debounce";
-import { Plus, Search, Undo2 } from "lucide-react";
+import { Plus, Printer, Search, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -185,25 +185,37 @@ export default function ReturnSpbPage() {
                       {new Date(row.created_at).toLocaleDateString("id-ID")}
                     </TableCell>
                     <TableCell>
-                      {row.approval_status === "open" &&
-                        isMyApprovalTurn(row) && (
-                          <div className="flex gap-1">
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => onApprove(row.id)}
-                            >
-                              Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => onReject(row.id)}
-                            >
-                              Reject
-                            </Button>
-                          </div>
-                        )}
+                      <div className="flex gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() =>
+                            window.open(`/return-spb/print/${row.id}`, "_blank")
+                          }
+                        >
+                          <Printer className="mr-1.5 h-3.5 w-3.5" />
+                          Cetak
+                        </Button>
+                        {row.approval_status === "open" &&
+                          isMyApprovalTurn(row) && (
+                            <>
+                              <Button
+                                size="sm"
+                                variant="outline"
+                                onClick={() => onApprove(row.id)}
+                              >
+                                Approve
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => onReject(row.id)}
+                              >
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))

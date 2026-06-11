@@ -1,7 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { Check, ChevronsUpDown, Plus, Search, Truck } from "lucide-react";
+import {
+  Check,
+  ChevronsUpDown,
+  Plus,
+  Printer,
+  Search,
+  Truck,
+} from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
@@ -367,25 +374,37 @@ export default function SpbDoPage() {
                         {new Date(row.created_at).toLocaleDateString("id-ID")}
                       </TableCell>
                       <TableCell>
-                        {row.approval_status === "open" &&
-                          isMyApprovalTurn(row) && (
-                            <div className="flex gap-1">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => onApprove(row.id)}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => onReject(row.id)}
-                              >
-                                Reject
-                              </Button>
-                            </div>
-                          )}
+                        <div className="flex gap-1">
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              window.open(`/spb/do/print/${row.id}`, "_blank")
+                            }
+                          >
+                            <Printer className="mr-1.5 h-3.5 w-3.5" />
+                            Cetak
+                          </Button>
+                          {row.approval_status === "open" &&
+                            isMyApprovalTurn(row) && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => onApprove(row.id)}
+                                >
+                                  Approve
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => onReject(row.id)}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
+                        </div>
                       </TableCell>
                     </TableRow>
                   ))

@@ -23,6 +23,7 @@ import {
   Search,
   MapPin,
   Plus,
+  Printer,
   ArrowRight,
   Calendar as CalendarIcon,
   ChevronRight,
@@ -106,13 +107,19 @@ export default function DoRegulerPage() {
         );
       case "cancelled":
         return (
-          <Badge variant="destructive" className="font-bold text-[10px] uppercase">
+          <Badge
+            variant="destructive"
+            className="font-bold text-[10px] uppercase"
+          >
             Dibatalkan
           </Badge>
         );
       default:
         return (
-          <Badge variant="secondary" className="font-bold text-[10px] uppercase">
+          <Badge
+            variant="secondary"
+            className="font-bold text-[10px] uppercase"
+          >
             {status}
           </Badge>
         );
@@ -196,23 +203,39 @@ export default function DoRegulerPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode DO</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Gudang → Customer</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">Tanggal</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">Status</TableHead>
-                <TableHead className="w-16"></TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Kode DO
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Gudang → Customer
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                  Tanggal
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                  Status
+                </TableHead>
+                <TableHead className="w-32 text-right">Aksi</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
-                Array(5).fill(0).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={5} className="h-16 animate-pulse bg-muted/20" />
-                  </TableRow>
-                ))
+                Array(5)
+                  .fill(0)
+                  .map((_, i) => (
+                    <TableRow key={i}>
+                      <TableCell
+                        colSpan={5}
+                        className="h-16 animate-pulse bg-muted/20"
+                      />
+                    </TableRow>
+                  ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]">
+                  <TableCell
+                    colSpan={5}
+                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                  >
                     Belum ada DO Reguler
                   </TableCell>
                 </TableRow>
@@ -259,7 +282,23 @@ export default function DoRegulerPage() {
                       {getStatusBadge(r.status)}
                     </TableCell>
                     <TableCell className="text-right">
-                      <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary inline" />
+                      <div className="flex items-center justify-end gap-1">
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            window.open(
+                              `/so-reguler/do/print/${r.id}`,
+                              "_blank",
+                            );
+                          }}
+                        >
+                          <Printer className="mr-1.5 h-3.5 w-3.5" />
+                          Cetak
+                        </Button>
+                        <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary inline" />
+                      </div>
                     </TableCell>
                   </TableRow>
                 ))
