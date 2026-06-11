@@ -12,6 +12,16 @@ import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
   Table,
   TableBody,
   TableCell,
@@ -42,6 +52,8 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
 import {
+  deleteDoReguler,
+  updateDoReguler,
   updateDoRegulerTracking,
   updateDoRegulerTrackingModerator,
   cancelDoReguler,
@@ -95,6 +107,22 @@ export function DoRegulerDetailSheet({
   const [moderatorTrackingStatus, setModeratorTrackingStatus] =
     useState("created");
   const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    do_tanggal: "",
+    kode_po: "",
+    shipment_type: "ekspedisi",
+    ekspedisi: "",
+    sender_name: "",
+    eksternal_provider: "",
+    eksternal_id: "",
+    jumlah_koli: "1",
+    no_resi: "",
+    estimasi_hari: "1",
+    pic: "",
+    remarks: "",
+  });
 
   const fetchData = async () => {
     if (!doId) return;
@@ -159,6 +187,49 @@ export function DoRegulerDetailSheet({
     onUpdate?.();
   };
 
+  const openEditDialog = () => {
+    if (!doRow) return;
+    setEditForm({
+      do_tanggal: doRow.do_tanggal ? String(doRow.do_tanggal).slice(0, 10) : "",
+      kode_po: doRow.kode_po || "",
+      shipment_type: doRow.shipment_type || "ekspedisi",
+      ekspedisi: doRow.ekspedisi || "",
+      sender_name: doRow.sender_name || "",
+      eksternal_provider: doRow.eksternal_provider || "",
+      eksternal_id: doRow.eksternal_id || "",
+      jumlah_koli: String(doRow.jumlah_koli ?? 1),
+      no_resi: doRow.no_resi || "",
+      estimasi_hari: String(doRow.estimasi_hari ?? 1),
+      pic: doRow.pic || "",
+      remarks: doRow.remarks || "",
+    });
+    setEditOpen(true);
+  };
+
+  const handleEditSave = async () => {
+    if (!doId) return;
+    setEditSaving(true);
+    const res = await updateDoReguler(doId, {
+      do_tanggal: editForm.do_tanggal || undefined,
+      kode_po: editForm.kode_po || undefined,
+      shipment_type: editForm.shipment_type,
+      ekspedisi: editForm.ekspedisi || undefined,
+      sender_name: editForm.sender_name || undefined,
+      eksternal_provider: editForm.eksternal_provider || undefined,
+      eksternal_id: editForm.eksternal_id || undefined,
+      jumlah_koli: Number(editForm.jumlah_koli) || 1,
+      no_resi: editForm.no_resi || undefined,
+      estimasi_hari: Number(editForm.estimasi_hari) || 1,
+      pic: editForm.pic || undefined,
+      remarks: editForm.remarks || undefined,
+    });
+    setEditSaving(false);
+    if ((res as any).error) return toast.error((res as any).error);
+    toast.success("DO Reguler berhasil diperbarui");
+    setEditOpen(false);
+    await refresh();
+  };
+
   const handleTrack = async () => {
     if (!doId || !nextTracking) return;
     setBusy(true);
@@ -197,13 +268,31 @@ export function DoRegulerDetailSheet({
     await refresh();
   };
 
+  const handleDelete = async () => {
+    if (!doId || !doRow) return;
+    const ok = window.confirm(
+      `Hapus DO Reguler ${doRow.do_kode}?\n\n` +
+        "Semua item detail akan ikut terhapus. Jika stok sudah keluar, stok pengirim akan dikembalikan dulu sebelum DO dihapus.",
+    );
+    if (!ok) return;
+    setBusy(true);
+    const res = await deleteDoReguler(doId);
+    setBusy(false);
+    if ((res as any).error) return toast.error((res as any).error);
+    toast.success("DO Reguler berhasil dihapus");
+    onOpenChange(false);
+    await refresh();
+  };
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 overflow-hidden">
         {loading || !doRow ? (
           <div className="flex-1 flex items-center justify-center">
             <SheetTitle className="sr-only">Memuat DO Reguler</SheetTitle>
-            <SheetDescription className="sr-only">Memuat detail.</SheetDescription>
+            <SheetDescription className="sr-only">
+              Memuat detail.
+            </SheetDescription>
             <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
           </div>
         ) : (
@@ -263,16 +352,24 @@ export function DoRegulerDetailSheet({
                   <Table>
                     <TableHeader className="bg-muted/50">
                       <TableRow className="h-8 hover:bg-transparent">
-                        <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Part</TableHead>
-                        <TableHead className="w-16 text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
+                        <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                          Part
+                        </TableHead>
+                        <TableHead className="w-16 text-center text-[10px] font-black uppercase text-muted-foreground">
+                          Qty
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {items.map((line) => (
                         <TableRow key={line.id} className="h-10">
                           <TableCell>
-                            <span className="text-xs font-semibold">{line.part_name}</span>
-                            <code className="block text-[10px] text-muted-foreground">{line.part_number}</code>
+                            <span className="text-xs font-semibold">
+                              {line.part_name}
+                            </span>
+                            <code className="block text-[10px] text-muted-foreground">
+                              {line.part_number}
+                            </code>
                           </TableCell>
                           <TableCell className="text-center text-xs font-bold">
                             {line.qty} {line.satuan}
@@ -289,11 +386,34 @@ export function DoRegulerDetailSheet({
                 <h4 className="text-[10px] font-black uppercase text-muted-foreground mb-1 flex items-center gap-1.5">
                   <Truck className="h-3.5 w-3.5" /> Pengiriman
                 </h4>
-                <div className="flex justify-between"><span className="text-muted-foreground">Jenis</span><span className="font-semibold">{SHIPMENT_LABEL[doRow.shipment_type] || doRow.shipment_type}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Ekspedisi/Kurir</span><span className="font-semibold">{doRow.ekspedisi || "-"}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Koli</span><span className="font-semibold">{doRow.jumlah_koli}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Estimasi</span><span className="font-semibold">{doRow.estimasi_hari} hari</span></div>
-                {doRow.no_resi && <div className="flex justify-between"><span className="text-muted-foreground">No. Resi</span><span className="font-semibold">{doRow.no_resi}</span></div>}
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Jenis</span>
+                  <span className="font-semibold">
+                    {SHIPMENT_LABEL[doRow.shipment_type] || doRow.shipment_type}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Ekspedisi/Kurir</span>
+                  <span className="font-semibold">
+                    {doRow.ekspedisi || "-"}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Koli</span>
+                  <span className="font-semibold">{doRow.jumlah_koli}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Estimasi</span>
+                  <span className="font-semibold">
+                    {doRow.estimasi_hari} hari
+                  </span>
+                </div>
+                {doRow.no_resi && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">No. Resi</span>
+                    <span className="font-semibold">{doRow.no_resi}</span>
+                  </div>
+                )}
               </div>
 
               {/* Tracking Timeline */}
@@ -373,7 +493,9 @@ export function DoRegulerDetailSheet({
                     <p className="text-[10px] font-medium text-destructive bg-white border border-destructive/30 rounded-lg p-2.5">
                       DO ini sudah dibatalkan. Stok telah dikembalikan ke gudang
                       pengirim.
-                      {doRow.cancel_reason ? ` Alasan: ${doRow.cancel_reason}` : ""}
+                      {doRow.cancel_reason
+                        ? ` Alasan: ${doRow.cancel_reason}`
+                        : ""}
                     </p>
                   )}
 
@@ -451,9 +573,27 @@ export function DoRegulerDetailSheet({
             {/* Actions */}
             {isModerator && doRow.status !== "cancelled" && (
               <div className="border-t p-4 bg-background">
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    disabled={busy}
+                    onClick={openEditDialog}
+                  >
+                    Edit Data
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2 text-destructive hover:text-destructive"
+                    disabled={busy}
+                    onClick={handleDelete}
+                  >
+                    <XCircle className="h-4 w-4" /> Hapus
+                  </Button>
+                </div>
                 <Button
-                  variant="outline"
-                  className="w-full gap-2 text-destructive hover:text-destructive"
+                  variant="ghost"
+                  className="mt-2 w-full gap-2 text-orange-700 hover:text-orange-700"
                   disabled={busy}
                   onClick={handleCancel}
                 >
@@ -464,6 +604,176 @@ export function DoRegulerDetailSheet({
           </>
         )}
       </SheetContent>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit DO Reguler</DialogTitle>
+            <DialogDescription>
+              Moderator/admin dapat memperbarui metadata DO tanpa mengubah item.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="do_tanggal">Tanggal DO</Label>
+              <Input
+                id="do_tanggal"
+                type="date"
+                value={editForm.do_tanggal}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    do_tanggal: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="kode_po">Kode PO</Label>
+              <Input
+                id="kode_po"
+                value={editForm.kode_po}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, kode_po: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="shipment_type">Shipment Type</Label>
+              <Input
+                id="shipment_type"
+                value={editForm.shipment_type}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    shipment_type: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="ekspedisi">Ekspedisi</Label>
+              <Input
+                id="ekspedisi"
+                value={editForm.ekspedisi}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    ekspedisi: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="sender_name">Sender Name</Label>
+              <Input
+                id="sender_name"
+                value={editForm.sender_name}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    sender_name: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="pic">PIC</Label>
+              <Input
+                id="pic"
+                value={editForm.pic}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, pic: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="jumlah_koli">Jumlah Koli</Label>
+              <Input
+                id="jumlah_koli"
+                type="number"
+                value={editForm.jumlah_koli}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    jumlah_koli: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="estimasi_hari">Estimasi Hari</Label>
+              <Input
+                id="estimasi_hari"
+                type="number"
+                value={editForm.estimasi_hari}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    estimasi_hari: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="eksternal_provider">Eksternal Provider</Label>
+              <Input
+                id="eksternal_provider"
+                value={editForm.eksternal_provider}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    eksternal_provider: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="eksternal_id">Eksternal ID</Label>
+              <Input
+                id="eksternal_id"
+                value={editForm.eksternal_id}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    eksternal_id: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="no_resi">No Resi</Label>
+              <Input
+                id="no_resi"
+                value={editForm.no_resi}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, no_resi: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="remarks">Remarks</Label>
+              <Textarea
+                id="remarks"
+                value={editForm.remarks}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, remarks: e.target.value }))
+                }
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Batal
+            </Button>
+            <Button onClick={handleEditSave} disabled={editSaving}>
+              {editSaving ? "Menyimpan..." : "Simpan Perubahan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </Sheet>
   );
 }

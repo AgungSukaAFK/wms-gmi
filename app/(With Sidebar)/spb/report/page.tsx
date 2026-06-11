@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { FileBox, Search } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { FileBox, Download, Search } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -24,11 +25,47 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toast } from "sonner";
 import { getSpbReport } from "@/services/spb-actions";
+import * as XLSX from "xlsx";
+
+type SpbReportRow = {
+  spb_id?: number | string | null;
+  spb_dtl_id?: number | string | null;
+  spb_tanggal?: string | null;
+  spb_no?: string | null;
+  dtl_spb_part_number?: string | null;
+  dtl_spb_part_name?: string | null;
+  dtl_spb_qty?: number | null;
+  dtl_spb_part_satuan?: string | null;
+  spb_kode_unit?: string | null;
+  spb_tipe_unit?: string | null;
+  spb_brand?: string | null;
+  spb_hm?: number | null;
+  spb_problem_remark?: string | null;
+  spb_section?: string | null;
+  spb_pic_gmi?: string | null;
+  spb_pic_ppa?: string | null;
+  spb_no_wo?: string | null;
+  spb_created_at?: string | null;
+  spb_status?: string | null;
+  po_no?: string | null;
+  so_no?: string | null;
+  po_created_at?: string | null;
+  do_no?: string | null;
+  do_created_at?: string | null;
+  invoice_no?: string | null;
+  invoice_date?: string | null;
+  invoice_email_date?: string | null;
+};
+
+function formatReportDate(value?: string | null) {
+  return value ? new Date(value).toLocaleDateString("id-ID") : "-";
+}
 
 export default function SpbReportPage() {
   const [loading, setLoading] = useState(true);
-  const [rows, setRows] = useState<any[]>([]);
+  const [rows, setRows] = useState<SpbReportRow[]>([]);
   const [total, setTotal] = useState(0);
+  const [exporting, setExporting] = useState(false);
 
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 500);
@@ -41,7 +78,7 @@ export default function SpbReportPage() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     setLoading(true);
     const res = await getSpbReport({
       search: debouncedSearch || undefined,
@@ -61,11 +98,112 @@ export default function SpbReportPage() {
       setTotal(res.count || 0);
     }
     setLoading(false);
+  }, [debouncedSearch, status, startDate, endDate, page, limit]);
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const first = await getSpbReport({
+        search: debouncedSearch || undefined,
+        status,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        page: 1,
+        limit: 1,
+      });
+
+      if (first.error) {
+        toast.error(first.error);
+        return;
+      }
+
+      const totalRows = first.count || 0;
+      if (!totalRows) {
+        toast.error("Data report kosong.");
+        return;
+      }
+
+      const allRows: SpbReportRow[] = [];
+      const pageSize = 1000;
+      for (
+        let pageIndex = 1;
+        (pageIndex - 1) * pageSize < totalRows;
+        pageIndex += 1
+      ) {
+        const res = await getSpbReport({
+          search: debouncedSearch || undefined,
+          status,
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          page: pageIndex,
+          limit: pageSize,
+        });
+
+        if (res.error) {
+          toast.error(res.error);
+          return;
+        }
+
+        allRows.push(...((res.data || []) as SpbReportRow[]));
+        if ((res.data || []).length < pageSize) break;
+      }
+
+      const data = allRows.map((row) => ({
+        "TGL SPB": row.spb_tanggal
+          ? new Date(row.spb_tanggal).toLocaleDateString("id-ID")
+          : "-",
+        "NO SPB": row.spb_no || "-",
+        "PART NUMBER": row.dtl_spb_part_number || "-",
+        "PART NAME": row.dtl_spb_part_name || "-",
+        QTY: row.dtl_spb_qty ?? "-",
+        UOM: row.dtl_spb_part_satuan || "-",
+        "KODE UNIT": row.spb_kode_unit || "-",
+        "TYPE UNIT": row.spb_tipe_unit || "-",
+        BRAND: row.spb_brand || "-",
+        HM: row.spb_hm ?? "-",
+        REMARK: row.spb_problem_remark || "-",
+        SECTION: row.spb_section || "-",
+        "PIC GMI": row.spb_pic_gmi || "-",
+        "PIC PPA": row.spb_pic_ppa || "-",
+        "NO WO": row.spb_no_wo || "-",
+        "DATE INPUT SPB": row.spb_created_at
+          ? new Date(row.spb_created_at).toLocaleDateString("id-ID")
+          : "-",
+        STATUS: row.spb_status || "-",
+        "NO PO": row.po_no || "-",
+        "NO SO": row.so_no || "-",
+        "DATE INPUT PO": row.po_created_at
+          ? new Date(row.po_created_at).toLocaleDateString("id-ID")
+          : "-",
+        "NO DO": row.do_no || "-",
+        "DATE INPUT DO": row.do_created_at
+          ? new Date(row.do_created_at).toLocaleDateString("id-ID")
+          : "-",
+        "NO INVOICE": row.invoice_no || "-",
+        "TGL INVOICE": row.invoice_date
+          ? new Date(row.invoice_date).toLocaleDateString("id-ID")
+          : "-",
+        "TGL EMAIL": row.invoice_email_date
+          ? new Date(row.invoice_email_date).toLocaleDateString("id-ID")
+          : "-",
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(data);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Report SPB");
+      XLSX.writeFile(
+        wb,
+        `REPORT_SPB_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, status, startDate, endDate, page, limit]);
+  }, [fetchData]);
 
   return (
     <>
@@ -84,6 +222,14 @@ export default function SpbReportPage() {
               </p>
             </div>
           </div>
+          <Button
+            onClick={exportExcel}
+            disabled={loading || exporting}
+            className="h-9 shrink-0 gap-2 rounded-md px-4 text-xs font-bold uppercase shadow-sm"
+          >
+            <Download className="h-4 w-4" />
+            {exporting ? "Mengekspor..." : "Export Excel"}
+          </Button>
         </div>
       </Content>
 
@@ -204,9 +350,7 @@ export default function SpbReportPage() {
               ) : (
                 rows.map((row, idx) => (
                   <TableRow key={`${row.spb_id}-${row.spb_dtl_id}-${idx}`}>
-                    <TableCell>
-                      {new Date(row.spb_tanggal).toLocaleDateString("id-ID")}
-                    </TableCell>
+                    <TableCell>{formatReportDate(row.spb_tanggal)}</TableCell>
                     <TableCell>{row.spb_no}</TableCell>
                     <TableCell>{row.dtl_spb_part_number}</TableCell>
                     <TableCell>{row.dtl_spb_part_name}</TableCell>
@@ -222,42 +366,18 @@ export default function SpbReportPage() {
                     <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
                     <TableCell>{row.spb_no_wo || "-"}</TableCell>
                     <TableCell>
-                      {row.spb_created_at
-                        ? new Date(row.spb_created_at).toLocaleDateString(
-                            "id-ID",
-                          )
-                        : "-"}
+                      {formatReportDate(row.spb_created_at)}
                     </TableCell>
                     <TableCell>{row.spb_status}</TableCell>
                     <TableCell>{row.po_no || "-"}</TableCell>
                     <TableCell>{row.so_no || "-"}</TableCell>
-                    <TableCell>
-                      {row.po_created_at
-                        ? new Date(row.po_created_at).toLocaleDateString(
-                            "id-ID",
-                          )
-                        : "-"}
-                    </TableCell>
+                    <TableCell>{formatReportDate(row.po_created_at)}</TableCell>
                     <TableCell>{row.do_no || "-"}</TableCell>
-                    <TableCell>
-                      {row.do_created_at
-                        ? new Date(row.do_created_at).toLocaleDateString(
-                            "id-ID",
-                          )
-                        : "-"}
-                    </TableCell>
+                    <TableCell>{formatReportDate(row.do_created_at)}</TableCell>
                     <TableCell>{row.invoice_no || "-"}</TableCell>
+                    <TableCell>{formatReportDate(row.invoice_date)}</TableCell>
                     <TableCell>
-                      {row.invoice_date
-                        ? new Date(row.invoice_date).toLocaleDateString("id-ID")
-                        : "-"}
-                    </TableCell>
-                    <TableCell>
-                      {row.invoice_email_date
-                        ? new Date(row.invoice_email_date).toLocaleDateString(
-                            "id-ID",
-                          )
-                        : "-"}
+                      {formatReportDate(row.invoice_email_date)}
                     </TableCell>
                   </TableRow>
                 ))

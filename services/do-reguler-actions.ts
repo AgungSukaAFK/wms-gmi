@@ -29,6 +29,26 @@ async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
     .filter((name: string | undefined): name is string => Boolean(name));
 }
 
+async function requireModeratorOrAdmin() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" } as const;
+
+  const roleNames = await getRoleNames(supabase, user.id);
+  const allowed = roleNames.some(
+    (role) => role === "moderator" || role === "admin",
+  );
+  if (!allowed)
+    return {
+      error:
+        "Akses ditolak. Hanya moderator/admin yang dapat mengubah atau menghapus DO Reguler.",
+    } as const;
+
+  return { supabase, user } as const;
+}
+
 /**
  * BUAT DO REGULER
  *
@@ -61,7 +81,8 @@ export async function createDoReguler(data: {
 
   const doKode = data.do_kode?.trim();
   if (!doKode) return { error: "Kode DO Reguler wajib diisi." };
-  if (!data.dari_cabang_id) return { error: "Gudang pengirim wajib diketahui." };
+  if (!data.dari_cabang_id)
+    return { error: "Gudang pengirim wajib diketahui." };
   if (!data.customer_id) return { error: "Customer tujuan wajib dipilih." };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar item tidak boleh kosong." };
@@ -299,6 +320,54 @@ export async function updateDoRegulerTrackingModerator(
 }
 
 /**
+ * UPDATE DATA HEADER DO REGULER (moderator/admin).
+ */
+export async function updateDoReguler(
+  doId: number,
+  payload: Partial<{
+    do_tanggal: string;
+    kode_po: string;
+    shipment_type: string;
+    ekspedisi: string;
+    sender_name: string;
+    eksternal_provider: string;
+    eksternal_id: string;
+    jumlah_koli: number;
+    no_resi: string;
+    estimasi_hari: number;
+    pic: string;
+    remarks: string;
+  }>,
+) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const { supabase } = auth;
+  const safePayload = {
+    ...payload,
+    kode_po: payload.kode_po?.trim() || null,
+    ekspedisi: payload.ekspedisi?.trim() || null,
+    sender_name: payload.sender_name?.trim() || null,
+    eksternal_provider: payload.eksternal_provider?.trim() || null,
+    eksternal_id: payload.eksternal_id?.trim() || null,
+    no_resi: payload.no_resi?.trim() || null,
+    pic: payload.pic?.trim() || null,
+    remarks: payload.remarks?.trim() || null,
+    updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from("do_reguler")
+    .update(safePayload)
+    .eq("id", doId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/so-reguler/do");
+  revalidatePath("/stock");
+  return { success: true };
+}
+
+/**
  * BATALKAN DO REGULER (hanya moderator).
  *
  * Stok dikembalikan ke gudang pengirim. Berlaku meski DO sudah "completed"
@@ -376,6 +445,74 @@ export async function cancelDoReguler(doId: number, reason: string) {
       updated_at: new Date().toISOString(),
     })
     .eq("id", doId);
+  if (error) return { error: error.message };
+
+  revalidatePath("/so-reguler/do");
+  revalidatePath("/stock");
+  return { success: true };
+}
+
+/**
+ * HAPUS DO REGULER (moderator/admin).
+ *
+ * Item ikut terhapus lewat cascade. Jika stok sudah keluar, stok dikembalikan
+ * dulu ke gudang pengirim sebelum header DO dihapus.
+ */
+export async function deleteDoReguler(doId: number) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const { supabase, user } = auth;
+
+  const { data: doRow } = await supabase
+    .from("do_reguler")
+    .select("id, do_kode, dari_cabang_id, status, stock_released")
+    .eq("id", doId)
+    .single();
+  if (!doRow) return { error: "DO Reguler tidak ditemukan" };
+  if (doRow.status === "cancelled")
+    return { error: "DO Reguler ini sudah dibatalkan." };
+
+  if (doRow.stock_released) {
+    const { data: items } = await supabase
+      .from("do_reguler_items")
+      .select("part_id, part_number, part_name, qty")
+      .eq("do_id", doId);
+
+    for (const item of items || []) {
+      const { data: srcStock } = await supabase
+        .from("stock")
+        .select("id, qty")
+        .eq("part_id", item.part_id)
+        .eq("cabang_id", doRow.dari_cabang_id)
+        .maybeSingle();
+      if (srcStock) {
+        await supabase
+          .from("stock")
+          .update({ qty: srcStock.qty + item.qty })
+          .eq("id", srcStock.id);
+      } else {
+        await supabase.from("stock").insert([
+          {
+            part_id: item.part_id,
+            cabang_id: doRow.dari_cabang_id,
+            qty: item.qty,
+          },
+        ]);
+      }
+      await supabase.from("stock_movements").insert({
+        part_id: item.part_id,
+        cabang_id: doRow.dari_cabang_id,
+        qty_change: item.qty,
+        type: "DO_REG",
+        reference_id: doRow.do_kode,
+        created_by: user.id,
+        notes: `Hapus DO Reguler ${doRow.do_kode}: ${item.part_number} ${item.part_name} dikembalikan ke cabang ${doRow.dari_cabang_id}`,
+      });
+    }
+  }
+
+  const { error } = await supabase.from("do_reguler").delete().eq("id", doId);
   if (error) return { error: error.message };
 
   revalidatePath("/so-reguler/do");

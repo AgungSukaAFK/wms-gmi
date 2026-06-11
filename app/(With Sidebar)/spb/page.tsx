@@ -1,13 +1,15 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useDebounce } from "use-debounce";
-import { FileWarning, Plus, Search, Trash2 } from "lucide-react";
+import { Edit2, FileWarning, Plus, Search, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
   SelectContent,
@@ -15,6 +17,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Table,
   TableBody,
@@ -29,8 +39,10 @@ import {
   deleteSpb,
   getSpbList,
   rejectSpb,
+  updateSpb,
 } from "@/services/spb-actions";
 import { createClient } from "@/lib/supabase/client";
+import { useAuthStore } from "@/stores/auth-store";
 
 type SpbRow = {
   id: number;
@@ -46,11 +58,12 @@ type SpbRow = {
   spb_pic_ppa?: string | null;
   spb_status: string;
   approval_status?: string;
-  approvals?: any[];
+  approvals?: Array<{ userid?: string; status?: string }>;
 };
 
 export default function SpbPage() {
   const supabase = createClient();
+  const profile = useAuthStore((s) => s.profile);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SpbRow[]>([]);
   const [search, setSearch] = useState("");
@@ -60,6 +73,29 @@ export default function SpbPage() {
   const [limit, setLimit] = useState(25);
   const [total, setTotal] = useState(0);
   const [userId, setUserId] = useState("");
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<SpbRow | null>(null);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editForm, setEditForm] = useState({
+    spb_no_wo: "",
+    spb_section: "",
+    spb_pic_ppa: "",
+    spb_kode_unit: "",
+    spb_tipe_unit: "",
+    spb_brand: "",
+    spb_hm: "",
+    spb_problem_remark: "",
+    spb_status: "DONE QUOT",
+  });
+
+  const canManageSpb = useMemo(() => {
+    const roleNames = (
+      (profile as { roles?: { name?: string }[] } | null)?.roles || []
+    )
+      .map((role) => role?.name)
+      .filter((name): name is string => Boolean(name));
+    return roleNames.some((role) => role === "moderator" || role === "admin");
+  }, [profile]);
 
   const fetchData = async () => {
     setLoading(true);
@@ -95,11 +131,56 @@ export default function SpbPage() {
     loadUser();
   }, [supabase]);
 
-  const onDelete = async (id: number) => {
-    const ok = window.confirm("Hapus SPB ini? Stok akan dikembalikan.");
+  const openEdit = (row: SpbRow) => {
+    setEditTarget(row);
+    setEditForm({
+      spb_no_wo: row.spb_no_wo || "",
+      spb_section: "",
+      spb_pic_ppa: row.spb_pic_ppa || "",
+      spb_kode_unit: row.spb_kode_unit || "",
+      spb_tipe_unit: row.spb_tipe_unit || "",
+      spb_brand: row.spb_brand || "",
+      spb_hm: row.spb_hm != null ? String(row.spb_hm) : "",
+      spb_problem_remark: "",
+      spb_status: row.spb_status || "DONE QUOT",
+    });
+    setEditOpen(true);
+  };
+
+  const saveEdit = async () => {
+    if (!editTarget) return;
+    setEditSaving(true);
+    const res = await updateSpb(editTarget.id, {
+      spb_no_wo: editForm.spb_no_wo || undefined,
+      spb_section: editForm.spb_section || undefined,
+      spb_pic_ppa: editForm.spb_pic_ppa || undefined,
+      spb_kode_unit: editForm.spb_kode_unit || undefined,
+      spb_tipe_unit: editForm.spb_tipe_unit || undefined,
+      spb_brand: editForm.spb_brand || undefined,
+      spb_hm: editForm.spb_hm ? Number(editForm.spb_hm) : undefined,
+      spb_problem_remark: editForm.spb_problem_remark || undefined,
+      spb_status: editForm.spb_status,
+    });
+    setEditSaving(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("SPB berhasil diperbarui.");
+    setEditOpen(false);
+    setEditTarget(null);
+    fetchData();
+  };
+
+  const onDelete = async (row: SpbRow) => {
+    const ok = window.confirm(
+      `Hapus SPB ${row.spb_no}?\n\n` +
+        "Detail SPB, SPB PO, SPB DO, SPB Invoice, dan Return SPB terkait akan ikut terhapus.\n" +
+        "Stok akan dikembalikan ke gudang asal.",
+    );
     if (!ok) return;
 
-    const res = await deleteSpb(id);
+    const res = await deleteSpb(row.id);
     if (res.error) {
       toast.error(res.error);
       return;
@@ -133,7 +214,7 @@ export default function SpbPage() {
 
   const isMyApprovalTurn = (row: SpbRow) => {
     return (row.approvals || []).some(
-      (a: any) => a.userid === userId && a.status === "pending",
+      (approval) => approval.userid === userId && approval.status === "pending",
     );
   };
 
@@ -263,6 +344,16 @@ export default function SpbPage() {
                     <TableCell>{row.approval_status || "open"}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
+                        {canManageSpb && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => openEdit(row)}
+                          >
+                            <Edit2 className="mr-1.5 h-3.5 w-3.5" />
+                            Edit
+                          </Button>
+                        )}
                         {row.approval_status === "open" &&
                           isMyApprovalTurn(row) && (
                             <>
@@ -285,7 +376,7 @@ export default function SpbPage() {
                         <Button
                           variant="ghost"
                           size="icon"
-                          onClick={() => onDelete(row.id)}
+                          onClick={() => onDelete(row)}
                           title="Hapus SPB"
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
@@ -311,6 +402,153 @@ export default function SpbPage() {
           itemLabel="SPB"
         />
       </Content>
+
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit SPB</DialogTitle>
+            <DialogDescription>
+              Moderator/admin dapat memperbarui data header SPB tanpa mengubah
+              item detail.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="spb_no_wo">No WO</Label>
+              <Input
+                id="spb_no_wo"
+                value={editForm.spb_no_wo}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_no_wo: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_section">Section</Label>
+              <Input
+                id="spb_section"
+                value={editForm.spb_section}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_section: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_pic_ppa">PIC PPA</Label>
+              <Input
+                id="spb_pic_ppa"
+                value={editForm.spb_pic_ppa}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_pic_ppa: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_kode_unit">Kode Unit</Label>
+              <Input
+                id="spb_kode_unit"
+                value={editForm.spb_kode_unit}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_kode_unit: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_tipe_unit">Tipe Unit</Label>
+              <Input
+                id="spb_tipe_unit"
+                value={editForm.spb_tipe_unit}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_tipe_unit: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_brand">Brand</Label>
+              <Input
+                id="spb_brand"
+                value={editForm.spb_brand}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_brand: e.target.value,
+                  }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_hm">HM</Label>
+              <Input
+                id="spb_hm"
+                type="number"
+                value={editForm.spb_hm}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, spb_hm: e.target.value }))
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="spb_status">Status</Label>
+              <Select
+                value={editForm.spb_status}
+                onValueChange={(value) =>
+                  setEditForm((prev) => ({ ...prev, spb_status: value }))
+                }
+              >
+                <SelectTrigger id="spb_status">
+                  <SelectValue placeholder="Pilih status" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="DONE QUOT">DONE QUOT</SelectItem>
+                  <SelectItem value="PO_ATTACH">PO_ATTACH</SelectItem>
+                  <SelectItem value="DO_ATTACH">DO_ATTACH</SelectItem>
+                  <SelectItem value="DONE_QUOTE">DONE_QUOTE</SelectItem>
+                  <SelectItem value="Partial">Partial</SelectItem>
+                  <SelectItem value="Returned">Returned</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="spb_problem_remark">Catatan Masalah</Label>
+              <Textarea
+                id="spb_problem_remark"
+                value={editForm.spb_problem_remark}
+                onChange={(e) =>
+                  setEditForm((prev) => ({
+                    ...prev,
+                    spb_problem_remark: e.target.value,
+                  }))
+                }
+              />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>
+              Batal
+            </Button>
+            <Button onClick={saveEdit} disabled={editSaving}>
+              {editSaving ? "Menyimpan..." : "Simpan Perubahan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

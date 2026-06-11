@@ -69,6 +69,38 @@ async function getCurrentUserProfile() {
   return { user, profile: profile || null, error: null as string | null };
 }
 
+async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
+  const { data: roleRows } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", userId);
+
+  return (roleRows || [])
+    .map((row: any) => row?.roles?.name)
+    .filter((name: string | undefined): name is string => Boolean(name));
+}
+
+async function requireModeratorOrAdmin() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Tidak terautentikasi." } as const;
+
+  const roleNames = await getRoleNames(supabase, user.id);
+  const allowed = roleNames.some(
+    (role) => role === "moderator" || role === "admin",
+  );
+  if (!allowed) {
+    return {
+      error:
+        "Akses ditolak. Hanya moderator/admin yang dapat mengubah atau menghapus SPB.",
+    } as const;
+  }
+
+  return { supabase, user } as const;
+}
+
 const STOCK_OUT_APPROVAL_TYPES = {
   spb: "Stock Out - SPB",
   spb_po: "Stock Out - SPB PO",
@@ -723,7 +755,10 @@ export async function updateSpb(
     spb_status: string;
   }>,
 ) {
-  const supabase = await createClient();
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const { supabase } = auth;
   const { error } = await supabase.from("spb").update(payload).eq("id", id);
 
   if (error) return { error: error.message };
@@ -732,9 +767,10 @@ export async function updateSpb(
 }
 
 export async function deleteSpb(id: number) {
-  const supabase = await createClient();
-  const me = await getCurrentUserProfile();
-  if (me.error || !me.user) return { error: me.error || "Unauthorized" };
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const { supabase, user } = auth;
 
   const { data: header, error: headerErr } = await supabase
     .from("spb")
@@ -772,15 +808,12 @@ export async function deleteSpb(id: number) {
         type: "SPB_ROLLBACK",
         reference_id: header.spb_no,
         notes: "Rollback due to SPB delete",
-        created_by: me.user.id,
+        created_by: user.id,
       });
     }
   }
 
-  const { error: delErr } = await supabase
-    .from("spb")
-    .update({ spb_is_deleted: true })
-    .eq("id", id);
+  const { error: delErr } = await supabase.from("spb").delete().eq("id", id);
 
   if (delErr) return { error: delErr.message };
 
