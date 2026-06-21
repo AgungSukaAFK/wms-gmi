@@ -1076,15 +1076,21 @@ export default function CreateDeliveryPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-center">
-                        <Input
-                          type="number"
-                          min="1"
-                          className="h-8 w-16 text-center font-bold text-sm border-input"
-                          value={item.qty_on_delivery}
-                          onChange={(e) =>
-                            handleUpdateItemQty(idx, parseInt(e.target.value))
-                          }
-                        />
+                        {selectedMr ? (
+                          <span className="text-sm font-bold text-foreground">
+                            {item.qty_on_delivery}
+                          </span>
+                        ) : (
+                          <Input
+                            type="number"
+                            min="1"
+                            className="h-8 w-16 text-center font-bold text-sm border-input"
+                            value={item.qty_on_delivery}
+                            onChange={(e) =>
+                              handleUpdateItemQty(idx, parseInt(e.target.value))
+                            }
+                          />
+                        )}
                       </TableCell>
                       <TableCell className="text-center font-bold text-[10px] text-muted-foreground uppercase">
                         {item.satuan}
