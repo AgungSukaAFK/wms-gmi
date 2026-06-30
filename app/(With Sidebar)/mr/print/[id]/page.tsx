@@ -13,6 +13,7 @@ export default function MRPrintPage() {
   const supabase = createClient();
   const [mr, setMr] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
+  const [ssAllocations, setSsAllocations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -37,6 +38,19 @@ export default function MRPrintPage() {
       .eq("mr_id", id);
 
     setItems(itemsData || []);
+
+    // Ambil alokasi share stock (planning supply) per item: gudang sumber, qty, deadline
+    if (itemsData && itemsData.length > 0) {
+      const { data: allocs } = await supabase
+        .from("mr_sharestock_allocations")
+        .select("*, cabang(nama_cabang)")
+        .in(
+          "mr_item_id",
+          itemsData.map((item: any) => item.id),
+        );
+      setSsAllocations(allocs || []);
+    }
+
     setLoading(false);
 
     // Auto-trigger print after a short delay to ensure rendering
@@ -46,6 +60,22 @@ export default function MRPrintPage() {
       }, 800);
     }
   };
+
+  const allocsForItem = (itemId: number) =>
+    ssAllocations.filter((a) => a.mr_item_id === itemId);
+
+  const formatDeadline = (d: string | null) =>
+    d
+      ? new Date(d).toLocaleDateString("id-ID", {
+          day: "numeric",
+          month: "long",
+          year: "numeric",
+        })
+      : "-";
+
+  const hasShareStock = items.some(
+    (item) => (item.qty_sharestock_total || 0) > 0,
+  );
 
   if (loading) {
     return (
@@ -219,6 +249,11 @@ export default function MRPrintPage() {
                       <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                         {item.part_number}
                       </div>
+                      {(item.qty_sharestock_total || 0) > 0 && (
+                        <div className="mt-1 inline-block text-[8px] font-bold text-blue-700 border border-blue-300 bg-blue-50 px-1.5 py-0.5 rounded uppercase tracking-wide">
+                          Share Stock: {item.qty_sharestock_total} {item.satuan}
+                        </div>
+                      )}
                     </td>
                     <td className="border border-slate-900 p-2 text-right font-bold">
                       {item.qty_request}
@@ -244,6 +279,112 @@ export default function MRPrintPage() {
               </tbody>
             </table>
           </div>
+
+          {/* Share Stock / Planning Supply Detail */}
+          {hasShareStock && (
+            <div className="mb-12">
+              <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-900 mb-1">
+                Rincian Share Stock (Planning Supply)
+              </h3>
+              <p className="text-[9px] text-slate-500 font-medium mb-3">
+                Pemenuhan sebagian/seluruh item via transfer antar gudang. Gudang
+                sumber wajib mengirim sebelum tanggal deadline.
+              </p>
+              <table className="w-full border-collapse border border-slate-900 text-xs">
+                <thead>
+                  <tr className="bg-slate-700 text-white font-bold uppercase text-[9px]">
+                    <th className="border border-slate-900 p-2 text-center w-12">
+                      No
+                    </th>
+                    <th className="border border-slate-900 p-2 text-left">
+                      Deskripsi Barang / Part Number
+                    </th>
+                    <th className="border border-slate-900 p-2 text-left">
+                      Gudang Sumber (Pemasok)
+                    </th>
+                    <th className="border border-slate-900 p-2 text-right w-24">
+                      Qty Share
+                    </th>
+                    <th className="border border-slate-900 p-2 text-center w-40">
+                      Deadline
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(() => {
+                    const ssRows: React.ReactNode[] = [];
+                    let no = 0;
+                    items
+                      .filter((item) => (item.qty_sharestock_total || 0) > 0)
+                      .forEach((item) => {
+                        no += 1;
+                        const allocs = allocsForItem(item.id);
+                        if (allocs.length === 0) {
+                          ssRows.push(
+                            <tr key={`ss-${item.id}`}>
+                              <td className="border border-slate-900 p-2 text-center align-top">
+                                {no}
+                              </td>
+                              <td className="border border-slate-900 p-2 align-top">
+                                <div className="font-bold">{item.part_name}</div>
+                                <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                  {item.part_number}
+                                </div>
+                              </td>
+                              <td
+                                className="border border-slate-900 p-2 text-slate-400 italic"
+                                colSpan={3}
+                              >
+                                Belum ada alokasi gudang sumber
+                                (total: {item.qty_sharestock_total} {item.satuan})
+                              </td>
+                            </tr>,
+                          );
+                          return;
+                        }
+                        allocs.forEach((alloc, ai) => {
+                          ssRows.push(
+                            <tr key={`ss-${item.id}-${alloc.id}`}>
+                              {ai === 0 && (
+                                <td
+                                  className="border border-slate-900 p-2 text-center align-top"
+                                  rowSpan={allocs.length}
+                                >
+                                  {no}
+                                </td>
+                              )}
+                              {ai === 0 && (
+                                <td
+                                  className="border border-slate-900 p-2 align-top"
+                                  rowSpan={allocs.length}
+                                >
+                                  <div className="font-bold">
+                                    {item.part_name}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                                    {item.part_number}
+                                  </div>
+                                </td>
+                              )}
+                              <td className="border border-slate-900 p-2 font-medium uppercase">
+                                {alloc.cabang?.nama_cabang || "-"}
+                              </td>
+                              <td className="border border-slate-900 p-2 text-right font-bold">
+                                {alloc.qty} {item.satuan}
+                              </td>
+                              <td className="border border-slate-900 p-2 text-center font-bold">
+                                {formatDeadline(alloc.deadline)}
+                              </td>
+                            </tr>,
+                          );
+                        });
+                      });
+                    return ssRows;
+                  })()}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Approval signatures grid */}
           <div className="mt-20">

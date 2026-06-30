@@ -78,6 +78,11 @@ export default function ShareStockPage() {
         .eq("id", user.id)
         .single();
       setUserProfile(profile);
+
+      // Default: pre-select lokasi peminta sesuai cabang user dari profil
+      if (profile?.cabang_id) {
+        setLocationFilters([profile.cabang_id.toString()]);
+      }
     }
 
     const { data: cabangData } = await supabase
