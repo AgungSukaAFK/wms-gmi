@@ -9,6 +9,7 @@ import {
   notifyApprovers,
   notifyDocumentOwner,
 } from "@/services/notification-actions";
+import { evaluateMrFreeze } from "@/services/freeze-actions";
 
 // ============================================================
 // PRIVATE HELPERS (server-side, uses authenticated server client)
@@ -375,6 +376,9 @@ export async function approveMR(
             mr_item_id: alloc.mr_item_id,
             source_cabang_id: ss.source_cabang_id,
             qty: ss.qty,
+            // Deadline per item (diisi approver terakhir). Berlaku untuk semua
+            // sumber alokasi item ini; dipakai mekanisme freeze MR.
+            deadline: ss.deadline ?? alloc.deadline ?? null,
           }));
           await supabase
             .from("mr_sharestock_allocations")
@@ -637,6 +641,14 @@ export async function createPurchaseRequest(data: {
   const prKode = data.pr_kode?.trim();
   if (!prKode) {
     return { error: "Kode PR wajib diisi manual." };
+  }
+
+  // Guard freeze: MR ter-freeze mengunci seluruh alur, termasuk pembuatan PR.
+  if (data.mr_id && (await evaluateMrFreeze(data.mr_id))) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE (lewat deadline share stock). Hubungi moderator untuk unfreeze/reset.",
+    };
   }
 
   const { data: existingPr } = await supabase

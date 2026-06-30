@@ -71,6 +71,9 @@ import {
   editMrByApprover,
 } from "@/services/procurement-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { MrFreezePanel } from "@/components/mr/mr-freeze-panel";
+import { evaluateMrFreeze } from "@/services/freeze-actions";
+import { businessToday } from "@/lib/business-date";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Content } from "@/components/content";
@@ -97,6 +100,9 @@ export default function MRDetailPage({
   // Fulfillment Data
   const [prRecords, setPrRecords] = useState<any[]>([]);
   const [deliveryRecords, setDeliveryRecords] = useState<any[]>([]);
+  const [deadlineByItem, setDeadlineByItem] = useState<Record<number, string>>(
+    {},
+  );
 
   // Approval states
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -158,6 +164,9 @@ export default function MRDetailPage({
 
   const fetchDetails = async () => {
     setLoading(true);
+    // Evaluasi freeze (lazy) sebelum memuat data agar status freeze terbaru
+    // langsung tercermin di halaman.
+    await evaluateMrFreeze(Number(mrId)).catch(() => {});
     // Fetch MR primary data
     const { data: mrData } = await supabase
       .from("mrs")
@@ -189,6 +198,20 @@ export default function MRDetailPage({
       .eq("deliveries.mr_id", mrId);
     setDeliveryRecords(deliveriesData || []);
 
+    // Deadline supply per item (dari alokasi share stock) untuk ditampilkan di list.
+    if (itemsData && itemsData.length > 0) {
+      const itemIds = itemsData.map((i: any) => i.id);
+      const { data: allocDeadlines } = await supabase
+        .from("mr_sharestock_allocations")
+        .select("mr_item_id, deadline")
+        .in("mr_item_id", itemIds);
+      const dlMap: Record<number, string> = {};
+      (allocDeadlines || []).forEach((a: any) => {
+        if (a.deadline && !dlMap[a.mr_item_id]) dlMap[a.mr_item_id] = a.deadline;
+      });
+      setDeadlineByItem(dlMap);
+    }
+
     if (itemsData) {
       const initialAllocations = itemsData.map((item: any) => ({
         mr_item_id: item.id,
@@ -199,6 +222,7 @@ export default function MRDetailPage({
         qty_sharestock_total: item.qty_sharestock_total || 0,
         qty_pr: item.qty_pr || item.qty_request,
         sharestocks: [],
+        deadline: "",
       }));
       setAllocations(initialAllocations);
 
@@ -458,6 +482,17 @@ export default function MRDetailPage({
   };
 
   const handleApproveConfirm = async (signature: any) => {
+    if (isLastApprover) {
+      const missingDeadline = allocations.find(
+        (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
+      );
+      if (missingDeadline) {
+        toast.error(
+          `Deadline supply wajib diisi untuk item ${missingDeadline.part_number} (ada alokasi share stock).`,
+        );
+        return;
+      }
+    }
     setSubmitting(true);
     try {
       const result = await approveMR(
@@ -496,6 +531,14 @@ export default function MRDetailPage({
         }
         return a;
       }),
+    );
+  };
+
+  const updateAllocationDeadline = (itemId: number, deadline: string) => {
+    setAllocations((prev) =>
+      prev.map((a) =>
+        a.mr_item_id === itemId ? { ...a, deadline } : a,
+      ),
     );
   };
 
@@ -583,6 +626,11 @@ export default function MRDetailPage({
                   {mr?.mr_kode}
                 </h1>
                 {getStatusBadge(mr?.mr_status)}
+                {mr?.is_frozen && (
+                  <Badge className="bg-sky-500 text-white border-none font-bold uppercase text-[10px]">
+                    Frozen
+                  </Badge>
+                )}
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
                 Dibuat pada{" "}
@@ -642,6 +690,16 @@ export default function MRDetailPage({
           </div>
         </div>
       </Content>
+
+      {mr?.is_frozen && (
+        <Content>
+          <MrFreezePanel
+            mrId={Number(mrId)}
+            currentUserId={currentUser?.id}
+            onChanged={fetchDetails}
+          />
+        </Content>
+      )}
 
       <div className="col-span-12 grid grid-cols-12 gap-4 md:gap-6 items-start">
         <div className="col-span-12 lg:col-span-8 space-y-4 md:space-y-6">
@@ -926,6 +984,21 @@ export default function MRDetailPage({
                                         </Badge>
                                       )}
                                     </div>
+                                    {deadlineByItem[item.id] && (
+                                      <div
+                                        className={`flex items-center gap-1 text-[9px] font-bold uppercase ${
+                                          deadlineByItem[item.id] <
+                                          businessToday()
+                                            ? "text-destructive"
+                                            : "text-muted-foreground"
+                                        }`}
+                                      >
+                                        <Calendar className="h-2.5 w-2.5" />
+                                        Deadline: {deadlineByItem[item.id]}
+                                        {deadlineByItem[item.id] <
+                                          businessToday() && " (lewat)"}
+                                      </div>
+                                    )}
                                     {itemDeliveries.map((d, i) => (
                                       <div
                                         key={i}
@@ -1112,6 +1185,29 @@ export default function MRDetailPage({
                         Stok
                       </Button>
                     </div>
+
+                    {alloc.sharestocks.length > 0 && (
+                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-2.5">
+                        <label className="text-[10px] font-bold text-warning uppercase tracking-widest whitespace-nowrap">
+                          Deadline Supply
+                        </label>
+                        <Input
+                          type="date"
+                          className="h-9 w-full sm:w-48 text-[11px] font-bold"
+                          value={alloc.deadline || ""}
+                          min={businessToday()}
+                          onChange={(e) =>
+                            updateAllocationDeadline(
+                              alloc.mr_item_id,
+                              e.target.value,
+                            )
+                          }
+                        />
+                        <span className="text-[10px] font-medium text-muted-foreground">
+                          Lewat tanggal ini & delivery belum dibuat → MR di-freeze.
+                        </span>
+                      </div>
+                    )}
 
                     {alloc.sharestocks.length > 0 && (
                       <div className="space-y-2.5 mt-2">

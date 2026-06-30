@@ -1,0 +1,74 @@
+@startuml planning-supply-flow
+title Alur Planning Supply & Freeze MR — WMS-GMI
+
+' ===== Styling biar rapih & bersih =====
+skinparam backgroundColor #FFFFFF
+skinparam shadowing false
+skinparam defaultFontName Helvetica
+skinparam defaultFontSize 13
+skinparam ArrowColor #64748B
+skinparam ArrowFontColor #475569
+skinparam ActivityBorderColor #94A3B8
+skinparam ActivityBackgroundColor #F8FAFC
+skinparam ActivityDiamondBackgroundColor #F1F5F9
+skinparam ActivityDiamondBorderColor #94A3B8
+skinparam PartitionBorderColor #CBD5E1
+skinparam PartitionFontColor #334155
+skinparam NoteBackgroundColor #FEF9C3
+skinparam NoteBorderColor #EAB308
+
+start
+
+partition "1 · Alokasi  (Approver Terakhir)" {
+  :Setujui MR & alokasi Share Stock;
+  #FEF3C7:Set **Deadline Supply** per item;
+}
+
+if (Delivery dibuat sebelum deadline?) then (ya)
+
+  partition "2 · Pengiriman" {
+    :Buat Delivery;
+    note right
+      stok cabang **sumber**  −  qty
+    end note
+    #DBEAFE:Planning Supply : **in_transit**;
+  }
+
+  if (Status barang?) then (diterima)
+    partition "3 · Penerimaan" {
+      :Finalize (TTD penerima);
+      note right
+        stok cabang **tujuan**  +  qty
+      end note
+      #DCFCE7:Planning Supply : **received**;
+    }
+    stop
+  else (dibatalkan)
+    partition "Pembatalan  (Moderator / Admin)" {
+      :Batalkan Delivery;
+      note right
+        stok cabang **sumber**  +  qty  (dikembalikan)
+      end note
+      #FEE2E2:Planning Supply : **cancelled**  (+ keterangan);
+    }
+    stop
+  endif
+
+else (lewat deadline & belum ada delivery)
+
+  partition "Freeze MR" {
+    #CFFAFE:**MR FREEZE** — seluruh alur terkunci;
+    :Pembuat MR lapor kendala;
+    :Notifikasi ke Moderator;
+    if (Tindakan Moderator?) then (Unfreeze)
+      :Unfreeze — lanjut dari posisi terakhir;
+    else (Reset)
+      :Set deadline baru per item;
+    endif
+    :Alur kembali ke tahap **Pengiriman**;
+  }
+  stop
+
+endif
+
+@enduml

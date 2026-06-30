@@ -624,6 +624,11 @@ export default function MaterialRequestPage() {
                       <TableCell className="text-center">
                         <div className="flex flex-col items-center gap-1.5">
                           {getStatusBadge(mr.mr_status)}
+                          {mr.is_frozen && (
+                            <Badge className="bg-sky-500 text-white border-none text-[9px] font-bold uppercase">
+                              Frozen
+                            </Badge>
+                          )}
                           {nextApprover && (
                             <div className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground uppercase tracking-tighter">
                               <Clock className="h-2.5 w-2.5" />

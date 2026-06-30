@@ -29,6 +29,7 @@ import {
   X,
   RefreshCw,
   FileBox,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -43,6 +44,7 @@ import {
   updateDeliveryTracking,
   updateDeliveryTrackingModerator,
   finalizeDelivery,
+  cancelDelivery,
 } from "@/services/inventory-actions";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -79,6 +81,8 @@ export function DeliveryDetailSheet({
   const [finalizing, setFinalizing] = useState(false);
   const [moderatorTrackingStatus, setModeratorTrackingStatus] = useState("");
   const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
+  const [cancelReason, setCancelReason] = useState("");
+  const [cancelling, setCancelling] = useState(false);
 
   useEffect(() => {
     if (open && deliveryId) {
@@ -292,6 +296,34 @@ export function DeliveryDetailSheet({
   const isModeratorOrAdmin = currentUserRoleNames.some(
     (role) => role === "moderator" || role === "admin",
   );
+
+  // Delivery yang belum diterima (barang masih in-transit / belum sampai) bisa
+  // dibatalkan. Qty dikembalikan ke stok sumber & saldo planning supply di-void.
+  const canCancelDelivery =
+    Boolean(delivery) &&
+    isModeratorOrAdmin &&
+    delivery?.status !== "cancelled" &&
+    delivery?.status !== "completed" &&
+    delivery?.tracking_status !== "completed";
+
+  const handleCancelDelivery = async () => {
+    if (!delivery) return;
+    if (!cancelReason.trim()) {
+      toast.error("Alasan pembatalan wajib diisi.");
+      return;
+    }
+    setCancelling(true);
+    const result = await cancelDelivery(delivery.id, cancelReason.trim());
+    setCancelling(false);
+    if (result?.success) {
+      toast.success("Delivery dibatalkan. Qty dikembalikan ke cabang sumber.");
+      setCancelReason("");
+      fetchDetails();
+      onUpdate?.();
+    } else {
+      toast.error(result?.error || "Gagal membatalkan delivery");
+    }
+  };
 
   const currentTrackingIndex = TRACKING_ORDER.indexOf(
     delivery?.tracking_status || "created",
@@ -572,6 +604,43 @@ export function DeliveryDetailSheet({
                       Simpan Tracking + Catatan
                     </Button>
                   </div>
+
+                  {canCancelDelivery && (
+                    <div className="p-4 bg-red-50/50 border border-red-100 rounded-xl space-y-3">
+                      <div className="flex items-center gap-2">
+                        <AlertTriangle className="h-3.5 w-3.5 text-red-600" />
+                        <h4 className="text-[11px] font-bold text-red-700 uppercase tracking-tight">
+                          Batalkan Delivery
+                        </h4>
+                      </div>
+                      <p className="text-[10px] font-medium text-red-600/80">
+                        Qty dikembalikan ke stok cabang sumber & saldo planning
+                        supply dibatalkan. Hanya untuk delivery yang belum
+                        diterima.
+                      </p>
+                      <Textarea
+                        value={cancelReason}
+                        onChange={(event) => setCancelReason(event.target.value)}
+                        placeholder="Alasan pembatalan (wajib)"
+                        className="min-h-16 bg-white border-red-200 text-xs"
+                        disabled={cancelling}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-2 text-xs font-bold border-red-200 text-red-700 hover:bg-red-50"
+                        onClick={handleCancelDelivery}
+                        disabled={cancelling}
+                      >
+                        {cancelling ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <AlertTriangle className="h-3.5 w-3.5" />
+                        )}
+                        Batalkan & Kembalikan Stok
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -783,9 +852,13 @@ export function DeliveryDetailSheet({
                               <span className="text-[10px] font-black text-blue-600">
                                 {item.qty_on_delivery}
                               </span>
-                              {item.qty_delivered > 0 && (
-                                <span className="text-[8px] text-green-600 font-bold">
-                                  delivered
+                              {item.qty_delivered > 0 ? (
+                                <span className="text-[8px] text-green-600 font-bold uppercase">
+                                  diterima
+                                </span>
+                              ) : (
+                                <span className="text-[8px] text-blue-500 font-bold uppercase">
+                                  dalam pengiriman
                                 </span>
                               )}
                             </div>

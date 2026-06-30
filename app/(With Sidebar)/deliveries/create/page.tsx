@@ -179,7 +179,10 @@ export default function CreateDeliveryPage() {
       )
       .gt("qty_sharestock_total", 0)
       .in("ss_status", ["open", "approved"])
-      .eq("mrs.mr_status", "approved");
+      .eq("mrs.mr_status", "approved")
+      // Sembunyikan item dari MR yang sedang di-freeze (tetap diblok juga di
+      // createDelivery sebagai jaring pengaman untuk freeze yang belum terflag).
+      .eq("mrs.is_frozen", false);
     setShareStocks(ssData || []);
 
     setInitialLoading(false);

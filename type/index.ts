@@ -587,3 +587,54 @@ export interface SpbReport {
   invoice_email_date?: string | null;
   invoice_created_at?: string | null;
 }
+
+// ============================================================
+// PLANNING SUPPLY + FREEZE MR
+// ============================================================
+
+export type PlanningSupplyStatus = "in_transit" | "received" | "cancelled";
+
+export interface PlanningSupply {
+  id: number;
+  mr_id: number | null;
+  mr_item_id: number | null;
+  dlv_id: number;
+  delivery_item_id: number | null;
+  part_id: number;
+  part_number: string | null;
+  part_name: string | null;
+  satuan: string | null;
+  source_cabang_id: number;
+  dest_cabang_id: number;
+  qty: number;
+  deadline: string | null;
+  status: PlanningSupplyStatus;
+  note: string | null;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // Join opsional
+  mrs?: { mr_kode: string } | null;
+  deliveries?: { dlv_kode: string } | null;
+  source_cabang?: { nama_cabang: string } | null;
+  dest_cabang?: { nama_cabang: string } | null;
+}
+
+export type MrFreezeReportStatus = "open" | "resolved";
+export type MrFreezeResolutionAction = "unfreeze" | "reset";
+
+export interface MrFreezeReport {
+  id: number;
+  mr_id: number;
+  reporter_id: string;
+  kendala: string;
+  status: MrFreezeReportStatus;
+  resolution_action: MrFreezeResolutionAction | null;
+  resolution: string | null;
+  resolved_by: string | null;
+  created_at: string;
+  resolved_at: string | null;
+  // Join opsional
+  mrs?: { mr_kode: string } | null;
+  reporter?: { nama: string } | null;
+}

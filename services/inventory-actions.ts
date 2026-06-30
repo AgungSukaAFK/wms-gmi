@@ -1,6 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import { evaluateMrFreeze } from "./freeze-actions";
 import { revalidatePath } from "next/cache";
 import { toCompletedIfLegacy } from "@/lib/document-status";
 
@@ -76,6 +77,14 @@ export async function createDelivery(data: {
 
   if (data.dari_cabang_id === data.ke_cabang_id) {
     return { error: "Cabang asal dan tujuan tidak boleh sama" };
+  }
+
+  // Guard freeze: MR yang ter-freeze tidak boleh membuat delivery baru.
+  if (data.mr_id && (await evaluateMrFreeze(data.mr_id))) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE (lewat deadline share stock). Hubungi moderator untuk unfreeze/reset.",
+    };
   }
 
   const {
@@ -248,8 +257,10 @@ export async function createDelivery(data: {
       part_name: item.part_name,
       satuan: item.satuan,
       qty_on_delivery: item.qty_on_delivery,
-      qty_delivered: item.qty_on_delivery,
-      qty_pending: 0,
+      // Barang baru keluar/dalam pengiriman — belum diterima. qty_delivered
+      // diisi penuh saat finalizeDelivery (barang diterima di tujuan).
+      qty_delivered: 0,
+      qty_pending: item.qty_on_delivery,
     };
 
     if (!hasMrItemColumn) {
@@ -276,8 +287,8 @@ export async function createDelivery(data: {
         part_name: item.part_name,
         satuan: item.satuan,
         qty_on_delivery: item.qty_on_delivery,
-        qty_delivered: item.qty_on_delivery,
-        qty_pending: 0,
+        qty_delivered: 0,
+        qty_pending: item.qty_on_delivery,
       }));
       const { error: retryError } = await supabase
         .from("delivery_items")
@@ -319,10 +330,64 @@ export async function createDelivery(data: {
     }
   }
 
+  // 4. Catat Planning Supply (barang akan masuk ke cabang tujuan).
+  //    Saldo "in_transit" sampai barang diterima (finalizeDelivery) atau
+  //    dibatalkan (cancelDelivery).
+  {
+    // Ambil deadline per mr_item dari alokasi share stock (kalau ada).
+    const planningMrItemIds = Array.from(
+      new Set(
+        data.items
+          .map((item) => item.mr_item_id)
+          .filter((id): id is number => typeof id === "number"),
+      ),
+    );
+    const deadlineByItemId = new Map<number, string | null>();
+    if (planningMrItemIds.length > 0) {
+      const { data: deadlineRows } = await supabase
+        .from("mr_sharestock_allocations")
+        .select("mr_item_id, deadline")
+        .in("mr_item_id", planningMrItemIds);
+      for (const row of deadlineRows || []) {
+        if (row.deadline && !deadlineByItemId.get(row.mr_item_id)) {
+          deadlineByItemId.set(row.mr_item_id, row.deadline);
+        }
+      }
+    }
+
+    const planningRows = data.items.map((item) => ({
+      mr_id: data.mr_id ?? null,
+      mr_item_id: typeof item.mr_item_id === "number" ? item.mr_item_id : null,
+      dlv_id: dlv.id,
+      part_id: item.part_id,
+      part_number: item.part_number,
+      part_name: item.part_name,
+      satuan: item.satuan,
+      source_cabang_id: data.dari_cabang_id,
+      dest_cabang_id: data.ke_cabang_id,
+      qty: item.qty_on_delivery,
+      deadline:
+        typeof item.mr_item_id === "number"
+          ? deadlineByItemId.get(item.mr_item_id) ?? null
+          : null,
+      status: "in_transit",
+      created_by: user?.id || null,
+    }));
+
+    // Tabel planning_supplies bisa belum ada di DB lama → jangan gagalkan delivery.
+    const { error: planningError } = await supabase
+      .from("planning_supplies")
+      .insert(planningRows);
+    if (planningError) {
+      console.error("Gagal mencatat planning supply:", planningError.message);
+    }
+  }
+
   revalidatePath("/deliveries");
   revalidatePath("/share-stock");
   revalidatePath("/mr");
   revalidatePath("/stock");
+  revalidatePath("/planning-supply");
   return { success: true, dlv_kode: dlv.dlv_kode };
 }
 
@@ -341,6 +406,19 @@ export async function updateDeliveryTracking(
   ];
   if (!TRACKING_ORDER.includes(trackingStatus)) {
     return { error: "Status tracking tidak valid" };
+  }
+
+  // Guard freeze: kunci progres tracking bila MR ter-freeze.
+  const { data: dlvForFreeze } = await supabase
+    .from("deliveries")
+    .select("mr_id")
+    .eq("id", deliveryId)
+    .maybeSingle();
+  if (dlvForFreeze?.mr_id && (await evaluateMrFreeze(dlvForFreeze.mr_id))) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE. Update tracking ditahan sampai moderator unfreeze/reset.",
+    };
   }
 
   const { error } = await supabase
@@ -414,6 +492,19 @@ export async function updateDeliveryTrackingModerator(
     return { error: "Catatan tracking maksimal 1000 karakter." };
   }
 
+  // Guard freeze: walau moderator, alur ditahan sampai MR di-unfreeze/reset.
+  const { data: dlvForFreeze } = await supabase
+    .from("deliveries")
+    .select("mr_id")
+    .eq("id", deliveryId)
+    .maybeSingle();
+  if (dlvForFreeze?.mr_id && (await evaluateMrFreeze(dlvForFreeze.mr_id))) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE. Unfreeze/reset MR dulu sebelum mengubah tracking.",
+    };
+  }
+
   const { error: updateError } = await supabase
     .from("deliveries")
     .update({
@@ -462,11 +553,19 @@ export async function finalizeDelivery(
   const { data: delivery, error: dlvError } = await supabase
     .from("deliveries")
     .select(
-      "id, dlv_kode, ke_cabang_id, dari_cabang_id, tracking_status, signature_receiver_id, status",
+      "id, dlv_kode, ke_cabang_id, dari_cabang_id, tracking_status, signature_receiver_id, status, mr_id",
     )
     .eq("id", deliveryId)
     .single();
   if (dlvError || !delivery) return { error: "Delivery tidak ditemukan" };
+
+  // Guard freeze: MR ter-freeze mengunci seluruh alur termasuk penerimaan.
+  if (delivery.mr_id && (await evaluateMrFreeze(delivery.mr_id))) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE. Penerimaan barang ditahan sampai moderator unfreeze/reset.",
+    };
+  }
 
   if (delivery.signature_receiver_id) {
     if (
@@ -526,7 +625,7 @@ export async function finalizeDelivery(
   // Get delivery items
   const { data: dlvItems } = await supabase
     .from("delivery_items")
-    .select("part_id, part_number, part_name, qty_on_delivery, mr_item_id")
+    .select("id, part_id, part_number, part_name, qty_on_delivery, mr_item_id")
     .eq("dlv_id", deliveryId);
   if (!dlvItems || dlvItems.length === 0)
     return { error: "Tidak ada item delivery" };
@@ -564,6 +663,12 @@ export async function finalizeDelivery(
       created_by: user.id,
       notes: `Delivery ${delivery.dlv_kode}: ${item.part_number} ${item.part_name} diterima di cabang ${delivery.ke_cabang_id}`,
     });
+
+    // Tandai item benar-benar diterima (sebelumnya 0 / pending saat dibuat).
+    await supabase
+      .from("delivery_items")
+      .update({ qty_delivered: item.qty_on_delivery, qty_pending: 0 })
+      .eq("id", item.id);
   }
 
   // Update delivery: signature + status
@@ -595,10 +700,162 @@ export async function finalizeDelivery(
     await syncShareStockStatuses(mrItemIds);
   }
 
+  // Tutup saldo planning supply: barang sudah diterima di cabang tujuan.
+  const { error: planningReceivedError } = await supabase
+    .from("planning_supplies")
+    .update({ status: "received" })
+    .eq("dlv_id", deliveryId)
+    .eq("status", "in_transit");
+  if (planningReceivedError) {
+    console.error(
+      "Gagal update planning supply jadi received:",
+      planningReceivedError.message,
+    );
+  }
+
   revalidatePath("/deliveries");
   revalidatePath("/share-stock");
   revalidatePath("/mr");
   revalidatePath("/stock");
+  revalidatePath("/planning-supply");
+  return { success: true };
+}
+
+/**
+ * BATALKAN DELIVERY (share stock) — moderator/admin.
+ *
+ * Dipakai bila pengiriman batal (tidak diapprove / kendala lain) SEBELUM barang
+ * diterima. Qty dikembalikan ke stok cabang sumber, saldo planning supply
+ * di-void (status 'cancelled') dengan keterangan, dan delivery jadi 'cancelled'.
+ * Delivery yang sudah selesai (barang diterima) tidak bisa dibatalkan lewat sini.
+ */
+export async function cancelDelivery(deliveryId: number, reason: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  const { data: roleRows } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  const roleNames = (roleRows || [])
+    .map((row: any) => row?.roles?.name)
+    .filter((role: string | undefined): role is string => Boolean(role));
+  const isModeratorOrAdmin = roleNames.some(
+    (role) => role === "moderator" || role === "admin",
+  );
+  if (!isModeratorOrAdmin) {
+    return {
+      error: "Hanya moderator atau admin yang dapat membatalkan delivery.",
+    };
+  }
+
+  const trimmedReason = reason?.trim();
+  if (!trimmedReason) {
+    return { error: "Alasan pembatalan wajib diisi." };
+  }
+
+  const { data: delivery } = await supabase
+    .from("deliveries")
+    .select("id, dlv_kode, dari_cabang_id, status, tracking_status")
+    .eq("id", deliveryId)
+    .single();
+  if (!delivery) return { error: "Delivery tidak ditemukan" };
+  if (delivery.status === "cancelled") {
+    return { error: "Delivery ini sudah dibatalkan." };
+  }
+  if (
+    delivery.status === "completed" ||
+    delivery.tracking_status === "completed"
+  ) {
+    return {
+      error:
+        "Delivery sudah selesai (barang diterima) dan tidak bisa dibatalkan dari sini.",
+    };
+  }
+
+  const { data: dlvItems } = await supabase
+    .from("delivery_items")
+    .select("part_id, part_number, part_name, qty_on_delivery, mr_item_id")
+    .eq("dlv_id", deliveryId);
+
+  // Kembalikan qty ke stok cabang sumber (saat createDelivery stok sumber dipotong).
+  for (const item of dlvItems || []) {
+    const { data: srcStock } = await supabase
+      .from("stock")
+      .select("id, qty")
+      .eq("part_id", item.part_id)
+      .eq("cabang_id", delivery.dari_cabang_id)
+      .maybeSingle();
+    if (srcStock) {
+      await supabase
+        .from("stock")
+        .update({ qty: srcStock.qty + item.qty_on_delivery })
+        .eq("id", srcStock.id);
+    } else {
+      await supabase.from("stock").insert([
+        {
+          part_id: item.part_id,
+          cabang_id: delivery.dari_cabang_id,
+          qty: item.qty_on_delivery,
+        },
+      ]);
+    }
+    await supabase.from("stock_movements").insert({
+      part_id: item.part_id,
+      cabang_id: delivery.dari_cabang_id,
+      qty_change: item.qty_on_delivery,
+      type: "SS",
+      reference_id: delivery.dlv_kode,
+      created_by: user.id,
+      notes: `Pembatalan Delivery ${delivery.dlv_kode}: ${item.part_number} ${item.part_name} dikembalikan ke cabang ${delivery.dari_cabang_id}. Alasan: ${trimmedReason}`,
+    });
+  }
+
+  // Void saldo planning supply dengan keterangan.
+  const { error: planningCancelError } = await supabase
+    .from("planning_supplies")
+    .update({ status: "cancelled", note: trimmedReason })
+    .eq("dlv_id", deliveryId)
+    .eq("status", "in_transit");
+  if (planningCancelError) {
+    console.error(
+      "Gagal membatalkan planning supply:",
+      planningCancelError.message,
+    );
+  }
+
+  const { error: updateError } = await supabase
+    .from("deliveries")
+    .update({
+      status: "cancelled",
+      cancel_reason: trimmedReason,
+      cancelled_by: user.id,
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", deliveryId);
+  if (updateError) return { error: updateError.message };
+
+  // Recompute status share stock item terkait (alokasi kembali tersedia).
+  const mrItemIds = Array.from(
+    new Set(
+      (dlvItems || [])
+        .map((i) => i.mr_item_id)
+        .filter((id): id is number => typeof id === "number"),
+    ),
+  );
+  if (mrItemIds.length > 0) {
+    await syncShareStockStatuses(mrItemIds);
+  }
+
+  revalidatePath("/deliveries");
+  revalidatePath("/share-stock");
+  revalidatePath("/mr");
+  revalidatePath("/stock");
+  revalidatePath("/planning-supply");
   return { success: true };
 }
 
@@ -629,6 +886,15 @@ export async function bypassShareStockCompletion(mrItemId: number) {
 
   const destCabangId = (mrItem.mrs as any)?.cabang_id;
   if (!destCabangId) return { error: "Cabang tujuan tidak ditemukan" };
+
+  // Guard freeze: bypass termasuk alur MR yang ikut terkunci saat freeze.
+  const bypassMrId = (mrItem.mrs as any)?.id;
+  if (bypassMrId && (await evaluateMrFreeze(bypassMrId))) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE. Hubungi moderator untuk unfreeze/reset sebelum bypass.",
+    };
+  }
 
   // Get allocations (source cabangs)
   const { data: allocations } = await supabase

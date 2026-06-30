@@ -49,6 +49,7 @@ import {
   Undo2,
   Calculator,
   FileSignature,
+  PackageSearch,
 } from "lucide-react";
 
 // Update the menu data
@@ -98,6 +99,7 @@ const data = {
     { title: "Delivery", url: "/deliveries", icon: Truck },
     { title: "Item Transfer", url: "/item-transfer", icon: ArrowLeftRight },
     { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
+    { title: "Planning Supply", url: "/planning-supply", icon: PackageSearch },
     { title: "Job Costing", url: "/job-costing", icon: Calculator },
   ],
   navProcurement: [
