@@ -16,6 +16,7 @@ import {
   Package,
   Loader2,
   AlertTriangle,
+  Send,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Badge } from "@/components/ui/badge";
@@ -38,6 +39,7 @@ import {
 import { toast } from "sonner";
 import Link from "next/link";
 import { getMrItemConstraint } from "@/services/procurement-actions";
+import { requestStockSetting } from "@/services/stock-request-actions";
 
 interface Barang {
   id: number;
@@ -95,6 +97,12 @@ export function MRItemSelector({
   const [checkingPartId, setCheckingPartId] = useState<number | null>(null);
   // Modal informasi duplikat PN
   const [dupModal, setDupModal] = useState<DupModalState | null>(null);
+  const [stockReqModal, setStockReqModal] = useState<{
+    barang: Barang;
+    cap: StockCap;
+    reason: "no_policy" | "limit_reached";
+  } | null>(null);
+  const [sendingStockReq, setSendingStockReq] = useState(false);
 
   const fetchItems = async (q: string) => {
     setLoading(true);
@@ -138,6 +146,38 @@ export function MRItemSelector({
     onItemsChange([...items, newItem]);
   };
 
+  const sendStockRequest = async (
+    barang: Barang,
+    cap: StockCap,
+    reason: "no_policy" | "limit_reached",
+  ) => {
+    if (!cabangId) {
+      toast.error("Pilih cabang tujuan terlebih dahulu.");
+      return;
+    }
+    setSendingStockReq(true);
+    const res = await requestStockSetting({
+      part_id: barang.id,
+      part_number: barang.part_number,
+      part_name: barang.part_name,
+      cabang_id: cabangId,
+      reason,
+      current_qty: cap.currentQty,
+      max_qty: cap.maxQty,
+    });
+    setSendingStockReq(false);
+    if (res?.success) {
+      toast.success(
+        res.alreadyExists
+          ? `${barang.part_number} sudah pernah diminta — menunggu atasan.`
+          : `Request pengaturan stok ${barang.part_number} terkirim ke atasan.`,
+      );
+      setStockReqModal(null);
+    } else {
+      toast.error(res?.error || "Gagal mengirim request");
+    }
+  };
+
   const handleAddItem = async (barang: Barang) => {
     if (items.some((i) => i.part_id === barang.id)) return;
 
@@ -174,17 +214,10 @@ export function MRItemSelector({
       hasPolicy: res.stock.hasPolicy,
     };
 
-    // allowedMax 0 → tidak bisa diminta sama sekali.
+    // allowedMax 0 → tidak bisa diminta sama sekali. Tampilkan modal.
     if (cap.allowedMax === 0) {
-      if (!cap.hasPolicy) {
-        toast.error(
-          `Belum ada kebijakan max stock untuk ${barang.part_number} di gudang Anda. Hubungi PPIC/atasan untuk menetapkan batas stok.`,
-        );
-      } else {
-        toast.error(
-          `Stok ${barang.part_number} sudah mencapai batas maksimum di gudang Anda (${cap.currentQty}/${cap.maxQty}). Tidak bisa diminta.`,
-        );
-      }
+      const reason = !cap.hasPolicy ? "no_policy" : "limit_reached";
+      setStockReqModal({ barang, cap, reason });
       return;
     }
 
@@ -487,6 +520,78 @@ export function MRItemSelector({
               }}
             >
               Batalkan Pembuatan MR
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Modal: item tidak bisa ditambah → minta atur stok */}
+      <Dialog
+        open={stockReqModal !== null}
+        onOpenChange={(o) => {
+          if (!o) setStockReqModal(null);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-600">
+              <AlertTriangle className="h-5 w-5" /> Item Belum Bisa Ditambahkan
+            </DialogTitle>
+            <DialogDescription className="text-left">
+              {stockReqModal?.reason === "no_policy" ? (
+                <>
+                  <span className="font-mono font-bold text-foreground">
+                    {stockReqModal?.barang.part_number}
+                  </span>{" "}
+                  belum punya kebijakan stok (min/max) di gudang Anda, jadi belum
+                  bisa diminta.
+                </>
+              ) : (
+                <>
+                  Stok{" "}
+                  <span className="font-mono font-bold text-foreground">
+                    {stockReqModal?.barang.part_number}
+                  </span>{" "}
+                  sudah mencapai batas maksimum di gudang Anda (
+                  {stockReqModal?.cap.currentQty}/{stockReqModal?.cap.maxQty}),
+                  jadi belum bisa diminta.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-[11px] font-medium text-amber-800">
+            Kirim permintaan ke moderator/PPIC untuk mengatur stok PN ini.
+            Setelah diatur, item bisa langsung ditambahkan ke MR.
+          </div>
+
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button
+              variant="ghost"
+              className="text-xs font-bold"
+              onClick={() => setStockReqModal(null)}
+              disabled={sendingStockReq}
+            >
+              Tutup
+            </Button>
+            <Button
+              className="gap-2 text-xs font-bold"
+              onClick={() =>
+                stockReqModal &&
+                sendStockRequest(
+                  stockReqModal.barang,
+                  stockReqModal.cap,
+                  stockReqModal.reason,
+                )
+              }
+              disabled={sendingStockReq}
+            >
+              {sendingStockReq ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Send className="h-3.5 w-3.5" />
+              )}
+              Minta Atur Stok
             </Button>
           </DialogFooter>
         </DialogContent>

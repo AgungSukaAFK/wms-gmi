@@ -50,6 +50,7 @@ import {
   Calculator,
   FileSignature,
   PackageSearch,
+  ClipboardList,
 } from "lucide-react";
 
 // Update the menu data
@@ -96,6 +97,7 @@ const data = {
   ],
   navInventory: [
     { title: "Stock", url: "/stock", icon: Archive },
+    { title: "Request Stok", url: "/stock-requests", icon: ClipboardList },
     { title: "Delivery", url: "/deliveries", icon: Truck },
     { title: "Item Transfer", url: "/item-transfer", icon: ArrowLeftRight },
     { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
