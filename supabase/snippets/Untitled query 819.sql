@@ -1,2 +1,2 @@
-SELECT to_regclass('public.stock_setting_requests') AS tbl;             -- harus ada
-SELECT relrowsecurity FROM pg_class WHERE relname='stock_setting_requests'; -- true
+-- Apakah ada notifikasi yang masuk sama sekali?
+SELECT count(*) AS total, max(created_at) AS terakhir FROM public.notifications;
