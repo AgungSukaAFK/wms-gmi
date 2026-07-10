@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import * as XLSX from "xlsx";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { MultiSelect } from "@/components/ui/multi-select";
 import {
@@ -26,6 +27,7 @@ import {
   Clock,
   AlertTriangle,
   Trash2,
+  Download,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -63,6 +65,7 @@ export default function MaterialRequestPage() {
   const [mrs, setMrs] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [userProfile, setUserProfile] = useState<any>(null);
+  const [exporting, setExporting] = useState(false);
 
   // Pagination & Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -116,8 +119,9 @@ export default function MaterialRequestPage() {
     setAvailableCabang(cabangData || []);
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  // Query dasar dengan seluruh filter aktif diterapkan (tanpa order/range),
+  // dipakai bersama oleh fetchData (list berpaginasi) dan exportExcel (semua baris).
+  const buildFilteredQuery = () => {
     let query = supabase
       .from("mrs")
       .select("*, cabang(nama_cabang)", { count: "exact" });
@@ -155,10 +159,15 @@ export default function MaterialRequestPage() {
       query = query.lte("mr_tanggal", dateTo);
     }
 
+    return query;
+  };
+
+  const fetchData = async () => {
+    setLoading(true);
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query
+    const { data, count, error } = await buildFilteredQuery()
       .order("created_at", { ascending: false })
       .range(from, to);
 
@@ -169,6 +178,62 @@ export default function MaterialRequestPage() {
       setTotalCount(count || 0);
     }
     setLoading(false);
+  };
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const pageSize = 1000;
+      const allRows: any[] = [];
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        const from = pageIndex * pageSize;
+        const to = from + pageSize - 1;
+        const { data, error } = await buildFilteredQuery()
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          toast.error(error.message || "Gagal mengambil data untuk export.");
+          return;
+        }
+
+        allRows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      if (allRows.length === 0) {
+        toast.error("Tidak ada data untuk diekspor.");
+        return;
+      }
+
+      const sheetData = allRows.map((mr, index) => ({
+        NO: index + 1,
+        "KODE MR": mr.mr_kode || "-",
+        PRIORITAS: mr.mr_priority || "-",
+        PIC: mr.mr_pic || "-",
+        LOKASI: mr.cabang?.nama_cabang || "-",
+        "TANGGAL REQUEST": mr.mr_tanggal
+          ? new Date(mr.mr_tanggal).toLocaleDateString("id-ID")
+          : "-",
+        "DUE DATE": mr.mr_due_date
+          ? new Date(mr.mr_due_date).toLocaleDateString("id-ID")
+          : "-",
+        STATUS: mr.mr_status || "-",
+        FROZEN: mr.is_frozen ? "YA" : "-",
+        KETERANGAN: mr.mr_remarks || "-",
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Material Request");
+      XLSX.writeFile(
+        wb,
+        `MATERIAL_REQUEST_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -347,15 +412,26 @@ export default function MaterialRequestPage() {
             </div>
           </div>
 
-          {canCreateMR(
-            (userProfile?.roles as any[])?.map((r: any) => r.roles?.name),
-          ) && (
-            <Link href="/mr/create">
-              <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all">
-                <Plus className="h-4 w-4" /> BUAT MR BARU
-              </Button>
-            </Link>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="outline"
+              onClick={exportExcel}
+              disabled={loading || exporting}
+              className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all"
+            >
+              <Download className="h-4 w-4" />
+              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
+            </Button>
+            {canCreateMR(
+              (userProfile?.roles as any[])?.map((r: any) => r.roles?.name),
+            ) && (
+              <Link href="/mr/create">
+                <Button className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all">
+                  <Plus className="h-4 w-4" /> BUAT MR BARU
+                </Button>
+              </Link>
+            )}
+          </div>
         </div>
       </Content>
 

@@ -762,6 +762,41 @@ export default function MRDetailPage({
 
               <div className="space-y-1.5">
                 <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                  Tanggal Kebutuhan (Due Date)
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-muted-foreground" />
+                  {mr?.mr_due_date ? (
+                    <div
+                      className={`flex h-10 w-full items-center rounded-md border px-3 py-2 text-sm font-semibold ${
+                        mr.mr_status === "open" &&
+                        mr.mr_due_date < businessToday()
+                          ? "border-destructive/30 bg-destructive/10 text-destructive"
+                          : "border-border bg-muted/40 text-foreground"
+                      }`}
+                    >
+                      {new Date(mr.mr_due_date).toLocaleDateString("id-ID", {
+                        day: "numeric",
+                        month: "long",
+                        year: "numeric",
+                      })}
+                      {mr.mr_status === "open" &&
+                        mr.mr_due_date < businessToday() && (
+                          <span className="ml-2 text-[10px] font-black uppercase tracking-wide">
+                            Lewat Due Date
+                          </span>
+                        )}
+                    </div>
+                  ) : (
+                    <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-muted-foreground italic">
+                      Belum ditentukan
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[11px] font-bold uppercase text-muted-foreground">
                   Tingkat Prioritas
                 </Label>
                 <div className="flex items-center gap-2">
