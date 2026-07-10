@@ -365,11 +365,29 @@ export async function approveMR(
   let status = "open";
 
   if (isLastStep) {
+    const mrDueDate = mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : null;
+
     status = "approved";
 
     // Process allocations if provided
     if (allocations && allocations.length > 0) {
       for (const alloc of allocations) {
+        const allocationDeadline = alloc?.deadline
+          ? String(alloc.deadline).slice(0, 10)
+          : null;
+
+        if (
+          mrDueDate &&
+          Number(alloc?.qty_sharestock_total || 0) > 0 &&
+          allocationDeadline &&
+          allocationDeadline > mrDueDate
+        ) {
+          return {
+            error:
+              `Deadline supply item ${alloc?.part_number || "-"} tidak boleh melewati due date MR (${mrDueDate}).`,
+          };
+        }
+
         // Create sharestock entries
         if (alloc.sharestocks && alloc.sharestocks.length > 0) {
           const sharestockEntries = alloc.sharestocks.map((ss: any) => ({

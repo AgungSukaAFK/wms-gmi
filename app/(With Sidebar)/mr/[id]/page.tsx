@@ -483,6 +483,7 @@ export default function MRDetailPage({
 
   const handleApproveConfirm = async (signature: any) => {
     if (isLastApprover) {
+      const mrDueDate = mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : "";
       const missingDeadline = allocations.find(
         (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
       );
@@ -491,6 +492,21 @@ export default function MRDetailPage({
           `Deadline supply wajib diisi untuk item ${missingDeadline.part_number} (ada alokasi share stock).`,
         );
         return;
+      }
+
+      if (mrDueDate) {
+        const invalidDeadline = allocations.find(
+          (a) =>
+            Number(a.qty_sharestock_total) > 0 &&
+            a.deadline &&
+            String(a.deadline).slice(0, 10) > mrDueDate,
+        );
+        if (invalidDeadline) {
+          toast.error(
+            `Deadline supply item ${invalidDeadline.part_number} tidak boleh melewati due date MR (${mrDueDate}).`,
+          );
+          return;
+        }
       }
     }
     setSubmitting(true);
@@ -535,6 +551,11 @@ export default function MRDetailPage({
   };
 
   const updateAllocationDeadline = (itemId: number, deadline: string) => {
+    const mrDueDate = mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : "";
+    if (mrDueDate && deadline && deadline > mrDueDate) {
+      toast.error(`Deadline supply tidak boleh melewati due date MR (${mrDueDate}).`);
+      return;
+    }
     setAllocations((prev) =>
       prev.map((a) =>
         a.mr_item_id === itemId ? { ...a, deadline } : a,
@@ -1231,6 +1252,7 @@ export default function MRDetailPage({
                           className="h-9 w-full sm:w-48 text-[11px] font-bold"
                           value={alloc.deadline || ""}
                           min={businessToday()}
+                          max={mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : undefined}
                           onChange={(e) =>
                             updateAllocationDeadline(
                               alloc.mr_item_id,
