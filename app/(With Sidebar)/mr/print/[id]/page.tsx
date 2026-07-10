@@ -13,6 +13,7 @@ export default function MRPrintPage() {
   const supabase = createClient();
   const [mr, setMr] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
+  const [sohByPartId, setSohByPartId] = useState<Record<number, number>>({});
   const [ssAllocations, setSsAllocations] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -38,6 +39,38 @@ export default function MRPrintPage() {
       .eq("mr_id", id);
 
     setItems(itemsData || []);
+
+    // Ambil SOH (stok saat ini) berdasarkan part_id di cabang MR.
+    if (mrData?.cabang_id && itemsData && itemsData.length > 0) {
+      const partIds = Array.from(
+        new Set(
+          itemsData
+            .map((item: any) => Number(item.part_id))
+            .filter((partId: number) => Number.isFinite(partId) && partId > 0),
+        ),
+      );
+
+      if (partIds.length > 0) {
+        const { data: stockRows } = await supabase
+          .from("stock")
+          .select("part_id, qty")
+          .eq("cabang_id", mrData.cabang_id)
+          .in("part_id", partIds);
+
+        const nextSohByPartId: Record<number, number> = {};
+        (stockRows || []).forEach((row: any) => {
+          const key = Number(row.part_id);
+          if (Number.isFinite(key)) {
+            nextSohByPartId[key] = Number(row.qty) || 0;
+          }
+        });
+        setSohByPartId(nextSohByPartId);
+      } else {
+        setSohByPartId({});
+      }
+    } else {
+      setSohByPartId({});
+    }
 
     // Ambil alokasi share stock (planning supply) per item: gudang sumber, qty, deadline
     if (itemsData && itemsData.length > 0) {
@@ -233,6 +266,9 @@ export default function MRPrintPage() {
                   <th className="border border-slate-900 p-2 text-right w-32">
                     Jumlah (Qty)
                   </th>
+                  <th className="border border-slate-900 p-2 text-right w-28">
+                    SOH
+                  </th>
                   <th className="border border-slate-900 p-2 text-center w-24">
                     Satuan
                   </th>
@@ -258,6 +294,12 @@ export default function MRPrintPage() {
                     <td className="border border-slate-900 p-2 text-right font-bold">
                       {item.qty_request}
                     </td>
+                    <td className="border border-slate-900 p-2 text-right font-bold">
+                      {typeof item.part_id === "number" &&
+                      Number.isFinite(item.part_id)
+                        ? (sohByPartId[item.part_id] ?? 0)
+                        : "-"}
+                    </td>
                     <td className="border border-slate-900 p-2 text-center uppercase font-medium">
                       {item.satuan}
                     </td>
@@ -270,6 +312,7 @@ export default function MRPrintPage() {
                       key={`empty-${i}`}
                       className="border-b border-slate-200 h-10"
                     >
+                      <td className="border border-slate-900 p-2"></td>
                       <td className="border border-slate-900 p-2"></td>
                       <td className="border border-slate-900 p-2"></td>
                       <td className="border border-slate-900 p-2"></td>
@@ -287,8 +330,8 @@ export default function MRPrintPage() {
                 Rincian Share Stock (Planning Supply)
               </h3>
               <p className="text-[9px] text-slate-500 font-medium mb-3">
-                Pemenuhan sebagian/seluruh item via transfer antar gudang. Gudang
-                sumber wajib mengirim sebelum tanggal deadline.
+                Pemenuhan sebagian/seluruh item via transfer antar gudang.
+                Gudang sumber wajib mengirim sebelum tanggal deadline.
               </p>
               <table className="w-full border-collapse border border-slate-900 text-xs">
                 <thead>
@@ -326,7 +369,9 @@ export default function MRPrintPage() {
                                 {no}
                               </td>
                               <td className="border border-slate-900 p-2 align-top">
-                                <div className="font-bold">{item.part_name}</div>
+                                <div className="font-bold">
+                                  {item.part_name}
+                                </div>
                                 <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                                   {item.part_number}
                                 </div>
@@ -335,8 +380,8 @@ export default function MRPrintPage() {
                                 className="border border-slate-900 p-2 text-slate-400 italic"
                                 colSpan={3}
                               >
-                                Belum ada alokasi gudang sumber
-                                (total: {item.qty_sharestock_total} {item.satuan})
+                                Belum ada alokasi gudang sumber (total:{" "}
+                                {item.qty_sharestock_total} {item.satuan})
                               </td>
                             </tr>,
                           );
