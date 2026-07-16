@@ -191,9 +191,7 @@ export async function createMaterialRequest(data: {
       .eq("cabang_id", data.cabang_id)
       .in("part_id", partIds);
 
-    const stockMap = new Map(
-      (stockRows || []).map((s: any) => [s.part_id, s]),
-    );
+    const stockMap = new Map((stockRows || []).map((s: any) => [s.part_id, s]));
 
     const violations: string[] = [];
     for (const item of data.items) {
@@ -365,7 +363,9 @@ export async function approveMR(
   let status = "open";
 
   if (isLastStep) {
-    const mrDueDate = mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : null;
+    const mrDueDate = mr?.mr_due_date
+      ? String(mr.mr_due_date).slice(0, 10)
+      : null;
 
     status = "approved";
 
@@ -383,8 +383,7 @@ export async function approveMR(
           allocationDeadline > mrDueDate
         ) {
           return {
-            error:
-              `Deadline supply item ${alloc?.part_number || "-"} tidak boleh melewati due date MR (${mrDueDate}).`,
+            error: `Deadline supply item ${alloc?.part_number || "-"} tidak boleh melewati due date MR (${mrDueDate}).`,
           };
         }
 
@@ -544,8 +543,7 @@ export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
   // - _buildApprovalFlow → userid + approval_role
   const myStepIndex = approvals.findIndex(
     (a) =>
-      (a.userid === user.id || a.user_id === user.id) &&
-      a.status === "pending",
+      (a.userid === user.id || a.user_id === user.id) && a.status === "pending",
   );
 
   if (myStepIndex === -1)
@@ -561,16 +559,20 @@ export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
 
   // 1. Update MR header fields (only fields explicitly provided)
   const headerPatch: Record<string, any> = {};
-  if (payload.mr_tanggal !== undefined) headerPatch.mr_tanggal = payload.mr_tanggal;
-  if (payload.mr_priority !== undefined) headerPatch.mr_priority = payload.mr_priority;
-  if (payload.mr_remarks !== undefined) headerPatch.mr_remarks = payload.mr_remarks;
+  if (payload.mr_tanggal !== undefined)
+    headerPatch.mr_tanggal = payload.mr_tanggal;
+  if (payload.mr_priority !== undefined)
+    headerPatch.mr_priority = payload.mr_priority;
+  if (payload.mr_remarks !== undefined)
+    headerPatch.mr_remarks = payload.mr_remarks;
 
   if (Object.keys(headerPatch).length > 0) {
     const { error: headerErr } = await supabase
       .from("mrs")
       .update(headerPatch)
       .eq("id", mrId);
-    if (headerErr) return { error: `Gagal update header MR: ${headerErr.message}` };
+    if (headerErr)
+      return { error: `Gagal update header MR: ${headerErr.message}` };
   }
 
   // 2. Delete removed items
@@ -598,7 +600,9 @@ export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
   // 4. Insert new items
   if (payload.newItems && payload.newItems.length > 0) {
     const toInsert = payload.newItems.map((i) => ({ ...i, mr_id: mrId }));
-    const { error: insertErr } = await supabase.from("mr_items").insert(toInsert);
+    const { error: insertErr } = await supabase
+      .from("mr_items")
+      .insert(toInsert);
     if (insertErr) return { error: `Gagal tambah item: ${insertErr.message}` };
   }
 
@@ -1765,7 +1769,9 @@ export async function deleteMR(mrId: number) {
     .select("id", { count: "exact", head: true })
     .eq("mr_id", mrId);
   if (dlvCount && dlvCount > 0)
-    return { error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus." };
+    return {
+      error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus.",
+    };
 
   // Cek via delivery_items → mr_items (untuk data lama yang mr_id-nya NULL)
   const { data: mrItemRows } = await supabase
@@ -1779,7 +1785,9 @@ export async function deleteMR(mrId: number) {
       .select("id", { count: "exact", head: true })
       .in("mr_item_id", mrItemIds);
     if (dlvItemCount && dlvItemCount > 0)
-      return { error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus." };
+      return {
+        error: "MR sudah memiliki Delivery/Share Stock, tidak dapat dihapus.",
+      };
   }
 
   await supabase.from("mr_items").delete().eq("mr_id", mrId);

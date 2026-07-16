@@ -207,7 +207,8 @@ export default function MRDetailPage({
         .in("mr_item_id", itemIds);
       const dlMap: Record<number, string> = {};
       (allocDeadlines || []).forEach((a: any) => {
-        if (a.deadline && !dlMap[a.mr_item_id]) dlMap[a.mr_item_id] = a.deadline;
+        if (a.deadline && !dlMap[a.mr_item_id])
+          dlMap[a.mr_item_id] = a.deadline;
       });
       setDeadlineByItem(dlMap);
     }
@@ -373,9 +374,7 @@ export default function MRDetailPage({
   }, [debouncedBarangSearch, barangPopoverOpen]);
 
   const enterEditMode = () => {
-    setEditTanggal(
-      mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "",
-    );
+    setEditTanggal(mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "");
     setEditPriority(mr?.mr_priority || "");
     setEditRemarks(mr?.mr_remarks || "");
     setEditItemsList(
@@ -422,7 +421,9 @@ export default function MRDetailPage({
       setSaving(false);
       return;
     }
-    toast.success("Perubahan disimpan. Approval diulang dari step awal approver.");
+    toast.success(
+      "Perubahan disimpan. Approval diulang dari step awal approver.",
+    );
     setEditMode(false);
     fetchDetails();
     setSaving(false);
@@ -483,7 +484,9 @@ export default function MRDetailPage({
 
   const handleApproveConfirm = async (signature: any) => {
     if (isLastApprover) {
-      const mrDueDate = mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : "";
+      const mrDueDate = mr?.mr_due_date
+        ? String(mr.mr_due_date).slice(0, 10)
+        : "";
       const missingDeadline = allocations.find(
         (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
       );
@@ -551,15 +554,17 @@ export default function MRDetailPage({
   };
 
   const updateAllocationDeadline = (itemId: number, deadline: string) => {
-    const mrDueDate = mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : "";
+    const mrDueDate = mr?.mr_due_date
+      ? String(mr.mr_due_date).slice(0, 10)
+      : "";
     if (mrDueDate && deadline && deadline > mrDueDate) {
-      toast.error(`Deadline supply tidak boleh melewati due date MR (${mrDueDate}).`);
+      toast.error(
+        `Deadline supply tidak boleh melewati due date MR (${mrDueDate}).`,
+      );
       return;
     }
     setAllocations((prev) =>
-      prev.map((a) =>
-        a.mr_item_id === itemId ? { ...a, deadline } : a,
-      ),
+      prev.map((a) => (a.mr_item_id === itemId ? { ...a, deadline } : a)),
     );
   };
 
@@ -1136,7 +1141,10 @@ export default function MRDetailPage({
                       <Plus className="h-4 w-4" /> Tambah Barang
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-80 p-0 flex flex-col max-h-[220px] overflow-hidden" align="start">
+                  <PopoverContent
+                    className="w-80 p-0 flex flex-col max-h-[220px] overflow-hidden"
+                    align="start"
+                  >
                     <div className="p-2 border-b border-border shrink-0">
                       <div className="relative">
                         <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
@@ -1252,7 +1260,11 @@ export default function MRDetailPage({
                           className="h-9 w-full sm:w-48 text-[11px] font-bold"
                           value={alloc.deadline || ""}
                           min={businessToday()}
-                          max={mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : undefined}
+                          max={
+                            mr?.mr_due_date
+                              ? String(mr.mr_due_date).slice(0, 10)
+                              : undefined
+                          }
                           onChange={(e) =>
                             updateAllocationDeadline(
                               alloc.mr_item_id,
@@ -1261,7 +1273,8 @@ export default function MRDetailPage({
                           }
                         />
                         <span className="text-[10px] font-medium text-muted-foreground">
-                          Lewat tanggal ini & delivery belum dibuat → MR di-freeze.
+                          Lewat tanggal ini & delivery belum dibuat → MR
+                          di-freeze.
                         </span>
                       </div>
                     )}

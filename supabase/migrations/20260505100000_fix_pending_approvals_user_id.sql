@@ -12,6 +12,7 @@ RETURNS TABLE (
   created_at      TIMESTAMPTZ,
   step_level      TEXT
 )
+
 LANGUAGE sql
 STABLE
 SECURITY DEFINER
