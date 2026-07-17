@@ -30,6 +30,11 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { updateMRAccurate } from "@/services/procurement-actions";
 import { toast } from "sonner";
+import {
+  computeMrLevel,
+  MR_LEVEL_LABELS,
+  MR_LEVEL_BADGE_CLASS,
+} from "@/lib/mr-level";
 
 interface MRDetailSheetProps {
   mrId: string | number | null;
@@ -48,6 +53,7 @@ export function MRDetailSheet({
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [updatingAccurate, setUpdatingAccurate] = useState(false);
+  const [hasPo, setHasPo] = useState(false);
 
   useEffect(() => {
     if (open && mrId) {
@@ -72,8 +78,32 @@ export function MRDetailSheet({
       .order("created_at");
 
     setItems(itemsData || []);
+
+    // Cek apakah ada PO yang sudah dibuat dari PR-PR MR ini (untuk level MR).
+    const { data: prItemsData } = await supabase
+      .from("pr_items")
+      .select("id")
+      .eq("mr_id", mrId);
+    const prItemIds = (prItemsData || []).map((p: any) => p.id);
+    if (prItemIds.length > 0) {
+      const { count: poItemCount } = await supabase
+        .from("po_items")
+        .select("id", { count: "exact", head: true })
+        .in("pr_item_id", prItemIds);
+      setHasPo((poItemCount || 0) > 0);
+    } else {
+      setHasPo(false);
+    }
+
     setLoading(false);
   };
+
+  const mrLevel = computeMrLevel({
+    mrConvertStatus: mr?.mr_convert_status,
+    hasPo,
+    qtyRequestTotal: items.reduce((s, i) => s + (i.qty_request || 0), 0),
+    qtyReceivedTotal: items.reduce((s, i) => s + (i.qty_received || 0), 0),
+  });
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -228,6 +258,16 @@ export function MRDetailSheet({
                 <div className="flex items-center gap-2 overflow-hidden">
                   {mr && getPriorityBadge(mr.mr_priority)}
                   {mr && getStatusBadge(mr.mr_status)}
+                  {mr &&
+                    mr.mr_status !== "open" &&
+                    mr.mr_status !== "rejected" && (
+                      <Badge
+                        variant="outline"
+                        className={`text-[10px] font-bold uppercase ${MR_LEVEL_BADGE_CLASS[mrLevel]}`}
+                      >
+                        {MR_LEVEL_LABELS[mrLevel]}
+                      </Badge>
+                    )}
                 </div>
               </div>
               <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">

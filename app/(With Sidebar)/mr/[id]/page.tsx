@@ -76,6 +76,11 @@ import { businessToday } from "@/lib/business-date";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Content } from "@/components/content";
+import {
+  computeMrLevel,
+  MR_LEVEL_LABELS,
+  MR_LEVEL_BADGE_CLASS,
+} from "@/lib/mr-level";
 
 export default function MRDetailPage({
   params,
@@ -99,6 +104,7 @@ export default function MRDetailPage({
   // Fulfillment Data
   const [prRecords, setPrRecords] = useState<any[]>([]);
   const [deliveryRecords, setDeliveryRecords] = useState<any[]>([]);
+  const [hasPo, setHasPo] = useState(false);
   const [deadlineByItem, setDeadlineByItem] = useState<Record<number, string>>(
     {},
   );
@@ -189,6 +195,18 @@ export default function MRDetailPage({
       .select("*, prs(pr_kode, pr_status)")
       .eq("mr_id", mrId);
     setPrRecords(prsData || []);
+
+    // Cek apakah ada PO yang sudah dibuat dari PR-PR di atas (untuk level MR).
+    const prItemIds = (prsData || []).map((p: any) => p.id);
+    if (prItemIds.length > 0) {
+      const { count: poItemCount } = await supabase
+        .from("po_items")
+        .select("id", { count: "exact", head: true })
+        .in("pr_item_id", prItemIds);
+      setHasPo((poItemCount || 0) > 0);
+    } else {
+      setHasPo(false);
+    }
 
     // Fetch related deliveries for Share Stock progress
     const { data: deliveriesData } = await supabase
@@ -326,6 +344,13 @@ export default function MRDetailPage({
         return null;
     }
   };
+
+  const mrLevel = computeMrLevel({
+    mrConvertStatus: mr?.mr_convert_status,
+    hasPo,
+    qtyRequestTotal: items.reduce((s, i) => s + (i.qty_request || 0), 0),
+    qtyReceivedTotal: items.reduce((s, i) => s + (i.qty_received || 0), 0),
+  });
 
   const nextApprover =
     mr?.mr_status === "open"
@@ -662,20 +687,16 @@ export default function MRDetailPage({
                   {mr?.mr_kode}
                 </h1>
                 {getStatusBadge(mr?.mr_status)}
-                {mr?.mr_convert_status && (
-                  <Badge
-                    variant="outline"
-                    className={`text-[10px] font-bold uppercase ${
-                      mr.mr_convert_status === "complete"
-                        ? "bg-success/10 text-success border-success/30"
-                        : mr.mr_convert_status === "partial"
-                          ? "bg-amber-100 text-amber-700 border-amber-300"
-                          : "bg-muted text-muted-foreground border-border"
-                    }`}
-                  >
-                    PR: {mr.mr_convert_status}
-                  </Badge>
-                )}
+                {mr &&
+                  mr.mr_status !== "open" &&
+                  mr.mr_status !== "rejected" && (
+                    <Badge
+                      variant="outline"
+                      className={`text-[10px] font-bold uppercase ${MR_LEVEL_BADGE_CLASS[mrLevel]}`}
+                    >
+                      {MR_LEVEL_LABELS[mrLevel]}
+                    </Badge>
+                  )}
                 {mr?.is_frozen && (
                   <Badge className="bg-sky-500 text-white border-none font-bold uppercase text-[10px]">
                     Frozen

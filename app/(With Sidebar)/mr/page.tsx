@@ -58,12 +58,19 @@ import {
 } from "@/components/ui/alert-dialog";
 import { deleteMR } from "@/services/procurement-actions";
 import { toast } from "sonner";
+import {
+  computeMrLevel,
+  MR_LEVEL_LABELS,
+  MR_LEVEL_BADGE_CLASS,
+  MrLevel,
+} from "@/lib/mr-level";
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [mrs, setMrs] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
+  const [levelByMrId, setLevelByMrId] = useState<Record<number, MrLevel>>({});
   const [userProfile, setUserProfile] = useState<any>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -162,6 +169,66 @@ export default function MaterialRequestPage() {
     return query;
   };
 
+  // Hitung level progres (PR/PO/receive) untuk sekumpulan MR yang sedang
+  // ditampilkan di halaman ini, murni derivasi dari data yang sudah ada
+  // (tidak ada kolom/tabel baru).
+  const fetchLevels = async (mrRows: any[]) => {
+    const mrIds = mrRows.map((mr) => mr.id);
+    if (mrIds.length === 0) {
+      setLevelByMrId({});
+      return;
+    }
+
+    const { data: mrItemsData } = await supabase
+      .from("mr_items")
+      .select("mr_id, qty_request, qty_received")
+      .in("mr_id", mrIds);
+
+    const qtyByMr = new Map<number, { req: number; recv: number }>();
+    for (const item of mrItemsData || []) {
+      const cur = qtyByMr.get(item.mr_id) || { req: 0, recv: 0 };
+      cur.req += item.qty_request || 0;
+      cur.recv += item.qty_received || 0;
+      qtyByMr.set(item.mr_id, cur);
+    }
+
+    const { data: prItemsData } = await supabase
+      .from("pr_items")
+      .select("id, mr_id")
+      .in("mr_id", mrIds);
+
+    const prItemIdToMrId = new Map<number, number>();
+    for (const pri of prItemsData || []) {
+      prItemIdToMrId.set(pri.id, pri.mr_id);
+    }
+
+    const hasPoByMr = new Set<number>();
+    const prItemIds = Array.from(prItemIdToMrId.keys());
+    for (let i = 0; i < prItemIds.length; i += 1000) {
+      const chunk = prItemIds.slice(i, i + 1000);
+      const { data: poItemsData } = await supabase
+        .from("po_items")
+        .select("pr_item_id")
+        .in("pr_item_id", chunk);
+      for (const poi of poItemsData || []) {
+        const mrId = prItemIdToMrId.get(poi.pr_item_id);
+        if (mrId) hasPoByMr.add(mrId);
+      }
+    }
+
+    const levels: Record<number, MrLevel> = {};
+    for (const mr of mrRows) {
+      const qty = qtyByMr.get(mr.id) || { req: 0, recv: 0 };
+      levels[mr.id] = computeMrLevel({
+        mrConvertStatus: mr.mr_convert_status,
+        hasPo: hasPoByMr.has(mr.id),
+        qtyRequestTotal: qty.req,
+        qtyReceivedTotal: qty.recv,
+      });
+    }
+    setLevelByMrId(levels);
+  };
+
   const fetchData = async () => {
     setLoading(true);
     const from = (page - 1) * limit;
@@ -176,6 +243,7 @@ export default function MaterialRequestPage() {
     } else {
       setMrs(data || []);
       setTotalCount(count || 0);
+      fetchLevels(data || []);
     }
     setLoading(false);
   };
@@ -794,6 +862,16 @@ export default function MaterialRequestPage() {
                       <TableCell className="text-center">
                         <div className="flex flex-col items-center gap-1.5">
                           {getStatusBadge(mr.mr_status)}
+                          {mr.mr_status !== "open" &&
+                            mr.mr_status !== "rejected" &&
+                            levelByMrId[mr.id] && (
+                              <Badge
+                                variant="outline"
+                                className={`text-[9px] font-bold uppercase ${MR_LEVEL_BADGE_CLASS[levelByMrId[mr.id]]}`}
+                              >
+                                {MR_LEVEL_LABELS[levelByMrId[mr.id]]}
+                              </Badge>
+                            )}
                           {mr.is_frozen && (
                             <Badge className="bg-sky-500 text-white border-none text-[9px] font-bold uppercase">
                               Frozen
