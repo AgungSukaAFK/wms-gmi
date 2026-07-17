@@ -16,7 +16,6 @@ import {
   Package,
   Clock,
   MapPin,
-  MessageSquare,
   Printer,
   ThumbsUp,
   ThumbsDown,
@@ -119,7 +118,6 @@ export default function MRDetailPage({
   // Header edit fields
   const [editTanggal, setEditTanggal] = useState("");
   const [editPriority, setEditPriority] = useState("");
-  const [editRemarks, setEditRemarks] = useState("");
   // Items edit
   type EditableItem = {
     id?: number;
@@ -128,6 +126,7 @@ export default function MRDetailPage({
     part_name: string;
     satuan: string;
     qty_request: number;
+    remarks?: string;
   };
   const [editItemsList, setEditItemsList] = useState<EditableItem[]>([]);
   const [deletedItemIds, setDeletedItemIds] = useState<number[]>([]);
@@ -376,7 +375,6 @@ export default function MRDetailPage({
   const enterEditMode = () => {
     setEditTanggal(mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "");
     setEditPriority(mr?.mr_priority || "");
-    setEditRemarks(mr?.mr_remarks || "");
     setEditItemsList(
       items.map((i) => ({
         id: i.id,
@@ -385,6 +383,7 @@ export default function MRDetailPage({
         part_name: i.part_name,
         satuan: i.satuan,
         qty_request: i.qty_request,
+        remarks: i.remarks || "",
       })),
     );
     setDeletedItemIds([]);
@@ -396,7 +395,11 @@ export default function MRDetailPage({
   const handleSaveEdit = async () => {
     const updatedItems = editItemsList
       .filter((e) => e.id !== undefined)
-      .map((e) => ({ id: e.id!, qty_request: e.qty_request }));
+      .map((e) => ({
+        id: e.id!,
+        qty_request: e.qty_request,
+        remarks: e.remarks || "",
+      }));
     const newItems = editItemsList
       .filter((e) => e.id === undefined)
       .map((e) => ({
@@ -405,13 +408,13 @@ export default function MRDetailPage({
         part_name: e.part_name,
         satuan: e.satuan,
         qty_request: e.qty_request,
+        remarks: e.remarks || undefined,
       }));
 
     setSaving(true);
     const res = await editMrByApprover(Number(mrId), {
       mr_tanggal: editTanggal || undefined,
       mr_priority: editPriority || undefined,
-      mr_remarks: editRemarks || undefined,
       updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
       newItems: newItems.length > 0 ? newItems : undefined,
       deletedItemIds: deletedItemIds.length > 0 ? deletedItemIds : undefined,
@@ -447,6 +450,7 @@ export default function MRDetailPage({
         part_name: barang.part_name,
         satuan: barang.part_satuan,
         qty_request: 1,
+        remarks: "",
       },
     ]);
     setBarangSearch("");
@@ -457,6 +461,12 @@ export default function MRDetailPage({
   const updateEditItemQty = (index: number, qty: number) => {
     setEditItemsList((prev) =>
       prev.map((e, i) => (i === index ? { ...e, qty_request: qty } : e)),
+    );
+  };
+
+  const updateEditItemRemarks = (index: number, remarks: string) => {
+    setEditItemsList((prev) =>
+      prev.map((e, i) => (i === index ? { ...e, remarks } : e)),
     );
   };
 
@@ -652,6 +662,20 @@ export default function MRDetailPage({
                   {mr?.mr_kode}
                 </h1>
                 {getStatusBadge(mr?.mr_status)}
+                {mr?.mr_convert_status && (
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] font-bold uppercase ${
+                      mr.mr_convert_status === "complete"
+                        ? "bg-success/10 text-success border-success/30"
+                        : mr.mr_convert_status === "partial"
+                          ? "bg-amber-100 text-amber-700 border-amber-300"
+                          : "bg-muted text-muted-foreground border-border"
+                    }`}
+                  >
+                    PR: {mr.mr_convert_status}
+                  </Badge>
+                )}
                 {mr?.is_frozen && (
                   <Badge className="bg-sky-500 text-white border-none font-bold uppercase text-[10px]">
                     Frozen
@@ -850,26 +874,6 @@ export default function MRDetailPage({
                 </div>
               </div>
 
-              <div className="md:col-span-2 space-y-1.5 mt-2">
-                <Label className="text-[11px] font-bold uppercase text-muted-foreground">
-                  Keterangan / Remarks
-                </Label>
-                <div className="flex items-start gap-2">
-                  <MessageSquare className="w-4 h-4 text-muted-foreground mt-2.5" />
-                  {editMode ? (
-                    <Textarea
-                      value={editRemarks}
-                      onChange={(e) => setEditRemarks(e.target.value)}
-                      className="min-h-20 text-sm font-medium resize-none"
-                      placeholder="Keterangan..."
-                    />
-                  ) : (
-                    <div className="w-full rounded-md border border-border bg-muted/40 px-3 py-2 text-sm min-h-20 whitespace-pre-wrap font-medium text-foreground leading-relaxed">
-                      {mr?.mr_remarks || "-"}
-                    </div>
-                  )}
-                </div>
-              </div>
             </div>
           </Content>
 
@@ -954,6 +958,14 @@ export default function MRDetailPage({
                             <span className="text-sm font-bold text-foreground uppercase">
                               {item.part_name}
                             </span>
+                            <Input
+                              value={item.remarks || ""}
+                              onChange={(e) =>
+                                updateEditItemRemarks(idx, e.target.value)
+                              }
+                              placeholder="Catatan (opsional)..."
+                              className="h-7 w-full mt-1 text-[11px] font-medium"
+                            />
                           </TableCell>
                           <TableCell className="text-center">
                             <Badge
@@ -1004,6 +1016,11 @@ export default function MRDetailPage({
                             <span className="text-sm font-bold text-foreground uppercase">
                               {item.part_name}
                             </span>
+                            {item.remarks && (
+                              <p className="text-[10px] font-medium text-muted-foreground mt-0.5 italic">
+                                {item.remarks}
+                              </p>
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             <Badge
@@ -1307,14 +1324,19 @@ export default function MRDetailPage({
                                       alloc.part_id,
                                       c.id,
                                     );
+                                    const isDestination = c.id === mr?.cabang_id;
                                     return (
                                       <option
                                         key={c.id}
                                         value={c.id}
-                                        disabled={cAvail <= 0}
+                                        disabled={cAvail <= 0 || isDestination}
                                       >
                                         {c.nama_cabang} — {cAvail} stok
-                                        {cAvail <= 0 ? " (kosong)" : ""}
+                                        {isDestination
+                                          ? " (gudang tujuan MR)"
+                                          : cAvail <= 0
+                                            ? " (kosong)"
+                                            : ""}
                                       </option>
                                     );
                                   })}

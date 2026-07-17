@@ -218,6 +218,7 @@ export default function CreateReceivePage() {
         po_id: selectedPo.id,
         cabang_id: selectedPo.prs?.cabang_id ?? userProfile?.cabang_id,
         ri_pic: userProfile?.nama || "",
+        ri_pic_id: userProfile?.id || undefined,
         ri_tanggal: riTanggal,
         ri_keterangan: riKeterangan || undefined,
         approval_template_id: Number(selectedTemplateId),

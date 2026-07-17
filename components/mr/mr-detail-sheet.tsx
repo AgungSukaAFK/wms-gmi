@@ -23,7 +23,6 @@ import {
   Package,
   Clock,
   MapPin,
-  MessageSquare,
   X,
   ExternalLink,
 } from "lucide-react";
@@ -268,20 +267,6 @@ export function MRDetailSheet({
             </SheetHeader>
 
             <div className="flex-1 overflow-y-auto p-8 space-y-10 pb-20 bg-background">
-              {mr?.mr_remarks && (
-                <div className="bg-muted/40 border border-border rounded-lg p-3 space-y-2 overflow-hidden wrap-break-word">
-                  <div className="flex items-center gap-2">
-                    <MessageSquare className="h-3 w-3 text-muted-foreground shrink-0" />
-                    <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">
-                      Keterangan / Remarks
-                    </span>
-                  </div>
-                  <p className="text-[11px] text-foreground leading-relaxed font-medium whitespace-pre-wrap">
-                    {mr.mr_remarks}
-                  </p>
-                </div>
-              )}
-
               {/* Section: Items */}
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
@@ -327,6 +312,11 @@ export function MRDetailSheet({
                             </TableCell>
                             <TableCell className="text-[11px] font-semibold text-foreground uppercase py-2 whitespace-normal wrap-break-word leading-snug">
                               {item.part_name}
+                              {item.remarks && (
+                                <p className="text-[10px] font-medium text-muted-foreground normal-case italic mt-0.5 whitespace-normal wrap-break-word">
+                                  {item.remarks}
+                                </p>
+                              )}
                             </TableCell>
                             <TableCell className="text-[11px] font-bold text-foreground text-right pr-4 py-2 whitespace-nowrap">
                               {item.qty_request}{" "}

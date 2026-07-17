@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import * as XLSX from "xlsx";
+import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
   Table,
@@ -27,6 +29,7 @@ import {
   Loader2,
   CalendarIcon,
   ArrowUpDown,
+  Download,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -43,6 +46,7 @@ import Link from "next/link";
 import { PRDetailSheet } from "@/components/pr/pr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
+import { summarizeApprovals } from "@/lib/approval-progress";
 import { MultiSelect } from "@/components/ui/multi-select";
 
 export default function PRListPage() {
@@ -50,6 +54,7 @@ export default function PRListPage() {
   const [prs, setPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
+  const [exporting, setExporting] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
 
@@ -101,8 +106,7 @@ export default function PRListPage() {
     setAvailableCabang(cabangData || []);
   };
 
-  const fetchPRs = async () => {
-    setLoading(true);
+  const buildFilteredPrQuery = () => {
     let query = supabase
       .from("prs")
       .select("*, cabang(nama_cabang), profiles(nama)", { count: "exact" });
@@ -133,6 +137,11 @@ export default function PRListPage() {
       query = query.lte("pr_tanggal", dateTo);
     }
 
+    return query;
+  };
+
+  const fetchPRs = async () => {
+    setLoading(true);
     const sortField =
       sortOrder === "tanggal_desc" || sortOrder === "tanggal_asc"
         ? "pr_tanggal"
@@ -142,7 +151,7 @@ export default function PRListPage() {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query
+    const { data, count, error } = await buildFilteredPrQuery()
       .order(sortField, { ascending })
       .range(from, to);
 
@@ -151,6 +160,85 @@ export default function PRListPage() {
       setTotalCount(count || 0);
     }
     setLoading(false);
+  };
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const pageSize = 1000;
+      const allRows: any[] = [];
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        const from = pageIndex * pageSize;
+        const to = from + pageSize - 1;
+        const { data, error } = await buildFilteredPrQuery()
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          toast.error(error.message || "Gagal mengambil data untuk export.");
+          return;
+        }
+
+        allRows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      if (allRows.length === 0) {
+        toast.error("Tidak ada data untuk diekspor.");
+        return;
+      }
+
+      // Ambil MR asal untuk tiap PR (bisa lebih dari satu).
+      const prIds = allRows.map((pr) => pr.id);
+      const mrCodesByPr = new Map<number, string[]>();
+      for (let i = 0; i < prIds.length; i += 1000) {
+        const chunk = prIds.slice(i, i + 1000);
+        const { data } = await supabase
+          .from("pr_items")
+          .select("pr_id, mrs(mr_kode)")
+          .in("pr_id", chunk);
+        for (const row of data || []) {
+          const kode = Array.isArray(row.mrs)
+            ? row.mrs[0]?.mr_kode
+            : (row.mrs as any)?.mr_kode;
+          if (!kode) continue;
+          const list = mrCodesByPr.get(row.pr_id) || [];
+          list.push(kode);
+          mrCodesByPr.set(row.pr_id, list);
+        }
+      }
+
+      const sheetData = allRows.map((pr, index) => {
+        const summary = summarizeApprovals(pr.approvals);
+        return {
+          NO: index + 1,
+          "KODE PR": pr.pr_kode || "-",
+          "MR ASAL": Array.from(
+            new Set(mrCodesByPr.get(pr.id) || []),
+          ).join(", ") || "-",
+          PIC: pr.profiles?.nama || "-",
+          LOKASI: pr.cabang?.nama_cabang || "-",
+          TANGGAL: pr.pr_tanggal
+            ? new Date(pr.pr_tanggal).toLocaleDateString("id-ID")
+            : "-",
+          STATUS: pr.pr_status || "-",
+          "PROGRES APPROVAL": `${summary.approvedCount}/${summary.totalCount}`,
+          "CONVERT STATUS": pr.pr_convert_status || "-",
+          ACCURATE: pr.accurate ? "Sudah" : "Belum",
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Purchase Request");
+      XLSX.writeFile(
+        wb,
+        `PURCHASE_REQUEST_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -266,11 +354,22 @@ export default function PRListPage() {
               </p>
             </div>
           </div>
-          <Link href="/pr/create">
-            <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
-              <Plus className="h-4 w-4" /> Buat PR Baru
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="outline"
+              onClick={exportExcel}
+              disabled={loading || exporting}
+              className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all"
+            >
+              <Download className="h-4 w-4" />
+              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
             </Button>
-          </Link>
+            <Link href="/pr/create">
+              <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
+                <Plus className="h-4 w-4" /> Buat PR Baru
+              </Button>
+            </Link>
+          </div>
         </div>
       </Content>
 
@@ -429,6 +528,9 @@ export default function PRListPage() {
                   Status
                 </TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                  Progress Approval
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
                   Accurate
                 </TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
@@ -440,7 +542,7 @@ export default function PRListPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-40 text-center">
+                  <TableCell colSpan={7} className="h-40 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                       <span className="text-[10px] font-bold text-muted-foreground uppercase">
@@ -452,7 +554,7 @@ export default function PRListPage() {
               ) : prs.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     className="h-48 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[10px]"
                   >
                     {hasActiveFilters || searchQuery
@@ -491,6 +593,24 @@ export default function PRListPage() {
                     </TableCell>
                     <TableCell className="text-center">
                       {getStatusBadge(pr.pr_status)}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      {(() => {
+                        const summary = summarizeApprovals(pr.approvals);
+                        return (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className="text-[11px] font-bold text-foreground">
+                              {summary.approvedCount}/{summary.totalCount}{" "}
+                              Disetujui
+                            </span>
+                            {summary.pendingApprover && (
+                              <span className="text-[9px] font-medium text-warning uppercase tracking-tight">
+                                Menunggu: {summary.pendingApprover.nama}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge

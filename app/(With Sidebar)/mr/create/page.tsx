@@ -5,7 +5,6 @@ import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   ChevronLeft,
@@ -22,7 +21,6 @@ import {
   Clock,
   ArrowRight,
   AlertTriangle,
-  MessageSquare,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { MRItemSelector, MRItem } from "@/components/mr/mr-item-selector";
@@ -64,7 +62,6 @@ export default function CreateMRPage() {
   const [mrTanggal, setMrTanggal] = useState(toYmdLocal());
   const [mrDueDate, setMrDueDate] = useState("");
   const [mrPriority, setMrPriority] = useState("P3");
-  const [mrRemarks, setMrRemarks] = useState("");
   const [mrAccurate, setMrAccurate] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [items, setItems] = useState<MRItem[]>([]);
@@ -192,7 +189,6 @@ export default function CreateMRPage() {
         mr_tanggal: mrTanggal,
         mr_due_date: mrDueDate,
         mr_priority: mrPriority,
-        mr_remarks: mrRemarks,
         accurate: mrAccurate,
         approvals: approvalData,
         items: items.map((item) => ({
@@ -201,6 +197,7 @@ export default function CreateMRPage() {
           part_name: item.part_name,
           satuan: item.satuan,
           qty_request: item.qty,
+          remarks: item.remarks?.trim() || undefined,
         })),
       });
 
@@ -354,17 +351,6 @@ export default function CreateMRPage() {
                   Authorized Location
                 </p>
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                Keterangan / Remarks
-              </Label>
-              <Textarea
-                placeholder="Catatan tambahan (Opsional)..."
-                className="min-h-21 resize-none rounded-md border-input bg-background text-xs font-medium text-foreground"
-                value={mrRemarks}
-                onChange={(e) => setMrRemarks(e.target.value)}
-              />
             </div>
             {/* ACCURATE_HIDDEN: hidden per request, default always false */}
             {false && (

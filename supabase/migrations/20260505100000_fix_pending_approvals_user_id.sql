@@ -17,6 +17,9 @@ LANGUAGE sql
 STABLE
 SECURITY DEFINER
 AS $$
+  -- Backward-compatible: support both legacy "userid" and current "user_id"
+  -- approval keys so older app builds can still work with a newer DB.
+
   -- Material Request
   SELECT
     'Material Request'::TEXT,
@@ -28,15 +31,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.mrs
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -52,15 +56,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.prs
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -76,15 +81,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.pos
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -100,15 +106,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.receives
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -124,15 +131,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.spb
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -148,15 +156,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.spb_po
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -172,15 +181,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.spb_do
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -196,15 +206,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.spb_invoice
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   UNION ALL
@@ -220,15 +231,16 @@ AS $$
     (
       SELECT COALESCE(elem->>'level', null)
       FROM jsonb_array_elements(approvals) AS elem
-      WHERE (elem->>'user_id' = user_uuid::TEXT OR elem->>'userid' = user_uuid::TEXT)
+      WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
         AND elem->>'status' = 'pending'
       LIMIT 1
     )
   FROM public.return_spb
-  WHERE (
-    approvals @> ('[{"user_id":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
-    OR
-    approvals @> ('[{"userid":"' || user_uuid::TEXT || '","status":"pending"}]')::jsonb
+  WHERE EXISTS (
+    SELECT 1
+    FROM jsonb_array_elements(approvals) AS elem
+    WHERE COALESCE(elem->>'user_id', elem->>'userid') = user_uuid::TEXT
+      AND elem->>'status' = 'pending'
   )
 
   ORDER BY created_at DESC;

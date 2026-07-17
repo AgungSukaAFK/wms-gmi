@@ -54,6 +54,7 @@ export interface MRItem {
   part_name: string;
   satuan: string;
   qty: number;
+  remarks?: string;
 }
 
 interface StockCap {
@@ -368,6 +369,9 @@ export function MRItemSelector({
               <TableHead className="w-35 font-semibold text-slate-500 text-xs text-center">
                 Quantity
               </TableHead>
+              <TableHead className="font-semibold text-slate-500 text-xs">
+                Catatan (opsional)
+              </TableHead>
               <TableHead className="w-[60px] text-center font-semibold text-slate-500 text-xs">
                 Aksi
               </TableHead>
@@ -424,6 +428,16 @@ export function MRItemSelector({
                         )}
                       </div>
                     </TableCell>
+                    <TableCell className="py-2">
+                      <Input
+                        placeholder="Catatan untuk item ini..."
+                        value={item.remarks || ""}
+                        onChange={(e) =>
+                          updateItem(item.part_id, { remarks: e.target.value })
+                        }
+                        className="h-8 w-full text-xs rounded-md bg-white border-slate-200"
+                      />
+                    </TableCell>
                     <TableCell className="text-center">
                       <Button
                         variant="ghost"
@@ -439,7 +453,7 @@ export function MRItemSelector({
               })
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
-                <TableCell colSpan={5} className="text-center">
+                <TableCell colSpan={6} className="text-center">
                   <span className="text-xs font-medium text-slate-400 italic">
                     No items added yet.
                   </span>

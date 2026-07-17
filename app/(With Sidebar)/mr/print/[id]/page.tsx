@@ -240,18 +240,6 @@ export default function MRPrintPage() {
             </div>
           </div>
 
-          {/* Remarks Section */}
-          {mr.mr_remarks && (
-            <div className="mb-10 bg-slate-50 p-4 border rounded-md">
-              <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-widest mb-1.5">
-                Catatan / Remarks:
-              </h4>
-              <p className="text-xs font-medium text-slate-800 leading-relaxed italic">
-                {mr.mr_remarks}
-              </p>
-            </div>
-          )}
-
           {/* Items Table */}
           <div className="mb-12">
             <table className="w-full border-collapse border border-slate-900 text-xs">
@@ -288,6 +276,11 @@ export default function MRPrintPage() {
                       {(item.qty_sharestock_total || 0) > 0 && (
                         <div className="mt-1 inline-block text-[8px] font-bold text-blue-700 border border-blue-300 bg-blue-50 px-1.5 py-0.5 rounded uppercase tracking-wide">
                           Share Stock: {item.qty_sharestock_total} {item.satuan}
+                        </div>
+                      )}
+                      {item.remarks && (
+                        <div className="mt-1 text-[10px] text-slate-600 italic">
+                          Catatan: {item.remarks}
                         </div>
                       )}
                     </td>

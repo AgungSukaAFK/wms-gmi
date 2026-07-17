@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import * as XLSX from "xlsx";
+import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
   Table,
@@ -28,6 +30,7 @@ import {
   CalendarIcon,
   ArrowUpDown,
   Package,
+  Download,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -53,6 +56,7 @@ export default function POListPage() {
   const [totalCount, setTotalCount] = useState(0);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
+  const [exporting, setExporting] = useState(false);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -107,9 +111,7 @@ export default function POListPage() {
     setAvailableCabang(cabangData || []);
   };
 
-  const fetchPOs = async () => {
-    setLoading(true);
-
+  const buildFilteredPoQuery = () => {
     let query = supabase.from("pos").select(
       `
         id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
@@ -146,6 +148,12 @@ export default function POListPage() {
     if (dateFrom) query = query.gte("po_tanggal", dateFrom);
     if (dateTo) query = query.lte("po_tanggal", dateTo);
 
+    return query;
+  };
+
+  const fetchPOs = async () => {
+    setLoading(true);
+
     const sortField =
       sortOrder === "tanggal_desc" || sortOrder === "tanggal_asc"
         ? "po_tanggal"
@@ -155,7 +163,7 @@ export default function POListPage() {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query
+    const { data, count, error } = await buildFilteredPoQuery()
       .order(sortField, { ascending })
       .range(from, to);
 
@@ -164,6 +172,95 @@ export default function POListPage() {
       setTotalCount(count || 0);
     }
     setLoading(false);
+  };
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const pageSize = 1000;
+      const allRows: any[] = [];
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        const from = pageIndex * pageSize;
+        const to = from + pageSize - 1;
+        const { data, error } = await buildFilteredPoQuery()
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          toast.error(error.message || "Gagal mengambil data untuk export.");
+          return;
+        }
+
+        allRows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      if (allRows.length === 0) {
+        toast.error("Tidak ada data untuk diekspor.");
+        return;
+      }
+
+      // PR asal (bisa >1) per PO via po_items.pr_item_id -> pr_items.pr_id.
+      const poIds = allRows.map((po) => po.id);
+      const prCodesByPo = new Map<number, string[]>();
+      for (let i = 0; i < poIds.length; i += 1000) {
+        const chunk = poIds.slice(i, i + 1000);
+        const { data } = await supabase
+          .from("po_items")
+          .select("po_id, pr_item_id, pr_items(pr_id, prs(pr_kode))")
+          .in("po_id", chunk);
+        for (const row of data || []) {
+          const prItem = Array.isArray(row.pr_items)
+            ? row.pr_items[0]
+            : (row.pr_items as any);
+          const prs = prItem?.prs;
+          const kode = Array.isArray(prs) ? prs[0]?.pr_kode : prs?.pr_kode;
+          if (!kode) continue;
+          const list = prCodesByPo.get(row.po_id) || [];
+          list.push(kode);
+          prCodesByPo.set(row.po_id, list);
+        }
+      }
+
+      const sheetData = allRows.map((po, index) => {
+        const vendorNames = Array.from(
+          new Set(
+            (po.po_items || [])
+              .map((i: any) => i.vendors?.vendor_name)
+              .filter(Boolean),
+          ),
+        );
+        return {
+          NO: index + 1,
+          "KODE PO": po.po_kode || "-",
+          "PR ASAL":
+            Array.from(new Set(prCodesByPo.get(po.id) || [])).join(", ") ||
+            po.prs?.pr_kode ||
+            "-",
+          VENDOR: vendorNames.join(", ") || "-",
+          PIC: po.po_pic || "-",
+          TANGGAL: po.po_tanggal
+            ? new Date(po.po_tanggal).toLocaleDateString("id-ID")
+            : "-",
+          ESTIMASI: po.po_estimasi
+            ? new Date(po.po_estimasi).toLocaleDateString("id-ID")
+            : "-",
+          STATUS: po.po_status || "-",
+          "RECEIVE STATUS": po.po_receive_status || "-",
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Purchase Order");
+      XLSX.writeFile(
+        wb,
+        `PURCHASE_ORDER_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -316,13 +413,24 @@ export default function POListPage() {
               </p>
             </div>
           </div>
-          {(userProfile?.isAdmin || userProfile?.isPurchasing) && (
-            <Link href="/po/create">
-              <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
-                <Plus className="h-4 w-4" /> Buat PO Baru
-              </Button>
-            </Link>
-          )}
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="outline"
+              onClick={exportExcel}
+              disabled={loading || exporting}
+              className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all"
+            >
+              <Download className="h-4 w-4" />
+              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
+            </Button>
+            {(userProfile?.isAdmin || userProfile?.isPurchasing) && (
+              <Link href="/po/create">
+                <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
+                  <Plus className="h-4 w-4" /> Buat PO Baru
+                </Button>
+              </Link>
+            )}
+          </div>
         </div>
       </Content>
 

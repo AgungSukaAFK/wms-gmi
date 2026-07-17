@@ -93,7 +93,7 @@ export function PRDetailSheet({
   const [updatingAccurate, setUpdatingAccurate] = useState(false);
 
   // Linked MR & Fulfillment Tracking
-  const [linkedMr, setLinkedMr] = useState<any>(null);
+  const [linkedMrs, setLinkedMrs] = useState<any[]>([]);
   const [ssItems, setSsItems] = useState<any[]>([]);
   const [ssAllocations, setSsAllocations] = useState<any[]>([]);
   const [deliveryRecords, setDeliveryRecords] = useState<any[]>([]);
@@ -144,21 +144,22 @@ export function PRDetailSheet({
       setPrItems(pItems || []);
 
       if (pItems && pItems.length > 0) {
-        const mrId = pItems[0].mr_id;
+        const mrIds = Array.from(
+          new Set(pItems.map((i: any) => i.mr_id).filter(Boolean)),
+        );
 
-        // 3. Fetch Linked MR Header
+        // 3. Fetch Linked MR Header(s) — a PR can now pull from multiple MRs.
         const { data: mrData } = await supabase
           .from("mrs")
           .select("*, cabang(nama_cabang)")
-          .eq("id", mrId)
-          .single();
-        setLinkedMr(mrData);
+          .in("id", mrIds);
+        setLinkedMrs(mrData || []);
 
-        // 4. Fetch Share Stock Items from MR
+        // 4. Fetch Share Stock Items from those MRs
         const { data: mItems } = await supabase
           .from("mr_items")
           .select("*")
-          .eq("mr_id", mrId)
+          .in("mr_id", mrIds)
           .gt("qty_sharestock_total", 0);
         setSsItems(mItems || []);
 
@@ -176,7 +177,7 @@ export function PRDetailSheet({
         const { data: dItems } = await supabase
           .from("delivery_items")
           .select("*, deliveries!inner(dlv_kode, status)")
-          .eq("deliveries.mr_id", mrId);
+          .in("deliveries.mr_id", mrIds);
         setDeliveryRecords(dItems || []);
       }
     } catch (err) {
@@ -416,7 +417,25 @@ export function PRDetailSheet({
                     Document Overview
                   </span>
                 </div>
-                {pr && getStatusBadge(pr.pr_status)}
+                <div className="flex items-center gap-1.5">
+                  {pr && getStatusBadge(pr.pr_status)}
+                  {pr?.pr_convert_status && (
+                    <Badge
+                      variant="outline"
+                      className={cn(
+                        "text-[9px] font-bold uppercase",
+                        pr.pr_convert_status === "complete" &&
+                          "bg-success/10 text-success border-success/30",
+                        pr.pr_convert_status === "partial" &&
+                          "bg-amber-100 text-amber-700 border-amber-300",
+                        pr.pr_convert_status === "pending" &&
+                          "bg-slate-100 text-slate-500 border-slate-300",
+                      )}
+                    >
+                      PO: {pr.pr_convert_status}
+                    </Badge>
+                  )}
+                </div>
               </div>
               <div>
                 <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
@@ -436,36 +455,48 @@ export function PRDetailSheet({
             </SheetHeader>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-white transition-all">
-              {/* Linked MR Reference */}
+              {/* Linked MR Reference(s) */}
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-1 bg-red-500 rounded-full" />
                   <h3 className="text-[11px] font-bold text-slate-900 uppercase">
-                    Referensi Material Request
+                    Referensi Material Request{" "}
+                    {linkedMrs.length > 1 && `(${linkedMrs.length})`}
                   </h3>
                 </div>
-                <div
-                  className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex items-center justify-between group hover:bg-white hover:border-red-200 transition-all cursor-pointer shadow-sm"
-                  onClick={() =>
-                    linkedMr && window.open(`/mr/${linkedMr.id}`, "_blank")
-                  }
-                >
-                  <div>
-                    <p className="text-xs font-bold text-slate-800 uppercase leading-none">
-                      {linkedMr?.mr_kode || "Loading..."}
-                    </p>
-                    <p className="text-[10px] text-slate-400 font-medium uppercase mt-1.5 flex items-center gap-1.5">
-                      <Calendar className="h-3 w-3" />
-                      {linkedMr?.mr_tanggal
-                        ? new Date(linkedMr.mr_tanggal).toLocaleDateString(
-                            "id-ID",
-                            { day: "numeric", month: "short", year: "numeric" },
-                          )
-                        : "-"}
-                    </p>
+                {linkedMrs.length === 0 ? (
+                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 text-xs text-slate-400 italic">
+                    Loading...
                   </div>
-                  <ExternalLink className="h-4 w-4 text-slate-300 group-hover:text-red-500 transition-colors" />
-                </div>
+                ) : (
+                  linkedMrs.map((mr) => (
+                    <div
+                      key={mr.id}
+                      className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex items-center justify-between group hover:bg-white hover:border-red-200 transition-all cursor-pointer shadow-sm"
+                      onClick={() => window.open(`/mr/${mr.id}`, "_blank")}
+                    >
+                      <div>
+                        <p className="text-xs font-bold text-slate-800 uppercase leading-none">
+                          {mr.mr_kode}
+                        </p>
+                        <p className="text-[10px] text-slate-400 font-medium uppercase mt-1.5 flex items-center gap-1.5">
+                          <Calendar className="h-3 w-3" />
+                          {mr.mr_tanggal
+                            ? new Date(mr.mr_tanggal).toLocaleDateString(
+                                "id-ID",
+                                {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                },
+                              )
+                            : "-"}
+                        </p>
+                      </div>
+                      <ExternalLink className="h-4 w-4 text-slate-300 group-hover:text-red-500 transition-colors" />
+                    </div>
+                  ))
+                )}
               </div>
 
               {/* Approval Flow */}

@@ -206,22 +206,116 @@ export default function MaterialRequestPage() {
         return;
       }
 
-      const sheetData = allRows.map((mr, index) => ({
-        NO: index + 1,
-        "KODE MR": mr.mr_kode || "-",
-        PRIORITAS: mr.mr_priority || "-",
-        PIC: mr.mr_pic || "-",
-        LOKASI: mr.cabang?.nama_cabang || "-",
-        "TANGGAL REQUEST": mr.mr_tanggal
-          ? new Date(mr.mr_tanggal).toLocaleDateString("id-ID")
-          : "-",
-        "DUE DATE": mr.mr_due_date
-          ? new Date(mr.mr_due_date).toLocaleDateString("id-ID")
-          : "-",
-        STATUS: mr.mr_status || "-",
-        FROZEN: mr.is_frozen ? "YA" : "-",
-        KETERANGAN: mr.mr_remarks || "-",
-      }));
+      const mrById = new Map(allRows.map((mr) => [mr.id, mr]));
+      const mrIds = allRows.map((mr) => mr.id);
+
+      // Ambil semua item per MR, batch 1000.
+      const mrItems: any[] = [];
+      for (let i = 0; i < mrIds.length; i += 1000) {
+        const chunk = mrIds.slice(i, i + 1000);
+        const { data } = await supabase
+          .from("mr_items")
+          .select("*")
+          .in("mr_id", chunk);
+        mrItems.push(...(data || []));
+      }
+
+      const mrItemIds = mrItems.map((i) => i.id);
+
+      // Trace: PR yang menarik item ini (via pr_items.mr_item_id).
+      const prCodesByMrItem = new Map<number, string[]>();
+      const prItemIdToMrItemId = new Map<number, number>();
+      for (let i = 0; i < mrItemIds.length; i += 1000) {
+        const chunk = mrItemIds.slice(i, i + 1000);
+        const { data } = await supabase
+          .from("pr_items")
+          .select("id, mr_item_id, prs(pr_kode)")
+          .in("mr_item_id", chunk);
+        for (const row of data || []) {
+          if (!row.mr_item_id) continue;
+          prItemIdToMrItemId.set(row.id, row.mr_item_id);
+          const kode = Array.isArray(row.prs)
+            ? row.prs[0]?.pr_kode
+            : (row.prs as any)?.pr_kode;
+          if (!kode) continue;
+          const list = prCodesByMrItem.get(row.mr_item_id) || [];
+          list.push(kode);
+          prCodesByMrItem.set(row.mr_item_id, list);
+        }
+      }
+
+      // Trace: PO yang menarik item ini (via po_items.pr_item_id -> pr_items.mr_item_id).
+      const poCodesByMrItem = new Map<number, string[]>();
+      const prItemIds = Array.from(prItemIdToMrItemId.keys());
+      for (let i = 0; i < prItemIds.length; i += 1000) {
+        const chunk = prItemIds.slice(i, i + 1000);
+        const { data } = await supabase
+          .from("po_items")
+          .select("pr_item_id, pos(po_kode)")
+          .in("pr_item_id", chunk);
+        for (const row of data || []) {
+          const mrItemId = prItemIdToMrItemId.get(row.pr_item_id);
+          if (!mrItemId) continue;
+          const kode = Array.isArray(row.pos)
+            ? row.pos[0]?.po_kode
+            : (row.pos as any)?.po_kode;
+          if (!kode) continue;
+          const list = poCodesByMrItem.get(mrItemId) || [];
+          list.push(kode);
+          poCodesByMrItem.set(mrItemId, list);
+        }
+      }
+
+      // Trace: Delivery (share stock) langsung via delivery_items.mr_item_id.
+      const dlvCodesByMrItem = new Map<number, string[]>();
+      for (let i = 0; i < mrItemIds.length; i += 1000) {
+        const chunk = mrItemIds.slice(i, i + 1000);
+        const { data } = await supabase
+          .from("delivery_items")
+          .select("mr_item_id, deliveries(dlv_kode)")
+          .in("mr_item_id", chunk);
+        for (const row of data || []) {
+          if (!row.mr_item_id) continue;
+          const kode = Array.isArray(row.deliveries)
+            ? row.deliveries[0]?.dlv_kode
+            : (row.deliveries as any)?.dlv_kode;
+          if (!kode) continue;
+          const list = dlvCodesByMrItem.get(row.mr_item_id) || [];
+          list.push(kode);
+          dlvCodesByMrItem.set(row.mr_item_id, list);
+        }
+      }
+
+      const uniq = (arr: string[]) => Array.from(new Set(arr));
+
+      const sheetData = mrItems.map((item, index) => {
+        const mr = mrById.get(item.mr_id);
+        return {
+          NO: index + 1,
+          "KODE MR": mr?.mr_kode || "-",
+          PRIORITAS: mr?.mr_priority || "-",
+          PIC: mr?.mr_pic || "-",
+          LOKASI: mr?.cabang?.nama_cabang || "-",
+          "TANGGAL REQUEST": mr?.mr_tanggal
+            ? new Date(mr.mr_tanggal).toLocaleDateString("id-ID")
+            : "-",
+          "DUE DATE": mr?.mr_due_date
+            ? new Date(mr.mr_due_date).toLocaleDateString("id-ID")
+            : "-",
+          STATUS: mr?.mr_status || "-",
+          FROZEN: mr?.is_frozen ? "YA" : "-",
+          "PART NUMBER": item.part_number || "-",
+          "NAMA BARANG": item.part_name || "-",
+          "QTY REQUEST": item.qty_request ?? 0,
+          "QTY PR": item.qty_pr ?? 0,
+          "QTY SHARE STOCK": item.qty_sharestock_total ?? 0,
+          CATATAN: item.remarks || "-",
+          "KODE PR": uniq(prCodesByMrItem.get(item.id) || []).join(", ") || "-",
+          "KODE PO": uniq(poCodesByMrItem.get(item.id) || []).join(", ") || "-",
+          "KODE DELIVERY":
+            uniq(dlvCodesByMrItem.get(item.id) || []).join(", ") || "-",
+        };
+      });
 
       const ws = XLSX.utils.json_to_sheet(sheetData);
       const wb = XLSX.utils.book_new();
@@ -230,7 +324,7 @@ export default function MaterialRequestPage() {
         wb,
         `MATERIAL_REQUEST_${new Date().toISOString().slice(0, 10)}.xlsx`,
       );
-      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+      toast.success(`Export Excel berhasil (${sheetData.length} baris item).`);
     } finally {
       setExporting(false);
     }

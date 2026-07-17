@@ -62,6 +62,7 @@ export function PODetailSheet({
   const supabase = createClient();
   const [po, setPo] = useState<any>(null);
   const [poItems, setPoItems] = useState<any[]>([]);
+  const [linkedPrs, setLinkedPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [canViewPrice, setCanViewPrice] = useState(false);
@@ -118,12 +119,37 @@ export function PODetailSheet({
       const { data: items } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, mr_id, vendors(vendor_name)",
+          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, mr_id, pr_item_id, vendors(vendor_name)",
         )
         .eq("po_id", poId!)
         .order("vendor_id", { nullsFirst: false });
 
       setPoItems(items || []);
+
+      // Distinct source PR(s) — a PO can now pull from multiple PRs.
+      const prItemIds = Array.from(
+        new Set((items || []).map((i: any) => i.pr_item_id).filter(Boolean)),
+      );
+      if (prItemIds.length > 0) {
+        const { data: prItemRows } = await supabase
+          .from("pr_items")
+          .select("pr_id")
+          .in("id", prItemIds);
+        const prIds = Array.from(
+          new Set((prItemRows || []).map((r: any) => r.pr_id).filter(Boolean)),
+        );
+        if (prIds.length > 0) {
+          const { data: prsData } = await supabase
+            .from("prs")
+            .select("id, pr_kode, pr_convert_status, cabang(nama_cabang)")
+            .in("id", prIds);
+          setLinkedPrs(prsData || []);
+        } else {
+          setLinkedPrs([]);
+        }
+      } else {
+        setLinkedPrs([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -329,9 +355,19 @@ export function PODetailSheet({
                       <Building2 className="h-3.5 w-3.5 text-primary/50" />{" "}
                       {po?.prs?.cabang?.nama_cabang || "-"}
                     </div>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+                    <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-muted-foreground font-mono">
                       <FileText className="h-3 w-3" />↑{" "}
-                      {po?.prs?.pr_kode || "-"}
+                      {linkedPrs.length > 0
+                        ? linkedPrs.map((pr) => (
+                            <Badge
+                              key={pr.id}
+                              variant="outline"
+                              className="text-[9px] font-bold uppercase font-mono"
+                            >
+                              {pr.pr_kode}
+                            </Badge>
+                          ))
+                        : po?.prs?.pr_kode || "-"}
                     </div>
                   </div>
                 </div>

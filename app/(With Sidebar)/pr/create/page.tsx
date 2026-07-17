@@ -44,6 +44,20 @@ import { cn, toYmdLocal } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 
+interface DraftPrItem {
+  mr_item_id: number;
+  mr_id: number;
+  mr_kode: string;
+  part_id: number;
+  part_number: string;
+  part_name: string;
+  satuan: string;
+  qty_sharestock_total: number;
+  remaining: number;
+  selected: boolean;
+  qty: number;
+}
+
 export default function CreatePRPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -58,8 +72,8 @@ export default function CreatePRPage() {
   // Form State
   const [prKode, setPrKode] = useState("");
   const [prTanggal, setPrTanggal] = useState(toYmdLocal());
-  const [selectedMrId, setSelectedMrId] = useState<number | null>(null);
-  const [mrItems, setMrItems] = useState<any[]>([]);
+  const [selectedMrs, setSelectedMrs] = useState<any[]>([]);
+  const [draftItems, setDraftItems] = useState<DraftPrItem[]>([]);
   const [sharestockAllocations, setSharestockAllocations] = useState<any[]>([]);
 
   // MR Search State
@@ -133,9 +147,33 @@ export default function CreatePRPage() {
     setMrs(data || []);
   };
 
-  const handleSelectMR = async (mr: any) => {
-    setSelectedMrId(mr.id);
-    setMrPopoverOpen(false);
+  // Hitung qty yang sudah terpakai di PR lain (belum rejected) per mr_item.
+  const fetchConvertedMap = async (mrItemIds: number[]) => {
+    if (mrItemIds.length === 0) return {} as Record<number, number>;
+    const { data } = await supabase
+      .from("pr_items")
+      .select("mr_item_id, qty, prs!inner(pr_status)")
+      .in("mr_item_id", mrItemIds);
+    const map: Record<number, number> = {};
+    (data || []).forEach((row: any) => {
+      const prStatus = Array.isArray(row.prs)
+        ? row.prs[0]?.pr_status
+        : row.prs?.pr_status;
+      if (prStatus === "rejected") return;
+      map[row.mr_item_id] = (map[row.mr_item_id] || 0) + row.qty;
+    });
+    return map;
+  };
+
+  const handleToggleMR = async (mr: any) => {
+    const isSelected = selectedMrs.some((m) => m.id === mr.id);
+    if (isSelected) {
+      setSelectedMrs((prev) => prev.filter((m) => m.id !== mr.id));
+      setDraftItems((prev) => prev.filter((i) => i.mr_id !== mr.id));
+      return;
+    }
+
+    setSelectedMrs((prev) => [...prev, mr]);
 
     // Fetch items that have qty_pr > 0 OR qty_sharestock_total > 0
     const { data: items } = await supabase
@@ -144,25 +182,68 @@ export default function CreatePRPage() {
       .eq("mr_id", mr.id)
       .or("qty_pr.gt.0,qty_sharestock_total.gt.0");
 
-    setMrItems(items || []);
+    const relevantItems = (items || []).filter((i: any) => i.qty_pr > 0);
+    const convertedMap = await fetchConvertedMap(
+      relevantItems.map((i: any) => i.id),
+    );
 
-    // Fetch sharestock allocations breakdown
+    const newDrafts: DraftPrItem[] = relevantItems.map((item: any) => {
+      const remaining = Math.max(
+        0,
+        item.qty_pr - (convertedMap[item.id] || 0),
+      );
+      return {
+        mr_item_id: item.id,
+        mr_id: mr.id,
+        mr_kode: mr.mr_kode,
+        part_id: item.part_id,
+        part_number: item.part_number,
+        part_name: item.part_name,
+        satuan: item.satuan,
+        qty_sharestock_total: item.qty_sharestock_total || 0,
+        remaining,
+        selected: remaining > 0,
+        qty: remaining,
+      };
+    });
+    setDraftItems((prev) => [...prev, ...newDrafts]);
+
+    // Fetch sharestock allocations breakdown (for display context only)
     if (items && items.length > 0) {
       const itemIds = items.map((i: any) => i.id);
       const { data: allocs } = await supabase
         .from("mr_sharestock_allocations")
         .select("*, cabang(nama_cabang)")
         .in("mr_item_id", itemIds);
-      setSharestockAllocations(allocs || []);
+      setSharestockAllocations((prev) => [...prev, ...(allocs || [])]);
     }
   };
 
+  const toggleDraftItem = (mrItemId: number, checked: boolean) => {
+    setDraftItems((prev) =>
+      prev.map((i) =>
+        i.mr_item_id === mrItemId ? { ...i, selected: checked } : i,
+      ),
+    );
+  };
+
+  const updateDraftItemQty = (mrItemId: number, qty: number) => {
+    setDraftItems((prev) =>
+      prev.map((i) =>
+        i.mr_item_id === mrItemId
+          ? { ...i, qty: Math.max(0, Math.min(qty, i.remaining)) }
+          : i,
+      ),
+    );
+  };
+
   const handleSave = () => {
+    const chosen = draftItems.filter((i) => i.selected && i.qty > 0);
     if (!prKode) return toast.error("Kode PR harus diisi");
-    if (!selectedMrId) return toast.error("Pilih Material Request");
+    if (selectedMrs.length === 0) return toast.error("Pilih Material Request");
     if (!selectedTemplateId) return toast.error("Pilih Alur Approval");
-    if (mrItems.filter((i) => i.qty_pr > 0).length === 0)
-      return toast.error("Tidak ada item untuk diproses ke PR");
+    if (chosen.length === 0)
+      return toast.error("Tidak ada item terpilih untuk diproses ke PR");
     if (!templates.find((t) => t.id.toString() === selectedTemplateId))
       return toast.error("Template approval tidak valid");
     setIsSignatureOpen(true);
@@ -173,7 +254,7 @@ export default function CreatePRPage() {
     image_url: string;
     label: string;
   }) => {
-    const itemsForPr = mrItems.filter((i) => i.qty_pr > 0);
+    const itemsForPr = draftItems.filter((i) => i.selected && i.qty > 0);
     const template = templates.find(
       (t) => t.id.toString() === selectedTemplateId,
     )!;
@@ -209,7 +290,6 @@ export default function CreatePRPage() {
     try {
       const result = await createPurchaseRequest({
         pr_kode: prKode,
-        mr_id: selectedMrId!,
         cabang_id: userProfile.cabang_id,
         pr_pic_id: userProfile.id,
         pr_tanggal: prTanggal,
@@ -220,8 +300,9 @@ export default function CreatePRPage() {
           part_number: item.part_number,
           part_name: item.part_name,
           satuan: item.satuan,
-          qty: item.qty_pr,
-          mr_id: selectedMrId!,
+          qty: item.qty,
+          mr_id: item.mr_id,
+          mr_item_id: item.mr_item_id,
         })),
       });
 
@@ -246,7 +327,6 @@ export default function CreatePRPage() {
     );
   }
 
-  const selectedMr = mrs.find((m) => m.id === selectedMrId);
   const userRoles =
     userProfile?.user_roles?.map((ur: any) => ur.roles?.label).join(", ") ||
     "Staff Procurement";
@@ -346,7 +426,7 @@ export default function CreatePRPage() {
             </div>
             <div className="space-y-1.5">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5 px-0.5">
-                <FileText className="h-3 w-3" /> Referensi MR
+                <FileText className="h-3 w-3" /> Referensi MR (bisa lebih dari 1)
               </Label>
               <Popover open={mrPopoverOpen} onOpenChange={setMrPopoverOpen}>
                 <PopoverTrigger asChild>
@@ -354,12 +434,14 @@ export default function CreatePRPage() {
                     variant="outline"
                     className={cn(
                       "w-full h-10 justify-between bg-muted/40 border-input rounded-lg px-3 font-bold text-xs uppercase shadow-sm hover:bg-background transition-all",
-                      selectedMr
+                      selectedMrs.length > 0
                         ? "text-primary border-primary/30 bg-primary/5"
                         : "text-muted-foreground",
                     )}
                   >
-                    {selectedMr ? selectedMr.mr_kode : "Pilih MR Referensi..."}
+                    {selectedMrs.length > 0
+                      ? `${selectedMrs.length} MR Dipilih`
+                      : "Pilih MR Referensi..."}
                     <Search className="ml-2 h-3.5 w-3.5 opacity-40 shrink-0" />
                   </Button>
                 </PopoverTrigger>
@@ -383,32 +465,50 @@ export default function CreatePRPage() {
                             .toLowerCase()
                             .includes(mrSearch.toLowerCase()),
                         )
-                        .map((m) => (
-                          <button
-                            key={m.id}
-                            onClick={() => handleSelectMR(m)}
-                            className={`w-full text-left p-3 rounded-lg transition-all flex items-center justify-between group mb-1 ${
-                              selectedMrId === m.id
-                                ? "bg-foreground text-background"
-                                : "hover:bg-muted text-foreground"
-                            }`}
-                          >
-                            <div className="flex flex-col">
-                              <span className="font-bold text-xs uppercase tracking-tight">
-                                {m.mr_kode}
-                              </span>
-                              <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
-                                Pemohon: {m.mr_pic}
-                              </span>
-                            </div>
-                            <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-all" />
-                          </button>
-                        ))
+                        .map((m) => {
+                          const isChecked = selectedMrs.some(
+                            (sel) => sel.id === m.id,
+                          );
+                          return (
+                            <button
+                              key={m.id}
+                              onClick={() => handleToggleMR(m)}
+                              className={`w-full text-left p-3 rounded-lg transition-all flex items-center justify-between group mb-1 ${
+                                isChecked
+                                  ? "bg-foreground text-background"
+                                  : "hover:bg-muted text-foreground"
+                              }`}
+                            >
+                              <div className="flex flex-col">
+                                <span className="font-bold text-xs uppercase tracking-tight">
+                                  {m.mr_kode}
+                                </span>
+                                <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
+                                  Pemohon: {m.mr_pic}
+                                </span>
+                              </div>
+                              {isChecked ? (
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                              ) : (
+                                <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-all" />
+                              )}
+                            </button>
+                          );
+                        })
                     ) : (
                       <div className="p-12 text-center text-muted-foreground text-xs italic font-medium">
                         MR Approved Tidak Ditemukan
                       </div>
                     )}
+                  </div>
+                  <div className="p-2 border-t border-border bg-muted/40">
+                    <Button
+                      size="sm"
+                      className="w-full h-8 text-xs font-bold"
+                      onClick={() => setMrPopoverOpen(false)}
+                    >
+                      Selesai ({selectedMrs.length} dipilih)
+                    </Button>
                   </div>
                 </PopoverContent>
               </Popover>
@@ -561,7 +661,7 @@ export default function CreatePRPage() {
                 className="w-full h-11 bg-background text-foreground hover:bg-background/90 font-bold text-xs uppercase gap-2 transition-all active:scale-95 rounded-lg"
                 onClick={handleSave}
                 disabled={
-                  loading || mrItems.length === 0 || !selectedTemplateId
+                  loading || draftItems.length === 0 || !selectedTemplateId
                 }
               >
                 {loading ? (
@@ -590,7 +690,11 @@ export default function CreatePRPage() {
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow className="hover:bg-transparent border-b border-border h-12">
-                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground pl-8">
+                  <TableHead className="w-10 pl-4" />
+                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">
+                    MR Asal
+                  </TableHead>
+                  <TableHead className="text-[10px] font-bold uppercase text-muted-foreground pl-4">
                     Part Number
                   </TableHead>
                   <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">
@@ -600,7 +704,7 @@ export default function CreatePRPage() {
                     Share Stock
                   </TableHead>
                   <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-center">
-                    Qty PR
+                    Qty PR (Sisa)
                   </TableHead>
                   <TableHead className="text-[10px] font-bold uppercase text-muted-foreground text-right pr-8">
                     Satuan
@@ -608,54 +712,54 @@ export default function CreatePRPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {mrItems.length === 0 ? (
+                {draftItems.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={5}
+                      colSpan={7}
                       className="h-60 text-center text-muted-foreground/30 font-medium italic"
                     >
-                      {selectedMrId
-                        ? "Tidak ada item pemenuhan untuk MR ini"
+                      {selectedMrs.length > 0
+                        ? "Tidak ada item pemenuhan untuk MR yang dipilih"
                         : "Silakan pilih MR Referensi"}
                     </TableCell>
                   </TableRow>
                 ) : (
-                  mrItems.map((item) => {
+                  draftItems.map((item) => {
                     const itemAllocs = sharestockAllocations.filter(
-                      (a) => a.mr_item_id === item.id,
+                      (a) => a.mr_item_id === item.mr_item_id,
                     );
                     return (
                       <TableRow
-                        key={item.id}
-                        className="hover:bg-muted/30 transition-all border-b border-border/50 group"
+                        key={item.mr_item_id}
+                        className={cn(
+                          "hover:bg-muted/30 transition-all border-b border-border/50 group",
+                          !item.selected && "opacity-50",
+                        )}
                       >
-                        <TableCell className="pl-8 font-mono text-[11px] font-bold text-muted-foreground uppercase tracking-tighter">
+                        <TableCell className="pl-4">
+                          <Checkbox
+                            checked={item.selected}
+                            disabled={item.remaining <= 0}
+                            onCheckedChange={(v) =>
+                              toggleDraftItem(item.mr_item_id, Boolean(v))
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] font-bold uppercase"
+                          >
+                            {item.mr_kode}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="pl-4 font-mono text-[11px] font-bold text-muted-foreground uppercase tracking-tighter">
                           {item.part_number}
                         </TableCell>
                         <TableCell>
-                          <div className="flex flex-col">
-                            <span className="text-sm font-bold text-foreground uppercase tracking-tight">
-                              {item.part_name}
-                            </span>
-                            <div className="flex items-center gap-2 mt-1">
-                              {item.qty_pr > 0 && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-[8px] h-3.5 px-1 bg-primary/10 text-primary border-primary/20 font-bold uppercase"
-                                >
-                                  External PR
-                                </Badge>
-                              )}
-                              {item.qty_sharestock_total > 0 && (
-                                <Badge
-                                  variant="outline"
-                                  className="text-[8px] h-3.5 px-1 bg-success/10 text-success border-success/20 font-bold uppercase"
-                                >
-                                  Internal SS
-                                </Badge>
-                              )}
-                            </div>
-                          </div>
+                          <span className="text-sm font-bold text-foreground uppercase tracking-tight">
+                            {item.part_name}
+                          </span>
                         </TableCell>
                         <TableCell className="text-center">
                           {item.qty_sharestock_total > 0 ? (
@@ -697,15 +801,25 @@ export default function CreatePRPage() {
                           )}
                         </TableCell>
                         <TableCell className="text-center">
-                          {item.qty_pr > 0 ? (
-                            <div className="inline-flex h-8 w-16 items-center justify-center bg-primary/10 text-primary rounded-md font-bold text-sm">
-                              {item.qty_pr}
-                            </div>
-                          ) : (
-                            <span className="text-muted-foreground/30 text-xs font-bold">
-                              -
+                          <div className="flex flex-col items-center gap-0.5">
+                            <Input
+                              type="number"
+                              min={0}
+                              max={item.remaining}
+                              disabled={!item.selected}
+                              value={item.qty}
+                              onChange={(e) =>
+                                updateDraftItemQty(
+                                  item.mr_item_id,
+                                  Number(e.target.value) || 0,
+                                )
+                              }
+                              className="h-8 w-20 text-center font-bold text-sm mx-auto"
+                            />
+                            <span className="text-[9px] font-medium text-muted-foreground">
+                              Sisa {item.remaining}
                             </span>
-                          )}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right pr-8 font-bold text-muted-foreground text-[10px] uppercase">
                           {item.satuan}

@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -65,10 +66,15 @@ type Step = 1 | 2 | 3;
 
 interface POItem {
   mr_id: number;
+  pr_item_id: number;
+  pr_id: number;
+  pr_kode: string;
   part_id: number;
   part_number: string;
   part_name: string;
   satuan: string;
+  remaining: number;
+  selected: boolean;
   qty: number;
   harga: number;
   vendor_id: number | null;
@@ -90,7 +96,7 @@ export default function CreatePOPage() {
   const [prSearch, setPrSearch] = useState("");
   const [debouncedPrSearch] = useDebounce(prSearch, 300);
   const [prPopoverOpen, setPrPopoverOpen] = useState(false);
-  const [selectedPr, setSelectedPr] = useState<any>(null);
+  const [selectedPrs, setSelectedPrs] = useState<any[]>([]);
 
   // Step 2 — Vendor per item
   const [poItems, setPoItems] = useState<POItem[]>([]);
@@ -198,11 +204,34 @@ export default function CreatePOPage() {
     setVendorLoading((prev) => ({ ...prev, [idx]: false }));
   };
 
-  const handleSelectPR = async (pr: any) => {
-    setSelectedPr(pr);
-    setPrPopoverOpen(false);
+  // Hitung qty yang sudah terpakai di PO lain (belum rejected) per pr_item.
+  const fetchConvertedMap = async (prItemIds: number[]) => {
+    if (prItemIds.length === 0) return {} as Record<number, number>;
+    const { data } = await supabase
+      .from("po_items")
+      .select("pr_item_id, qty, pos!inner(po_status)")
+      .in("pr_item_id", prItemIds);
+    const map: Record<number, number> = {};
+    (data || []).forEach((row: any) => {
+      const poStatus = Array.isArray(row.pos)
+        ? row.pos[0]?.po_status
+        : row.pos?.po_status;
+      if (poStatus === "rejected") return;
+      map[row.pr_item_id] = (map[row.pr_item_id] || 0) + row.qty;
+    });
+    return map;
+  };
 
-    // Fetch PR items to build PO item list
+  const handleTogglePR = async (pr: any) => {
+    const isSelected = selectedPrs.some((p) => p.id === pr.id);
+    if (isSelected) {
+      setSelectedPrs((prev) => prev.filter((p) => p.id !== pr.id));
+      setPoItems((prev) => prev.filter((i) => i.pr_id !== pr.id));
+      return;
+    }
+
+    setSelectedPrs((prev) => [...prev, pr]);
+
     // Note: pr_items has no harga column; user enters harga in step 2
     const { data: items } = await supabase
       .from("pr_items")
@@ -210,19 +239,47 @@ export default function CreatePOPage() {
       .eq("pr_id", pr.id)
       .order("created_at");
 
-    const poItemsList: POItem[] = (items || []).map((item: any) => ({
-      mr_id: item.mr_id,
-      part_id: item.part_id,
-      part_number: item.part_number,
-      part_name: item.part_name,
-      satuan: item.satuan,
-      qty: item.qty,
-      harga: item.harga || 0,
-      vendor_id: null,
-    }));
+    const prItemIds = (items || []).map((i: any) => i.id);
+    const convertedMap = await fetchConvertedMap(prItemIds);
 
-    setPoItems(poItemsList);
-    setStep(2);
+    const newItems: POItem[] = (items || []).map((item: any) => {
+      const remaining = Math.max(0, item.qty - (convertedMap[item.id] || 0));
+      return {
+        mr_id: item.mr_id,
+        pr_item_id: item.id,
+        pr_id: pr.id,
+        pr_kode: pr.pr_kode,
+        part_id: item.part_id,
+        part_number: item.part_number,
+        part_name: item.part_name,
+        satuan: item.satuan,
+        remaining,
+        selected: remaining > 0,
+        qty: remaining,
+        harga: 0,
+        vendor_id: null,
+      };
+    });
+
+    setPoItems((prev) => [...prev, ...newItems]);
+  };
+
+  const toggleItemSelected = (idx: number, checked: boolean) => {
+    setPoItems((prev) =>
+      prev.map((item, i) =>
+        i === idx ? { ...item, selected: checked } : item,
+      ),
+    );
+  };
+
+  const updateItemQty = (idx: number, qty: number) => {
+    setPoItems((prev) =>
+      prev.map((item, i) =>
+        i === idx
+          ? { ...item, qty: Math.max(0, Math.min(qty, item.remaining)) }
+          : item,
+      ),
+    );
   };
 
   const updateItemField = (index: number, field: keyof POItem, value: any) => {
@@ -237,15 +294,34 @@ export default function CreatePOPage() {
     setVendorPopoverOpen((prev) => ({ ...prev, [index]: false }));
   };
 
-  const totalNilai = poItems.reduce((sum, it) => sum + it.qty * it.harga, 0);
+  const totalNilai = poItems
+    .filter((it) => it.selected)
+    .reduce((sum, it) => sum + it.qty * it.harga, 0);
 
   const handleSubmit = () => {
+    const chosen = poItems.filter((i) => i.selected && i.qty > 0);
     if (!poKode.trim()) return toast.error("Kode PO wajib diisi");
-    if (!selectedPr) return toast.error("Pilih PR terlebih dahulu");
-    if (poItems.length === 0) return toast.error("Tidak ada item");
+    if (selectedPrs.length === 0) return toast.error("Pilih PR terlebih dahulu");
+    if (chosen.length === 0)
+      return toast.error("Tidak ada item terpilih untuk diproses ke PO");
     if (!selectedTemplateId) return toast.error("Pilih Alur Approval");
     if (!templates.find((t) => t.id.toString() === selectedTemplateId))
       return toast.error("Template approval tidak valid");
+    if (!canViewPrice) {
+      return toast.error(
+        "Hanya user dengan akses harga yang bisa membuat PO.",
+      );
+    }
+    const incomplete = chosen.filter(
+      (item) => !item.vendor_id || !(item.harga > 0),
+    );
+    if (incomplete.length > 0) {
+      return toast.error(
+        `Vendor dan harga wajib diisi untuk: ${incomplete
+          .map((i) => i.part_number)
+          .join(", ")}`,
+      );
+    }
     setIsSignatureOpen(true);
   };
 
@@ -288,8 +364,7 @@ export default function CreatePOPage() {
     try {
       const result = await createPurchaseOrder({
         po_kode: poKode,
-        pr_id: selectedPr.id,
-        cabang_id: selectedPr.cabang_id ?? userProfile?.cabang_id,
+        cabang_id: userProfile?.cabang_id,
         po_pic: userProfile?.nama || "",
         po_pic_id: userProfile?.id || "",
         po_tanggal: poTanggal,
@@ -297,7 +372,20 @@ export default function CreatePOPage() {
         po_payment_term: poPaymentTerm || undefined,
         po_keterangan: poKeterangan || undefined,
         approvals: approvalData,
-        items: poItems,
+        items: poItems
+          .filter((i) => i.selected && i.qty > 0)
+          .map((i) => ({
+            mr_id: i.mr_id,
+            pr_item_id: i.pr_item_id,
+            pr_id: i.pr_id,
+            part_id: i.part_id,
+            part_number: i.part_number,
+            part_name: i.part_name,
+            satuan: i.satuan,
+            qty: i.qty,
+            harga: i.harga,
+            vendor_id: i.vendor_id,
+          })),
       });
 
       if (result.success) {
@@ -398,7 +486,7 @@ export default function CreatePOPage() {
             <div className="flex items-center gap-2">
               <div className="h-4 w-1 bg-primary rounded-full" />
               <h3 className="text-[11px] font-bold uppercase">
-                Pilih Purchase Request yang Telah Disetujui
+                Pilih Purchase Request yang Telah Disetujui (bisa lebih dari 1)
               </h3>
             </div>
 
@@ -409,9 +497,9 @@ export default function CreatePOPage() {
                   className="w-full justify-start gap-2 h-10 font-bold text-xs"
                 >
                   <Search className="h-4 w-4 text-muted-foreground" />
-                  {selectedPr ? (
+                  {selectedPrs.length > 0 ? (
                     <span className="text-foreground">
-                      {selectedPr.pr_kode}
+                      {selectedPrs.length} PR Dipilih
                     </span>
                   ) : (
                     <span className="text-muted-foreground">
@@ -421,7 +509,7 @@ export default function CreatePOPage() {
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-105 p-0" align="start">
-                <Command>
+                <Command shouldFilter={false}>
                   <CommandInput
                     placeholder="Cari kode PR..."
                     value={prSearch}
@@ -437,48 +525,75 @@ export default function CreatePOPage() {
                         Tidak ada PR approved yang tersedia.
                       </CommandEmpty>
                     ) : (
-                      prs.map((pr) => (
-                        <CommandItem
-                          key={pr.id}
-                          value={pr.pr_kode}
-                          onSelect={() => handleSelectPR(pr)}
-                          className="gap-3 py-3"
-                        >
-                          <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                          <div className="flex-1 min-w-0">
-                            <p className="font-bold text-xs uppercase">
-                              {pr.pr_kode}
-                            </p>
-                            <p className="text-[9px] text-muted-foreground font-medium uppercase">
-                              {pr.cabang?.nama_cabang} • {pr.profiles?.nama}
-                            </p>
-                          </div>
-                          <Badge
-                            variant="outline"
-                            className="text-[9px] font-bold uppercase shrink-0"
+                      prs.map((pr) => {
+                        const isChecked = selectedPrs.some(
+                          (p) => p.id === pr.id,
+                        );
+                        return (
+                          <CommandItem
+                            key={pr.id}
+                            value={pr.pr_kode}
+                            onSelect={() => handleTogglePR(pr)}
+                            className="gap-3 py-3"
                           >
-                            {new Date(pr.pr_tanggal).toLocaleDateString(
-                              "id-ID",
-                              {
-                                day: "numeric",
-                                month: "short",
-                                year: "numeric",
-                              },
+                            {isChecked ? (
+                              <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                            ) : (
+                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             )}
-                          </Badge>
-                        </CommandItem>
-                      ))
+                            <div className="flex-1 min-w-0">
+                              <p className="font-bold text-xs uppercase">
+                                {pr.pr_kode}
+                              </p>
+                              <p className="text-[9px] text-muted-foreground font-medium uppercase">
+                                {pr.cabang?.nama_cabang} • {pr.profiles?.nama}
+                              </p>
+                            </div>
+                            <Badge
+                              variant="outline"
+                              className="text-[9px] font-bold uppercase shrink-0"
+                            >
+                              {new Date(pr.pr_tanggal).toLocaleDateString(
+                                "id-ID",
+                                {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                },
+                              )}
+                            </Badge>
+                          </CommandItem>
+                        );
+                      })
                     )}
                   </CommandList>
                 </Command>
               </PopoverContent>
             </Popover>
 
-            {prs.length > 0 && !selectedPr && (
-              <div className="text-[10px] text-muted-foreground font-medium">
-                {prs.length} PR approved tersedia. Pilih satu untuk dilanjutkan.
+            {selectedPrs.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {selectedPrs.map((pr) => (
+                  <Badge
+                    key={pr.id}
+                    variant="outline"
+                    className="text-[10px] font-bold uppercase gap-1"
+                  >
+                    {pr.pr_kode}
+                  </Badge>
+                ))}
               </div>
             )}
+
+            <div className="flex justify-end pt-2">
+              <Button
+                className="gap-2 font-bold text-xs uppercase"
+                disabled={selectedPrs.length === 0 || poItems.length === 0}
+                onClick={() => setStep(2)}
+              >
+                Lanjut ke Vendor & Harga <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         </Content>
       )}
@@ -494,9 +609,9 @@ export default function CreatePOPage() {
                   Tentukan Vendor & Harga per Item
                 </h3>
               </div>
-              <div className="flex items-center gap-2 text-[10px] font-bold text-muted-foreground uppercase">
+              <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase flex-wrap justify-end">
                 <FileText className="h-3.5 w-3.5" />
-                {selectedPr?.pr_kode}
+                {selectedPrs.map((pr) => pr.pr_kode).join(", ")}
               </div>
             </div>
           </Content>
@@ -512,14 +627,18 @@ export default function CreatePOPage() {
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow className="h-10 hover:bg-transparent">
-                  <TableHead className="text-[9px] font-black uppercase text-muted-foreground pl-4 w-28">
+                  <TableHead className="w-10 pl-4" />
+                  <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-24">
+                    PR Asal
+                  </TableHead>
+                  <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-28">
                     Part No.
                   </TableHead>
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground">
                     Nama Barang
                   </TableHead>
-                  <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-center w-20">
-                    Qty
+                  <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-center w-24">
+                    Qty (Sisa)
                   </TableHead>
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-36">
                     Harga Satuan
@@ -535,9 +654,29 @@ export default function CreatePOPage() {
                   return (
                     <TableRow
                       key={idx}
-                      className="border-b border-border/50 hover:bg-muted/20"
+                      className={cn(
+                        "border-b border-border/50 hover:bg-muted/20",
+                        !item.selected && "opacity-50",
+                      )}
                     >
                       <TableCell className="pl-4 py-3 align-top">
+                        <Checkbox
+                          checked={item.selected}
+                          disabled={item.remaining <= 0}
+                          onCheckedChange={(v) =>
+                            toggleItemSelected(idx, Boolean(v))
+                          }
+                        />
+                      </TableCell>
+                      <TableCell className="py-3 align-top">
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] font-bold uppercase"
+                        >
+                          {item.pr_kode}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="py-3 align-top">
                         <span className="text-[11px] font-black text-foreground font-mono uppercase tracking-wide">
                           {item.part_number}
                         </span>
@@ -548,12 +687,22 @@ export default function CreatePOPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-center py-3 align-middle">
-                        <span className="text-[11px] font-bold text-foreground">
-                          {item.qty}{" "}
-                          <span className="text-muted-foreground font-medium">
-                            {item.satuan}
+                        <div className="flex flex-col items-center gap-0.5">
+                          <Input
+                            type="number"
+                            min={0}
+                            max={item.remaining}
+                            disabled={!item.selected}
+                            value={item.qty}
+                            onChange={(e) =>
+                              updateItemQty(idx, Number(e.target.value) || 0)
+                            }
+                            className="h-8 w-20 text-center font-bold text-sm mx-auto"
+                          />
+                          <span className="text-[9px] font-medium text-muted-foreground">
+                            Sisa {item.remaining} {item.satuan}
                           </span>
-                        </span>
+                        </div>
                       </TableCell>
                       <TableCell className="py-2 align-middle">
                         {canViewPrice ? (
@@ -821,7 +970,7 @@ export default function CreatePOPage() {
                 <div className="flex items-center gap-2">
                   <Building2 className="w-4 h-4 text-muted-foreground" />
                   <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
-                    {selectedPr?.cabang?.nama_cabang || "-"}
+                    {userProfile?.cabang?.nama_cabang || "-"}
                   </div>
                 </div>
               </div>
@@ -977,19 +1126,25 @@ export default function CreatePOPage() {
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                 <span>Sumber PR</span>
                 <span className="text-foreground font-mono">
-                  {selectedPr?.pr_kode}
+                  {selectedPrs.map((pr) => pr.pr_kode).join(", ")}
                 </span>
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                 <span>Jumlah Item</span>
-                <span className="text-foreground">{poItems.length} item</span>
+                <span className="text-foreground">
+                  {poItems.filter((i) => i.selected).length} item
+                </span>
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                 <span>Jumlah Vendor</span>
                 <span className="text-foreground">
                   {
-                    new Set(poItems.map((i) => i.vendor_id).filter(Boolean))
-                      .size
+                    new Set(
+                      poItems
+                        .filter((i) => i.selected)
+                        .map((i) => i.vendor_id)
+                        .filter(Boolean),
+                    ).size
                   }{" "}
                   vendor
                 </span>

@@ -2,6 +2,8 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import * as XLSX from "xlsx";
+import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
   Table,
@@ -26,6 +28,7 @@ import {
   ArrowUpDown,
   ShoppingCart,
   Package,
+  Download,
 } from "lucide-react";
 import {
   Select,
@@ -48,6 +51,7 @@ export default function ReceiveItemPage() {
   const [totalCount, setTotalCount] = useState(0);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
+  const [exporting, setExporting] = useState(false);
 
   // Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -87,9 +91,7 @@ export default function ReceiveItemPage() {
     setAvailableCabang(cabangData || []);
   };
 
-  const fetchReceives = async () => {
-    setLoading(true);
-
+  const buildFilteredRiQuery = () => {
     let query = supabase.from("receives").select(
       `
           id, ri_kode, ri_tanggal, ri_pic, ri_keterangan, ri_status, created_at,
@@ -111,11 +113,17 @@ export default function ReceiveItemPage() {
     if (dateFrom) query = query.gte("ri_tanggal", dateFrom);
     if (dateTo) query = query.lte("ri_tanggal", dateTo);
 
+    return query;
+  };
+
+  const fetchReceives = async () => {
+    setLoading(true);
+
     const ascending = sortOrder === "oldest";
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query
+    const { data, count, error } = await buildFilteredRiQuery()
       .order("created_at", { ascending })
       .range(from, to);
 
@@ -124,6 +132,57 @@ export default function ReceiveItemPage() {
       setTotalCount(count || 0);
     }
     setLoading(false);
+  };
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const pageSize = 1000;
+      const allRows: any[] = [];
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        const from = pageIndex * pageSize;
+        const to = from + pageSize - 1;
+        const { data, error } = await buildFilteredRiQuery()
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          toast.error(error.message || "Gagal mengambil data untuk export.");
+          return;
+        }
+
+        allRows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      if (allRows.length === 0) {
+        toast.error("Tidak ada data untuk diekspor.");
+        return;
+      }
+
+      const sheetData = allRows.map((ri, index) => ({
+        NO: index + 1,
+        "KODE RECEIVE": ri.ri_kode || "-",
+        "PO ASAL": ri.pos?.po_kode || "-",
+        PIC: ri.ri_pic || "-",
+        LOKASI: ri.cabang?.nama_cabang || "-",
+        TANGGAL: ri.ri_tanggal
+          ? new Date(ri.ri_tanggal).toLocaleDateString("id-ID")
+          : "-",
+        STATUS: ri.ri_status || "-",
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Receive Item");
+      XLSX.writeFile(
+        wb,
+        `RECEIVE_ITEM_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -175,12 +234,23 @@ export default function ReceiveItemPage() {
               </p>
             </div>
           </div>
-          <Link href="/receive/create">
-            <Button className="gap-2 font-bold text-xs uppercase h-9">
-              <Plus className="h-4 w-4" />
-              Buat Penerimaan
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="outline"
+              onClick={exportExcel}
+              disabled={loading || exporting}
+              className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all"
+            >
+              <Download className="h-4 w-4" />
+              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
             </Button>
-          </Link>
+            <Link href="/receive/create">
+              <Button className="gap-2 font-bold text-xs uppercase h-9">
+                <Plus className="h-4 w-4" />
+                Buat Penerimaan
+              </Button>
+            </Link>
+          </div>
         </div>
       </Content>
 
