@@ -31,6 +31,10 @@ import { useRouter } from "next/navigation";
 import { updateMRAccurate } from "@/services/procurement-actions";
 import { toast } from "sonner";
 import { MrLevelBadge } from "@/components/mr/mr-level-badge";
+import {
+  MrLevelAutoRules,
+  DEFAULT_MR_LEVEL_AUTO_RULES,
+} from "@/lib/mr-level";
 
 interface MRDetailSheetProps {
   mrId: string | number | null;
@@ -52,6 +56,9 @@ export function MRDetailSheet({
   const [loading, setLoading] = useState(false);
   const [updatingAccurate, setUpdatingAccurate] = useState(false);
   const [hasPo, setHasPo] = useState(false);
+  const [mrLevelAutoRules, setMrLevelAutoRules] = useState<MrLevelAutoRules>(
+    DEFAULT_MR_LEVEL_AUTO_RULES,
+  );
 
   useEffect(() => {
     if (open && mrId) {
@@ -93,6 +100,19 @@ export function MRDetailSheet({
       setHasPo((poItemCount || 0) > 0);
     } else {
       setHasPo(false);
+    }
+
+    const { data: rulesData } = await supabase
+      .from("mr_level_auto_rules")
+      .select("*")
+      .eq("id", 1)
+      .single();
+    if (rulesData) {
+      setMrLevelAutoRules({
+        pendingConvertStatuses: rulesData.pending_convert_statuses || ["pending"],
+        closeStartMinReceivedPct: Number(rulesData.close_start_min_received_pct),
+        closeDoneMinReceivedPct: Number(rulesData.close_done_min_received_pct),
+      });
     }
 
     setLoading(false);
@@ -270,6 +290,7 @@ export function MRDetailSheet({
                         manualNote={mr.manual_level_note}
                         manualSetByName={mr.manual_level_setter?.nama}
                         manualSetAt={mr.manual_level_set_at}
+                        autoRules={mrLevelAutoRules}
                         canEdit={isModerator}
                         onChanged={(patch) =>
                           setMr((prev: any) => ({ ...prev, ...patch }))

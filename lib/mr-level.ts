@@ -112,6 +112,23 @@ export const MR_LEVEL_BADGE_CLASS: Record<MrLevelCode, string> = {
   CLOSE_2B: "bg-success/10 text-success border-success/30",
 };
 
+// Threshold yang menentukan bucket otomatis mana yang dipilih. Disimpan di
+// tabel mr_level_auto_rules (singleton, id=1) dan bisa diubah moderator lewat
+// /mr-level-settings — lihat migration mr_level_auto_rules. Default di bawah
+// ini persis meniru perilaku hardcoded sebelum fitur ini ada, dipakai sebagai
+// fallback selama data dari DB belum termuat / gagal fetch.
+export interface MrLevelAutoRules {
+  pendingConvertStatuses: string[];
+  closeStartMinReceivedPct: number;
+  closeDoneMinReceivedPct: number;
+}
+
+export const DEFAULT_MR_LEVEL_AUTO_RULES: MrLevelAutoRules = {
+  pendingConvertStatuses: ["pending"],
+  closeStartMinReceivedPct: 0,
+  closeDoneMinReceivedPct: 100,
+};
+
 // Bucket yang bisa dipastikan otomatis oleh sistem. OPEN_3_5 dan CLOSE_2
 // adalah rentang (sistem tidak bisa memastikan sub-statusnya tanpa info
 // payment/budget/WH-site/email) — bukan salah satu dari 10 MrLevelCode resmi.
@@ -133,21 +150,26 @@ export const MR_AUTO_BUCKET_BADGE_CLASS: Record<MrAutoBucket, string> = {
   CLOSE_2: "bg-success/10 text-success border-success/30",
 };
 
-export function computeMrAutoBucket(input: {
-  mrConvertStatus: string | null | undefined;
-  hasPo: boolean;
-  qtyRequestTotal: number;
-  qtyReceivedTotal: number;
-}): MrAutoBucket {
+export function computeMrAutoBucket(
+  input: {
+    mrConvertStatus: string | null | undefined;
+    hasPo: boolean;
+    qtyRequestTotal: number;
+    qtyReceivedTotal: number;
+  },
+  rules: MrLevelAutoRules = DEFAULT_MR_LEVEL_AUTO_RULES,
+): MrAutoBucket {
   const { mrConvertStatus, hasPo, qtyRequestTotal, qtyReceivedTotal } = input;
+  const receivedPct =
+    qtyRequestTotal > 0 ? (qtyReceivedTotal / qtyRequestTotal) * 100 : 0;
 
-  if (qtyRequestTotal > 0 && qtyReceivedTotal >= qtyRequestTotal) {
+  if (qtyRequestTotal > 0 && receivedPct >= rules.closeDoneMinReceivedPct) {
     return "CLOSE_2";
   }
-  if (qtyReceivedTotal > 0) {
+  if (qtyReceivedTotal > 0 && receivedPct >= rules.closeStartMinReceivedPct) {
     return "CLOSE_1";
   }
-  if (!mrConvertStatus || mrConvertStatus === "pending") {
+  if (!mrConvertStatus || rules.pendingConvertStatuses.includes(mrConvertStatus)) {
     return "OPEN_1";
   }
   if (!hasPo) {

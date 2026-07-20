@@ -51,6 +51,7 @@ import {
   FileSignature,
   PackageSearch,
   ClipboardList,
+  SlidersHorizontal,
 } from "lucide-react";
 
 // Update the menu data
@@ -70,6 +71,11 @@ const data = {
       title: "Approval Templates",
       url: "/approval-templates",
       icon: CheckCircle2,
+    },
+    {
+      title: "Trigger Level MR",
+      url: "/mr-level-settings",
+      icon: SlidersHorizontal,
     },
   ],
   navMain: [

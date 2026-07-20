@@ -77,6 +77,10 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Content } from "@/components/content";
 import { MrLevelBadge } from "@/components/mr/mr-level-badge";
+import {
+  MrLevelAutoRules,
+  DEFAULT_MR_LEVEL_AUTO_RULES,
+} from "@/lib/mr-level";
 
 export default function MRDetailPage({
   params,
@@ -102,6 +106,9 @@ export default function MRDetailPage({
   const [prRecords, setPrRecords] = useState<any[]>([]);
   const [deliveryRecords, setDeliveryRecords] = useState<any[]>([]);
   const [hasPo, setHasPo] = useState(false);
+  const [mrLevelAutoRules, setMrLevelAutoRules] = useState<MrLevelAutoRules>(
+    DEFAULT_MR_LEVEL_AUTO_RULES,
+  );
   const [deadlineByItem, setDeadlineByItem] = useState<Record<number, string>>(
     {},
   );
@@ -214,6 +221,19 @@ export default function MRDetailPage({
       setHasPo((poItemCount || 0) > 0);
     } else {
       setHasPo(false);
+    }
+
+    const { data: rulesData } = await supabase
+      .from("mr_level_auto_rules")
+      .select("*")
+      .eq("id", 1)
+      .single();
+    if (rulesData) {
+      setMrLevelAutoRules({
+        pendingConvertStatuses: rulesData.pending_convert_statuses || ["pending"],
+        closeStartMinReceivedPct: Number(rulesData.close_start_min_received_pct),
+        closeDoneMinReceivedPct: Number(rulesData.close_done_min_received_pct),
+      });
     }
 
     // Fetch related deliveries for Share Stock progress
@@ -705,6 +725,7 @@ export default function MRDetailPage({
                     manualNote={mr.manual_level_note}
                     manualSetByName={mr.manual_level_setter?.nama}
                     manualSetAt={mr.manual_level_set_at}
+                    autoRules={mrLevelAutoRules}
                     canEdit={isModerator}
                     onChanged={(patch) =>
                       setMr((prev: any) => ({ ...prev, ...patch }))

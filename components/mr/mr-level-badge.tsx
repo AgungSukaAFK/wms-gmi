@@ -17,12 +17,15 @@ import {
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Pencil, RotateCcw } from "lucide-react";
+import { Loader2, Pencil, RotateCcw, Settings2 } from "lucide-react";
+import Link from "next/link";
 import { toast } from "sonner";
 import {
   MR_LEVEL_DEFINITIONS,
   MrLevelCode,
   MrAutoBucket,
+  MrLevelAutoRules,
+  DEFAULT_MR_LEVEL_AUTO_RULES,
   computeMrAutoBucket,
   resolveMrLevelDisplay,
 } from "@/lib/mr-level";
@@ -38,6 +41,7 @@ interface MrLevelBadgeProps {
   manualNote?: string | null;
   manualSetByName?: string | null;
   manualSetAt?: string | null;
+  autoRules?: MrLevelAutoRules;
   canEdit: boolean;
   size?: "xs" | "sm";
   onChanged?: (patch: {
@@ -56,6 +60,7 @@ export function MrLevelBadge({
   manualNote,
   manualSetByName,
   manualSetAt,
+  autoRules = DEFAULT_MR_LEVEL_AUTO_RULES,
   canEdit,
   size = "sm",
   onChanged,
@@ -66,12 +71,15 @@ export function MrLevelBadge({
   const [note, setNote] = useState(manualNote || "");
   const [saving, setSaving] = useState(false);
 
-  const autoBucket: MrAutoBucket = computeMrAutoBucket({
-    mrConvertStatus,
-    hasPo,
-    qtyRequestTotal,
-    qtyReceivedTotal,
-  });
+  const autoBucket: MrAutoBucket = computeMrAutoBucket(
+    {
+      mrConvertStatus,
+      hasPo,
+      qtyRequestTotal,
+      qtyReceivedTotal,
+    },
+    autoRules,
+  );
 
   const display = resolveMrLevelDisplay({
     manualLevel,
@@ -186,11 +194,49 @@ export function MrLevelBadge({
               )}
             </div>
           ) : (
-            <p className="text-[11px] text-muted-foreground italic">
-              Dihitung otomatis oleh sistem. Sub-status pastinya (payment
-              issue, budget approval, posisi barang, dokumen ke HO) belum
-              bisa dipastikan sistem.
-            </p>
+            <div className="space-y-2">
+              <p className="text-[11px] text-muted-foreground italic">
+                Dihitung otomatis oleh sistem. Sub-status pastinya (payment
+                issue, budget approval, posisi barang, dokumen ke HO) belum
+                bisa dipastikan sistem.
+              </p>
+              <div className="rounded-md bg-muted/50 p-2 space-y-1">
+                <p className="text-[9px] font-bold uppercase text-muted-foreground">
+                  Aturan Auto-Deteksi Saat Ini
+                </p>
+                <ul className="text-[10px] text-foreground space-y-0.5 list-disc list-inside">
+                  <li>
+                    OPEN 1 jika status konversi:{" "}
+                    <span className="font-semibold">
+                      {autoRules.pendingConvertStatuses.join(", ")}
+                    </span>
+                  </li>
+                  <li>
+                    CLOSE 1 jika qty diterima ≥{" "}
+                    <span className="font-semibold">
+                      {autoRules.closeStartMinReceivedPct}%
+                    </span>{" "}
+                    dari qty request
+                  </li>
+                  <li>
+                    CLOSE 2 jika qty diterima ≥{" "}
+                    <span className="font-semibold">
+                      {autoRules.closeDoneMinReceivedPct}%
+                    </span>{" "}
+                    dari qty request
+                  </li>
+                </ul>
+                {canEdit && (
+                  <Link
+                    href="/mr-level-settings"
+                    className="inline-flex items-center gap-1 text-[10px] font-bold text-primary hover:underline pt-0.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Settings2 className="h-2.5 w-2.5" /> Atur Trigger
+                  </Link>
+                )}
+              </div>
+            </div>
           )}
         </div>
 

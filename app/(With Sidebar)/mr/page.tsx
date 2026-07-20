@@ -59,6 +59,10 @@ import {
 import { deleteMR } from "@/services/procurement-actions";
 import { toast } from "sonner";
 import { MrLevelBadge } from "@/components/mr/mr-level-badge";
+import {
+  MrLevelAutoRules,
+  DEFAULT_MR_LEVEL_AUTO_RULES,
+} from "@/lib/mr-level";
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
@@ -73,6 +77,9 @@ export default function MaterialRequestPage() {
   >({});
   const [userProfile, setUserProfile] = useState<any>(null);
   const [exporting, setExporting] = useState(false);
+  const [mrLevelAutoRules, setMrLevelAutoRules] = useState<MrLevelAutoRules>(
+    DEFAULT_MR_LEVEL_AUTO_RULES,
+  );
 
   // Pagination & Filters
   const [searchQuery, setSearchQuery] = useState("");
@@ -124,6 +131,19 @@ export default function MaterialRequestPage() {
       .order("nama_cabang");
 
     setAvailableCabang(cabangData || []);
+
+    const { data: rulesData } = await supabase
+      .from("mr_level_auto_rules")
+      .select("*")
+      .eq("id", 1)
+      .single();
+    if (rulesData) {
+      setMrLevelAutoRules({
+        pendingConvertStatuses: rulesData.pending_convert_statuses || ["pending"],
+        closeStartMinReceivedPct: Number(rulesData.close_start_min_received_pct),
+        closeDoneMinReceivedPct: Number(rulesData.close_done_min_received_pct),
+      });
+    }
   };
 
   // Query dasar dengan seluruh filter aktif diterapkan (tanpa order/range),
@@ -882,6 +902,7 @@ export default function MaterialRequestPage() {
                                 manualNote={mr.manual_level_note}
                                 manualSetByName={mr.manual_level_setter?.nama}
                                 manualSetAt={mr.manual_level_set_at}
+                                autoRules={mrLevelAutoRules}
                                 canEdit={!!userProfile?.isModerator}
                                 size="xs"
                                 onChanged={(patch) =>
