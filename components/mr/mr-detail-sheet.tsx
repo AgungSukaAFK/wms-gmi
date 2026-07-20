@@ -30,22 +30,20 @@ import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { updateMRAccurate } from "@/services/procurement-actions";
 import { toast } from "sonner";
-import {
-  computeMrLevel,
-  MR_LEVEL_LABELS,
-  MR_LEVEL_BADGE_CLASS,
-} from "@/lib/mr-level";
+import { MrLevelBadge } from "@/components/mr/mr-level-badge";
 
 interface MRDetailSheetProps {
   mrId: string | number | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  isModerator?: boolean;
 }
 
 export function MRDetailSheet({
   mrId,
   open,
   onOpenChange,
+  isModerator = false,
 }: MRDetailSheetProps) {
   const supabase = createClient();
   const router = useRouter();
@@ -65,7 +63,9 @@ export function MRDetailSheet({
     setLoading(true);
     const { data: mrData } = await supabase
       .from("mrs")
-      .select("*, cabang(nama_cabang)")
+      .select(
+        "*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama)",
+      )
       .eq("id", mrId)
       .single();
 
@@ -97,13 +97,6 @@ export function MRDetailSheet({
 
     setLoading(false);
   };
-
-  const mrLevel = computeMrLevel({
-    mrConvertStatus: mr?.mr_convert_status,
-    hasPo,
-    qtyRequestTotal: items.reduce((s, i) => s + (i.qty_request || 0), 0),
-    qtyReceivedTotal: items.reduce((s, i) => s + (i.qty_received || 0), 0),
-  });
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -261,12 +254,27 @@ export function MRDetailSheet({
                   {mr &&
                     mr.mr_status !== "open" &&
                     mr.mr_status !== "rejected" && (
-                      <Badge
-                        variant="outline"
-                        className={`text-[10px] font-bold uppercase ${MR_LEVEL_BADGE_CLASS[mrLevel]}`}
-                      >
-                        {MR_LEVEL_LABELS[mrLevel]}
-                      </Badge>
+                      <MrLevelBadge
+                        mrId={mr.id}
+                        mrConvertStatus={mr.mr_convert_status}
+                        hasPo={hasPo}
+                        qtyRequestTotal={items.reduce(
+                          (s, i) => s + (i.qty_request || 0),
+                          0,
+                        )}
+                        qtyReceivedTotal={items.reduce(
+                          (s, i) => s + (i.qty_received || 0),
+                          0,
+                        )}
+                        manualLevel={mr.manual_level}
+                        manualNote={mr.manual_level_note}
+                        manualSetByName={mr.manual_level_setter?.nama}
+                        manualSetAt={mr.manual_level_set_at}
+                        canEdit={isModerator}
+                        onChanged={(patch) =>
+                          setMr((prev: any) => ({ ...prev, ...patch }))
+                        }
+                      />
                     )}
                 </div>
               </div>

@@ -58,19 +58,19 @@ import {
 } from "@/components/ui/alert-dialog";
 import { deleteMR } from "@/services/procurement-actions";
 import { toast } from "sonner";
-import {
-  computeMrLevel,
-  MR_LEVEL_LABELS,
-  MR_LEVEL_BADGE_CLASS,
-  MrLevel,
-} from "@/lib/mr-level";
+import { MrLevelBadge } from "@/components/mr/mr-level-badge";
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [mrs, setMrs] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [levelByMrId, setLevelByMrId] = useState<Record<number, MrLevel>>({});
+  const [levelExtraByMrId, setLevelExtraByMrId] = useState<
+    Record<
+      number,
+      { hasPo: boolean; qtyRequestTotal: number; qtyReceivedTotal: number }
+    >
+  >({});
   const [userProfile, setUserProfile] = useState<any>(null);
   const [exporting, setExporting] = useState(false);
 
@@ -129,9 +129,10 @@ export default function MaterialRequestPage() {
   // Query dasar dengan seluruh filter aktif diterapkan (tanpa order/range),
   // dipakai bersama oleh fetchData (list berpaginasi) dan exportExcel (semua baris).
   const buildFilteredQuery = () => {
-    let query = supabase
-      .from("mrs")
-      .select("*, cabang(nama_cabang)", { count: "exact" });
+    let query = supabase.from("mrs").select(
+      "*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama)",
+      { count: "exact" },
+    );
 
     if (debouncedSearch) {
       query = query.or(
@@ -169,13 +170,13 @@ export default function MaterialRequestPage() {
     return query;
   };
 
-  // Hitung level progres (PR/PO/receive) untuk sekumpulan MR yang sedang
+  // Data pendukung level MR (PR/PO/qty) untuk sekumpulan MR yang sedang
   // ditampilkan di halaman ini, murni derivasi dari data yang sudah ada
-  // (tidak ada kolom/tabel baru).
-  const fetchLevels = async (mrRows: any[]) => {
+  // (tidak ada kolom/tabel baru) — level akhirnya dihitung oleh <MrLevelBadge>.
+  const fetchLevelExtras = async (mrRows: any[]) => {
     const mrIds = mrRows.map((mr) => mr.id);
     if (mrIds.length === 0) {
-      setLevelByMrId({});
+      setLevelExtraByMrId({});
       return;
     }
 
@@ -216,17 +217,19 @@ export default function MaterialRequestPage() {
       }
     }
 
-    const levels: Record<number, MrLevel> = {};
+    const extras: Record<
+      number,
+      { hasPo: boolean; qtyRequestTotal: number; qtyReceivedTotal: number }
+    > = {};
     for (const mr of mrRows) {
       const qty = qtyByMr.get(mr.id) || { req: 0, recv: 0 };
-      levels[mr.id] = computeMrLevel({
-        mrConvertStatus: mr.mr_convert_status,
+      extras[mr.id] = {
         hasPo: hasPoByMr.has(mr.id),
         qtyRequestTotal: qty.req,
         qtyReceivedTotal: qty.recv,
-      });
+      };
     }
-    setLevelByMrId(levels);
+    setLevelExtraByMrId(extras);
   };
 
   const fetchData = async () => {
@@ -243,7 +246,7 @@ export default function MaterialRequestPage() {
     } else {
       setMrs(data || []);
       setTotalCount(count || 0);
-      fetchLevels(data || []);
+      fetchLevelExtras(data || []);
     }
     setLoading(false);
   };
@@ -864,13 +867,31 @@ export default function MaterialRequestPage() {
                           {getStatusBadge(mr.mr_status)}
                           {mr.mr_status !== "open" &&
                             mr.mr_status !== "rejected" &&
-                            levelByMrId[mr.id] && (
-                              <Badge
-                                variant="outline"
-                                className={`text-[9px] font-bold uppercase ${MR_LEVEL_BADGE_CLASS[levelByMrId[mr.id]]}`}
-                              >
-                                {MR_LEVEL_LABELS[levelByMrId[mr.id]]}
-                              </Badge>
+                            levelExtraByMrId[mr.id] && (
+                              <MrLevelBadge
+                                mrId={mr.id}
+                                mrConvertStatus={mr.mr_convert_status}
+                                hasPo={levelExtraByMrId[mr.id].hasPo}
+                                qtyRequestTotal={
+                                  levelExtraByMrId[mr.id].qtyRequestTotal
+                                }
+                                qtyReceivedTotal={
+                                  levelExtraByMrId[mr.id].qtyReceivedTotal
+                                }
+                                manualLevel={mr.manual_level}
+                                manualNote={mr.manual_level_note}
+                                manualSetByName={mr.manual_level_setter?.nama}
+                                manualSetAt={mr.manual_level_set_at}
+                                canEdit={!!userProfile?.isModerator}
+                                size="xs"
+                                onChanged={(patch) =>
+                                  setMrs((prev) =>
+                                    prev.map((m) =>
+                                      m.id === mr.id ? { ...m, ...patch } : m,
+                                    ),
+                                  )
+                                }
+                              />
                             )}
                           {mr.is_frozen && (
                             <Badge className="bg-sky-500 text-white border-none text-[9px] font-bold uppercase">
@@ -951,6 +972,7 @@ export default function MaterialRequestPage() {
         mrId={selectedMrId}
         open={detailOpen}
         onOpenChange={setDetailOpen}
+        isModerator={!!userProfile?.isModerator}
       />
 
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>

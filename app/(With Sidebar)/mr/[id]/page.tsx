@@ -76,11 +76,7 @@ import { businessToday } from "@/lib/business-date";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Content } from "@/components/content";
-import {
-  computeMrLevel,
-  MR_LEVEL_LABELS,
-  MR_LEVEL_BADGE_CLASS,
-} from "@/lib/mr-level";
+import { MrLevelBadge } from "@/components/mr/mr-level-badge";
 
 export default function MRDetailPage({
   params,
@@ -95,6 +91,7 @@ export default function MRDetailPage({
   const [items, setItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
+  const [isModerator, setIsModerator] = useState(false);
   const [cabangs, setCabangs] = useState<any[]>([]);
   // Stok per PN per cabang: { [part_id]: { [cabang_id]: qty } }
   const [stockByPart, setStockByPart] = useState<
@@ -156,6 +153,15 @@ export default function MRDetailPage({
       data: { user },
     } = await supabase.auth.getUser();
     setCurrentUser(user);
+    if (user) {
+      const { data: roleRows } = await supabase
+        .from("user_roles")
+        .select("roles(name)")
+        .eq("user_id", user.id);
+      setIsModerator(
+        (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
+      );
+    }
   };
 
   const fetchCabangs = async () => {
@@ -175,7 +181,9 @@ export default function MRDetailPage({
     // Fetch MR primary data
     const { data: mrData } = await supabase
       .from("mrs")
-      .select("*, cabang(nama_cabang)")
+      .select(
+        "*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama)",
+      )
       .eq("id", mrId)
       .single();
 
@@ -344,13 +352,6 @@ export default function MRDetailPage({
         return null;
     }
   };
-
-  const mrLevel = computeMrLevel({
-    mrConvertStatus: mr?.mr_convert_status,
-    hasPo,
-    qtyRequestTotal: items.reduce((s, i) => s + (i.qty_request || 0), 0),
-    qtyReceivedTotal: items.reduce((s, i) => s + (i.qty_received || 0), 0),
-  });
 
   const nextApprover =
     mr?.mr_status === "open"
@@ -687,16 +688,29 @@ export default function MRDetailPage({
                   {mr?.mr_kode}
                 </h1>
                 {getStatusBadge(mr?.mr_status)}
-                {mr &&
-                  mr.mr_status !== "open" &&
-                  mr.mr_status !== "rejected" && (
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] font-bold uppercase ${MR_LEVEL_BADGE_CLASS[mrLevel]}`}
-                    >
-                      {MR_LEVEL_LABELS[mrLevel]}
-                    </Badge>
-                  )}
+                {mr && mr.mr_status !== "open" && mr.mr_status !== "rejected" && (
+                  <MrLevelBadge
+                    mrId={mr.id}
+                    mrConvertStatus={mr.mr_convert_status}
+                    hasPo={hasPo}
+                    qtyRequestTotal={items.reduce(
+                      (s, i) => s + (i.qty_request || 0),
+                      0,
+                    )}
+                    qtyReceivedTotal={items.reduce(
+                      (s, i) => s + (i.qty_received || 0),
+                      0,
+                    )}
+                    manualLevel={mr.manual_level}
+                    manualNote={mr.manual_level_note}
+                    manualSetByName={mr.manual_level_setter?.nama}
+                    manualSetAt={mr.manual_level_set_at}
+                    canEdit={isModerator}
+                    onChanged={(patch) =>
+                      setMr((prev: any) => ({ ...prev, ...patch }))
+                    }
+                  />
+                )}
                 {mr?.is_frozen && (
                   <Badge className="bg-sky-500 text-white border-none font-bold uppercase text-[10px]">
                     Frozen
