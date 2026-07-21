@@ -442,13 +442,15 @@ export default function SpbCreatePage() {
                     <Button
                       variant="outline"
                       role="combobox"
-                      className="w-full justify-between"
+                      className="w-full justify-between font-normal"
                       disabled={masterLoading}
                     >
-                      {selectedPart
-                        ? `${selectedPart.part_number} - ${selectedPart.part_name}`
-                        : "Pilih part..."}
-                      <ChevronsUpDown className="h-4 w-4 opacity-50" />
+                      <span className="truncate">
+                        {selectedPart
+                          ? `${selectedPart.part_number} - ${selectedPart.part_name}`
+                          : "Pilih part..."}
+                      </span>
+                      <ChevronsUpDown className="h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
                   <PopoverContent
@@ -481,16 +483,16 @@ export default function SpbCreatePage() {
                           <button
                             key={part.id}
                             type="button"
-                            className="w-full rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
+                            className="w-full min-w-0 rounded-md px-2 py-2 text-left text-sm hover:bg-muted"
                             onClick={() => {
                               setSelectedPartId(String(part.id));
                               setPartPickerOpen(false);
                             }}
                           >
-                            <div className="font-medium">
+                            <div className="truncate font-medium">
                               {part.part_number}
                             </div>
-                            <div className="text-xs text-muted-foreground">
+                            <div className="truncate text-xs text-muted-foreground">
                               {part.part_name}
                             </div>
                           </button>
@@ -526,15 +528,17 @@ export default function SpbCreatePage() {
             Stock saat ini mengacu ke lokasi user:{" "}
             <span className="font-medium text-foreground">{gudang || "-"}</span>
           </p>
-          <div className="rounded-lg border">
-            <Table>
+          <div className="rounded-lg border overflow-auto">
+            <Table className="table-fixed">
               <TableHeader>
                 <TableRow>
-                  <TableHead>Part Number</TableHead>
+                  <TableHead className="w-32">Part Number</TableHead>
                   <TableHead>Part Name</TableHead>
-                  <TableHead>Satuan</TableHead>
-                  <TableHead>Qty SPB</TableHead>
-                  <TableHead>Stock Saat Ini ({gudang || "-"})</TableHead>
+                  <TableHead className="w-20">Satuan</TableHead>
+                  <TableHead className="w-20">Qty SPB</TableHead>
+                  <TableHead className="w-40">
+                    Stock Saat Ini ({gudang || "-"})
+                  </TableHead>
                   <TableHead className="w-16">Aksi</TableHead>
                 </TableRow>
               </TableHeader>
@@ -551,8 +555,18 @@ export default function SpbCreatePage() {
                 ) : (
                   items.map((item) => (
                     <TableRow key={item.part_id}>
-                      <TableCell>{item.dtl_spb_part_number}</TableCell>
-                      <TableCell>{item.dtl_spb_part_name}</TableCell>
+                      <TableCell
+                        className="truncate"
+                        title={item.dtl_spb_part_number}
+                      >
+                        {item.dtl_spb_part_number}
+                      </TableCell>
+                      <TableCell
+                        className="truncate"
+                        title={item.dtl_spb_part_name}
+                      >
+                        {item.dtl_spb_part_name}
+                      </TableCell>
                       <TableCell>{item.dtl_spb_part_satuan}</TableCell>
                       <TableCell>{item.dtl_spb_qty}</TableCell>
                       <TableCell>{stockMap[item.part_id] ?? 0}</TableCell>

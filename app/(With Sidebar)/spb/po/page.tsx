@@ -536,14 +536,14 @@ export default function SpbPoPage() {
 
             {selectedSpbId && (
               <div className="rounded-md border max-h-[45vh] overflow-auto">
-                <Table>
+                <Table className="table-fixed">
                   <TableHeader>
                     <TableRow>
                       <TableHead className="w-10">Pilih</TableHead>
-                      <TableHead>Part Number</TableHead>
+                      <TableHead className="w-32">Part Number</TableHead>
                       <TableHead>Part Name</TableHead>
-                      <TableHead>Qty</TableHead>
-                      <TableHead>Satuan</TableHead>
+                      <TableHead className="w-16">Qty</TableHead>
+                      <TableHead className="w-20">Satuan</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -568,8 +568,18 @@ export default function SpbPoPage() {
                               }
                             />
                           </TableCell>
-                          <TableCell>{item.dtl_spb_part_number}</TableCell>
-                          <TableCell>{item.dtl_spb_part_name}</TableCell>
+                          <TableCell
+                            className="truncate"
+                            title={item.dtl_spb_part_number}
+                          >
+                            {item.dtl_spb_part_number}
+                          </TableCell>
+                          <TableCell
+                            className="truncate"
+                            title={item.dtl_spb_part_name}
+                          >
+                            {item.dtl_spb_part_name}
+                          </TableCell>
                           <TableCell>{item.dtl_spb_qty}</TableCell>
                           <TableCell>{item.dtl_spb_part_satuan}</TableCell>
                         </TableRow>
