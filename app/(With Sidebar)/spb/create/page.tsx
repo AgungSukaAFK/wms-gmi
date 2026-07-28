@@ -403,6 +403,16 @@ export default function SpbCreatePage() {
                 ))}
               </SelectContent>
             </Select>
+            {!masterLoading && approvalTemplates.length === 0 && (
+              <p className="text-xs text-destructive">
+                Belum ada template tanda tangan untuk cabang ini. Minta
+                moderator/admin membuat template dulu di halaman{" "}
+                <Link href="/approval-templates" className="underline">
+                  Approval Templates
+                </Link>{" "}
+                (type &quot;Stock Out - SPB&quot;).
+              </p>
+            )}
           </div>
 
           {approvalTemplateId && (

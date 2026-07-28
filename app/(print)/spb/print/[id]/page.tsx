@@ -227,7 +227,7 @@ export default function SpbPrintPage() {
             <div>
               <p>YANG MENYERAHKAN</p>
               <div className="h-16" />
-              <p className="border-t border-black pt-1 font-medium">
+              <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
                 {header.spb_pic_gmi || "-"}
               </p>
               <p>Warehouse GMI</p>
@@ -236,7 +236,7 @@ export default function SpbPrintPage() {
               <div key={idx}>
                 <p>MENGETAHUI</p>
                 <div className="h-16" />
-                <p className="border-t border-black pt-1 font-medium">
+                <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
                   {signer?.nama || "-"}
                 </p>
                 <p>&nbsp;</p>
