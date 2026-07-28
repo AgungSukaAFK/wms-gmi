@@ -141,7 +141,8 @@ export default function SpbPrintPage() {
                 <th className="border border-black p-1">DESCRIPTION</th>
                 <th className="border border-black p-1 w-12">QTY</th>
                 <th className="border border-black p-1 w-16">SATUAN</th>
-                <th className="border border-black p-1 w-20">NO.UNIT AMM</th>
+                <th className="border border-black p-1 w-20">TYPE UNIT</th>
+                <th className="border border-black p-1 w-20">NO. UNIT</th>
                 <th className="border border-black p-1 w-32">KETERANGAN</th>
               </tr>
             </thead>
@@ -168,6 +169,14 @@ export default function SpbPrintPage() {
                       className="border border-black p-1 text-center align-top"
                       rowSpan={items.length}
                     >
+                      {header.spb_tipe_unit || "-"}
+                    </td>
+                  )}
+                  {idx === 0 && (
+                    <td
+                      className="border border-black p-1 text-center align-top"
+                      rowSpan={items.length}
+                    >
                       {header.spb_kode_unit || "-"}
                     </td>
                   )}
@@ -183,7 +192,7 @@ export default function SpbPrintPage() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="border border-black p-2 text-center">
+                  <td colSpan={8} className="border border-black p-2 text-center">
                     Tidak ada item.
                   </td>
                 </tr>

@@ -52,6 +52,7 @@ import {
   Eye,
   EyeOff,
   UserPlus,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -93,6 +94,7 @@ export default function UserTableClient({
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [cabangFilters, setCabangFilters] = useState<string[]>([]);
+  const [roleFilters, setRoleFilters] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
@@ -143,13 +145,30 @@ export default function UserTableClient({
         cabangFilters.length === 0 ||
         cabangFilters.includes(u.cabang_id?.toString() ?? "");
 
-      return matchSearch && matchStatus && matchCabang;
+      const matchRole =
+        roleFilters.length === 0 ||
+        u.roles.some((r) => roleFilters.includes(r.id.toString()));
+
+      return matchSearch && matchStatus && matchCabang && matchRole;
     });
-  }, [users, search, statusFilter, cabangFilters]);
+  }, [users, search, statusFilter, cabangFilters, roleFilters]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [search, statusFilter, cabangFilters, pageSize]);
+  }, [search, statusFilter, cabangFilters, roleFilters, pageSize]);
+
+  const hasActiveFilters =
+    search.trim() !== "" ||
+    statusFilter !== "all" ||
+    cabangFilters.length > 0 ||
+    roleFilters.length > 0;
+
+  const resetFilters = () => {
+    setSearch("");
+    setStatusFilter("all");
+    setCabangFilters([]);
+    setRoleFilters([]);
+  };
 
   const totalCount = filteredUsers.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -403,6 +422,30 @@ export default function UserTableClient({
                 value: cabang.id.toString(),
               }))}
             />
+
+            <MultiSelect
+              className="w-full sm:w-45"
+              placeholder="Semua Role"
+              selected={roleFilters}
+              onChange={setRoleFilters}
+              options={allRoles.map((role) => ({
+                label: role.label,
+                value: role.id.toString(),
+              }))}
+            />
+
+            {hasActiveFilters && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-9 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-destructive"
+                onClick={resetFilters}
+              >
+                <X className="h-3.5 w-3.5" />
+                Reset Filter
+              </Button>
+            )}
           </div>
         </div>
       </Content>
