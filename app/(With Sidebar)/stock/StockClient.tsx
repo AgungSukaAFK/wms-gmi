@@ -33,6 +33,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import { useAuthStore } from "@/stores/auth-store";
 import * as XLSX from "xlsx";
@@ -135,19 +136,28 @@ export default function StockClient({
   } | null>(null);
   const [problems, setProblems] = useState<MinMaxProblemReport | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
+  const [siteSelectOpen, setSiteSelectOpen] = useState(false);
+  const [selectedCabangIds, setSelectedCabangIds] = useState<number[]>(
+    cabangList.map((c: any) => c.id),
+  );
   const dlStartRef = useRef(0);
   const stageStartRef = useRef(0);
 
-  const handleDownloadTemplate = async () => {
+  const handleDownloadTemplate = async (cabangIds: number[]) => {
+    if (cabangIds.length === 0) {
+      toast.error("Pilih minimal 1 site terlebih dahulu.");
+      return;
+    }
     setDownloading(true);
     setDlProgress({ done: 0, total: 0 });
     try {
-      const meta = await getStockMinMaxMeta();
+      const meta = await getStockMinMaxMeta(cabangIds);
       if (!meta.success) {
         toast.error(meta.error);
         return;
       }
-      const { cabang, total } = meta;
+      const cabang = meta.cabang.filter((c: any) => cabangIds.includes(c.id));
+      const { total } = meta;
       setDlProgress({ done: 0, total });
       dlStartRef.current = Date.now();
 
@@ -163,7 +173,7 @@ export default function StockClient({
       >();
       const PAGE = 1000;
       for (let off = 0; off < Math.max(total, 1); off += PAGE) {
-        const res = await fetchStockMinMaxPage(off, PAGE);
+        const res = await fetchStockMinMaxPage(off, PAGE, cabangIds);
         if (!res.success) {
           toast.error(res.error);
           return;
@@ -219,18 +229,32 @@ export default function StockClient({
         ],
         ["2. Kolom MIN / MAX = silakan diedit sesuai kebutuhan tiap cabang."],
         [
-          "3. JANGAN mengubah/menghapus kolom 'No. Barang' & 'Deskripsi Barang'.",
+          "3. JANGAN mengubah isi/header kolom 'No. Barang' & 'Deskripsi Barang'.",
         ],
         [
-          "4. JANGAN menambah/menghapus/menggeser kolom. Isi angka bulat (>= 0).",
+          "4. Hanya part & site yang mau diubah yang perlu diisi. Baris part " +
+            "boleh dihapus kalau tidak ingin diubah. Kelompok kolom cabang " +
+            "(QTY/MIN/MAX) boleh dihapus kalau site itu tidak ingin diubah.",
         ],
-        ["5. Simpan tetap .xlsx, lalu upload via tombol 'Update Min/Max'."],
+        [
+          "5. Cell MIN/MAX yang dikosongkan (blank) TIDAK akan mengubah data " +
+            "site tsb untuk part itu. Isi angka bulat (>= 0) hanya untuk yang " +
+            "benar-benar mau diubah.",
+        ],
+        ["6. Simpan tetap .xlsx, lalu upload via tombol 'Update Min/Max'."],
       ]);
       guide["!cols"] = [{ wch: 90 }];
       XLSX.utils.book_append_sheet(wb, guide, "PETUNJUK");
 
       const ymd = new Date().toLocaleDateString("sv-SE").replace(/-/g, "");
-      XLSX.writeFile(wb, `TEMPLATE_MINMAX_STOCK_${ymd}.xlsx`);
+      const siteSuffix =
+        cabangIds.length === cabangList.length
+          ? "SEMUA_SITE"
+          : cabang
+              .map((c: any) => c.nama_cabang)
+              .join("-")
+              .replace(/[^a-zA-Z0-9-]/g, "");
+      XLSX.writeFile(wb, `TEMPLATE_MINMAX_STOCK_${siteSuffix}_${ymd}.xlsx`);
       toast.success(`Template diunduh (${parts.size} part).`);
     } catch {
       toast.error("Gagal mengunduh template.");
@@ -319,16 +343,23 @@ export default function StockClient({
         max_qty: number;
         source_row: number;
       }[] = [];
+      const isBlank = (v: unknown) =>
+        v === undefined || v === null || String(v).trim() === "";
       for (let r = 1; r < aoa.length; r++) {
         const row = aoa[r] || [];
         const pn = String(row[0] ?? "").trim();
         if (!pn) continue;
         for (const [cab, c] of cols) {
+          const minVal = c.min !== undefined ? row[c.min] : undefined;
+          const maxVal = c.max !== undefined ? row[c.max] : undefined;
+          // Cell kosong = site ini TIDAK ingin diubah untuk part ini -- jangan
+          // di-stage sama sekali, biar tidak ketimpa jadi 0 di database.
+          if (isBlank(minVal) && isBlank(maxVal)) continue;
           rows.push({
             part_number: pn,
             nama_cabang: cab,
-            min_qty: c.min !== undefined ? (row[c.min] as number) : 0,
-            max_qty: c.max !== undefined ? (row[c.max] as number) : 0,
+            min_qty: isBlank(minVal) ? 0 : (minVal as number),
+            max_qty: isBlank(maxVal) ? 0 : (maxVal as number),
             source_row: r + 1,
           });
         }
@@ -492,7 +523,7 @@ export default function StockClient({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleDownloadTemplate}
+                  onClick={() => setSiteSelectOpen(true)}
                   disabled={downloading}
                   className="gap-2 border-input text-xs font-bold hover:bg-muted/40"
                 >
@@ -732,6 +763,94 @@ export default function StockClient({
         </div>
       </Content>
 
+      {/* Dialog Pilih Site untuk Template Min/Max */}
+      <Dialog open={siteSelectOpen} onOpenChange={setSiteSelectOpen}>
+        <DialogContent className="max-h-[85vh] w-[calc(100%-2rem)] max-w-105 overflow-y-auto rounded-2xl p-6">
+          <DialogHeader className="mb-2">
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold">
+              <Download className="h-5 w-5 text-success" />
+              Pilih Site untuk Template
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Cuma site yang dicentang yang ditarik datanya — makin sedikit
+              site, makin cepat download & upload-nya. Site yang tidak dicentang
+              tidak akan ada di file, jadi otomatis tidak akan ikut berubah saat
+              di-upload nanti.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="flex items-center gap-2 border-b border-border pb-2">
+              <Checkbox
+                id="site-select-all"
+                checked={selectedCabangIds.length === cabangList.length}
+                onCheckedChange={(checked) =>
+                  setSelectedCabangIds(
+                    checked ? cabangList.map((c: any) => c.id) : [],
+                  )
+                }
+              />
+              <label
+                htmlFor="site-select-all"
+                className="cursor-pointer text-xs font-bold uppercase"
+              >
+                Pilih Semua ({cabangList.length} site)
+              </label>
+            </div>
+
+            <div className="grid max-h-72 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2">
+              {cabangList.map((c: any) => {
+                const checked = selectedCabangIds.includes(c.id);
+                return (
+                  <div key={c.id} className="flex items-center gap-2">
+                    <Checkbox
+                      id={`site-${c.id}`}
+                      checked={checked}
+                      onCheckedChange={(v) =>
+                        setSelectedCabangIds((prev) =>
+                          v
+                            ? [...prev, c.id]
+                            : prev.filter((id) => id !== c.id),
+                        )
+                      }
+                    />
+                    <label
+                      htmlFor={`site-${c.id}`}
+                      className="cursor-pointer text-xs font-medium"
+                    >
+                      {c.nama_cabang}
+                    </label>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <DialogFooter className="mt-6 flex items-center gap-3 sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex-1 rounded-xl font-bold text-muted-foreground"
+              onClick={() => setSiteSelectOpen(false)}
+            >
+              Batal
+            </Button>
+            <Button
+              type="button"
+              disabled={selectedCabangIds.length === 0 || downloading}
+              className="flex-1 gap-2 rounded-xl font-bold shadow-md shadow-primary/20"
+              onClick={() => {
+                setSiteSelectOpen(false);
+                handleDownloadTemplate(selectedCabangIds);
+              }}
+            >
+              <Download className="h-4 w-4" />
+              Download ({selectedCabangIds.length} site)
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Dialog Update Min/Max via Excel */}
       <Dialog
         open={uploadOpen}
@@ -748,8 +867,11 @@ export default function StockClient({
             </DialogTitle>
             <DialogDescription className="text-xs">
               Upload file Excel hasil edit. File <b>harus</b> berasal dari
-              tombol <b>Template Min/Max</b> (struktur kolom tidak boleh
-              diubah). Hanya kolom MIN/MAX yang diterapkan — QTY tidak disentuh.
+              tombol <b>Template Min/Max</b>. Boleh hanya berisi sebagian part
+              (baris lain dihapus) dan/atau sebagian site (kelompok kolom cabang
+              lain dihapus/dikosongkan) — yang tidak ada di file tidak akan
+              tersentuh. Hanya kolom MIN/MAX yang diterapkan — QTY tidak
+              disentuh.
             </DialogDescription>
           </DialogHeader>
 

@@ -42,8 +42,14 @@ export interface MinMaxStageRow {
  * Metadata untuk membangun template di client: daftar cabang aktif + total baris stock.
  * Client memakai `total` untuk progress bar saat menarik data per halaman.
  */
-export async function getStockMinMaxMeta(): Promise<
-  | { success: true; cabang: { id: number; nama_cabang: string }[]; total: number }
+export async function getStockMinMaxMeta(
+  cabangIds?: number[],
+): Promise<
+  | {
+      success: true;
+      cabang: { id: number; nama_cabang: string }[];
+      total: number;
+    }
   | { success: false; error: string }
 > {
   const denied = await requireModerator();
@@ -57,9 +63,13 @@ export async function getStockMinMaxMeta(): Promise<
     .order("nama_cabang");
   if (cErr) return { success: false, error: cErr.message };
 
-  const { count, error: sErr } = await admin
+  let countQuery = admin
     .from("stock")
     .select("id", { count: "exact", head: true });
+  if (cabangIds && cabangIds.length > 0) {
+    countQuery = countQuery.in("cabang_id", cabangIds);
+  }
+  const { count, error: sErr } = await countQuery;
   if (sErr) return { success: false, error: sErr.message };
 
   return { success: true, cabang: (cabang || []) as any, total: count || 0 };
@@ -67,10 +77,13 @@ export async function getStockMinMaxMeta(): Promise<
 
 /**
  * Ambil satu halaman baris stock (untuk dibangun jadi Excel di client).
+ * `cabangIds` opsional -- kalau diisi, cuma tarik stock milik cabang tersebut
+ * (dipakai saat user memilih download template hanya untuk site tertentu).
  */
 export async function fetchStockMinMaxPage(
   offset: number,
   limit: number,
+  cabangIds?: number[],
 ): Promise<
   | {
       success: true;
@@ -89,11 +102,14 @@ export async function fetchStockMinMaxPage(
   if (denied) return { success: false, error: denied };
 
   const admin = createAdminClient();
-  const { data, error } = await admin
+  let query = admin
     .from("stock")
     .select("qty, min_qty, max_qty, cabang_id, barang(part_number, part_name)")
-    .order("id", { ascending: true })
-    .range(offset, offset + limit - 1);
+    .order("id", { ascending: true });
+  if (cabangIds && cabangIds.length > 0) {
+    query = query.in("cabang_id", cabangIds);
+  }
+  const { data, error } = await query.range(offset, offset + limit - 1);
   if (error) return { success: false, error: error.message };
 
   const rows = (data || [])
@@ -242,7 +258,7 @@ export async function updateStock(
     qty: number;
     min_qty: number;
     max_qty: number;
-  }
+  },
 ) {
   const supabase = await createClient();
 
@@ -266,9 +282,7 @@ export async function updateStock(
     .from("user_roles")
     .select("roles(name)")
     .eq("user_id", user.id);
-  const roles = (roleRows || [])
-    .map((r: any) => r.roles?.name)
-    .filter(Boolean);
+  const roles = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
   const isModerator = roles.includes("moderator");
   const isPpicOrPjo = roles.includes("ppic") || roles.includes("pjo");
 
@@ -298,10 +312,7 @@ export async function updateStock(
   const qtyChange = data.qty - currentStock.qty;
 
   // 2. Perform Update
-  const { error } = await supabase
-    .from("stock")
-    .update(data)
-    .eq("id", id);
+  const { error } = await supabase.from("stock").update(data).eq("id", id);
 
   if (error) {
     console.error("Error updating stock:", error);
@@ -310,15 +321,17 @@ export async function updateStock(
 
   // 3. Log Movement if qty changed
   if (qtyChange !== 0) {
-    const { data: { user } } = await supabase.auth.getUser();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
     await supabase.from("stock_movements").insert({
       part_id: currentStock.part_id,
       cabang_id: currentStock.cabang_id,
       qty_change: qtyChange,
-      type: 'ADJUSTMENT',
-      reference_id: 'MANUAL',
+      type: "ADJUSTMENT",
+      reference_id: "MANUAL",
       created_by: user?.id,
-      notes: 'Manual stock adjustment'
+      notes: "Manual stock adjustment",
     });
   }
 

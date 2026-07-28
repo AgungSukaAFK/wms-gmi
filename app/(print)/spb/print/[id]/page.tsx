@@ -73,7 +73,18 @@ export default function SpbPrintPage() {
 
   return (
     <Content>
-      <div className="bg-white min-h-screen p-0 sm:p-8 print:min-h-0 print:p-0 print-page-landscape">
+      {/* Named @page + CSS `page` property tidak konsisten didukung Chrome untuk
+          print, jadi override @page langsung di sini (scoped selama halaman ini
+          mounted) supaya cuma cetakan SPB yang landscape, bukan seluruh app. */}
+      <style>{`
+        @media print {
+          @page {
+            size: A4 landscape;
+            margin: 0;
+          }
+        }
+      `}</style>
+      <div className="bg-white min-h-screen p-0 sm:p-8 print:min-h-0 print:p-0">
         <div className="fixed top-4 left-4 print:hidden flex gap-2">
           <Button variant="outline" size="sm" onClick={() => router.back()}>
             <ChevronLeft className="h-4 w-4" /> Kembali
