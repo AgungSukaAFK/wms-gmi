@@ -52,6 +52,7 @@ export interface ApprovalTemplateStep {
   approver_type: "user" | "requester";
   user_id: string | null;
   level: ApprovalLevel;
+  position_label?: string | null;
   created_at: string;
   updated_at: string;
   profiles?: {

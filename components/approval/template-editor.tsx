@@ -194,6 +194,7 @@ export function TemplateEditor({
       approver_type: type,
       level: "menyetujui" as ApprovalLevel,
       user_id: null,
+      position_label: "",
     };
     setSteps((prev) => [...prev, newStep]);
   };
@@ -350,6 +351,7 @@ export function TemplateEditor({
         approver_type: s.approver_type,
         user_id: s.user_id,
         level: s.level,
+        position_label: s.position_label?.trim() || null,
       }));
 
       const { error: sError } = await supabase
@@ -496,9 +498,6 @@ export function TemplateEditor({
                 <div className="flex-1 text-[10px] uppercase font-extrabold text-slate-400 tracking-widest px-1">
                   Penyetuju
                 </div>
-                <div className="w-[120px] text-[10px] uppercase font-extrabold text-slate-400 pl-2 tracking-widest">
-                  Level
-                </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
@@ -511,33 +510,33 @@ export function TemplateEditor({
                   steps.map((step, index) => (
                     <div
                       key={step.local_id}
-                      className="flex gap-3 items-center bg-white p-2 rounded-lg border border-slate-200 group shadow-sm transition-all hover:border-blue-200"
+                      className="flex flex-col gap-2.5 bg-white p-3 rounded-lg border border-slate-200 group shadow-sm transition-all hover:border-blue-200"
                     >
-                      <div className="flex flex-col items-center min-w-[32px] shrink-0">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
-                          onClick={() => moveStep(index, "up")}
-                          disabled={index === 0}
-                        >
-                          <ChevronUp className="h-3 w-3" />
-                        </Button>
-                        <span className="text-[11px] font-black text-slate-500 my-0.5">
-                          {index + 1}
-                        </span>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
-                          onClick={() => moveStep(index, "down")}
-                          disabled={index === steps.length - 1}
-                        >
-                          <ChevronDown className="h-3 w-3" />
-                        </Button>
-                      </div>
+                      <div className="flex items-center gap-3">
+                        <div className="flex flex-col items-center min-w-[32px] shrink-0">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
+                            onClick={() => moveStep(index, "up")}
+                            disabled={index === 0}
+                          >
+                            <ChevronUp className="h-3 w-3" />
+                          </Button>
+                          <span className="text-[11px] font-black text-slate-500 my-0.5">
+                            {index + 1}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
+                            onClick={() => moveStep(index, "down")}
+                            disabled={index === steps.length - 1}
+                          >
+                            <ChevronDown className="h-3 w-3" />
+                          </Button>
+                        </div>
 
-                      <div className="flex-1 min-w-0 flex items-center gap-4">
                         <div className="flex-1 min-w-0">
                           {step.approver_type === "requester" ? (
                             <div className="h-9 px-3 w-full flex items-center bg-blue-50/50 border border-blue-200 rounded-md text-[12px] font-bold text-blue-700 whitespace-nowrap">
@@ -669,7 +668,23 @@ export function TemplateEditor({
                           )}
                         </div>
 
-                        <div className="w-28 shrink-0 sm:w-[120px]">
+                        <div className="shrink-0 pl-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-slate-200 hover:text-red-500 hover:bg-red-50 transition-all"
+                            onClick={() => removeStep(step.local_id)}
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-end gap-3 pl-11">
+                        <div className="w-40 shrink-0 space-y-1">
+                          <Label className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                            Level
+                          </Label>
                           <Select
                             value={step.level}
                             onValueChange={(val: any) =>
@@ -690,15 +705,20 @@ export function TemplateEditor({
                           </Select>
                         </div>
 
-                        <div className="shrink-0 pl-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-slate-200 hover:text-red-500 hover:bg-red-50 transition-all"
-                            onClick={() => removeStep(step.local_id)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
+                        <div className="flex-1 min-w-[160px] space-y-1">
+                          <Label className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                            Jabatan (Cetak)
+                          </Label>
+                          <Input
+                            placeholder="mis. GL Plant"
+                            value={step.position_label ?? ""}
+                            onChange={(e) =>
+                              updateStep(step.local_id, {
+                                position_label: e.target.value,
+                              })
+                            }
+                            className="h-9 bg-white text-[12px] border-slate-200 font-semibold text-slate-700 rounded-md shadow-none"
+                          />
                         </div>
                       </div>
                     </div>

@@ -159,6 +159,7 @@ async function buildStockOutApprovalFlow(
       nama: profile?.nama || "Unknown",
       email: profile?.email || "",
       level: step.step_order,
+      position: step.position_label || null,
       processed_at: null,
       notes: null,
       snapshot: null,
@@ -1379,7 +1380,7 @@ export async function getApprovalTemplateSteps(templateId: number) {
   const { data, error } = await supabase
     .from("approval_template_steps")
     .select(
-      "id, step_order, approver_type, level, profiles(nama, email, cabang:cabang_id(nama_cabang))",
+      "id, step_order, approver_type, level, position_label, profiles(nama, email, cabang:cabang_id(nama_cabang))",
     )
     .eq("template_id", templateId)
     .order("step_order");

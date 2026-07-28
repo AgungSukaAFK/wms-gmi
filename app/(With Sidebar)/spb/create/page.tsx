@@ -70,6 +70,7 @@ type ApprovalTemplateStep = {
   step_order: number;
   approver_type: string;
   level: string;
+  position_label: string | null;
   profiles: {
     nama: string;
     email: string;
@@ -445,8 +446,8 @@ export default function SpbCreatePage() {
                         </span>
                         <span className="ml-auto rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
                           {step.approver_type === "requester"
-                            ? "Yang Menyerahkan"
-                            : step.level}
+                            ? step.position_label || "Yang Menyerahkan"
+                            : step.position_label || step.level}
                         </span>
                       </li>
                     ))}

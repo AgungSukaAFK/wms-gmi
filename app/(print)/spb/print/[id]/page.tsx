@@ -59,7 +59,9 @@ export default function SpbPrintPage() {
 
   // Slot tanda tangan: 1 Yang Menyerahkan (tetap) + s.d. 3 Mengetahui dari
   // template tanda tangan (maks 4 slot total, mengikuti form fisik SPB).
-  const mengetahuiSigners = ((header.approvals as any[]) || [])
+  const approvalsList = (header.approvals as any[]) || [];
+  const requesterSigner = approvalsList.find((a) => a?.type === "Requester");
+  const mengetahuiSigners = approvalsList
     .filter((a) => a?.type !== "Requester")
     .slice(0, 3);
   const totalSlots = 1 + mengetahuiSigners.length;
@@ -230,7 +232,7 @@ export default function SpbPrintPage() {
               <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
                 {header.spb_pic_gmi || "-"}
               </p>
-              <p>Warehouse GMI</p>
+              <p>{requesterSigner?.position || "Warehouse GMI"}</p>
             </div>
             {mengetahuiSigners.map((signer, idx) => (
               <div key={idx}>
@@ -239,7 +241,7 @@ export default function SpbPrintPage() {
                 <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
                   {signer?.nama || "-"}
                 </p>
-                <p>&nbsp;</p>
+                <p>{signer?.position || " "}</p>
               </div>
             ))}
           </div>
