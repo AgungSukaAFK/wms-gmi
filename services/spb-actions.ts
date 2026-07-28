@@ -1374,6 +1374,20 @@ export async function getStockOutApprovalTemplates(
   return { data: data || [], error: null as string | null };
 }
 
+export async function getApprovalTemplateSteps(templateId: number) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("approval_template_steps")
+    .select(
+      "id, step_order, approver_type, level, profiles(nama, email, cabang:cabang_id(nama_cabang))",
+    )
+    .eq("template_id", templateId)
+    .order("step_order");
+
+  if (error) return { data: [], error: error.message };
+  return { data: data || [], error: null as string | null };
+}
+
 async function approveStockOutDocument(
   table: "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb",
   id: number,

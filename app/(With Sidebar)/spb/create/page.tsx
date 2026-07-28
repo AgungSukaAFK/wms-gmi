@@ -33,6 +33,7 @@ import {
 import { createClient } from "@/lib/supabase/client";
 import {
   createSpb,
+  getApprovalTemplateSteps,
   getStockOutApprovalTemplates,
 } from "@/services/spb-actions";
 import { useRouter } from "next/navigation";
@@ -64,6 +65,18 @@ type ApprovalTemplateOption = {
   cabang_id: number | null;
 };
 
+type ApprovalTemplateStep = {
+  id: number;
+  step_order: number;
+  approver_type: string;
+  level: string;
+  profiles: {
+    nama: string;
+    email: string;
+    cabang: { nama_cabang: string } | null;
+  } | null;
+};
+
 export default function SpbCreatePage() {
   const router = useRouter();
   const supabase = createClient();
@@ -89,6 +102,10 @@ export default function SpbCreatePage() {
   const [approvalTemplates, setApprovalTemplates] = useState<
     ApprovalTemplateOption[]
   >([]);
+  const [templateSteps, setTemplateSteps] = useState<ApprovalTemplateStep[]>(
+    [],
+  );
+  const [templateStepsLoading, setTemplateStepsLoading] = useState(false);
 
   const [partPickerOpen, setPartPickerOpen] = useState(false);
   const [partSearch, setPartSearch] = useState("");
@@ -141,16 +158,6 @@ export default function SpbCreatePage() {
     if (profile?.cabang_id) {
       setCabangId(profile.cabang_id);
 
-      const tplRes = await getStockOutApprovalTemplates(
-        "spb",
-        profile.cabang_id,
-      );
-      if (tplRes.error) {
-        toast.error(tplRes.error);
-      } else {
-        setApprovalTemplates((tplRes.data || []) as ApprovalTemplateOption[]);
-      }
-
       if (!resolvedGudang) {
         const { data: cabangData } = await supabase
           .from("cabang")
@@ -159,6 +166,19 @@ export default function SpbCreatePage() {
           .maybeSingle();
         resolvedGudang = cabangData?.nama_cabang || "";
       }
+    }
+
+    // Fetch template tanda tangan lepas dari ada/tidaknya cabang_id user --
+    // sebelumnya ini nyangkut di dalam blok `if (profile?.cabang_id)` sehingga
+    // dropdown-nya kosong total kalau user belum punya cabang_id.
+    const tplRes = await getStockOutApprovalTemplates(
+      "spb",
+      profile?.cabang_id || undefined,
+    );
+    if (tplRes.error) {
+      toast.error(tplRes.error);
+    } else {
+      setApprovalTemplates((tplRes.data || []) as ApprovalTemplateOption[]);
     }
 
     setGudang(resolvedGudang);
@@ -216,6 +236,26 @@ export default function SpbCreatePage() {
 
     fetchPartOptions();
   }, [partPickerOpen, partSearch, supabase]);
+
+  useEffect(() => {
+    const fetchTemplateSteps = async () => {
+      if (!approvalTemplateId) {
+        setTemplateSteps([]);
+        return;
+      }
+      setTemplateStepsLoading(true);
+      const res = await getApprovalTemplateSteps(Number(approvalTemplateId));
+      if (res.error) {
+        toast.error(res.error);
+        setTemplateSteps([]);
+      } else {
+        setTemplateSteps(res.data as unknown as ApprovalTemplateStep[]);
+      }
+      setTemplateStepsLoading(false);
+    };
+
+    fetchTemplateSteps();
+  }, [approvalTemplateId]);
 
   useEffect(() => {
     const syncWidth = () => {
@@ -364,6 +404,47 @@ export default function SpbCreatePage() {
               </SelectContent>
             </Select>
           </div>
+
+          {approvalTemplateId && (
+            <div className="space-y-2 md:col-span-2">
+              <Label className="text-xs text-muted-foreground">
+                Slot Tanda Tangan dari Template Ini
+              </Label>
+              <div className="rounded-md border border-input bg-muted/30 p-3">
+                {templateStepsLoading ? (
+                  <p className="text-xs text-muted-foreground">Memuat...</p>
+                ) : templateSteps.length === 0 ? (
+                  <p className="text-xs italic text-muted-foreground">
+                    Template ini belum punya step tanda tangan.
+                  </p>
+                ) : (
+                  <ul className="space-y-1.5 text-xs">
+                    {templateSteps.map((step, idx) => (
+                      <li key={step.id} className="flex items-center gap-2">
+                        <span className="font-semibold">{idx + 1}.</span>
+                        <span className="font-medium">
+                          {step.approver_type === "requester"
+                            ? "Anda (Pembuat SPB)"
+                            : step.profiles?.nama || "Belum ditentukan"}
+                        </span>
+                        <span className="text-muted-foreground">
+                          dari{" "}
+                          {step.approver_type === "requester"
+                            ? gudang || "-"
+                            : step.profiles?.cabang?.nama_cabang || "-"}
+                        </span>
+                        <span className="ml-auto rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground">
+                          {step.approver_type === "requester"
+                            ? "Yang Menyerahkan"
+                            : step.level}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>No WO</Label>
