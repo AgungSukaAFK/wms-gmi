@@ -69,45 +69,159 @@ export default function SpbPrintPage() {
           </Button>
         </div>
 
-        <div className="max-w-[210mm] mx-auto bg-white p-[15mm]">
-          <h1 className="text-2xl font-bold">SURAT PENGELUARAN BARANG</h1>
-          <p className="text-sm text-muted-foreground">
-            No SPB: {header.spb_no}
-          </p>
-          <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-            <p>
-              Tanggal:{" "}
-              {header.spb_tanggal
-                ? new Date(header.spb_tanggal).toLocaleDateString("id-ID")
-                : "-"}
-            </p>
-            <p>Lokasi: {header.spb_gudang || "-"}</p>
-            <p>PIC GMI: {header.spb_pic_gmi || "-"}</p>
-            <p>PIC PPA: {header.spb_pic_ppa || "-"}</p>
-            <p>No WO: {header.spb_no_wo || "-"}</p>
-            <p>Status: {header.spb_status || "-"}</p>
+        <div className="max-w-[210mm] mx-auto bg-white p-[15mm] text-black text-[11px] leading-tight">
+          {/* Kop surat */}
+          <div className="flex justify-between items-start border-b-2 border-black pb-2">
+            <div>
+              <p className="text-base font-bold">PT.GARUDAMART INDONESIA</p>
+              <p>Sentra Niaga Sakura Regency Blok J5-8A,</p>
+              <p>Jakarta Outer Ring Road - Jatiasih</p>
+              <p>Bekasi 17423 - Indonesia</p>
+              <p>Phone : (62-21) 8248 7309</p>
+              <p>Fax : (62-21) 8248 7323</p>
+              <p>Email : info@garudamart.com</p>
+            </div>
+            <div className="text-right">
+              <p className="font-bold">CABANG {header.spb_gudang || "-"}</p>
+            </div>
           </div>
 
-          <table className="w-full mt-6 border text-sm">
+          <h1 className="text-center text-lg font-bold mt-3 mb-3 underline">
+            SURAT PENGELUARAN BARANG
+          </h1>
+
+          {/* Info fields */}
+          <div className="grid grid-cols-2 gap-x-8 border border-black p-2 mb-4">
+            <div className="space-y-1">
+              <div className="flex">
+                <span className="w-28 shrink-0">NO.SPB OUT</span>
+                <span className="mr-1">:</span>
+                <span className="font-medium">{header.spb_no}</span>
+              </div>
+              <div className="flex">
+                <span className="w-28 shrink-0">LOKASI</span>
+                <span className="mr-1">:</span>
+                <span className="font-medium">{header.spb_gudang || "-"}</span>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <div className="flex">
+                <span className="w-24 shrink-0">NO. WO</span>
+                <span className="mr-1">:</span>
+                <span className="font-medium">{header.spb_no_wo || "-"}</span>
+              </div>
+              <div className="flex">
+                <span className="w-24 shrink-0">TANGGAL</span>
+                <span className="mr-1">:</span>
+                <span className="font-medium">
+                  {header.spb_tanggal
+                    ? new Date(header.spb_tanggal).toLocaleDateString("id-ID")
+                    : "-"}
+                </span>
+              </div>
+              <div className="flex">
+                <span className="w-24 shrink-0">NO HM</span>
+                <span className="mr-1">:</span>
+                <span className="font-medium">{header.spb_hm ?? "-"}</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Tabel item */}
+          <table className="w-full border-collapse border border-black">
             <thead>
-              <tr className="bg-muted">
-                <th className="border p-2 text-left">Part Number</th>
-                <th className="border p-2 text-left">Nama Part</th>
-                <th className="border p-2 text-right">Qty</th>
-                <th className="border p-2 text-left">Satuan</th>
+              <tr className="text-center">
+                <th className="border border-black p-1 w-8">NO</th>
+                <th className="border border-black p-1">PART NO</th>
+                <th className="border border-black p-1">DESCRIPTION</th>
+                <th className="border border-black p-1 w-12">QTY</th>
+                <th className="border border-black p-1 w-16">SATUAN</th>
+                <th className="border border-black p-1 w-20">NO.UNIT AMM</th>
+                <th className="border border-black p-1 w-32">KETERANGAN</th>
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {items.map((item, idx) => (
                 <tr key={item.id}>
-                  <td className="border p-2">{item.dtl_spb_part_number}</td>
-                  <td className="border p-2">{item.dtl_spb_part_name}</td>
-                  <td className="border p-2 text-right">{item.dtl_spb_qty}</td>
-                  <td className="border p-2">{item.dtl_spb_part_satuan}</td>
+                  <td className="border border-black p-1 text-center">
+                    {idx + 1}
+                  </td>
+                  <td className="border border-black p-1">
+                    {item.dtl_spb_part_number}
+                  </td>
+                  <td className="border border-black p-1">
+                    {item.dtl_spb_part_name}
+                  </td>
+                  <td className="border border-black p-1 text-center">
+                    {item.dtl_spb_qty}
+                  </td>
+                  <td className="border border-black p-1 text-center">
+                    {item.dtl_spb_part_satuan}
+                  </td>
+                  {idx === 0 && (
+                    <td
+                      className="border border-black p-1 text-center align-top"
+                      rowSpan={items.length}
+                    >
+                      {header.spb_kode_unit || "-"}
+                    </td>
+                  )}
+                  {idx === 0 && (
+                    <td
+                      className="border border-black p-1 align-top"
+                      rowSpan={items.length}
+                    >
+                      {header.spb_problem_remark || "-"}
+                    </td>
+                  )}
                 </tr>
               ))}
+              {items.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="border border-black p-2 text-center">
+                    Tidak ada item.
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
+
+          {/* Blok tanda tangan */}
+          <div className="grid grid-cols-4 gap-2 mt-10 text-center">
+            <div>
+              <p>YANG MENYERAHKAN</p>
+              <div className="h-16" />
+              <p className="border-t border-black pt-1 font-medium">
+                {header.spb_pic_gmi || "-"}
+              </p>
+              <p>Warehouse GMI</p>
+            </div>
+            <div>
+              <p>MENGETAHUI</p>
+              <div className="h-16" />
+              <p className="border-t border-black pt-1">&nbsp;</p>
+              <p>GL Plant</p>
+            </div>
+            <div>
+              <p>MENGETAHUI</p>
+              <div className="h-16" />
+              <p className="border-t border-black pt-1">&nbsp;</p>
+              <p>Planner</p>
+            </div>
+            <div>
+              <p>MENGETAHUI</p>
+              <div className="h-16" />
+              <p className="border-t border-black pt-1">&nbsp;</p>
+              <p>Logistics</p>
+            </div>
+          </div>
+
+          {/* Catatan lembar arsip */}
+          <div className="mt-8 text-[10px]">
+            <p className="font-semibold">KETERANGAN:</p>
+            <p>1. LEMBAR KE 1 DAN KE 3 ARSIP GMI</p>
+            <p>2. LEMBAR KE 2 DAN 4 ARSIP {header.spb_gudang || "-"}</p>
+          </div>
         </div>
       </div>
     </Content>
