@@ -59,7 +59,7 @@ export default function SpbPrintPage() {
 
   return (
     <Content>
-      <div className="bg-white min-h-screen p-0 sm:p-8">
+      <div className="bg-white min-h-screen p-0 sm:p-8 print:min-h-0 print:p-0 print-page-landscape">
         <div className="fixed top-4 left-4 print:hidden flex gap-2">
           <Button variant="outline" size="sm" onClick={() => router.back()}>
             <ChevronLeft className="h-4 w-4" /> Kembali
@@ -69,11 +69,16 @@ export default function SpbPrintPage() {
           </Button>
         </div>
 
-        <div className="max-w-[210mm] mx-auto bg-white p-[15mm] text-black text-[11px] leading-tight">
+        <div className="max-w-[297mm] mx-auto bg-white p-[15mm] text-black text-[11px] leading-tight">
           {/* Kop surat */}
           <div className="flex justify-between items-start border-b-2 border-black pb-2">
             <div>
-              <p className="text-base font-bold">PT.GARUDAMART INDONESIA</p>
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src="/gmi-lanscape-rgb.png"
+                alt="PT. Garudamart Indonesia"
+                className="h-9 w-auto object-contain mb-1"
+              />
               <p>Sentra Niaga Sakura Regency Blok J5-8A,</p>
               <p>Jakarta Outer Ring Road - Jatiasih</p>
               <p>Bekasi 17423 - Indonesia</p>

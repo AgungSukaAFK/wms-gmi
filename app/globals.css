@@ -237,6 +237,16 @@
     size: A4;
     margin: 0;
   }
+
+  /* Halaman landscape khusus untuk dokumen yang butuh orientasi lebar (mis. SPB) */
+  @page spb-landscape {
+    size: A4 landscape;
+    margin: 0;
+  }
+
+  .print-page-landscape {
+    page: spb-landscape;
+  }
 }
 
 /* Styling for TipTap Editor */
