@@ -284,9 +284,12 @@ export function TemplateEditor({
       return;
     }
 
-    const invalidStep = steps.find(
-      (s) => s.approver_type === "user" && !s.user_id,
-    );
+    // Khusus "Stock Out - SPB": approval digital sudah ditiadakan, template cuma
+    // dipakai untuk data slot tanda tangan cetak. Jadi step "user" boleh dikosongkan
+    // (tanpa nama) untuk kasus TTD eksternal yang cuma butuh jabatannya saja.
+    const invalidStep =
+      type !== "Stock Out - SPB" &&
+      steps.find((s) => s.approver_type === "user" && !s.user_id);
     if (invalidStep) {
       toast.error("Ada tahap approval yang belum memilih user");
       return;
@@ -566,7 +569,9 @@ export function TemplateEditor({
                                           (p) => p.id === step.user_id,
                                         )?.nama ||
                                         "User terpilih"
-                                      : "Pilih User..."}
+                                      : type === "Stock Out - SPB"
+                                        ? "Tanpa nama (TTD eksternal)"
+                                        : "Pilih User..."}
                                   </span>
                                   <ChevronsUpDown className="ml-2 h-3.5 w-3.5 shrink-0 opacity-40" />
                                 </Button>
@@ -598,6 +603,26 @@ export function TemplateEditor({
                                 </div>
 
                                 <div className="max-h-[250px] overflow-y-auto p-1 space-y-0.5 custom-scrollbar bg-white">
+                                  {type === "Stock Out - SPB" && (
+                                    <div
+                                      onClick={() => {
+                                        updateStep(step.local_id, {
+                                          user_id: null,
+                                          profiles: null,
+                                        });
+                                        setActiveStepId(null);
+                                      }}
+                                      className={cn(
+                                        "flex items-center gap-2 px-3 py-2 cursor-pointer transition-all rounded-md border border-dashed mb-0.5 text-[12px] font-semibold italic text-slate-500",
+                                        !step.user_id
+                                          ? "bg-blue-50 border-blue-200 text-blue-600"
+                                          : "border-slate-200 hover:bg-slate-50",
+                                      )}
+                                    >
+                                      Kosongkan (TTD eksternal, tanpa nama)
+                                    </div>
+                                  )}
+
                                   {profiles.length === 0 && !searching && (
                                     <div className="py-12 text-center text-[12px] text-slate-500 font-medium">
                                       User tidak ditemukan.

@@ -216,7 +216,10 @@ export default function SpbPrintPage() {
               ))}
               {items.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="border border-black p-2 text-center">
+                  <td
+                    colSpan={8}
+                    className="border border-black p-2 text-center"
+                  >
                     Tidak ada item.
                   </td>
                 </tr>
@@ -224,26 +227,34 @@ export default function SpbPrintPage() {
             </tbody>
           </table>
 
-          {/* Blok tanda tangan: 1 Yang Menyerahkan + s.d. 3 Mengetahui dari template */}
+          {/* Blok tanda tangan: 1 Yang Menyerahkan + s.d. 3 Mengetahui dari template.
+              Kalau nama kosong (TTD eksternal), jabatan naik menempati baris nama. */}
           <div className={`grid ${gridColsClass} gap-2 mt-10 text-center`}>
             <div>
               <p>YANG MENYERAHKAN</p>
               <div className="h-16" />
               <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
-                {header.spb_pic_gmi || "-"}
+                {header.spb_pic_gmi || requesterSigner?.position || "-"}
               </p>
-              <p>{requesterSigner?.position || "Warehouse GMI"}</p>
+              <p>
+                {header.spb_pic_gmi
+                  ? requesterSigner?.position || "Warehouse GMI"
+                  : " "}
+              </p>
             </div>
-            {mengetahuiSigners.map((signer, idx) => (
-              <div key={idx}>
-                <p>MENGETAHUI</p>
-                <div className="h-16" />
-                <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
-                  {signer?.nama || "-"}
-                </p>
-                <p>{signer?.position || " "}</p>
-              </div>
-            ))}
+            {mengetahuiSigners.map((signer, idx) => {
+              const hasName = Boolean(signer?.nama);
+              return (
+                <div key={idx}>
+                  <p>MENGETAHUI</p>
+                  <div className="h-16" />
+                  <p className="mx-auto w-40 border-t border-black pt-1 font-medium">
+                    {hasName ? signer.nama : signer?.position || "-"}
+                  </p>
+                  <p>{hasName ? signer?.position || " " : " "}</p>
+                </div>
+              );
+            })}
           </div>
 
           {/* Catatan lembar arsip */}

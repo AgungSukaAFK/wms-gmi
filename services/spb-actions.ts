@@ -153,10 +153,12 @@ async function buildStockOutApprovalFlow(
     const isRequester = step.approver_type === "requester";
     const profile = isRequester ? requesterProfile : step.profiles;
     return {
+      // Step "user" tanpa user_id (TTD eksternal) sengaja dibiarkan tanpa nama --
+      // di cetak cuma jabatannya (position) yang tampil.
       type: isRequester ? "Requester" : profile?.nama || "Approver",
       status: "pending",
       userid: profile?.id || "",
-      nama: profile?.nama || "Unknown",
+      nama: profile?.nama || "",
       email: profile?.email || "",
       level: step.step_order,
       position: step.position_label || null,
