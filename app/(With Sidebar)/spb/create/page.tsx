@@ -278,7 +278,7 @@ export default function SpbCreatePage() {
     if (!hm || Number(hm) <= 0) return toast.error("HM harus lebih dari 0.");
     if (!items.length) return toast.error("Tambahkan minimal 1 item.");
     if (!approvalTemplateId)
-      return toast.error("Template approval wajib dipilih.");
+      return toast.error("Template tanda tangan wajib dipilih.");
 
     setLoading(true);
 
@@ -346,13 +346,13 @@ export default function SpbCreatePage() {
           </div>
 
           <div className="space-y-2">
-            <Label>Template Approval</Label>
+            <Label>Template Tanda Tangan</Label>
             <Select
               value={approvalTemplateId}
               onValueChange={setApprovalTemplateId}
             >
               <SelectTrigger>
-                <SelectValue placeholder="Pilih template approval" />
+                <SelectValue placeholder="Pilih template tanda tangan" />
               </SelectTrigger>
               <SelectContent>
                 {approvalTemplates.map((tpl) => (

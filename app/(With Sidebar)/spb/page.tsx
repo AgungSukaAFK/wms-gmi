@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useDebounce } from "use-debounce";
 import {
+  Ban,
   Edit2,
   FileWarning,
   Plus,
@@ -42,13 +43,11 @@ import {
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
-  approveSpb,
+  cancelSpb,
   deleteSpb,
   getSpbList,
-  rejectSpb,
   updateSpb,
 } from "@/services/spb-actions";
-import { createClient } from "@/lib/supabase/client";
 import { useAuthStore } from "@/stores/auth-store";
 
 type SpbRow = {
@@ -64,12 +63,9 @@ type SpbRow = {
   spb_pic_gmi?: string | null;
   spb_pic_ppa?: string | null;
   spb_status: string;
-  approval_status?: string;
-  approvals?: Array<{ userid?: string; status?: string }>;
 };
 
 export default function SpbPage() {
-  const supabase = createClient();
   const profile = useAuthStore((s) => s.profile);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SpbRow[]>([]);
@@ -79,7 +75,6 @@ export default function SpbPage() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [total, setTotal] = useState(0);
-  const [userId, setUserId] = useState("");
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<SpbRow | null>(null);
   const [editSaving, setEditSaving] = useState(false);
@@ -127,16 +122,6 @@ export default function SpbPage() {
   useEffect(() => {
     fetchData();
   }, [debouncedSearch, status, page, limit]);
-
-  useEffect(() => {
-    const loadUser = async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (user?.id) setUserId(user.id);
-    };
-    loadUser();
-  }, [supabase]);
 
   const openEdit = (row: SpbRow) => {
     setEditTarget(row);
@@ -197,32 +182,18 @@ export default function SpbPage() {
     fetchData();
   };
 
-  const onApprove = async (id: number) => {
-    const res = await approveSpb(id);
-    if (res.error) {
-      toast.error(res.error);
-      return;
-    }
-    toast.success("Approval SPB berhasil diproses.");
-    fetchData();
-  };
-
-  const onReject = async (id: number) => {
-    const reason = window.prompt("Alasan reject SPB:");
-    if (!reason) return;
-    const res = await rejectSpb(id, reason);
-    if (res.error) {
-      toast.error(res.error);
-      return;
-    }
-    toast.success("SPB berhasil direject.");
-    fetchData();
-  };
-
-  const isMyApprovalTurn = (row: SpbRow) => {
-    return (row.approvals || []).some(
-      (approval) => approval.userid === userId && approval.status === "pending",
+  const onCancel = async (row: SpbRow) => {
+    const reason = window.prompt(
+      `Alasan cancel SPB ${row.spb_no}?\n\nStok yang sudah keluar akan dikembalikan.`,
     );
+    if (!reason) return;
+    const res = await cancelSpb(row.id, reason);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("SPB berhasil dibatalkan, stok sudah dikembalikan.");
+    fetchData();
   };
 
   return (
@@ -287,6 +258,7 @@ export default function SpbPage() {
                 <SelectItem value="DONE_QUOTE">DONE_QUOTE</SelectItem>
                 <SelectItem value="Partial">Partial</SelectItem>
                 <SelectItem value="Returned">Returned</SelectItem>
+                <SelectItem value="CANCELLED">CANCELLED</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -309,15 +281,14 @@ export default function SpbPage() {
                 <TableHead>PIC GMI</TableHead>
                 <TableHead>PIC PPA</TableHead>
                 <TableHead>Status</TableHead>
-                <TableHead>Approval</TableHead>
-                <TableHead className="w-24">Aksi</TableHead>
+                <TableHead className="w-28">Aksi</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={13}
+                    colSpan={12}
                     className="text-center text-muted-foreground"
                   >
                     Memuat data...
@@ -326,7 +297,7 @@ export default function SpbPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={13}
+                    colSpan={12}
                     className="text-center text-muted-foreground"
                   >
                     Belum ada data SPB.
@@ -348,7 +319,6 @@ export default function SpbPage() {
                     <TableCell>{row.spb_pic_gmi || "-"}</TableCell>
                     <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
                     <TableCell>{row.spb_status}</TableCell>
-                    <TableCell>{row.approval_status || "open"}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-1">
                         {canManageSpb && (
@@ -371,25 +341,17 @@ export default function SpbPage() {
                           <Printer className="mr-1.5 h-3.5 w-3.5" />
                           Cetak
                         </Button>
-                        {row.approval_status === "open" &&
-                          isMyApprovalTurn(row) && (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => onApprove(row.id)}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                variant="destructive"
-                                size="sm"
-                                onClick={() => onReject(row.id)}
-                              >
-                                Reject
-                              </Button>
-                            </>
-                          )}
+                        {canManageSpb && row.spb_status !== "CANCELLED" && (
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => onCancel(row)}
+                            title="Cancel SPB (stok akan dikembalikan)"
+                          >
+                            <Ban className="mr-1.5 h-3.5 w-3.5" />
+                            Cancel
+                          </Button>
+                        )}
                         <Button
                           variant="ghost"
                           size="icon"

@@ -101,6 +101,11 @@ async function requireModeratorOrAdmin() {
   return { supabase, user } as const;
 }
 
+// SPB tidak lagi punya approval digital; approval_template cuma dipakai untuk
+// menentukan siapa yang ditaruh di slot tanda tangan cetak (1 Yang Menyerahkan +
+// maks 3 Mengetahui = 4 slot total, mengikuti form fisik SPB).
+const MAX_SIGNATURE_SLOTS = 4;
+
 const STOCK_OUT_APPROVAL_TYPES = {
   spb: "Stock Out - SPB",
   spb_po: "Stock Out - SPB PO",
@@ -285,7 +290,7 @@ async function applySpbPosting(spbId: number, actorId: string) {
       qty_change: -Math.abs(snap.oldQty - snap.newQty),
       type: "SPB_OUT",
       reference_id: spbHeader.spb_no,
-      notes: "Stock out from SPB",
+      notes: `Stock out dari SPB ${spbHeader.spb_no}`,
       created_by: actorId,
     });
   }
@@ -670,13 +675,19 @@ export async function createSpb(payload: CreateSpbPayload) {
     return { error: "Template approval wajib dipilih sebelum membuat SPB." };
   }
 
-  const approvals = await buildStockOutApprovalFlow(
-    supabase,
-    "spb",
-    cabangId,
-    me.user.id,
-    payload.approval_template_id,
-  );
+  // Approval digital untuk SPB sudah ditiadakan. Template approval tetap dipakai,
+  // tapi cuma sebagai sumber data nama penanda tangan yang dicetak di bawah SPB
+  // (maks 4 slot: 1 Yang Menyerahkan + s.d. 3 Mengetahui). Tanda tangan asli
+  // dilakukan manual di atas kertas setelah dicetak.
+  const approvals = (
+    await buildStockOutApprovalFlow(
+      supabase,
+      "spb",
+      cabangId,
+      me.user.id,
+      payload.approval_template_id,
+    )
+  ).slice(0, MAX_SIGNATURE_SLOTS);
 
   if (!approvals.length) {
     return {
@@ -689,6 +700,8 @@ export async function createSpb(payload: CreateSpbPayload) {
       return { error: "Semua item harus valid dan qty > 0." };
     }
   }
+
+  const nowIsoStr = new Date().toISOString();
 
   const { data: spbHeader, error: spbErr } = await supabase
     .from("spb")
@@ -704,14 +717,15 @@ export async function createSpb(payload: CreateSpbPayload) {
       spb_brand: payload.spb_brand || null,
       spb_hm: payload.spb_hm || null,
       spb_problem_remark: payload.spb_problem_remark || null,
-      spb_status: "DRAFT",
+      spb_status: "DONE QUOT",
       spb_gudang:
         payload.spb_gudang || (me.profile as any)?.cabang?.nama_cabang || null,
       cabang_id: cabangId,
       spb_pic: me.profile?.nama || null,
       approval_template_id: payload.approval_template_id,
       approvals,
-      approval_status: "open",
+      approval_status: "completed",
+      completed_at: nowIsoStr,
       created_by: me.user.id,
     })
     .select()
@@ -735,6 +749,13 @@ export async function createSpb(payload: CreateSpbPayload) {
   if (detailErr) {
     await supabase.from("spb").delete().eq("id", spbHeader.id);
     return { error: detailErr.message };
+  }
+
+  // Stock langsung dikurangi begitu SPB dibuat (tidak lagi menunggu approval).
+  const postingRes = await applySpbPosting(spbHeader.id, me.user.id);
+  if (postingRes.error) {
+    await supabase.from("spb").delete().eq("id", spbHeader.id);
+    return { error: postingRes.error };
   }
 
   revalidateStockOutPaths();
@@ -1469,21 +1490,85 @@ async function rejectStockOutDocument(
   return { success: true, data: updated };
 }
 
-export async function approveSpb(id: number) {
-  return approveStockOutDocument("spb", id, async (docId, actorId) => {
-    const res = await applySpbPosting(docId, actorId);
-    if (res.error) return { error: res.error };
+export async function cancelSpb(id: number, reason: string) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+  const { supabase, user } = auth;
 
-    const supabase = await createClient();
-    await supabase
-      .from("spb")
-      .update({ spb_status: "DONE QUOT" })
-      .eq("id", docId);
-  });
-}
+  const notes = reason?.trim();
+  if (!notes) {
+    return { error: "Alasan cancel wajib diisi." };
+  }
 
-export async function rejectSpb(id: number, reason: string) {
-  return rejectStockOutDocument("spb", id, reason);
+  const { data: header, error: headerErr } = await supabase
+    .from("spb")
+    .select("id, spb_no, cabang_id, spb_status")
+    .eq("id", id)
+    .single();
+  if (headerErr || !header)
+    return { error: headerErr?.message || "SPB tidak ditemukan." };
+
+  if (header.spb_status === "CANCELLED") {
+    return { error: "SPB ini sudah dibatalkan sebelumnya." };
+  }
+
+  const { count: poCount, error: poCountErr } = await supabase
+    .from("spb_po")
+    .select("id", { count: "exact", head: true })
+    .eq("spb_id", id);
+  if (poCountErr) return { error: poCountErr.message };
+  if ((poCount || 0) > 0) {
+    return {
+      error:
+        "SPB ini sudah punya PO/DO/Invoice turunan, tidak bisa dibatalkan. Hapus turunannya terlebih dahulu jika memang salah input.",
+    };
+  }
+
+  const { data: items, error: itemsErr } = await supabase
+    .from("spb_details")
+    .select("part_id, dtl_spb_qty")
+    .eq("spb_id", id);
+  if (itemsErr) return { error: itemsErr.message };
+
+  for (const item of items || []) {
+    const { data: stockRow, error: stockErr } = await supabase
+      .from("stock")
+      .select("id, qty")
+      .eq("part_id", item.part_id)
+      .eq("cabang_id", header.cabang_id)
+      .single();
+
+    if (!stockErr && stockRow) {
+      await supabase
+        .from("stock")
+        .update({ qty: (stockRow.qty || 0) + (item.dtl_spb_qty || 0) })
+        .eq("id", stockRow.id);
+
+      await supabase.from("stock_movements").insert({
+        part_id: item.part_id,
+        cabang_id: header.cabang_id,
+        qty_change: item.dtl_spb_qty,
+        type: "SPB_CANCEL",
+        reference_id: header.spb_no,
+        notes: `Cancel SPB ${header.spb_no}: ${notes}`,
+        created_by: user.id,
+      });
+    }
+  }
+
+  const { error: updateErr } = await supabase
+    .from("spb")
+    .update({
+      spb_status: "CANCELLED",
+      cancelled_at: new Date().toISOString(),
+      cancelled_by: user.id,
+      cancel_reason: notes,
+    })
+    .eq("id", id);
+  if (updateErr) return { error: updateErr.message };
+
+  revalidateStockOutPaths();
+  return { success: true };
 }
 
 export async function approveSpbPo(id: number) {

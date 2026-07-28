@@ -57,6 +57,18 @@ export default function SpbPrintPage() {
     );
   }
 
+  // Slot tanda tangan: 1 Yang Menyerahkan (tetap) + s.d. 3 Mengetahui dari
+  // template tanda tangan (maks 4 slot total, mengikuti form fisik SPB).
+  const mengetahuiSigners = ((header.approvals as any[]) || [])
+    .filter((a) => a?.type !== "Requester")
+    .slice(0, 3);
+  const totalSlots = 1 + mengetahuiSigners.length;
+  const gridColsClass =
+    { 1: "grid-cols-1", 2: "grid-cols-2", 3: "grid-cols-3", 4: "grid-cols-4" }[
+      totalSlots
+    ] || "grid-cols-4";
+  const isCancelled = header.spb_status === "CANCELLED";
+
   return (
     <Content>
       <div className="bg-white min-h-screen p-0 sm:p-8 print:min-h-0 print:p-0 print-page-landscape">
@@ -94,6 +106,16 @@ export default function SpbPrintPage() {
           <h1 className="text-center text-lg font-bold mt-3 mb-3 underline">
             SURAT PENGELUARAN BARANG
           </h1>
+
+          {isCancelled && (
+            <div className="mb-3 border-2 border-black p-2 text-center font-bold">
+              SPB INI TELAH DIBATALKAN (CANCELLED)
+              {header.cancelled_at
+                ? ` - ${new Date(header.cancelled_at).toLocaleDateString("id-ID")}`
+                : ""}
+              {header.cancel_reason ? ` - Alasan: ${header.cancel_reason}` : ""}
+            </div>
+          )}
 
           {/* Info fields */}
           <div className="grid grid-cols-2 gap-x-8 border border-black p-2 mb-4">
@@ -200,8 +222,8 @@ export default function SpbPrintPage() {
             </tbody>
           </table>
 
-          {/* Blok tanda tangan */}
-          <div className="grid grid-cols-4 gap-2 mt-10 text-center">
+          {/* Blok tanda tangan: 1 Yang Menyerahkan + s.d. 3 Mengetahui dari template */}
+          <div className={`grid ${gridColsClass} gap-2 mt-10 text-center`}>
             <div>
               <p>YANG MENYERAHKAN</p>
               <div className="h-16" />
@@ -210,24 +232,16 @@ export default function SpbPrintPage() {
               </p>
               <p>Warehouse GMI</p>
             </div>
-            <div>
-              <p>MENGETAHUI</p>
-              <div className="h-16" />
-              <p className="border-t border-black pt-1">&nbsp;</p>
-              <p>GL Plant</p>
-            </div>
-            <div>
-              <p>MENGETAHUI</p>
-              <div className="h-16" />
-              <p className="border-t border-black pt-1">&nbsp;</p>
-              <p>Planner</p>
-            </div>
-            <div>
-              <p>MENGETAHUI</p>
-              <div className="h-16" />
-              <p className="border-t border-black pt-1">&nbsp;</p>
-              <p>Logistics</p>
-            </div>
+            {mengetahuiSigners.map((signer, idx) => (
+              <div key={idx}>
+                <p>MENGETAHUI</p>
+                <div className="h-16" />
+                <p className="border-t border-black pt-1 font-medium">
+                  {signer?.nama || "-"}
+                </p>
+                <p>&nbsp;</p>
+              </div>
+            ))}
           </div>
 
           {/* Catatan lembar arsip */}
