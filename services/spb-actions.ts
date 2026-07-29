@@ -577,12 +577,27 @@ export async function generateReturnKode() {
   return { data: `${prefix}${formatNumber3(seq)}` };
 }
 
+const SPB_SORT_COLUMNS: Record<string, string> = {
+  spb_no: "spb_no",
+  spb_no_wo: "spb_no_wo",
+  spb_tanggal: "spb_tanggal",
+  spb_kode_unit: "spb_kode_unit",
+  spb_tipe_unit: "spb_tipe_unit",
+  spb_brand: "spb_brand",
+  spb_hm: "spb_hm",
+  spb_gudang: "spb_gudang",
+  spb_pic_gmi: "spb_pic_gmi",
+  spb_pic_ppa: "spb_pic_ppa",
+  spb_status: "spb_status",
+};
+
 export async function getSpbList(params?: {
   search?: string;
   cabangId?: number;
   status?: string;
   page?: number;
   limit?: number;
+  sort?: string;
 }) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
@@ -594,8 +609,15 @@ export async function getSpbList(params?: {
     .select("*, details:spb_details(*), cabang(nama_cabang)", {
       count: "exact",
     })
-    .eq("spb_is_deleted", false)
-    .order("created_at", { ascending: false });
+    .eq("spb_is_deleted", false);
+
+  const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = SPB_SORT_COLUMNS[sortKeyRaw];
+  if (sortColumn) {
+    query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+  } else {
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (params?.search) {
     query = query.or(

@@ -130,22 +130,29 @@ export default function SignatureManagerPage() {
       type: "image/png",
     });
 
-    const result = await createSignature({
-      imageFile,
-      label,
-      accountPassword,
-      signaturePassword,
-    });
+    try {
+      const result = await createSignature({
+        imageFile,
+        label,
+        accountPassword,
+        signaturePassword,
+      });
 
-    setIsSubmitting(false);
-
-    if (result.success) {
-      toast.success("Tanda tangan berhasil disimpan secara permanen.");
-      setIsPasswordModalOpen(false);
-      resetForm();
-      loadData();
-    } else {
-      toast.error(result.error || "Gagal menyimpan tanda tangan.");
+      if (result.success) {
+        toast.success("Tanda tangan berhasil disimpan secara permanen.");
+        setIsPasswordModalOpen(false);
+        resetForm();
+        loadData();
+      } else {
+        toast.error(result.error || "Gagal menyimpan tanda tangan.");
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error(
+        "Gagal menyimpan tanda tangan. Ukuran gambar mungkin terlalu besar, coba unggah foto dengan resolusi lebih kecil."
+      );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 

@@ -42,6 +42,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   cancelSpb,
   deleteSpb,
@@ -72,6 +73,7 @@ export default function SpbPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 500);
   const [status, setStatus] = useState("all");
+  const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [total, setTotal] = useState(0);
@@ -104,6 +106,7 @@ export default function SpbPage() {
     const res = await getSpbList({
       search: debouncedSearch || undefined,
       status,
+      sort,
       page,
       limit,
     });
@@ -121,7 +124,12 @@ export default function SpbPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, status, page, limit]);
+  }, [debouncedSearch, status, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   const openEdit = (row: SpbRow) => {
     setEditTarget(row);
@@ -270,17 +278,84 @@ export default function SpbPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>No SPB</TableHead>
-                <TableHead>No WO</TableHead>
-                <TableHead>Tanggal</TableHead>
-                <TableHead>Kode Unit</TableHead>
-                <TableHead>Tipe Unit</TableHead>
-                <TableHead>Brand</TableHead>
-                <TableHead>HM</TableHead>
-                <TableHead>Lokasi</TableHead>
-                <TableHead>PIC GMI</TableHead>
-                <TableHead>PIC PPA</TableHead>
-                <TableHead>Status</TableHead>
+                <SortableTableHead
+                  sortKey="spb_no"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  No SPB
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_no_wo"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  No WO
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_tanggal"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                >
+                  Tanggal
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_kode_unit"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Kode Unit
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_tipe_unit"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Tipe Unit
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_brand"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Brand
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_hm"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  HM
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_gudang"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Lokasi
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_pic_gmi"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  PIC GMI
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_pic_ppa"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  PIC PPA
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_status"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Status
+                </SortableTableHead>
                 <TableHead className="w-28">Aksi</TableHead>
               </TableRow>
             </TableHeader>

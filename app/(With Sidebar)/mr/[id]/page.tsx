@@ -37,6 +37,7 @@ import {
   Save,
   Search,
   Plus,
+  ShieldAlert,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import {
@@ -69,8 +70,14 @@ import {
   rejectMR,
   editMrByApprover,
 } from "@/services/procurement-actions";
+import {
+  moderatorEditMR,
+  ModeratorApprovalStep,
+} from "@/services/moderator-edit-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { MrFreezePanel } from "@/components/mr/mr-freeze-panel";
+import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
+import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import { evaluateMrFreeze } from "@/services/freeze-actions";
 import { businessToday } from "@/lib/business-date";
 import { useRouter } from "next/navigation";
@@ -146,6 +153,19 @@ export default function MRDetailPage({
   const [barangResults, setBarangResults] = useState<any[]>([]);
   const [barangPopoverOpen, setBarangPopoverOpen] = useState(false);
   const [barangLoading, setBarangLoading] = useState(false);
+
+  // Moderator Edit state — edit bebas (header + items + jalur/status approval)
+  // di luar giliran approval normal. Item list & header tanggal/priority pakai
+  // state yang sama dengan "Edit Isi MR" approver di atas (editItemsList,
+  // deletedItemIds, editTanggal, editPriority) karena bentuknya identik; hanya
+  // cabang, due date, dan jalur approval yang butuh state tambahan di sini.
+  const [modEditMode, setModEditMode] = useState(false);
+  const [modSaving, setModSaving] = useState(false);
+  const [modCabangId, setModCabangId] = useState("");
+  const [modDueDate, setModDueDate] = useState("");
+  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
+  const [modRejectionReason, setModRejectionReason] = useState("");
+  const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
 
   useEffect(() => {
     if (mrId) {
@@ -478,6 +498,136 @@ export default function MRDetailPage({
     setSaving(false);
   };
 
+  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
+    userid: a.userid || a.user_id || "",
+    nama: a.nama || "",
+    email: a.email || "",
+    approval_role:
+      a.approval_role === "mengetahui" || a.level === "mengetahui"
+        ? "mengetahui"
+        : "menyetujui",
+    status: a.status || "pending",
+    processed_at: a.processed_at ?? null,
+    signature_url: a.signature_url ?? null,
+    notes: a.notes ?? null,
+    snapshot: a.snapshot ?? null,
+  });
+
+  const enterModEditMode = () => {
+    setModCabangId(mr?.cabang_id ? String(mr.cabang_id) : "");
+    setEditTanggal(mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "");
+    setModDueDate(mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : "");
+    setEditPriority(mr?.mr_priority || "");
+    setEditItemsList(
+      items.map((i) => ({
+        id: i.id,
+        part_id: i.part_id,
+        part_number: i.part_number,
+        part_name: i.part_name,
+        satuan: i.satuan,
+        qty_request: i.qty_request,
+        remarks: i.remarks || "",
+      })),
+    );
+    setDeletedItemIds([]);
+    setBarangSearch("");
+    setBarangResults([]);
+    setModApprovals((mr?.approvals || []).map(normalizeApprovalStep));
+    setModRejectionReason(mr?.rejection_reason || "");
+    setModEditMode(true);
+  };
+
+  const modPreviouslyApprovedLike =
+    mr && ["approved", "done", "closed"].includes(mr.mr_status);
+  const modWillBeApproved =
+    modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
+  const showModAllocationForm =
+    modEditMode && modWillBeApproved && !modPreviouslyApprovedLike;
+
+  const handleModSaveEdit = async () => {
+    if (modApprovals.length === 0) {
+      toast.error("Jalur approval tidak boleh kosong.");
+      return;
+    }
+    if (modApprovals.some((a) => !a.userid || !a.nama)) {
+      toast.error("Setiap tahap approval harus punya approver yang dipilih.");
+      return;
+    }
+    const willReject = modApprovals.some((a) => a.status === "rejected");
+    if (willReject && !modRejectionReason.trim()) {
+      toast.error("Alasan penolakan wajib diisi.");
+      return;
+    }
+    if (showModAllocationForm) {
+      const mrDueDate = modDueDate || "";
+      const missingDeadline = allocations.find(
+        (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
+      );
+      if (missingDeadline) {
+        toast.error(
+          `Deadline supply wajib diisi untuk item ${missingDeadline.part_number} (ada alokasi share stock).`,
+        );
+        return;
+      }
+      if (mrDueDate) {
+        const invalidDeadline = allocations.find(
+          (a) =>
+            Number(a.qty_sharestock_total) > 0 &&
+            a.deadline &&
+            String(a.deadline).slice(0, 10) > mrDueDate,
+        );
+        if (invalidDeadline) {
+          toast.error(
+            `Deadline supply item ${invalidDeadline.part_number} tidak boleh melewati due date MR (${mrDueDate}).`,
+          );
+          return;
+        }
+      }
+    }
+
+    const updatedItems = editItemsList
+      .filter((e) => e.id !== undefined)
+      .map((e) => ({
+        id: e.id!,
+        qty_request: e.qty_request,
+        remarks: e.remarks || "",
+      }));
+    const newItems = editItemsList
+      .filter((e) => e.id === undefined)
+      .map((e) => ({
+        part_id: e.part_id!,
+        part_number: e.part_number,
+        part_name: e.part_name,
+        satuan: e.satuan,
+        qty_request: e.qty_request,
+        remarks: e.remarks || undefined,
+      }));
+
+    setModSaving(true);
+    const res = await moderatorEditMR(Number(mrId), {
+      cabang_id: modCabangId ? Number(modCabangId) : undefined,
+      mr_tanggal: editTanggal || undefined,
+      mr_due_date: modDueDate || null,
+      mr_priority: editPriority || undefined,
+      updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
+      newItems: newItems.length > 0 ? newItems : undefined,
+      deletedItemIds: deletedItemIds.length > 0 ? deletedItemIds : undefined,
+      approvals: modApprovals,
+      rejection_reason: willReject ? modRejectionReason : undefined,
+      allocations: showModAllocationForm ? allocations : undefined,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setModSaving(false);
+      return;
+    }
+    toast.success("Moderator Edit berhasil disimpan.");
+    setModEditMode(false);
+    setModLogRefreshKey((k) => k + 1);
+    fetchDetails();
+    setModSaving(false);
+  };
+
   const deleteEditItem = (index: number) => {
     const item = editItemsList[index];
     if (item.id !== undefined) {
@@ -749,7 +899,7 @@ export default function MRDetailPage({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {isPendingApproverMenyetujui && !editMode && (
+            {isPendingApproverMenyetujui && !editMode && !modEditMode && (
               <Button
                 size="sm"
                 variant="outline"
@@ -782,6 +932,42 @@ export default function MRDetailPage({
                     <Save className="h-4 w-4" />
                   )}
                   Simpan Perubahan
+                </Button>
+              </>
+            )}
+            {isModerator && !editMode && !modEditMode && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-2 font-semibold border-warning/40 text-warning hover:bg-warning/10"
+                onClick={enterModEditMode}
+              >
+                <ShieldAlert className="h-4 w-4" /> Moderator Edit
+              </Button>
+            )}
+            {modEditMode && (
+              <>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="gap-2 font-semibold text-muted-foreground"
+                  onClick={() => setModEditMode(false)}
+                  disabled={modSaving}
+                >
+                  <RotateCcw className="h-4 w-4" /> Batal
+                </Button>
+                <Button
+                  size="sm"
+                  className="gap-2 font-semibold bg-warning text-warning-foreground hover:bg-warning/90"
+                  onClick={handleModSaveEdit}
+                  disabled={modSaving}
+                >
+                  {modSaving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  Simpan Moderator Edit
                 </Button>
               </>
             )}
@@ -818,6 +1004,15 @@ export default function MRDetailPage({
                 </p>
               </div>
             )}
+            {modEditMode && (
+              <div className="mb-5 rounded-lg border border-warning/40 bg-warning/10 px-4 py-2.5">
+                <p className="text-[11px] font-semibold text-warning">
+                  Mode Moderator Edit aktif — semua field (termasuk jalur & status
+                  approval) bisa diubah bebas, di luar giliran approval normal.
+                  Perubahan tercatat di Riwayat Moderator Edit.
+                </p>
+              </div>
+            )}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-5">
               <div className="space-y-1.5">
                 <Label className="text-[11px] font-bold uppercase text-muted-foreground">
@@ -837,9 +1032,24 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-center gap-2">
                   <Building className="w-4 h-4 text-muted-foreground" />
-                  <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
-                    {mr?.cabang?.nama_cabang}
-                  </div>
+                  {modEditMode ? (
+                    <Select value={modCabangId} onValueChange={setModCabangId}>
+                      <SelectTrigger className="h-10 w-full text-sm font-semibold">
+                        <SelectValue placeholder="Pilih cabang..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {cabangs.map((c) => (
+                          <SelectItem key={c.id} value={String(c.id)}>
+                            {c.nama_cabang}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
+                      {mr?.cabang?.nama_cabang}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -849,7 +1059,7 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-muted-foreground" />
-                  {editMode ? (
+                  {editMode || modEditMode ? (
                     <Input
                       type="date"
                       value={editTanggal}
@@ -872,7 +1082,14 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-center gap-2">
                   <Calendar className="w-4 h-4 text-muted-foreground" />
-                  {mr?.mr_due_date ? (
+                  {modEditMode ? (
+                    <Input
+                      type="date"
+                      value={modDueDate}
+                      onChange={(e) => setModDueDate(e.target.value)}
+                      className="h-10 w-full text-sm font-semibold"
+                    />
+                  ) : mr?.mr_due_date ? (
                     <div
                       className={`flex h-10 w-full items-center rounded-md border px-3 py-2 text-sm font-semibold ${
                         mr.mr_status === "open" &&
@@ -907,7 +1124,7 @@ export default function MRDetailPage({
                 </Label>
                 <div className="flex items-center gap-2">
                   <Tag className="w-4 h-4 text-muted-foreground" />
-                  {editMode ? (
+                  {editMode || modEditMode ? (
                     <Select
                       value={editPriority}
                       onValueChange={setEditPriority}
@@ -938,7 +1155,7 @@ export default function MRDetailPage({
               <Table>
                 <TableHeader className="bg-muted/50">
                   <TableRow className="h-12">
-                    {editMode && (
+                    {(editMode || modEditMode) && (
                       <TableHead className="w-10 text-center text-[10px] font-bold uppercase text-muted-foreground" />
                     )}
                     <TableHead className="w-12 text-center text-[10px] font-bold uppercase text-muted-foreground">
@@ -958,6 +1175,7 @@ export default function MRDetailPage({
                     </TableHead>
                     {/* Fulfillment Columns (Only show when approved and not in edit) */}
                     {!editMode &&
+                      !modEditMode &&
                       (mr?.mr_status === "approved" ||
                         mr?.mr_status === "done" ||
                         mr?.mr_status === "closed") && (
@@ -973,7 +1191,7 @@ export default function MRDetailPage({
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {editMode ? (
+                  {editMode || modEditMode ? (
                     editItemsList.length === 0 ? (
                       <TableRow>
                         <TableCell
@@ -1199,7 +1417,7 @@ export default function MRDetailPage({
             </div>
 
             {/* Add barang button — only visible in edit mode */}
-            {editMode && (
+            {(editMode || modEditMode) && (
               <div className="mt-3">
                 <Popover
                   open={barangPopoverOpen}
@@ -1272,7 +1490,8 @@ export default function MRDetailPage({
             )}
           </Content>
 
-          {isPendingApprover && isLastApprover && (
+          {((!modEditMode && isPendingApprover && isLastApprover) ||
+            showModAllocationForm) && (
             <Content title="Perencanaan Pemenuhan (Decision Making)">
               <div className="space-y-6">
                 <div className="bg-primary/5 border border-primary/20 rounded-lg p-4 flex items-start gap-4 ring-1 ring-primary/10 mb-4">
@@ -1284,9 +1503,9 @@ export default function MRDetailPage({
                       Final Decision Required
                     </h4>
                     <p className="text-xs text-primary leading-relaxed mt-1">
-                      Sebagai penyetuju terakhir, Anda perlu menentukan alokasi
-                      barang antara Share Stock (dari cabang lain) dan Purchase
-                      Request (pengadaan baru).
+                      {showModAllocationForm
+                        ? "Jalur approval yang Anda edit membuat MR ini langsung berstatus approved. Tentukan alokasi barang antara Share Stock dan Purchase Request sebelum menyimpan."
+                        : "Sebagai penyetuju terakhir, Anda perlu menentukan alokasi barang antara Share Stock (dari cabang lain) dan Purchase Request (pengadaan baru)."}
                     </p>
                   </div>
                 </div>
@@ -1457,6 +1676,15 @@ export default function MRDetailPage({
         </div>
 
         <div className="col-span-12 lg:col-span-4 space-y-4 md:space-y-6">
+          {modEditMode ? (
+            <Content title="Tindakan">
+              <div className="rounded-lg border border-warning/30 bg-warning/5 p-4 text-[11px] font-semibold text-warning">
+                Sedang dalam mode Moderator Edit. Tombol approve/reject normal
+                disembunyikan sementara — atur status tiap tahap langsung di
+                panel Jalur Approval di bawah.
+              </div>
+            </Content>
+          ) : (
           <Content title="Tindakan">
             <div className="space-y-4">
               {isPendingApprover ? (
@@ -1513,8 +1741,27 @@ export default function MRDetailPage({
               )}
             </div>
           </Content>
+          )}
 
           <Content title="Jalur Approval">
+            {modEditMode ? (
+              <div className="space-y-4">
+                <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                {modApprovals.some((a) => a.status === "rejected") && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                      Alasan Penolakan
+                    </Label>
+                    <Textarea
+                      value={modRejectionReason}
+                      onChange={(e) => setModRejectionReason(e.target.value)}
+                      placeholder="Wajib diisi karena ada tahap berstatus rejected..."
+                      className="h-24 resize-none text-sm"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
             <div className="space-y-2.5">
               {mr?.approvals
                 ?.sort((a: any, b: any) => a.step_order - b.step_order)
@@ -1588,6 +1835,15 @@ export default function MRDetailPage({
                   );
                 })}
             </div>
+            )}
+          </Content>
+
+          <Content>
+            <ModeratorEditLogPanel
+              docType="mr"
+              docId={Number(mrId)}
+              refreshKey={modLogRefreshKey}
+            />
           </Content>
         </div>
       </div>

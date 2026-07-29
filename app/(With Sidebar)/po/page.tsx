@@ -48,6 +48,14 @@ import { PODetailSheet } from "@/components/po/po-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const PO_SORT_COLUMNS: Record<string, string> = {
+  po_kode: "po_kode",
+  po_tanggal: "po_tanggal",
+  po_status: "po_status",
+  po_receive_status: "po_receive_status",
+};
 
 export default function POListPage() {
   const supabase = createClient();
@@ -154,11 +162,12 @@ export default function POListPage() {
   const fetchPOs = async () => {
     setLoading(true);
 
-    const sortField =
-      sortOrder === "tanggal_desc" || sortOrder === "tanggal_asc"
-        ? "po_tanggal"
-        : "created_at";
-    const ascending = sortOrder === "oldest" || sortOrder === "tanggal_asc";
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = PO_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn
+      ? sortDirRaw === "asc"
+      : sortOrder === "oldest";
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
@@ -280,6 +289,11 @@ export default function POListPage() {
     page,
     limit,
   ]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const resetFilters = () => {
     setSearchQuery("");
@@ -515,8 +529,8 @@ export default function POListPage() {
               <SelectContent className="rounded-md">
                 <SelectItem value="newest">Terbaru Dibuat</SelectItem>
                 <SelectItem value="oldest">Terlama Dibuat</SelectItem>
-                <SelectItem value="tanggal_desc">Tanggal Dok ↓</SelectItem>
-                <SelectItem value="tanggal_asc">Tanggal Dok ↑</SelectItem>
+                <SelectItem value="po_tanggal_desc">Tanggal Dok ↓</SelectItem>
+                <SelectItem value="po_tanggal_asc">Tanggal Dok ↑</SelectItem>
               </SelectContent>
             </Select>
 
@@ -578,24 +592,45 @@ export default function POListPage() {
           <Table>
             <TableHeader className="bg-muted/50 border-b border-border">
               <TableRow className="hover:bg-transparent h-10">
-                <TableHead className="w-52 text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="po_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-52 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Purchase Order ID
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Sumber PR / Lokasi
                 </TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Vendor(s)
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="po_status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Approval
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="po_receive_status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Penerimaan
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="po_tanggal"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="justify-end text-right text-[10px] font-black uppercase text-muted-foreground pr-6"
+                >
                   Tanggal Dokumen
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-20"></TableHead>
               </TableRow>
             </TableHeader>

@@ -54,20 +54,18 @@ export default async function StockPage({
   // Note: Cabang filter is handled within the Detail Sheet in the grouped view,
   // but we can still filter the summaries if needed. For now, we show all parts.
 
-  // Handle Various Sorting
-  switch (sort) {
-    case "qty_asc":
-      query = query.order("total_qty", { ascending: true });
-      break;
-    case "qty_desc":
-      query = query.order("total_qty", { ascending: false });
-      break;
-    case "name_asc":
-      query = query.order("part_name", { ascending: true });
-      break;
-    default:
-      query = query.order("total_qty", { ascending: false });
-  }
+  // Handle Various Sorting -- konvensi key: `${kolom}_${asc|desc}`.
+  const SORT_COLUMNS: Record<string, string> = {
+    no: "part_id",
+    qty: "total_qty",
+    part_number: "part_number",
+    part_name: "part_name",
+    active_locations: "active_locations",
+  };
+  const [sortKeyRaw, sortDirRaw] = sort.split(/_(asc|desc)$/);
+  const sortColumn = SORT_COLUMNS[sortKeyRaw] || "total_qty";
+  const sortAscending = sortDirRaw === "asc";
+  query = query.order(sortColumn, { ascending: sortAscending });
 
   const { data, count, error } = await query.range(from, to);
 

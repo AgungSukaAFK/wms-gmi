@@ -48,6 +48,14 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
 import { summarizeApprovals } from "@/lib/approval-progress";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const PR_SORT_COLUMNS: Record<string, string> = {
+  pr_kode: "pr_kode",
+  pr_tanggal: "pr_tanggal",
+  pr_status: "pr_status",
+  accurate: "accurate",
+};
 
 export default function PRListPage() {
   const supabase = createClient();
@@ -142,11 +150,12 @@ export default function PRListPage() {
 
   const fetchPRs = async () => {
     setLoading(true);
-    const sortField =
-      sortOrder === "tanggal_desc" || sortOrder === "tanggal_asc"
-        ? "pr_tanggal"
-        : "created_at";
-    const ascending = sortOrder === "oldest" || sortOrder === "tanggal_asc";
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = PR_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn
+      ? sortDirRaw === "asc"
+      : sortOrder === "oldest";
 
     const from = (page - 1) * limit;
     const to = from + limit - 1;
@@ -213,9 +222,8 @@ export default function PRListPage() {
         return {
           NO: index + 1,
           "KODE PR": pr.pr_kode || "-",
-          "MR ASAL": Array.from(
-            new Set(mrCodesByPr.get(pr.id) || []),
-          ).join(", ") || "-",
+          "MR ASAL":
+            Array.from(new Set(mrCodesByPr.get(pr.id) || [])).join(", ") || "-",
           PIC: pr.profiles?.nama || "-",
           LOKASI: pr.cabang?.nama_cabang || "-",
           TANGGAL: pr.pr_tanggal
@@ -258,6 +266,11 @@ export default function PRListPage() {
     page,
     limit,
   ]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const resetFilters = () => {
     setSearchQuery("");
@@ -455,8 +468,8 @@ export default function PRListPage() {
               <SelectContent className="rounded-md">
                 <SelectItem value="newest">Terbaru Dibuat</SelectItem>
                 <SelectItem value="oldest">Terlama Dibuat</SelectItem>
-                <SelectItem value="tanggal_desc">Tanggal Dok ↓</SelectItem>
-                <SelectItem value="tanggal_asc">Tanggal Dok ↑</SelectItem>
+                <SelectItem value="pr_tanggal_desc">Tanggal Dok ↓</SelectItem>
+                <SelectItem value="pr_tanggal_asc">Tanggal Dok ↑</SelectItem>
               </SelectContent>
             </Select>
 
@@ -518,24 +531,45 @@ export default function PRListPage() {
           <Table>
             <TableHeader className="bg-muted/50 border-b border-border">
               <TableRow className="hover:bg-transparent h-10">
-                <TableHead className="w-50 text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="pr_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-50 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Purchase Request ID
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Personnel / Source
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="pr_status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
                   Progress Approval
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="accurate"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Accurate
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="pr_tanggal"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="justify-end text-right text-[10px] font-black uppercase text-muted-foreground pr-6"
+                >
                   Tanggal Dokumen
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-20"></TableHead>
               </TableRow>
             </TableHeader>

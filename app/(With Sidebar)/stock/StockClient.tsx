@@ -83,6 +83,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { StockDetailSheet } from "@/components/stock/stock-detail-sheet";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 interface StockClientProps {
   initialData: any[];
@@ -611,7 +612,7 @@ export default function StockClient({
               <SelectContent>
                 <SelectItem value="qty_desc">Stok Terbanyak</SelectItem>
                 <SelectItem value="qty_asc">Stok Terendah</SelectItem>
-                <SelectItem value="name_asc">Nama (A-Z)</SelectItem>
+                <SelectItem value="part_name_asc">Nama (A-Z)</SelectItem>
               </SelectContent>
             </Select>
 
@@ -656,21 +657,47 @@ export default function StockClient({
           <Table className="table-fixed">
             <TableHeader className="bg-muted/50">
               <TableRow className="h-10 border-b border-border hover:bg-transparent">
-                <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="no"
+                  currentSort={initialSort}
+                  onSort={handleSortChange}
+                  className="w-12.5 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   No
-                </TableHead>
-                <TableHead className="w-45 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="part_number"
+                  currentSort={initialSort}
+                  onSort={handleSortChange}
+                  className="w-45 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Part Number
-                </TableHead>
-                <TableHead className="w-25 max-w-65 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="part_name"
+                  currentSort={initialSort}
+                  onSort={handleSortChange}
+                  className="w-25 max-w-65 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Part Name
-                </TableHead>
-                <TableHead className="w-25 text-center text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="active_locations"
+                  currentSort={initialSort}
+                  onSort={handleSortChange}
+                  className="w-25 text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Lokasi
-                </TableHead>
-                <TableHead className="w-27.5 text-center text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="qty"
+                  currentSort={initialSort}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="w-27.5 text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Total Stock
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-30 text-center text-[10px] font-black uppercase text-muted-foreground">
                   Rata/Site
                 </TableHead>
