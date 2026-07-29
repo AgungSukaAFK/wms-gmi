@@ -23,6 +23,7 @@ import {
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import {
   ChevronUp,
@@ -244,6 +245,20 @@ export function ApprovalFlowEditor({ steps, onChange }: ApprovalFlowEditorProps)
               </Badge>
             )}
           </div>
+
+          {step.status === "rejected" && (
+            <div className="pl-9 space-y-1">
+              <span className="text-[9px] font-bold uppercase text-muted-foreground">
+                Catatan / Alasan Penolakan
+              </span>
+              <Textarea
+                value={step.notes || ""}
+                onChange={(e) => updateStep(index, { notes: e.target.value })}
+                placeholder="Alasan penolakan tahap ini..."
+                className="h-16 resize-none text-xs"
+              />
+            </div>
+          )}
         </div>
       ))}
 

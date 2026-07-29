@@ -8,6 +8,7 @@ import {
   Plus,
   Printer,
   Search,
+  ShieldAlert,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { toast } from "sonner";
@@ -62,6 +63,11 @@ import {
   getSpbInvoiceList,
   rejectSpbInvoice,
 } from "@/services/spb-actions";
+import {
+  moderatorEditSpbInvoice,
+  ModeratorApprovalStep,
+} from "@/services/moderator-edit-actions";
+import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { cn, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
@@ -123,6 +129,16 @@ export default function SpbInvoicePage() {
   const [openCreateModal, setOpenCreateModal] = useState(false);
   const [userId, setUserId] = useState("");
 
+  // Moderator Edit state
+  const [isModerator, setIsModerator] = useState(false);
+  const [modOpen, setModOpen] = useState(false);
+  const [modSaving, setModSaving] = useState(false);
+  const [modRow, setModRow] = useState<any>(null);
+  const [modInvoiceDate, setModInvoiceDate] = useState("");
+  const [modInvoiceEmailDate, setModInvoiceEmailDate] = useState("");
+  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
+  const [modRejectionReason, setModRejectionReason] = useState("");
+
   const selectedDo = useMemo(
     () => doOptions.find((s) => String(s.id) === selectedDoId),
     [doOptions, selectedDoId],
@@ -164,7 +180,16 @@ export default function SpbInvoicePage() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user?.id) setUserId(user.id);
+      if (user?.id) {
+        setUserId(user.id);
+        const { data: roleRows } = await supabase
+          .from("user_roles")
+          .select("roles(name)")
+          .eq("user_id", user.id);
+        setIsModerator(
+          (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
+        );
+      }
     };
     loadUser();
   }, [supabase]);
@@ -281,6 +306,53 @@ export default function SpbInvoicePage() {
     return (row.approvals || []).some(
       (a: any) => a.userid === userId && a.status === "pending",
     );
+  };
+
+  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
+    userid: a.userid || a.user_id || "",
+    nama: a.nama || "",
+    email: a.email || "",
+    approval_role:
+      a.approval_role === "mengetahui" || a.level === "mengetahui"
+        ? "mengetahui"
+        : "menyetujui",
+    status: a.status || "pending",
+    processed_at: a.processed_at ?? null,
+    signature_url: a.signature_url ?? null,
+    notes: a.notes ?? null,
+    snapshot: a.snapshot ?? null,
+    position: a.position ?? null,
+  });
+
+  const openModEdit = (row: any) => {
+    setModRow(row);
+    setModInvoiceDate(row.invoice_date ? String(row.invoice_date).slice(0, 10) : "");
+    setModInvoiceEmailDate(
+      row.invoice_email_date ? String(row.invoice_email_date).slice(0, 10) : "",
+    );
+    setModApprovals((row.approvals || []).map(normalizeApprovalStep));
+    setModRejectionReason("");
+    setModOpen(true);
+  };
+
+  const handleModSave = async () => {
+    if (!modRow) return;
+    setModSaving(true);
+    const res = await moderatorEditSpbInvoice(modRow.id, {
+      invoice_date: modInvoiceDate ? ymdToLocalStartIso(modInvoiceDate) : null,
+      invoice_email_date: modInvoiceEmailDate ? ymdToLocalStartIso(modInvoiceEmailDate) : null,
+      approvals: modApprovals,
+      rejection_reason: modRejectionReason,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setModSaving(false);
+      return;
+    }
+    toast.success("Moderator Edit berhasil disimpan.");
+    setModOpen(false);
+    setModSaving(false);
+    fetchList();
   };
 
   return (
@@ -422,6 +494,17 @@ export default function SpbInvoicePage() {
                                 </Button>
                               </>
                             )}
+                          {isModerator && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5 border-amber-300 text-amber-600 hover:bg-amber-50"
+                              onClick={() => openModEdit(row)}
+                            >
+                              <ShieldAlert className="h-3.5 w-3.5" />
+                              Moderator Edit
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -646,6 +729,41 @@ export default function SpbInvoicePage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {modRow && (
+        <StockOutModeratorEditDialog
+          open={modOpen}
+          onOpenChange={setModOpen}
+          title={`Moderator Edit — SPB Invoice ${modRow.invoice_no}`}
+          docType="spb_invoice"
+          docId={modRow.id}
+          fields={[
+            {
+              key: "invoice_date",
+              label: "Tanggal Invoice",
+              type: "date",
+              value: modInvoiceDate,
+              onChange: setModInvoiceDate,
+            },
+            {
+              key: "invoice_email_date",
+              label: "Tanggal Email",
+              type: "date",
+              value: modInvoiceEmailDate,
+              onChange: setModInvoiceEmailDate,
+            },
+          ]}
+          approvals={modApprovals}
+          onApprovalsChange={setModApprovals}
+          rejectionReason={modRejectionReason}
+          onRejectionReasonChange={setModRejectionReason}
+          downgradeLocked={false}
+          downgradeLockedMessage=""
+          blockedDowngrade={false}
+          saving={modSaving}
+          onSave={handleModSave}
+        />
+      )}
     </>
   );
 }

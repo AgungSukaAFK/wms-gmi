@@ -7,6 +7,7 @@ import {
   Plus,
   Printer,
   Search,
+  ShieldAlert,
   Truck,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
@@ -62,6 +63,11 @@ import {
   getSpbPoOptionsForDo,
   rejectSpbDo,
 } from "@/services/spb-actions";
+import {
+  moderatorEditSpbDo,
+  ModeratorApprovalStep,
+} from "@/services/moderator-edit-actions";
+import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { cn, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
@@ -118,6 +124,17 @@ export default function SpbDoPage() {
   const [openCreateModal, setOpenCreateModal] = useState(false);
   const [userId, setUserId] = useState("");
 
+  // Moderator Edit state
+  const [isModerator, setIsModerator] = useState(false);
+  const [modOpen, setModOpen] = useState(false);
+  const [modSaving, setModSaving] = useState(false);
+  const [modRow, setModRow] = useState<any>(null);
+  const [modDoDate, setModDoDate] = useState("");
+  const [modDoStatusPart, setModDoStatusPart] = useState("");
+  const [modDoPic, setModDoPic] = useState("");
+  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
+  const [modRejectionReason, setModRejectionReason] = useState("");
+
   const selectedPo = useMemo(
     () => poOptions.find((s) => String(s.id) === selectedPoId),
     [poOptions, selectedPoId],
@@ -159,7 +176,16 @@ export default function SpbDoPage() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user?.id) setUserId(user.id);
+      if (user?.id) {
+        setUserId(user.id);
+        const { data: roleRows } = await supabase
+          .from("user_roles")
+          .select("roles(name)")
+          .eq("user_id", user.id);
+        setIsModerator(
+          (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
+        );
+      }
     };
     loadUser();
   }, [supabase]);
@@ -276,6 +302,58 @@ export default function SpbDoPage() {
     return (row.approvals || []).some(
       (a: any) => a.userid === userId && a.status === "pending",
     );
+  };
+
+  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
+    userid: a.userid || a.user_id || "",
+    nama: a.nama || "",
+    email: a.email || "",
+    approval_role:
+      a.approval_role === "mengetahui" || a.level === "mengetahui"
+        ? "mengetahui"
+        : "menyetujui",
+    status: a.status || "pending",
+    processed_at: a.processed_at ?? null,
+    signature_url: a.signature_url ?? null,
+    notes: a.notes ?? null,
+    snapshot: a.snapshot ?? null,
+    position: a.position ?? null,
+  });
+
+  const openModEdit = (row: any) => {
+    setModRow(row);
+    setModDoDate(row.do_date ? String(row.do_date).slice(0, 10) : "");
+    setModDoStatusPart(row.do_status_part || "");
+    setModDoPic(row.do_pic || "");
+    setModApprovals((row.approvals || []).map(normalizeApprovalStep));
+    setModRejectionReason("");
+    setModOpen(true);
+  };
+
+  const modWillBeApproved =
+    modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
+  const modDowngradeLocked = modRow?.approval_status === "completed";
+  const modBlockedDowngrade = modDowngradeLocked && !modWillBeApproved;
+
+  const handleModSave = async () => {
+    if (!modRow) return;
+    setModSaving(true);
+    const res = await moderatorEditSpbDo(modRow.id, {
+      do_date: modDoDate ? ymdToLocalStartIso(modDoDate) : null,
+      do_status_part: modDoStatusPart || null,
+      do_pic: modDoPic || null,
+      approvals: modApprovals,
+      rejection_reason: modRejectionReason,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setModSaving(false);
+      return;
+    }
+    toast.success("Moderator Edit berhasil disimpan.");
+    setModOpen(false);
+    setModSaving(false);
+    fetchList();
   };
 
   return (
@@ -404,6 +482,17 @@ export default function SpbDoPage() {
                                 </Button>
                               </>
                             )}
+                          {isModerator && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5 border-amber-300 text-amber-600 hover:bg-amber-50"
+                              onClick={() => openModEdit(row)}
+                            >
+                              <ShieldAlert className="h-3.5 w-3.5" />
+                              Moderator Edit
+                            </Button>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>
@@ -616,6 +705,30 @@ export default function SpbDoPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {modRow && (
+        <StockOutModeratorEditDialog
+          open={modOpen}
+          onOpenChange={setModOpen}
+          title={`Moderator Edit — SPB DO ${modRow.do_no}`}
+          docType="spb_do"
+          docId={modRow.id}
+          fields={[
+            { key: "do_date", label: "Tanggal DO", type: "date", value: modDoDate, onChange: setModDoDate },
+            { key: "do_status_part", label: "Status Part", type: "text", value: modDoStatusPart, onChange: setModDoStatusPart },
+            { key: "do_pic", label: "PIC", type: "text", value: modDoPic, onChange: setModDoPic },
+          ]}
+          approvals={modApprovals}
+          onApprovalsChange={setModApprovals}
+          rejectionReason={modRejectionReason}
+          onRejectionReasonChange={setModRejectionReason}
+          downgradeLocked={modDowngradeLocked}
+          downgradeLockedMessage="SPB DO ini berstatus completed. Kalau sudah ada SPB Invoice turunan, status approval tidak bisa diturunkan dari 'completed'."
+          blockedDowngrade={modBlockedDowngrade}
+          saving={modSaving}
+          onSave={handleModSave}
+        />
+      )}
     </>
   );
 }

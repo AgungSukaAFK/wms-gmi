@@ -39,8 +39,13 @@ import {
   AlertCircle,
   XCircle,
   Printer,
+  ShieldAlert,
+  Trash2,
+  Save,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -64,6 +69,12 @@ import {
   approvePR,
   rejectPR,
 } from "@/services/procurement-actions";
+import {
+  moderatorEditPR,
+  ModeratorApprovalStep,
+} from "@/services/moderator-edit-actions";
+import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
+import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
@@ -110,10 +121,27 @@ export function PRDetailSheet({
     Record<number, "approved" | "rejected">
   >({});
 
+  // Moderator Edit state — edit bebas header/qty item/jalur approval di luar
+  // giliran approval normal. Item baru tidak didukung di mode ini karena
+  // pr_items selalu terikat ke satu mr_item spesifik (lihat pr/create).
+  const [isModerator, setIsModerator] = useState(false);
+  const [cabangs, setCabangs] = useState<any[]>([]);
+  const [modEditMode, setModEditMode] = useState(false);
+  const [modSaving, setModSaving] = useState(false);
+  const [modCabangId, setModCabangId] = useState("");
+  const [modTanggal, setModTanggal] = useState("");
+  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
+  const [modItemsList, setModItemsList] = useState<
+    { id: number; part_number: string; qty: number }[]
+  >([]);
+  const [modDeletedItemIds, setModDeletedItemIds] = useState<number[]>([]);
+  const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
+
   useEffect(() => {
     if (open && prId) {
       fetchDetails();
       fetchCurrentUser();
+      fetchCabangs();
     }
   }, [open, prId]);
 
@@ -121,7 +149,25 @@ export function PRDetailSheet({
     const {
       data: { user },
     } = await supabase.auth.getUser();
-    if (user) setCurrentUser(user);
+    if (user) {
+      setCurrentUser(user);
+      const { data: roleRows } = await supabase
+        .from("user_roles")
+        .select("roles(name)")
+        .eq("user_id", user.id);
+      setIsModerator(
+        (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
+      );
+    }
+  };
+
+  const fetchCabangs = async () => {
+    const { data } = await supabase
+      .from("cabang")
+      .select("id, nama_cabang")
+      .eq("is_active", true)
+      .order("nama_cabang");
+    setCabangs(data || []);
   };
 
   const fetchDetails = async () => {
@@ -246,6 +292,15 @@ export function PRDetailSheet({
     nextPendingApproval &&
     nextPendingApproval.userid === currentUser.id;
 
+  // PR sudah dikonversi ke PO kalau pr_convert_status bukan lagi 'pending'.
+  const modPreviouslyApprovedLike =
+    !!pr && ["approved", "done", "closed"].includes(pr.pr_status);
+  const modWillBeApproved =
+    modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
+  const modDowngradeLocked =
+    modPreviouslyApprovedLike && !!pr?.pr_convert_status && pr.pr_convert_status !== "pending";
+  const modBlockedDowngrade = modEditMode && modDowngradeLocked && !modWillBeApproved;
+
   const handleOpenApproveDialog = () => {
     // Default all items to approved
     const defaults: Record<number, "approved" | "rejected"> = {};
@@ -323,6 +378,86 @@ export function PRDetailSheet({
       toast.error(result.error || "Gagal mengubah status Accurate");
     }
     setUpdatingAccurate(false);
+  };
+
+  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
+    userid: a.userid || a.user_id || "",
+    nama: a.nama || "",
+    email: a.email || "",
+    approval_role:
+      a.approval_role === "mengetahui" || a.level === "mengetahui"
+        ? "mengetahui"
+        : "menyetujui",
+    status: a.status || "pending",
+    processed_at: a.processed_at ?? null,
+    signature_url: a.signature_url ?? null,
+    notes: a.notes ?? null,
+    snapshot: a.snapshot ?? null,
+  });
+
+  const enterModEditMode = () => {
+    setModCabangId(pr?.cabang_id ? String(pr.cabang_id) : "");
+    setModTanggal(pr?.pr_tanggal ? String(pr.pr_tanggal).slice(0, 10) : "");
+    setModItemsList(
+      prItems.map((i) => ({ id: i.id, part_number: i.part_number, qty: i.qty })),
+    );
+    setModDeletedItemIds([]);
+    setModApprovals((pr?.approvals || []).map(normalizeApprovalStep));
+    setModEditMode(true);
+  };
+
+  const modDeleteItem = (id: number) => {
+    setModDeletedItemIds((prev) => [...prev, id]);
+    setModItemsList((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const modUpdateItemQty = (id: number, qty: number) => {
+    setModItemsList((prev) => prev.map((i) => (i.id === id ? { ...i, qty } : i)));
+  };
+
+  const handleModSaveEdit = async () => {
+    if (modApprovals.length === 0) {
+      toast.error("Jalur approval tidak boleh kosong.");
+      return;
+    }
+    if (modApprovals.some((a) => !a.userid || !a.nama)) {
+      toast.error("Setiap tahap approval harus punya approver yang dipilih.");
+      return;
+    }
+    if (
+      modApprovals.some((a) => a.status === "rejected") &&
+      !modApprovals.find((a) => a.status === "rejected")?.notes?.trim()
+    ) {
+      toast.error("Catatan/alasan penolakan wajib diisi pada tahap yang di-reject.");
+      return;
+    }
+
+    const updatedItems = modItemsList
+      .filter((m) => {
+        const original = prItems.find((p) => p.id === m.id);
+        return original && original.qty !== m.qty;
+      })
+      .map((m) => ({ id: m.id, qty: m.qty }));
+
+    setModSaving(true);
+    const res = await moderatorEditPR(Number(prId), {
+      cabang_id: modCabangId ? Number(modCabangId) : undefined,
+      pr_tanggal: modTanggal || undefined,
+      updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
+      deletedItemIds: modDeletedItemIds.length > 0 ? modDeletedItemIds : undefined,
+      approvals: modApprovals,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setModSaving(false);
+      return;
+    }
+    toast.success("Moderator Edit berhasil disimpan.");
+    setModEditMode(false);
+    setModLogRefreshKey((k) => k + 1);
+    fetchDetails();
+    if (onUpdate) onUpdate();
+    setModSaving(false);
   };
 
   const getStatusBadge = (status: string) => {
@@ -438,21 +573,106 @@ export function PRDetailSheet({
                 </div>
               </div>
               <div>
-                <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
-                  {pr?.pr_kode}
-                </SheetTitle>
+                <div className="flex items-center justify-between gap-2">
+                  <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
+                    {pr?.pr_kode}
+                  </SheetTitle>
+                  {isModerator && !modEditMode && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 gap-1.5 text-[10px] font-bold border-amber-300 text-amber-600 hover:bg-amber-50 shrink-0"
+                      onClick={enterModEditMode}
+                    >
+                      <ShieldAlert className="h-3 w-3" /> Moderator Edit
+                    </Button>
+                  )}
+                  {modEditMode && (
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="h-7 gap-1.5 text-[10px] font-bold text-slate-500"
+                        onClick={() => setModEditMode(false)}
+                        disabled={modSaving}
+                      >
+                        <RotateCcw className="h-3 w-3" /> Batal
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="h-7 gap-1.5 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white"
+                        onClick={handleModSaveEdit}
+                        disabled={modSaving || modBlockedDowngrade}
+                        title={
+                          modBlockedDowngrade
+                            ? "Tidak bisa disimpan: status approval akan turun dari 'approved' padahal PR sudah dikonversi ke PO."
+                            : undefined
+                        }
+                      >
+                        {modSaving ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Save className="h-3 w-3" />
+                        )}
+                        Simpan
+                      </Button>
+                    </div>
+                  )}
+                </div>
                 <div className="flex flex-col gap-1.5 mt-3">
                   <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
                     <User className="h-3.5 w-3.5 text-slate-400" />{" "}
                     {pr?.profiles?.nama}
                   </div>
-                  <div className="flex items-center gap-2 text-[10px] font-bold text-blue-600 uppercase tracking-tight">
-                    <Building2 className="h-3.5 w-3.5 text-blue-500/50" />{" "}
-                    {pr?.cabang?.nama_cabang}
-                  </div>
+                  {modEditMode ? (
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-3.5 w-3.5 text-blue-500/50 shrink-0" />
+                      <Select value={modCabangId} onValueChange={setModCabangId}>
+                        <SelectTrigger className="h-8 text-[11px] font-bold bg-white">
+                          <SelectValue placeholder="Pilih cabang..." />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {cabangs.map((c) => (
+                            <SelectItem key={c.id} value={String(c.id)}>
+                              {c.nama_cabang}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[10px] font-bold text-blue-600 uppercase tracking-tight">
+                      <Building2 className="h-3.5 w-3.5 text-blue-500/50" />{" "}
+                      {pr?.cabang?.nama_cabang}
+                    </div>
+                  )}
+                  {modEditMode && (
+                    <div className="flex items-center gap-2">
+                      <Calendar className="h-3.5 w-3.5 text-blue-500/50 shrink-0" />
+                      <Input
+                        type="date"
+                        value={modTanggal}
+                        onChange={(e) => setModTanggal(e.target.value)}
+                        className="h-8 text-[11px] font-bold bg-white"
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
             </SheetHeader>
+
+            {modEditMode && (
+              <div className="px-6 pt-4 -mb-4">
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                  <p className="text-[10px] font-semibold text-amber-700">
+                    Mode Moderator Edit aktif — semua field (termasuk jalur & status
+                    approval) bisa diubah bebas, di luar giliran approval normal.
+                    Tambah item baru tidak didukung di mode ini. Perubahan tercatat
+                    di Riwayat Moderator Edit.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-white transition-all">
               {/* Linked MR Reference(s) */}
@@ -500,7 +720,7 @@ export function PRDetailSheet({
               </div>
 
               {/* Approval Flow */}
-              {approvals.length > 0 && (
+              {(approvals.length > 0 || modEditMode) && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="h-4 w-1 bg-violet-500 rounded-full" />
@@ -508,6 +728,37 @@ export function PRDetailSheet({
                       Alur Approval
                     </h3>
                   </div>
+                  {modEditMode ? (
+                    <div className="space-y-3">
+                      {modDowngradeLocked && (
+                        <div
+                          className={cn(
+                            "rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed",
+                            modBlockedDowngrade
+                              ? "border-red-300 bg-red-50 text-red-700"
+                              : "border-amber-300 bg-amber-50 text-amber-700",
+                          )}
+                        >
+                          {modBlockedDowngrade ? (
+                            <>
+                              Tidak bisa disimpan: PR ini sudah dikonversi ke PO,
+                              tapi jalur approval yang Anda atur sekarang membuat
+                              status turun dari <strong>approved</strong>.
+                              Kembalikan semua tahap ke approved, atau bereskan
+                              dulu PO-nya sebelum menurunkan status.
+                            </>
+                          ) : (
+                            <>
+                              PR ini sudah dikonversi ke PO. Status approval
+                              tidak bisa diturunkan dari <strong>approved</strong>{" "}
+                              selama PO tersebut belum dibereskan.
+                            </>
+                          )}
+                        </div>
+                      )}
+                      <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                    </div>
+                  ) : (
                   <div className="border border-slate-100 rounded-xl overflow-hidden shadow-sm divide-y divide-slate-50">
                     {approvals.map((step: any, idx: number) => (
                       <div
@@ -568,9 +819,10 @@ export function PRDetailSheet({
                       </div>
                     ))}
                   </div>
+                  )}
 
                   {/* Action buttons — only shown when it's the current user's turn */}
-                  {isMyTurn && (
+                  {isMyTurn && !modEditMode && (
                     <div className="flex gap-2 mt-2">
                       <Button
                         size="sm"
@@ -596,6 +848,7 @@ export function PRDetailSheet({
               )}
 
               {/* Status Management */}
+              {!modEditMode && (
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-1 bg-blue-600 rounded-full" />
@@ -648,6 +901,7 @@ export function PRDetailSheet({
                   </Select>
                 </div>
               </div>
+              )}
 
               {/* Item Pembelian (PR Items) - Per Item Status Editable */}
               <div className="space-y-3">
@@ -681,13 +935,48 @@ export function PRDetailSheet({
                           className="hover:bg-blue-50/30 border-b border-slate-50 transition-colors align-top"
                         >
                           <TableCell className="pl-4 py-3 align-top">
-                            <div className="flex flex-col">
+                            <div className="flex flex-col gap-1">
                               <span className="text-sm font-black font-mono text-slate-900 uppercase tracking-wide leading-none">
                                 {item.part_number}
                               </span>
-                              <span className="text-[11px] font-bold text-slate-900 mt-1">
-                                {item.qty} {item.satuan}
-                              </span>
+                              {modEditMode ? (
+                                modDeletedItemIds.includes(item.id) ? (
+                                  <span className="text-[10px] font-bold text-red-500 italic">
+                                    Akan dihapus
+                                  </span>
+                                ) : (
+                                  <div className="flex items-center gap-1.5">
+                                    <Input
+                                      type="number"
+                                      min={1}
+                                      value={
+                                        modItemsList.find((m) => m.id === item.id)
+                                          ?.qty ?? item.qty
+                                      }
+                                      onChange={(e) =>
+                                        modUpdateItemQty(
+                                          item.id,
+                                          Math.max(1, Number(e.target.value)),
+                                        )
+                                      }
+                                      className="h-7 w-16 text-[11px] font-bold px-1.5"
+                                    />
+                                    <span className="text-[10px] font-bold text-slate-500">
+                                      {item.satuan}
+                                    </span>
+                                    <button
+                                      onClick={() => modDeleteItem(item.id)}
+                                      className="text-slate-300 hover:text-red-500 transition-colors"
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </div>
+                                )
+                              ) : (
+                                <span className="text-[11px] font-bold text-slate-900 mt-1">
+                                  {item.qty} {item.satuan}
+                                </span>
+                              )}
                             </div>
                           </TableCell>
                           <TableCell className="py-3 align-top">
@@ -755,6 +1044,12 @@ export function PRDetailSheet({
                   </Table>
                 </div>
               </div>
+
+              <ModeratorEditLogPanel
+                docType="pr"
+                docId={Number(prId)}
+                refreshKey={modLogRefreshKey}
+              />
 
               {/* Share Stock Fulfillment */}
               {ssItems.length > 0 && (

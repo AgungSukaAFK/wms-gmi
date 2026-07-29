@@ -29,8 +29,14 @@ import {
   CreditCard,
   AlertCircle,
   Truck,
+  ShieldAlert,
+  Trash2,
+  Save,
+  RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -42,6 +48,12 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { approvePO, rejectPO } from "@/services/procurement-actions";
+import {
+  moderatorEditPO,
+  ModeratorApprovalStep,
+} from "@/services/moderator-edit-actions";
+import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
+import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import { cn } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
@@ -73,6 +85,23 @@ export function PODetailSheet({
   const [rejectionReason, setRejectionReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Moderator Edit state — edit bebas header (non-harga)/qty item/jalur
+  // approval di luar giliran approval normal. Item baru & harga/vendor
+  // sengaja tidak didukung di mode ini (lihat catatan di moderatorEditPO).
+  const [isModerator, setIsModerator] = useState(false);
+  const [modEditMode, setModEditMode] = useState(false);
+  const [modSaving, setModSaving] = useState(false);
+  const [modTanggal, setModTanggal] = useState("");
+  const [modEstimasi, setModEstimasi] = useState("");
+  const [modPaymentTerm, setModPaymentTerm] = useState("");
+  const [modKeterangan, setModKeterangan] = useState("");
+  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
+  const [modItemsList, setModItemsList] = useState<
+    { id: number; part_number: string; qty: number }[]
+  >([]);
+  const [modDeletedItemIds, setModDeletedItemIds] = useState<number[]>([]);
+  const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
+
   useEffect(() => {
     if (open && poId) {
       fetchDetails();
@@ -92,6 +121,11 @@ export function PODetailSheet({
         .eq("id", user.id)
         .single();
       setCanViewPrice(canViewPOPrice(profile));
+      setIsModerator(
+        ((profile as any)?.roles || []).some(
+          (r: any) => r.roles?.name === "moderator",
+        ),
+      );
     }
   };
 
@@ -215,6 +249,100 @@ export function PODetailSheet({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
+    userid: a.userid || a.user_id || "",
+    nama: a.nama || "",
+    email: a.email || "",
+    approval_role:
+      a.approval_role === "mengetahui" || a.level === "mengetahui"
+        ? "mengetahui"
+        : "menyetujui",
+    status: a.status || "pending",
+    processed_at: a.processed_at ?? null,
+    signature_url: a.signature_url ?? null,
+    notes: a.notes ?? null,
+    snapshot: a.snapshot ?? null,
+  });
+
+  const enterModEditMode = () => {
+    setModTanggal(po?.po_tanggal ? String(po.po_tanggal).slice(0, 10) : "");
+    setModEstimasi(po?.po_estimasi ? String(po.po_estimasi).slice(0, 10) : "");
+    setModPaymentTerm(po?.po_payment_term || "");
+    setModKeterangan(po?.po_keterangan || "");
+    setModItemsList(
+      poItems.map((i) => ({ id: i.id, part_number: i.part_number, qty: i.qty })),
+    );
+    setModDeletedItemIds([]);
+    setModApprovals((po?.approvals || []).map(normalizeApprovalStep));
+    setModEditMode(true);
+  };
+
+  const modDeleteItem = (id: number) => {
+    setModDeletedItemIds((prev) => [...prev, id]);
+    setModItemsList((prev) => prev.filter((i) => i.id !== id));
+  };
+
+  const modUpdateItemQty = (id: number, qty: number) => {
+    setModItemsList((prev) => prev.map((i) => (i.id === id ? { ...i, qty } : i)));
+  };
+
+  // Downgrade-lock: PO yang sudah mulai diterima (partial/complete) tidak
+  // boleh status approval-nya diturunkan dari 'approved' lewat mode ini.
+  const modPreviouslyApprovedLike =
+    !!po && ["approved", "completed", "closed"].includes(po.po_status);
+  const modWillBeApproved =
+    modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
+  const modDowngradeLocked =
+    modPreviouslyApprovedLike && !!po?.po_receive_status && po.po_receive_status !== "pending";
+  const modBlockedDowngrade = modEditMode && modDowngradeLocked && !modWillBeApproved;
+
+  const handleModSaveEdit = async () => {
+    if (modApprovals.length === 0) {
+      toast.error("Jalur approval tidak boleh kosong.");
+      return;
+    }
+    if (modApprovals.some((a) => !a.userid || !a.nama)) {
+      toast.error("Setiap tahap approval harus punya approver yang dipilih.");
+      return;
+    }
+    if (
+      modApprovals.some((a) => a.status === "rejected") &&
+      !modApprovals.find((a) => a.status === "rejected")?.notes?.trim()
+    ) {
+      toast.error("Catatan/alasan penolakan wajib diisi pada tahap yang di-reject.");
+      return;
+    }
+
+    const updatedItems = modItemsList
+      .filter((m) => {
+        const original = poItems.find((p) => p.id === m.id);
+        return original && original.qty !== m.qty;
+      })
+      .map((m) => ({ id: m.id, qty: m.qty }));
+
+    setModSaving(true);
+    const res = await moderatorEditPO(Number(poId), {
+      po_tanggal: modTanggal || undefined,
+      po_estimasi: modEstimasi || null,
+      po_payment_term: modPaymentTerm || null,
+      po_keterangan: modKeterangan || null,
+      updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
+      deletedItemIds: modDeletedItemIds.length > 0 ? modDeletedItemIds : undefined,
+      approvals: modApprovals,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setModSaving(false);
+      return;
+    }
+    toast.success("Moderator Edit berhasil disimpan.");
+    setModEditMode(false);
+    setModLogRefreshKey((k) => k + 1);
+    await fetchDetails();
+    if (onUpdate) onUpdate();
+    setModSaving(false);
   };
 
   // Group items by vendor
@@ -343,9 +471,52 @@ export function PODetailSheet({
                   </div>
                 </div>
                 <div>
-                  <h2 className="text-xl font-bold text-foreground tracking-tight uppercase leading-none">
-                    {po?.po_kode}
-                  </h2>
+                  <div className="flex items-center justify-between gap-2">
+                    <h2 className="text-xl font-bold text-foreground tracking-tight uppercase leading-none">
+                      {po?.po_kode}
+                    </h2>
+                    {isModerator && !modEditMode && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 gap-1.5 text-[10px] font-bold border-amber-300 text-amber-600 hover:bg-amber-50 shrink-0"
+                        onClick={enterModEditMode}
+                      >
+                        <ShieldAlert className="h-3 w-3" /> Moderator Edit
+                      </Button>
+                    )}
+                    {modEditMode && (
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          className="h-7 gap-1.5 text-[10px] font-bold text-muted-foreground"
+                          onClick={() => setModEditMode(false)}
+                          disabled={modSaving}
+                        >
+                          <RotateCcw className="h-3 w-3" /> Batal
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-7 gap-1.5 text-[10px] font-bold bg-amber-500 hover:bg-amber-600 text-white"
+                          onClick={handleModSaveEdit}
+                          disabled={modSaving || modBlockedDowngrade}
+                          title={
+                            modBlockedDowngrade
+                              ? "Tidak bisa disimpan: status approval akan turun dari 'approved' padahal PO sudah mulai diterima."
+                              : undefined
+                          }
+                        >
+                          {modSaving ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Save className="h-3 w-3" />
+                          )}
+                          Simpan
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                   <div className="flex flex-col gap-1.5 mt-3">
                     <div className="flex items-center gap-2 text-xs font-bold text-foreground">
                       <User className="h-3.5 w-3.5 text-muted-foreground" />{" "}
@@ -373,6 +544,20 @@ export function PODetailSheet({
                 </div>
               </div>
 
+              {modEditMode && (
+                <div className="px-6 pt-4 -mb-4">
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2">
+                    <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
+                      Mode Moderator Edit aktif — header (non-harga), qty item,
+                      dan jalur/status approval bisa diubah bebas, di luar
+                      giliran approval normal. Harga & vendor tidak bisa diedit
+                      di mode ini. Tambah item baru tidak didukung. Perubahan
+                      tercatat di Riwayat Moderator Edit.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Body */}
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
                 {/* Info Section */}
@@ -383,69 +568,117 @@ export function PODetailSheet({
                       Informasi PO
                     </h3>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-muted/40 border border-border rounded-lg p-3">
-                      <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
-                        Tanggal PO
-                      </p>
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
-                        <Calendar className="h-3 w-3 text-muted-foreground" />
-                        {po?.po_tanggal
-                          ? new Date(po.po_tanggal).toLocaleDateString(
-                              "id-ID",
-                              {
-                                day: "numeric",
-                                month: "short",
-                                year: "numeric",
-                              },
-                            )
-                          : "-"}
+                  {modEditMode ? (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="space-y-1">
+                        <Label className="text-[9px] font-bold uppercase text-muted-foreground">
+                          Tanggal PO
+                        </Label>
+                        <Input
+                          type="date"
+                          value={modTanggal}
+                          onChange={(e) => setModTanggal(e.target.value)}
+                          className="h-9 text-[11px] font-bold"
+                        />
                       </div>
-                    </div>
-                    <div className="bg-muted/40 border border-border rounded-lg p-3">
-                      <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
-                        Estimasi Terima
-                      </p>
-                      <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
-                        <Truck className="h-3 w-3 text-muted-foreground" />
-                        {po?.po_estimasi
-                          ? new Date(po.po_estimasi).toLocaleDateString(
-                              "id-ID",
-                              {
-                                day: "numeric",
-                                month: "short",
-                                year: "numeric",
-                              },
-                            )
-                          : "-"}
+                      <div className="space-y-1">
+                        <Label className="text-[9px] font-bold uppercase text-muted-foreground">
+                          Estimasi Terima
+                        </Label>
+                        <Input
+                          type="date"
+                          value={modEstimasi}
+                          onChange={(e) => setModEstimasi(e.target.value)}
+                          className="h-9 text-[11px] font-bold"
+                        />
                       </div>
-                    </div>
-                    {po?.po_payment_term && (
-                      <div className="col-span-2 bg-muted/40 border border-border rounded-lg p-3">
-                        <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
+                      <div className="col-span-2 space-y-1">
+                        <Label className="text-[9px] font-bold uppercase text-muted-foreground">
                           Syarat Pembayaran
+                        </Label>
+                        <Input
+                          value={modPaymentTerm}
+                          onChange={(e) => setModPaymentTerm(e.target.value)}
+                          placeholder="mis. Net 30"
+                          className="h-9 text-[11px] font-bold"
+                        />
+                      </div>
+                      <div className="col-span-2 space-y-1">
+                        <Label className="text-[9px] font-bold uppercase text-muted-foreground">
+                          Keterangan
+                        </Label>
+                        <Textarea
+                          value={modKeterangan}
+                          onChange={(e) => setModKeterangan(e.target.value)}
+                          className="min-h-16 resize-none text-[11px]"
+                        />
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-3">
+                      <div className="bg-muted/40 border border-border rounded-lg p-3">
+                        <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
+                          Tanggal PO
                         </p>
                         <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
-                          <CreditCard className="h-3 w-3 text-muted-foreground" />
-                          {po.po_payment_term}
+                          <Calendar className="h-3 w-3 text-muted-foreground" />
+                          {po?.po_tanggal
+                            ? new Date(po.po_tanggal).toLocaleDateString(
+                                "id-ID",
+                                {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                },
+                              )
+                            : "-"}
                         </div>
                       </div>
-                    )}
-                    {po?.po_keterangan && (
-                      <div className="col-span-2 bg-muted/40 border border-border rounded-lg p-3">
+                      <div className="bg-muted/40 border border-border rounded-lg p-3">
                         <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
-                          Keterangan
+                          Estimasi Terima
                         </p>
-                        <p className="text-[11px] text-foreground whitespace-pre-wrap">
-                          {po.po_keterangan}
-                        </p>
+                        <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
+                          <Truck className="h-3 w-3 text-muted-foreground" />
+                          {po?.po_estimasi
+                            ? new Date(po.po_estimasi).toLocaleDateString(
+                                "id-ID",
+                                {
+                                  day: "numeric",
+                                  month: "short",
+                                  year: "numeric",
+                                },
+                              )
+                            : "-"}
+                        </div>
                       </div>
-                    )}
-                  </div>
+                      {po?.po_payment_term && (
+                        <div className="col-span-2 bg-muted/40 border border-border rounded-lg p-3">
+                          <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
+                            Syarat Pembayaran
+                          </p>
+                          <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
+                            <CreditCard className="h-3 w-3 text-muted-foreground" />
+                            {po.po_payment_term}
+                          </div>
+                        </div>
+                      )}
+                      {po?.po_keterangan && (
+                        <div className="col-span-2 bg-muted/40 border border-border rounded-lg p-3">
+                          <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
+                            Keterangan
+                          </p>
+                          <p className="text-[11px] text-foreground whitespace-pre-wrap">
+                            {po.po_keterangan}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
 
                 {/* Approval Flow */}
-                {po?.approvals && po.approvals.length > 0 && (
+                {((po?.approvals && po.approvals.length > 0) || modEditMode) && (
                   <div className="space-y-3">
                     <div className="flex items-center gap-2">
                       <div className="h-4 w-1 bg-amber-500 rounded-full" />
@@ -453,6 +686,39 @@ export function PODetailSheet({
                         Alur Approval
                       </h3>
                     </div>
+                    {modEditMode ? (
+                      <div className="space-y-3">
+                        {modDowngradeLocked && (
+                          <div
+                            className={cn(
+                              "rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed",
+                              modBlockedDowngrade
+                                ? "border-destructive/40 bg-destructive/10 text-destructive"
+                                : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400",
+                            )}
+                          >
+                            {modBlockedDowngrade ? (
+                              <>
+                                Tidak bisa disimpan: PO ini sudah mulai diterima
+                                (partial/complete), tapi jalur approval yang Anda
+                                atur sekarang membuat status turun dari{" "}
+                                <strong>approved</strong>. Kembalikan semua tahap
+                                ke approved, atau bereskan dulu penerimaannya
+                                sebelum menurunkan status.
+                              </>
+                            ) : (
+                              <>
+                                PO ini sudah mulai diterima (partial/complete).
+                                Status approval tidak bisa diturunkan dari{" "}
+                                <strong>approved</strong> selama penerimaan
+                                tersebut belum dibereskan.
+                              </>
+                            )}
+                          </div>
+                        )}
+                        <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                      </div>
+                    ) : (
                     <div className="space-y-2">
                       {(po.approvals as any[]).map((step: any, i: number) => (
                         <div
@@ -512,11 +778,12 @@ export function PODetailSheet({
                         </div>
                       ))}
                     </div>
+                    )}
                   </div>
                 )}
 
                 {/* My Turn Action */}
-                {isMyTurn && po?.po_status === "open" && (
+                {isMyTurn && po?.po_status === "open" && !modEditMode && (
                   <div className="space-y-3">
                     <div className="flex items-center gap-2">
                       <div className="h-4 w-1 bg-primary rounded-full" />
@@ -663,12 +930,46 @@ export function PODetailSheet({
                                     </p>
                                   </TableCell>
                                   <TableCell className="text-right py-2.5">
-                                    <span className="text-[11px] font-bold text-foreground">
-                                      {item.qty}
-                                    </span>
-                                    <span className="text-[9px] text-muted-foreground ml-1">
-                                      {item.satuan}
-                                    </span>
+                                    {modEditMode ? (
+                                      modDeletedItemIds.includes(item.id) ? (
+                                        <span className="text-[9px] font-bold text-destructive italic">
+                                          Dihapus
+                                        </span>
+                                      ) : (
+                                        <div className="flex items-center justify-end gap-1">
+                                          <Input
+                                            type="number"
+                                            min={1}
+                                            value={
+                                              modItemsList.find((m) => m.id === item.id)
+                                                ?.qty ?? item.qty
+                                            }
+                                            onChange={(e) =>
+                                              modUpdateItemQty(
+                                                item.id,
+                                                Math.max(1, Number(e.target.value)),
+                                              )
+                                            }
+                                            className="h-7 w-16 text-[11px] font-bold px-1.5 text-right"
+                                          />
+                                          <button
+                                            onClick={() => modDeleteItem(item.id)}
+                                            className="text-muted-foreground/40 hover:text-destructive transition-colors shrink-0"
+                                          >
+                                            <Trash2 className="h-3.5 w-3.5" />
+                                          </button>
+                                        </div>
+                                      )
+                                    ) : (
+                                      <>
+                                        <span className="text-[11px] font-bold text-foreground">
+                                          {item.qty}
+                                        </span>
+                                        <span className="text-[9px] text-muted-foreground ml-1">
+                                          {item.satuan}
+                                        </span>
+                                      </>
+                                    )}
                                   </TableCell>
                                   <TableCell className="text-right pr-4 py-2.5">
                                     <span
@@ -696,6 +997,12 @@ export function PODetailSheet({
                     );
                   })}
                 </div>
+
+                <ModeratorEditLogPanel
+                  docType="po"
+                  docId={Number(poId)}
+                  refreshKey={modLogRefreshKey}
+                />
               </div>
             </>
           )}

@@ -543,6 +543,14 @@ export default function MRDetailPage({
     modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
   const showModAllocationForm =
     modEditMode && modWillBeApproved && !modPreviouslyApprovedLike;
+  // MR sudah punya jejak distribusi stock kalau sudah ada PR/Delivery yang
+  // dibuat dari MR ini, atau item mana pun sudah dialokasikan ke share stock.
+  const mrHasDistribution =
+    prRecords.length > 0 ||
+    deliveryRecords.length > 0 ||
+    items.some((i) => Number(i.qty_sharestock_total || 0) > 0);
+  const modDowngradeLocked = !!modPreviouslyApprovedLike && mrHasDistribution;
+  const modBlockedDowngrade = modEditMode && modDowngradeLocked && !modWillBeApproved;
 
   const handleModSaveEdit = async () => {
     if (modApprovals.length === 0) {
@@ -960,7 +968,12 @@ export default function MRDetailPage({
                   size="sm"
                   className="gap-2 font-semibold bg-warning text-warning-foreground hover:bg-warning/90"
                   onClick={handleModSaveEdit}
-                  disabled={modSaving}
+                  disabled={modSaving || modBlockedDowngrade}
+                  title={
+                    modBlockedDowngrade
+                      ? "Tidak bisa disimpan: status approval akan turun dari 'approved' padahal MR sudah punya distribusi stock."
+                      : undefined
+                  }
                 >
                   {modSaving ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
@@ -1746,6 +1759,31 @@ export default function MRDetailPage({
           <Content title="Jalur Approval">
             {modEditMode ? (
               <div className="space-y-4">
+                {modDowngradeLocked && (
+                  <div
+                    className={`rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed ${
+                      modBlockedDowngrade
+                        ? "border-destructive/40 bg-destructive/10 text-destructive"
+                        : "border-warning/40 bg-warning/10 text-warning"
+                    }`}
+                  >
+                    {modBlockedDowngrade ? (
+                      <>
+                        Tidak bisa disimpan: MR ini sudah punya distribusi stock
+                        (Share Stock/PR/Delivery), tapi jalur approval yang Anda
+                        atur sekarang membuat status turun dari <strong>approved</strong>.
+                        Kembalikan semua tahap ke approved, atau bereskan dulu
+                        distribusi stock-nya sebelum menurunkan status.
+                      </>
+                    ) : (
+                      <>
+                        MR ini sudah punya distribusi stock (Share Stock/PR/Delivery).
+                        Status approval tidak bisa diturunkan dari <strong>approved</strong>{" "}
+                        selama distribusi ini belum dibereskan.
+                      </>
+                    )}
+                  </div>
+                )}
                 <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
                 {modApprovals.some((a) => a.status === "rejected") && (
                   <div className="space-y-1.5">

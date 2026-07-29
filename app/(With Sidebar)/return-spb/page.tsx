@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useDebounce } from "use-debounce";
-import { Plus, Printer, Search, Undo2 } from "lucide-react";
+import { Plus, Printer, Search, ShieldAlert, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,11 @@ import {
   getReturnSpbList,
   rejectReturnSpb,
 } from "@/services/spb-actions";
+import {
+  moderatorEditReturnSpb,
+  ModeratorApprovalStep,
+} from "@/services/moderator-edit-actions";
+import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { createClient } from "@/lib/supabase/client";
 
 export default function ReturnSpbPage() {
@@ -34,6 +39,16 @@ export default function ReturnSpbPage() {
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [userId, setUserId] = useState("");
+
+  // Moderator Edit state
+  const [isModerator, setIsModerator] = useState(false);
+  const [modOpen, setModOpen] = useState(false);
+  const [modSaving, setModSaving] = useState(false);
+  const [modRow, setModRow] = useState<any>(null);
+  const [modRtnTanggal, setModRtnTanggal] = useState("");
+  const [modRtnNote, setModRtnNote] = useState("");
+  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
+  const [modRejectionReason, setModRejectionReason] = useState("");
 
   const fetchData = async () => {
     setLoading(true);
@@ -62,7 +77,16 @@ export default function ReturnSpbPage() {
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      if (user?.id) setUserId(user.id);
+      if (user?.id) {
+        setUserId(user.id);
+        const { data: roleRows } = await supabase
+          .from("user_roles")
+          .select("roles(name)")
+          .eq("user_id", user.id);
+        setIsModerator(
+          (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
+        );
+      }
     };
     loadUser();
   }, [supabase]);
@@ -71,6 +95,56 @@ export default function ReturnSpbPage() {
     return (row.approvals || []).some(
       (a: any) => a.userid === userId && a.status === "pending",
     );
+  };
+
+  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
+    userid: a.userid || a.user_id || "",
+    nama: a.nama || "",
+    email: a.email || "",
+    approval_role:
+      a.approval_role === "mengetahui" || a.level === "mengetahui"
+        ? "mengetahui"
+        : "menyetujui",
+    status: a.status || "pending",
+    processed_at: a.processed_at ?? null,
+    signature_url: a.signature_url ?? null,
+    notes: a.notes ?? null,
+    snapshot: a.snapshot ?? null,
+    position: a.position ?? null,
+  });
+
+  const openModEdit = (row: any) => {
+    setModRow(row);
+    setModRtnTanggal(row.rtn_tanggal ? String(row.rtn_tanggal).slice(0, 10) : "");
+    setModRtnNote(row.rtn_note || "");
+    setModApprovals((row.approvals || []).map(normalizeApprovalStep));
+    setModRejectionReason("");
+    setModOpen(true);
+  };
+
+  const modWillBeApproved =
+    modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
+  const modDowngradeLocked = modRow?.approval_status === "completed";
+  const modBlockedDowngrade = modDowngradeLocked && !modWillBeApproved;
+
+  const handleModSave = async () => {
+    if (!modRow) return;
+    setModSaving(true);
+    const res = await moderatorEditReturnSpb(modRow.id, {
+      rtn_tanggal: modRtnTanggal || undefined,
+      rtn_note: modRtnNote || null,
+      approvals: modApprovals,
+      rejection_reason: modRejectionReason,
+    });
+    if (res.error) {
+      toast.error(res.error);
+      setModSaving(false);
+      return;
+    }
+    toast.success("Moderator Edit berhasil disimpan.");
+    setModOpen(false);
+    setModSaving(false);
+    fetchData();
   };
 
   const onApprove = async (id: number) => {
@@ -215,6 +289,17 @@ export default function ReturnSpbPage() {
                               </Button>
                             </>
                           )}
+                        {isModerator && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="gap-1.5 border-amber-300 text-amber-600 hover:bg-amber-50"
+                            onClick={() => openModEdit(row)}
+                          >
+                            <ShieldAlert className="h-3.5 w-3.5" />
+                            Moderator Edit
+                          </Button>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -236,6 +321,41 @@ export default function ReturnSpbPage() {
           itemLabel="Return SPB"
         />
       </Content>
+
+      {modRow && (
+        <StockOutModeratorEditDialog
+          open={modOpen}
+          onOpenChange={setModOpen}
+          title={`Moderator Edit — Return SPB ${modRow.rtn_kode}`}
+          docType="return_spb"
+          docId={modRow.id}
+          fields={[
+            {
+              key: "rtn_tanggal",
+              label: "Tanggal Return",
+              type: "date",
+              value: modRtnTanggal,
+              onChange: setModRtnTanggal,
+            },
+            {
+              key: "rtn_note",
+              label: "Catatan",
+              type: "textarea",
+              value: modRtnNote,
+              onChange: setModRtnNote,
+            },
+          ]}
+          approvals={modApprovals}
+          onApprovalsChange={setModApprovals}
+          rejectionReason={modRejectionReason}
+          onRejectionReasonChange={setModRejectionReason}
+          downgradeLocked={modDowngradeLocked}
+          downgradeLockedMessage="Return ini berstatus completed, kemungkinan sudah diposting ke stok. Status approval tidak bisa diturunkan dari 'completed' tanpa membereskan posting tersebut terlebih dahulu."
+          blockedDowngrade={modBlockedDowngrade}
+          saving={modSaving}
+          onSave={handleModSave}
+        />
+      )}
     </>
   );
 }

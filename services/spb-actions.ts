@@ -301,7 +301,7 @@ async function applySpbPosting(spbId: number, actorId: string) {
   return { success: true };
 }
 
-async function applyReturnSpbPosting(returnId: number, actorId: string) {
+export async function applyReturnSpbPosting(returnId: number, actorId: string) {
   const supabase = await createClient();
 
   const { data: header, error: headerErr } = await supabase
@@ -433,7 +433,7 @@ async function applyReturnSpbPosting(returnId: number, actorId: string) {
   return { success: true };
 }
 
-async function finalizeSpbPoStatus(spbPoId: number) {
+export async function finalizeSpbPoStatus(spbPoId: number) {
   const supabase = await createClient();
   const { data: po } = await supabase
     .from("spb_po")
@@ -449,7 +449,7 @@ async function finalizeSpbPoStatus(spbPoId: number) {
   }
 }
 
-async function finalizeSpbDoStatus(spbDoId: number) {
+export async function finalizeSpbDoStatus(spbDoId: number) {
   const supabase = await createClient();
   const { data: doHeader } = await supabase
     .from("spb_do")
@@ -473,7 +473,7 @@ async function finalizeSpbDoStatus(spbDoId: number) {
   }
 }
 
-async function finalizeSpbInvoiceStatus(spbInvoiceId: number) {
+export async function finalizeSpbInvoiceStatus(spbInvoiceId: number) {
   const supabase = await createClient();
   const { data: invoiceHeader } = await supabase
     .from("spb_invoice")
