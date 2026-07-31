@@ -126,6 +126,7 @@ export default function SpbPoPage() {
   const [modSoDate, setModSoDate] = useState("");
   const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
   const [modRejectionReason, setModRejectionReason] = useState("");
+  const [modTemplateId, setModTemplateId] = useState<number | null>(null);
 
   const selectedSpb = useMemo(
     () => spbOptions.find((s) => String(s.id) === selectedSpbId),
@@ -318,6 +319,7 @@ export default function SpbPoPage() {
     setModSoDate(row.so_date ? String(row.so_date).slice(0, 10) : "");
     setModApprovals((row.approvals || []).map(normalizeApprovalStep));
     setModRejectionReason("");
+    setModTemplateId(row.approval_template_id ?? null);
     setModOpen(true);
   };
 
@@ -332,6 +334,7 @@ export default function SpbPoPage() {
     const res = await moderatorEditSpbPo(modRow.id, {
       so_no: modSoNo || null,
       so_date: modSoDate ? ymdToLocalStartIso(modSoDate) : null,
+      approval_template_id: modTemplateId ?? undefined,
       approvals: modApprovals,
       rejection_reason: modRejectionReason,
     });
@@ -712,6 +715,8 @@ export default function SpbPoPage() {
           blockedDowngrade={modBlockedDowngrade}
           saving={modSaving}
           onSave={handleModSave}
+          currentTemplateId={modTemplateId}
+          onTemplateIdChange={setModTemplateId}
         />
       )}
     </>

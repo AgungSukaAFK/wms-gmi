@@ -1219,7 +1219,8 @@ export async function createReceive(data: {
   return { success: true };
 }
 
-async function _applyReceiveCompletion(receiveId: number, supabase: any) {
+export async function applyReceiveCompletion(receiveId: number) {
+  const supabase = await createClient();
   const { data: ri } = await supabase
     .from("receives")
     .select("id, po_id")
@@ -1408,7 +1409,7 @@ export async function approveReceive(riId: number, signatureUrl: string) {
   const isAllDone = updatedApprovals.every((a: any) => a.status !== "pending");
 
   if (isAllDone) {
-    const completionResult = await _applyReceiveCompletion(riId, supabase);
+    const completionResult = await applyReceiveCompletion(riId);
     if ((completionResult as any)?.error) {
       return completionResult;
     }

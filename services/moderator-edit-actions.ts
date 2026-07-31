@@ -9,6 +9,7 @@ import {
   finalizeSpbDoStatus,
   finalizeSpbInvoiceStatus,
 } from "@/services/spb-actions";
+import { applyReceiveCompletion } from "@/services/procurement-actions";
 
 export type ModeratorApprovalStep = {
   userid: string;
@@ -1049,6 +1050,263 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
 }
 
 // ============================================================
+// RECEIVE ITEM (GRN)
+// ============================================================
+
+export type ModeratorReceiveEditPayload = {
+  ri_tanggal?: string;
+  ri_pic?: string;
+  ri_keterangan?: string | null;
+  updatedItems?: { id: number; qty: number }[];
+  deletedItemIds?: number[];
+  approvals: ModeratorApprovalStep[];
+  rejection_reason?: string;
+};
+
+/**
+ * Edit Receive Item (GRN) secara penuh oleh moderator: header (tanggal/PIC/
+ * keterangan), qty item, dan jalur/status approval, di luar giliran approval
+ * normal. Begitu ri_status sudah 'completed', stok, po_items.qty_received,
+ * dan mr_items.qty_received sudah diposting (lihat applyReceiveCompletion) —
+ * jadi item TIDAK BOLEH diubah lagi lewat mode ini, dan status approval tidak
+ * boleh diturunkan dari 'completed', supaya tidak ada posting yang jadi tidak
+ * konsisten dengan data receive-nya sendiri. Kalau moderator menyetujui semua
+ * tahap lewat mode ini sehingga baru pertama kali completed, posting stok
+ * yang sama seperti alur approve normal tetap dijalankan (applyReceiveCompletion).
+ */
+export async function moderatorEditReceive(riId: number, payload: ModeratorReceiveEditPayload) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired." };
+
+  const roleNames = await fetchRoleNames(supabase, user.id);
+  if (!roleNames.includes("moderator")) {
+    return { error: "Hanya moderator yang dapat menggunakan Moderator Edit." };
+  }
+
+  const { data: ri, error: riError } = await supabase
+    .from("receives")
+    .select("*")
+    .eq("id", riId)
+    .single();
+  if (riError || !ri) return { error: "Receive tidak ditemukan." };
+
+  if (!payload.approvals || payload.approvals.length === 0) {
+    return { error: "Jalur approval tidak boleh kosong." };
+  }
+  for (const step of payload.approvals) {
+    if (!step.userid || !step.nama) {
+      return { error: "Setiap tahap approval harus punya approver yang dipilih." };
+    }
+    if (!["menyetujui", "mengetahui"].includes(step.approval_role)) {
+      return { error: "Role approval tidak valid." };
+    }
+    if (!["pending", "approved", "rejected"].includes(step.status)) {
+      return { error: "Status approval tidak valid." };
+    }
+  }
+
+  const previousStatus: string = ri.ri_status || "open";
+  const previousCompleted = previousStatus === "completed";
+
+  // 1. Guard: item tidak boleh diubah lagi kalau sudah completed (stok/po_items
+  // /mr_items sudah diposting dan tidak otomatis di-rollback/re-posting di sini).
+  if (
+    previousCompleted &&
+    ((payload.updatedItems && payload.updatedItems.length > 0) ||
+      (payload.deletedItemIds && payload.deletedItemIds.length > 0))
+  ) {
+    return {
+      error:
+        "Receive ini sudah completed — stok dan qty_received sudah diposting. Item tidak bisa diubah lagi lewat Moderator Edit.",
+    };
+  }
+
+  const { data: currentItems } = await supabase
+    .from("receive_items")
+    .select("id, part_number, qty, po_item_id")
+    .eq("ri_id", riId);
+  const itemById = new Map((currentItems || []).map((i: any) => [i.id, i]));
+
+  // 2. Guard: qty item yang diupdate tidak boleh melebihi sisa qty PO item
+  // sumbernya (qty PO dikurangi qty yang sudah diterima dari receive lain —
+  // receive ini sendiri belum diposting selama belum completed).
+  if (payload.updatedItems && payload.updatedItems.length > 0) {
+    const poItemIds = Array.from(
+      new Set(
+        payload.updatedItems
+          .map((u) => itemById.get(u.id)?.po_item_id)
+          .filter((id): id is number => Boolean(id)),
+      ),
+    );
+    if (poItemIds.length > 0) {
+      const { data: poItemRows } = await supabase
+        .from("po_items")
+        .select("id, qty, qty_received, part_number")
+        .in("id", poItemIds);
+      const poItemById = new Map((poItemRows || []).map((r: any) => [r.id, r]));
+
+      for (const upd of payload.updatedItems) {
+        const item = itemById.get(upd.id);
+        if (!item?.po_item_id) continue;
+        const poItem = poItemById.get(item.po_item_id);
+        if (!poItem) continue;
+        const remaining = Math.max(0, (poItem.qty || 0) - (poItem.qty_received || 0));
+        if (upd.qty > remaining) {
+          return {
+            error: `Qty item ${item.part_number} melebihi sisa yang bisa diterima dari PO (sisa ${remaining}).`,
+          };
+        }
+      }
+    }
+  }
+
+  const newStatus = deriveStockOutStatus(payload.approvals);
+  const newCompleted = newStatus === "completed";
+
+  if (newStatus === "rejected" && !payload.rejection_reason?.trim()) {
+    return { error: "Alasan penolakan wajib diisi jika status approval jadi rejected." };
+  }
+
+  // 3. Guard: status approval tidak boleh diturunkan dari 'completed' — begitu
+  // completed, stok/po_items/mr_items sudah diposting berdasarkan data saat itu.
+  if (previousCompleted && !newCompleted) {
+    return {
+      error:
+        "Receive ini sudah completed dan stoknya sudah diposting ke inventory. Tidak bisa mengubah status approval keluar dari 'completed'.",
+    };
+  }
+
+  // 4. Apply item mutations (hanya kalau belum completed, sudah dijamin guard #1).
+  if (payload.deletedItemIds && payload.deletedItemIds.length > 0) {
+    const { error: delErr } = await supabase
+      .from("receive_items")
+      .delete()
+      .in("id", payload.deletedItemIds)
+      .eq("ri_id", riId);
+    if (delErr) return { error: `Gagal hapus item: ${delErr.message}` };
+  }
+  if (payload.updatedItems && payload.updatedItems.length > 0) {
+    for (const item of payload.updatedItems) {
+      const { error: itemErr } = await supabase
+        .from("receive_items")
+        .update({ qty: item.qty })
+        .eq("id", item.id)
+        .eq("ri_id", riId);
+      if (itemErr) return { error: `Gagal update item: ${itemErr.message}` };
+    }
+  }
+
+  // 5. Header patch.
+  const headerPatch: Record<string, any> = {
+    approvals: payload.approvals,
+    ri_status: newStatus,
+    rejection_reason: newStatus === "rejected" ? payload.rejection_reason : null,
+    completed_at: newCompleted ? (ri.completed_at ?? new Date().toISOString()) : null,
+  };
+  if (payload.ri_tanggal !== undefined) headerPatch.ri_tanggal = payload.ri_tanggal;
+  if (payload.ri_pic !== undefined) headerPatch.ri_pic = payload.ri_pic;
+  if (payload.ri_keterangan !== undefined) headerPatch.ri_keterangan = payload.ri_keterangan || null;
+
+  const { error: updateErr } = await supabase.from("receives").update(headerPatch).eq("id", riId);
+  if (updateErr) return { error: updateErr.message };
+
+  // 6. Baru pertama kali completed lewat mode ini → jalankan posting stok yang
+  // sama seperti alur approve normal. Kalau gagal, rollback status supaya tidak
+  // ada dokumen yang "completed" tanpa posting.
+  if (!previousCompleted && newCompleted) {
+    const completionResult = await applyReceiveCompletion(riId);
+    if ((completionResult as any)?.error) {
+      await supabase
+        .from("receives")
+        .update({ ri_status: previousStatus, completed_at: ri.completed_at ?? null })
+        .eq("id", riId);
+      return completionResult;
+    }
+  }
+
+  // 7. Audit log.
+  const { data: myProfile } = await supabase
+    .from("profiles")
+    .select("nama")
+    .eq("id", user.id)
+    .single();
+
+  const summaryParts: string[] = [];
+  if (payload.ri_tanggal !== undefined && payload.ri_tanggal !== ri.ri_tanggal)
+    summaryParts.push("tanggal");
+  if (payload.ri_pic !== undefined && payload.ri_pic !== ri.ri_pic) summaryParts.push("PIC");
+  if (payload.ri_keterangan !== undefined) summaryParts.push("keterangan");
+  if (payload.updatedItems?.length) summaryParts.push(`${payload.updatedItems.length} item diubah`);
+  if (payload.deletedItemIds?.length) summaryParts.push(`${payload.deletedItemIds.length} item dihapus`);
+  if (previousStatus !== newStatus) summaryParts.push(`status ${previousStatus} → ${newStatus}`);
+  summaryParts.push(`jalur approval (${payload.approvals.length} tahap)`);
+
+  await supabase.from("moderator_edit_logs").insert({
+    doc_type: "receive",
+    doc_id: riId,
+    user_id: user.id,
+    user_nama: myProfile?.nama || user.email,
+    summary: `Moderator edit: ${summaryParts.join(", ")}.`,
+    changes: {
+      before: {
+        ri_tanggal: ri.ri_tanggal,
+        ri_pic: ri.ri_pic,
+        ri_keterangan: ri.ri_keterangan,
+        ri_status: previousStatus,
+        approvals: ri.approvals,
+      },
+      after: {
+        ri_tanggal: headerPatch.ri_tanggal ?? ri.ri_tanggal,
+        ri_pic: headerPatch.ri_pic ?? ri.ri_pic,
+        ri_keterangan: headerPatch.ri_keterangan ?? ri.ri_keterangan,
+        ri_status: newStatus,
+        approvals: payload.approvals,
+      },
+      items: {
+        updated: payload.updatedItems || [],
+        deletedIds: payload.deletedItemIds || [],
+      },
+    },
+  });
+
+  // 8. Notifications.
+  if (previousStatus !== newStatus && ri.ri_pic_id) {
+    if (newStatus === "completed") {
+      notifyDocumentOwner(
+        ri.ri_pic_id,
+        "document_completed",
+        "RI",
+        riId,
+        ri.ri_kode,
+        `/receive`,
+        myProfile?.nama || "Moderator",
+      ).catch(console.error);
+    } else if (newStatus === "rejected") {
+      notifyDocumentOwner(
+        ri.ri_pic_id,
+        "rejected",
+        "RI",
+        riId,
+        ri.ri_kode,
+        `/receive`,
+        myProfile?.nama || "Moderator",
+        payload.rejection_reason,
+      ).catch(console.error);
+    }
+  }
+  notifyApprovers(payload.approvals, "RI", riId, ri.ri_kode, `/receive`).catch(console.error);
+
+  revalidatePath("/receive");
+  revalidatePath("/po");
+  revalidatePath("/stock");
+  revalidatePath("/mr");
+  return { success: true };
+}
+
+// ============================================================
 // STOCK OUT (SPB) — spb_po, spb_do, spb_invoice, return_spb
 // ============================================================
 //
@@ -1253,6 +1511,7 @@ async function _moderatorEditStockOut(params: {
 export type ModeratorSpbPoEditPayload = {
   so_no?: string | null;
   so_date?: string | null;
+  approval_template_id?: number;
   approvals: ModeratorApprovalStep[];
   rejection_reason?: string;
 };
@@ -1266,6 +1525,9 @@ export async function moderatorEditSpbPo(id: number, payload: ModeratorSpbPoEdit
     headerPatch: {
       so_no: payload.so_no || null,
       so_date: payload.so_date || null,
+      ...(payload.approval_template_id !== undefined
+        ? { approval_template_id: payload.approval_template_id }
+        : {}),
     },
     approvals: payload.approvals,
     rejectionReason: payload.rejection_reason,
@@ -1278,6 +1540,7 @@ export type ModeratorSpbDoEditPayload = {
   do_date?: string | null;
   do_status_part?: string | null;
   do_pic?: string | null;
+  approval_template_id?: number;
   approvals: ModeratorApprovalStep[];
   rejection_reason?: string;
 };
@@ -1292,6 +1555,9 @@ export async function moderatorEditSpbDo(id: number, payload: ModeratorSpbDoEdit
       do_date: payload.do_date || null,
       do_status_part: payload.do_status_part || null,
       do_pic: payload.do_pic || null,
+      ...(payload.approval_template_id !== undefined
+        ? { approval_template_id: payload.approval_template_id }
+        : {}),
     },
     approvals: payload.approvals,
     rejectionReason: payload.rejection_reason,
@@ -1303,6 +1569,7 @@ export async function moderatorEditSpbDo(id: number, payload: ModeratorSpbDoEdit
 export type ModeratorSpbInvoiceEditPayload = {
   invoice_date?: string | null;
   invoice_email_date?: string | null;
+  approval_template_id?: number;
   approvals: ModeratorApprovalStep[];
   rejection_reason?: string;
 };
@@ -1316,6 +1583,9 @@ export async function moderatorEditSpbInvoice(id: number, payload: ModeratorSpbI
     headerPatch: {
       invoice_date: payload.invoice_date || null,
       invoice_email_date: payload.invoice_email_date || null,
+      ...(payload.approval_template_id !== undefined
+        ? { approval_template_id: payload.approval_template_id }
+        : {}),
     },
     approvals: payload.approvals,
     rejectionReason: payload.rejection_reason,
@@ -1327,6 +1597,7 @@ export async function moderatorEditSpbInvoice(id: number, payload: ModeratorSpbI
 export type ModeratorReturnSpbEditPayload = {
   rtn_tanggal?: string;
   rtn_note?: string | null;
+  approval_template_id?: number;
   approvals: ModeratorApprovalStep[];
   rejection_reason?: string;
 };
@@ -1340,6 +1611,9 @@ export async function moderatorEditReturnSpb(id: number, payload: ModeratorRetur
     headerPatch: {
       ...(payload.rtn_tanggal !== undefined ? { rtn_tanggal: payload.rtn_tanggal } : {}),
       rtn_note: payload.rtn_note || null,
+      ...(payload.approval_template_id !== undefined
+        ? { approval_template_id: payload.approval_template_id }
+        : {}),
     },
     approvals: payload.approvals,
     rejectionReason: payload.rejection_reason,
@@ -1355,7 +1629,7 @@ export async function moderatorEditReturnSpb(id: number, payload: ModeratorRetur
 }
 
 export async function getModeratorEditLogs(
-  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb",
+  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive",
   docId: number,
 ) {
   const supabase = await createClient();

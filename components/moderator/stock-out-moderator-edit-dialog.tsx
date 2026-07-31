@@ -6,7 +6,7 @@
 // karena dokumen-dokumen ini tidak punya halaman/sheet detail sendiri —
 // approve/reject-nya pun sudah dilakukan langsung dari baris tabel.
 
-import React from "react";
+import React, { useEffect, useState } from "react";
 import {
   Dialog,
   DialogContent,
@@ -19,11 +19,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Save, ShieldAlert } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Loader2, Save, ShieldAlert, RefreshCcw } from "lucide-react";
+import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import type { ModeratorApprovalStep } from "@/services/moderator-edit-actions";
+import {
+  getStockOutApprovalTemplateOptions,
+  previewStockOutApprovalFromTemplate,
+} from "@/services/spb-actions";
 
 export type StockOutModeratorEditField = {
   key: string;
@@ -32,6 +44,8 @@ export type StockOutModeratorEditField = {
   value: string;
   onChange: (value: string) => void;
 };
+
+type StockOutTemplateOption = { id: number; name: string | null; cabang_id: number | null };
 
 interface StockOutModeratorEditDialogProps {
   open: boolean;
@@ -49,6 +63,8 @@ interface StockOutModeratorEditDialogProps {
   blockedDowngrade: boolean;
   saving: boolean;
   onSave: () => void;
+  currentTemplateId: number | null;
+  onTemplateIdChange: (id: number) => void;
 }
 
 export function StockOutModeratorEditDialog({
@@ -67,8 +83,50 @@ export function StockOutModeratorEditDialog({
   blockedDowngrade,
   saving,
   onSave,
+  currentTemplateId,
+  onTemplateIdChange,
 }: StockOutModeratorEditDialogProps) {
   const willReject = approvals.some((a) => a.status === "rejected");
+
+  // Ubah/perbarui template — dipakai kalau template approval sudah direvisi
+  // setelah dokumen ini dibuat (langkah/approver-nya jadi tidak sinkron lagi
+  // dengan snapshot di `approvals`), atau moderator mau pindah ke template
+  // lain sama sekali. Hasilnya cuma preview di form ini — belum tersimpan
+  // sampai "Simpan Moderator Edit" ditekan.
+  const [templateOptions, setTemplateOptions] = useState<StockOutTemplateOption[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setLoadingTemplates(true);
+    getStockOutApprovalTemplateOptions(docType, docId)
+      .then((res) => {
+        if (res.error) {
+          toast.error(res.error);
+          setTemplateOptions([]);
+          return;
+        }
+        setTemplateOptions(res.data || []);
+      })
+      .finally(() => setLoadingTemplates(false));
+  }, [open, docType, docId]);
+
+  const handleApplyTemplate = async () => {
+    if (!currentTemplateId) {
+      toast.error("Pilih template terlebih dahulu.");
+      return;
+    }
+    setApplyingTemplate(true);
+    const res = await previewStockOutApprovalFromTemplate(docType, docId, currentTemplateId);
+    setApplyingTemplate(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    onApprovalsChange(res.data as ModeratorApprovalStep[]);
+    toast.success("Jalur approval diperbarui dari template. Cek dulu sebelum menyimpan.");
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -109,6 +167,56 @@ export function StockOutModeratorEditDialog({
                 )}
               </div>
             ))}
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+              Template Approval
+            </Label>
+            <div className="flex items-center gap-2">
+              <Select
+                value={currentTemplateId ? String(currentTemplateId) : undefined}
+                onValueChange={(v) => onTemplateIdChange(Number(v))}
+                disabled={loadingTemplates || templateOptions.length === 0}
+              >
+                <SelectTrigger className="h-9 text-sm flex-1">
+                  <SelectValue
+                    placeholder={loadingTemplates ? "Memuat template..." : "Pilih template"}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {templateOptions.map((t) => (
+                    <SelectItem key={t.id} value={String(t.id)}>
+                      {t.name || `Template #${t.id}`}
+                      {t.cabang_id === null ? " (Global)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-9 gap-1.5 text-[11px] font-bold shrink-0"
+                onClick={handleApplyTemplate}
+                disabled={applyingTemplate || !currentTemplateId}
+              >
+                {applyingTemplate ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCcw className="h-3.5 w-3.5" />
+                )}
+                Perbarui dari Template
+              </Button>
+            </div>
+            <p className="text-[10px] text-muted-foreground leading-relaxed">
+              Pilih template yang sama untuk menyinkronkan ulang jalur approval
+              kalau templatenya sudah direvisi (langkah/approver berubah), atau
+              pilih template lain untuk ganti jalur sepenuhnya. Ini cuma
+              mengganti daftar di bawah — status semua tahap kembali ke
+              pending dan belum tersimpan sampai &ldquo;Simpan Moderator
+              Edit&rdquo; ditekan.
+            </p>
           </div>
 
           <div className="space-y-2">

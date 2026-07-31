@@ -134,6 +134,7 @@ export default function SpbDoPage() {
   const [modDoPic, setModDoPic] = useState("");
   const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
   const [modRejectionReason, setModRejectionReason] = useState("");
+  const [modTemplateId, setModTemplateId] = useState<number | null>(null);
 
   const selectedPo = useMemo(
     () => poOptions.find((s) => String(s.id) === selectedPoId),
@@ -327,6 +328,7 @@ export default function SpbDoPage() {
     setModDoPic(row.do_pic || "");
     setModApprovals((row.approvals || []).map(normalizeApprovalStep));
     setModRejectionReason("");
+    setModTemplateId(row.approval_template_id ?? null);
     setModOpen(true);
   };
 
@@ -342,6 +344,7 @@ export default function SpbDoPage() {
       do_date: modDoDate ? ymdToLocalStartIso(modDoDate) : null,
       do_status_part: modDoStatusPart || null,
       do_pic: modDoPic || null,
+      approval_template_id: modTemplateId ?? undefined,
       approvals: modApprovals,
       rejection_reason: modRejectionReason,
     });
@@ -727,6 +730,8 @@ export default function SpbDoPage() {
           blockedDowngrade={modBlockedDowngrade}
           saving={modSaving}
           onSave={handleModSave}
+          currentTemplateId={modTemplateId}
+          onTemplateIdChange={setModTemplateId}
         />
       )}
     </>

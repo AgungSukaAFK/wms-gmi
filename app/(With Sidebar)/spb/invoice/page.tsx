@@ -138,6 +138,7 @@ export default function SpbInvoicePage() {
   const [modInvoiceEmailDate, setModInvoiceEmailDate] = useState("");
   const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
   const [modRejectionReason, setModRejectionReason] = useState("");
+  const [modTemplateId, setModTemplateId] = useState<number | null>(null);
 
   const selectedDo = useMemo(
     () => doOptions.find((s) => String(s.id) === selectedDoId),
@@ -332,6 +333,7 @@ export default function SpbInvoicePage() {
     );
     setModApprovals((row.approvals || []).map(normalizeApprovalStep));
     setModRejectionReason("");
+    setModTemplateId(row.approval_template_id ?? null);
     setModOpen(true);
   };
 
@@ -341,6 +343,7 @@ export default function SpbInvoicePage() {
     const res = await moderatorEditSpbInvoice(modRow.id, {
       invoice_date: modInvoiceDate ? ymdToLocalStartIso(modInvoiceDate) : null,
       invoice_email_date: modInvoiceEmailDate ? ymdToLocalStartIso(modInvoiceEmailDate) : null,
+      approval_template_id: modTemplateId ?? undefined,
       approvals: modApprovals,
       rejection_reason: modRejectionReason,
     });
@@ -762,6 +765,8 @@ export default function SpbInvoicePage() {
           blockedDowngrade={false}
           saving={modSaving}
           onSave={handleModSave}
+          currentTemplateId={modTemplateId}
+          onTemplateIdChange={setModTemplateId}
         />
       )}
     </>

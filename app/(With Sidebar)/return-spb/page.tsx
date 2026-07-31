@@ -49,6 +49,7 @@ export default function ReturnSpbPage() {
   const [modRtnNote, setModRtnNote] = useState("");
   const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
   const [modRejectionReason, setModRejectionReason] = useState("");
+  const [modTemplateId, setModTemplateId] = useState<number | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -119,6 +120,7 @@ export default function ReturnSpbPage() {
     setModRtnNote(row.rtn_note || "");
     setModApprovals((row.approvals || []).map(normalizeApprovalStep));
     setModRejectionReason("");
+    setModTemplateId(row.approval_template_id ?? null);
     setModOpen(true);
   };
 
@@ -133,6 +135,7 @@ export default function ReturnSpbPage() {
     const res = await moderatorEditReturnSpb(modRow.id, {
       rtn_tanggal: modRtnTanggal || undefined,
       rtn_note: modRtnNote || null,
+      approval_template_id: modTemplateId ?? undefined,
       approvals: modApprovals,
       rejection_reason: modRejectionReason,
     });
@@ -354,6 +357,8 @@ export default function ReturnSpbPage() {
           blockedDowngrade={modBlockedDowngrade}
           saving={modSaving}
           onSave={handleModSave}
+          currentTemplateId={modTemplateId}
+          onTemplateIdChange={setModTemplateId}
         />
       )}
     </>

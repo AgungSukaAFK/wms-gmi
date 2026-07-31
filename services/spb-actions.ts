@@ -161,12 +161,134 @@ async function buildStockOutApprovalFlow(
       nama: profile?.nama || "",
       email: profile?.email || "",
       level: step.step_order,
+      // "menyetujui" | "mengetahui" — preserved from template step, dipakai
+      // Moderator Edit (lihat services/moderator-edit-actions.ts). Sebelumnya
+      // field ini tidak diisi (beda dengan _buildApprovalFlow di
+      // procurement-actions.ts), jadi hilang begitu approval dokumen ini
+      // dimuat ulang lewat mode edit — selalu jatuh ke default "menyetujui".
+      approval_role: isRequester ? "menyetujui" : (step.level ?? "menyetujui"),
       position: step.position_label || null,
       processed_at: null,
       notes: null,
       snapshot: null,
     };
   });
+}
+
+// Cabang sebuah dokumen turunan SPB ditentukan lewat SPB sumbernya (rantai
+// spb -> spb_po -> spb_do -> spb_invoice), dipakai untuk mencocokkan template
+// approval yang scope ke cabang tsb (atau template Global).
+async function resolveStockOutCabangId(
+  supabase: any,
+  docType: Exclude<StockOutDocType, "spb">,
+  docId: number,
+): Promise<number | null> {
+  if (docType === "spb_po") {
+    const { data } = await supabase
+      .from("spb_po")
+      .select("spb:spb_id(cabang_id)")
+      .eq("id", docId)
+      .single();
+    const spbRelation = Array.isArray((data as any)?.spb)
+      ? (data as any)?.spb?.[0]
+      : (data as any)?.spb;
+    return spbRelation?.cabang_id ?? null;
+  }
+  if (docType === "spb_do") {
+    const { data } = await supabase
+      .from("spb_do")
+      .select("po:spb_po_id(spb:spb_id(cabang_id))")
+      .eq("id", docId)
+      .single();
+    const poRelation = Array.isArray((data as any)?.po)
+      ? (data as any)?.po?.[0]
+      : (data as any)?.po;
+    const spbRelation = Array.isArray(poRelation?.spb) ? poRelation?.spb?.[0] : poRelation?.spb;
+    return spbRelation?.cabang_id ?? null;
+  }
+  if (docType === "spb_invoice") {
+    const { data } = await supabase
+      .from("spb_invoice")
+      .select("do:spb_do_id(po:spb_po_id(spb:spb_id(cabang_id)))")
+      .eq("id", docId)
+      .single();
+    const doRelation = Array.isArray((data as any)?.do)
+      ? (data as any)?.do?.[0]
+      : (data as any)?.do;
+    const poRelation = Array.isArray(doRelation?.po) ? doRelation?.po?.[0] : doRelation?.po;
+    const spbRelation = Array.isArray(poRelation?.spb) ? poRelation?.spb?.[0] : poRelation?.spb;
+    return spbRelation?.cabang_id ?? null;
+  }
+  if (docType === "return_spb") {
+    const { data } = await supabase
+      .from("return_spb")
+      .select("spb:spb_id(cabang_id)")
+      .eq("id", docId)
+      .single();
+    const spbRelation = Array.isArray((data as any)?.spb)
+      ? (data as any)?.spb?.[0]
+      : (data as any)?.spb;
+    return spbRelation?.cabang_id ?? null;
+  }
+  return null;
+}
+
+/**
+ * Daftar template approval yang bisa dipilih untuk dokumen turunan SPB ini —
+ * dipakai di Moderator Edit untuk fitur "ubah/perbarui template" (lihat
+ * StockOutModeratorEditDialog). Termasuk template scope cabang dokumen ini
+ * maupun template Global (cabang_id null).
+ */
+export async function getStockOutApprovalTemplateOptions(
+  docType: Exclude<StockOutDocType, "spb">,
+  docId: number,
+) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error, data: [] };
+  const { supabase } = auth;
+
+  const cabangId = await resolveStockOutCabangId(supabase, docType, docId);
+  if (!cabangId) return { error: "Dokumen sumber tidak valid.", data: [] };
+
+  const approvalType = STOCK_OUT_APPROVAL_TYPES[docType];
+  const { data, error } = await supabase
+    .from("approval_templates")
+    .select("id, name, cabang_id")
+    .eq("type", approvalType)
+    .or(`cabang_id.eq.${cabangId},cabang_id.is.null`)
+    .order("cabang_id", { ascending: false, nullsFirst: false })
+    .order("updated_at", { ascending: false });
+
+  if (error) return { error: error.message, data: [] };
+  return { data: data || [] };
+}
+
+/**
+ * Ambil ulang langkah approval dari sebuah template (bisa template yang
+ * sedang dipakai — untuk "perbarui" kalau template-nya sudah diubah setelah
+ * dokumen ini dibuat — atau template lain — untuk "ubah template"). Hasilnya
+ * cuma di-preview di form Moderator Edit, belum disimpan sampai moderator
+ * menekan "Simpan Moderator Edit".
+ */
+export async function previewStockOutApprovalFromTemplate(
+  docType: Exclude<StockOutDocType, "spb">,
+  docId: number,
+  templateId: number,
+) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+  const { supabase, user } = auth;
+
+  const cabangId = await resolveStockOutCabangId(supabase, docType, docId);
+  if (!cabangId) return { error: "Dokumen sumber tidak valid." };
+
+  const steps = await buildStockOutApprovalFlow(supabase, docType, cabangId, user.id, templateId);
+  if (!steps.length) {
+    return {
+      error: "Template tidak ditemukan, tidak sesuai site, atau belum punya langkah approval.",
+    };
+  }
+  return { data: steps };
 }
 
 function processStockOutApprovalStep(
