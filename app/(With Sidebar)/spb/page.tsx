@@ -7,8 +7,10 @@ import {
   Ban,
   Edit2,
   FileWarning,
+  Loader2,
   Plus,
   Printer,
+  RefreshCcw,
   Search,
   Trash2,
 } from "lucide-react";
@@ -47,6 +49,8 @@ import {
   cancelSpb,
   deleteSpb,
   getSpbList,
+  getStockOutApprovalTemplateOptions,
+  previewStockOutApprovalFromTemplate,
   updateSpb,
 } from "@/services/spb-actions";
 import { useAuthStore } from "@/stores/auth-store";
@@ -64,7 +68,11 @@ type SpbRow = {
   spb_pic_gmi?: string | null;
   spb_pic_ppa?: string | null;
   spb_status: string;
+  approval_template_id?: number | null;
 };
+
+type SpbTemplateOption = { id: number; name: string | null; cabang_id: number | null };
+type SpbApprovalPreviewStep = { nama: string; position?: string | null };
 
 export default function SpbPage() {
   const profile = useAuthStore((s) => s.profile);
@@ -91,6 +99,22 @@ export default function SpbPage() {
     spb_problem_remark: "",
     spb_status: "DONE QUOT",
   });
+
+  // Ubah/perbarui template approval (menentukan nama-nama di slot tanda
+  // tangan cetak) — supaya bisa disesuaikan tanpa cancel & buat ulang SPB.
+  // `editTemplatePendingId` cuma pilihan di dropdown; baru "commit" jadi
+  // `editTemplateAppliedId` (dikirim ke updateSpb bersama approvals hasil
+  // preview-nya) setelah "Perbarui dari Template" berhasil, supaya
+  // approval_template_id yang tersimpan tidak pernah lepas sinkron dari isi
+  // approvals-nya.
+  const [editTemplateOptions, setEditTemplateOptions] = useState<SpbTemplateOption[]>([]);
+  const [editLoadingTemplates, setEditLoadingTemplates] = useState(false);
+  const [editTemplatePendingId, setEditTemplatePendingId] = useState<number | null>(null);
+  const [editTemplateAppliedId, setEditTemplateAppliedId] = useState<number | null>(null);
+  const [editApprovalsPreview, setEditApprovalsPreview] = useState<
+    SpbApprovalPreviewStep[] | null
+  >(null);
+  const [editApplyingTemplate, setEditApplyingTemplate] = useState(false);
 
   const canManageSpb = useMemo(() => {
     const roleNames = (
@@ -144,7 +168,45 @@ export default function SpbPage() {
       spb_problem_remark: "",
       spb_status: row.spb_status || "DONE QUOT",
     });
+    setEditTemplatePendingId(row.approval_template_id ?? null);
+    setEditTemplateAppliedId(null);
+    setEditApprovalsPreview(null);
     setEditOpen(true);
+
+    setEditLoadingTemplates(true);
+    getStockOutApprovalTemplateOptions("spb", row.id)
+      .then((res) => {
+        if (res.error) {
+          toast.error(res.error);
+          setEditTemplateOptions([]);
+          return;
+        }
+        setEditTemplateOptions(res.data || []);
+      })
+      .finally(() => setEditLoadingTemplates(false));
+  };
+
+  const handleApplyEditTemplate = async () => {
+    if (!editTarget || !editTemplatePendingId) {
+      toast.error("Pilih template terlebih dahulu.");
+      return;
+    }
+    setEditApplyingTemplate(true);
+    const res = await previewStockOutApprovalFromTemplate(
+      "spb",
+      editTarget.id,
+      editTemplatePendingId,
+    );
+    setEditApplyingTemplate(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    setEditApprovalsPreview(res.data as SpbApprovalPreviewStep[]);
+    setEditTemplateAppliedId(editTemplatePendingId);
+    toast.success(
+      "Nama tanda tangan diperbarui dari template. Cek dulu sebelum menyimpan.",
+    );
   };
 
   const saveEdit = async () => {
@@ -160,6 +222,9 @@ export default function SpbPage() {
       spb_hm: editForm.spb_hm ? Number(editForm.spb_hm) : undefined,
       spb_problem_remark: editForm.spb_problem_remark || undefined,
       spb_status: editForm.spb_status,
+      ...(editApprovalsPreview && editTemplateAppliedId
+        ? { approval_template_id: editTemplateAppliedId, approvals: editApprovalsPreview }
+        : {}),
     });
     setEditSaving(false);
     if (res.error) {
@@ -591,6 +656,69 @@ export default function SpbPage() {
                 }
               />
             </div>
+          </div>
+
+          <div className="space-y-2 border-t pt-4">
+            <Label>Template Approval (Tanda Tangan Cetak)</Label>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              SPB tidak punya approval digital — template ini cuma menentukan
+              nama-nama yang tercetak di slot tanda tangan. Kalau template-nya
+              sudah direvisi (atau mau pakai template lain), pilih di sini lalu
+              klik &ldquo;Perbarui&rdquo; supaya tidak perlu cancel & buat
+              ulang SPB.
+            </p>
+            <div className="flex items-center gap-2">
+              <Select
+                value={editTemplatePendingId ? String(editTemplatePendingId) : undefined}
+                onValueChange={(v) => setEditTemplatePendingId(Number(v))}
+                disabled={editLoadingTemplates || editTemplateOptions.length === 0}
+              >
+                <SelectTrigger className="flex-1">
+                  <SelectValue
+                    placeholder={editLoadingTemplates ? "Memuat template..." : "Pilih template"}
+                  />
+                </SelectTrigger>
+                <SelectContent>
+                  {editTemplateOptions.map((t) => (
+                    <SelectItem key={t.id} value={String(t.id)}>
+                      {t.name || `Template #${t.id}`}
+                      {t.cabang_id === null ? " (Global)" : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 shrink-0"
+                onClick={handleApplyEditTemplate}
+                disabled={editApplyingTemplate || !editTemplatePendingId}
+              >
+                {editApplyingTemplate ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <RefreshCcw className="h-3.5 w-3.5" />
+                )}
+                Perbarui
+              </Button>
+            </div>
+            {editApprovalsPreview && (
+              <div className="rounded-md border bg-muted/40 p-2.5 text-xs space-y-1">
+                <p className="font-semibold text-muted-foreground">
+                  Akan tercetak sebagai:
+                </p>
+                {editApprovalsPreview.map((step, idx) => (
+                  <p key={idx}>
+                    {step.position ? `${step.position}: ` : ""}
+                    {step.nama || "-"}
+                  </p>
+                ))}
+                <p className="text-[11px] text-amber-600">
+                  Belum tersimpan — klik &ldquo;Simpan Perubahan&rdquo; untuk menerapkan.
+                </p>
+              </div>
+            )}
           </div>
 
           <DialogFooter>

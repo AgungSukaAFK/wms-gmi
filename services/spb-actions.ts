@@ -175,14 +175,19 @@ async function buildStockOutApprovalFlow(
   });
 }
 
-// Cabang sebuah dokumen turunan SPB ditentukan lewat SPB sumbernya (rantai
-// spb -> spb_po -> spb_do -> spb_invoice), dipakai untuk mencocokkan template
-// approval yang scope ke cabang tsb (atau template Global).
+// Cabang sebuah dokumen SPB (atau turunannya) ditentukan lewat SPB sumbernya
+// (rantai spb -> spb_po -> spb_do -> spb_invoice, atau langsung cabang_id
+// untuk spb/return_spb), dipakai untuk mencocokkan template approval yang
+// scope ke cabang tsb (atau template Global).
 async function resolveStockOutCabangId(
   supabase: any,
-  docType: Exclude<StockOutDocType, "spb">,
+  docType: StockOutDocType,
   docId: number,
 ): Promise<number | null> {
+  if (docType === "spb") {
+    const { data } = await supabase.from("spb").select("cabang_id").eq("id", docId).single();
+    return (data as any)?.cabang_id ?? null;
+  }
   if (docType === "spb_po") {
     const { data } = await supabase
       .from("spb_po")
@@ -234,13 +239,16 @@ async function resolveStockOutCabangId(
 }
 
 /**
- * Daftar template approval yang bisa dipilih untuk dokumen turunan SPB ini —
- * dipakai di Moderator Edit untuk fitur "ubah/perbarui template" (lihat
- * StockOutModeratorEditDialog). Termasuk template scope cabang dokumen ini
- * maupun template Global (cabang_id null).
+ * Daftar template approval yang bisa dipilih untuk dokumen SPB (atau turunan-
+ * nya) ini — dipakai di fitur "ubah/perbarui template": StockOutModeratorEdit
+ * Dialog untuk spb_po/spb_do/spb_invoice/return_spb, dan edit dialog SPB biasa
+ * (app/(With Sidebar)/spb/page.tsx) untuk base spb (di sana cuma menentukan
+ * nama-nama yang tercetak di slot tanda tangan, bukan approval digital).
+ * Termasuk template scope cabang dokumen ini maupun template Global
+ * (cabang_id null).
  */
 export async function getStockOutApprovalTemplateOptions(
-  docType: Exclude<StockOutDocType, "spb">,
+  docType: StockOutDocType,
   docId: number,
 ) {
   const auth = await requireModeratorOrAdmin();
@@ -271,7 +279,7 @@ export async function getStockOutApprovalTemplateOptions(
  * menekan "Simpan Moderator Edit".
  */
 export async function previewStockOutApprovalFromTemplate(
-  docType: Exclude<StockOutDocType, "spb">,
+  docType: StockOutDocType,
   docId: number,
   templateId: number,
 ) {
@@ -282,7 +290,10 @@ export async function previewStockOutApprovalFromTemplate(
   const cabangId = await resolveStockOutCabangId(supabase, docType, docId);
   if (!cabangId) return { error: "Dokumen sumber tidak valid." };
 
-  const steps = await buildStockOutApprovalFlow(supabase, docType, cabangId, user.id, templateId);
+  let steps = await buildStockOutApprovalFlow(supabase, docType, cabangId, user.id, templateId);
+  // Base spb tidak punya approval digital — approvals-nya cuma dipakai untuk
+  // slot tanda tangan cetak (maks 4, sama seperti createSpb).
+  if (docType === "spb") steps = steps.slice(0, MAX_SIGNATURE_SLOTS);
   if (!steps.length) {
     return {
       error: "Template tidak ditemukan, tidak sesuai site, atau belum punya langkah approval.",
@@ -921,6 +932,13 @@ export async function updateSpb(
     spb_hm: number;
     spb_problem_remark: string;
     spb_status: string;
+    // Dikirim bersamaan (lihat previewStockOutApprovalFromTemplate) supaya
+    // approval_template_id tidak pernah tersimpan tanpa approvals yang sesuai
+    // — dipakai fitur "ubah/perbarui template" di app/(With Sidebar)/spb/page.tsx
+    // untuk menyesuaikan nama-nama di slot tanda tangan cetak tanpa cancel &
+    // buat ulang SPB.
+    approval_template_id: number;
+    approvals: any[];
   }>,
 ) {
   const auth = await requireModeratorOrAdmin();

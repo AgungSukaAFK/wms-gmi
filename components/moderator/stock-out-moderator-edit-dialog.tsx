@@ -93,12 +93,21 @@ export function StockOutModeratorEditDialog({
   // dengan snapshot di `approvals`), atau moderator mau pindah ke template
   // lain sama sekali. Hasilnya cuma preview di form ini — belum tersimpan
   // sampai "Simpan Moderator Edit" ditekan.
+  //
+  // `pendingTemplateId` sengaja dipisah dari `currentTemplateId` (yang
+  // dikirim ke server saat Simpan): memilih template di dropdown TIDAK
+  // langsung meng-commit approval_template_id, supaya approval_template_id
+  // yang tersimpan tidak pernah lepas sinkron dari isi `approvals` — keduanya
+  // baru di-commit bersamaan lewat onTemplateIdChange begitu "Perbarui dari
+  // Template" berhasil.
   const [templateOptions, setTemplateOptions] = useState<StockOutTemplateOption[]>([]);
   const [loadingTemplates, setLoadingTemplates] = useState(false);
   const [applyingTemplate, setApplyingTemplate] = useState(false);
+  const [pendingTemplateId, setPendingTemplateId] = useState<number | null>(currentTemplateId);
 
   useEffect(() => {
     if (!open) return;
+    setPendingTemplateId(currentTemplateId);
     setLoadingTemplates(true);
     getStockOutApprovalTemplateOptions(docType, docId)
       .then((res) => {
@@ -110,21 +119,23 @@ export function StockOutModeratorEditDialog({
         setTemplateOptions(res.data || []);
       })
       .finally(() => setLoadingTemplates(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, docType, docId]);
 
   const handleApplyTemplate = async () => {
-    if (!currentTemplateId) {
+    if (!pendingTemplateId) {
       toast.error("Pilih template terlebih dahulu.");
       return;
     }
     setApplyingTemplate(true);
-    const res = await previewStockOutApprovalFromTemplate(docType, docId, currentTemplateId);
+    const res = await previewStockOutApprovalFromTemplate(docType, docId, pendingTemplateId);
     setApplyingTemplate(false);
     if (res.error) {
       toast.error(res.error);
       return;
     }
     onApprovalsChange(res.data as ModeratorApprovalStep[]);
+    onTemplateIdChange(pendingTemplateId);
     toast.success("Jalur approval diperbarui dari template. Cek dulu sebelum menyimpan.");
   };
 
@@ -175,8 +186,8 @@ export function StockOutModeratorEditDialog({
             </Label>
             <div className="flex items-center gap-2">
               <Select
-                value={currentTemplateId ? String(currentTemplateId) : undefined}
-                onValueChange={(v) => onTemplateIdChange(Number(v))}
+                value={pendingTemplateId ? String(pendingTemplateId) : undefined}
+                onValueChange={(v) => setPendingTemplateId(Number(v))}
                 disabled={loadingTemplates || templateOptions.length === 0}
               >
                 <SelectTrigger className="h-9 text-sm flex-1">
@@ -199,7 +210,7 @@ export function StockOutModeratorEditDialog({
                 size="sm"
                 className="h-9 gap-1.5 text-[11px] font-bold shrink-0"
                 onClick={handleApplyTemplate}
-                disabled={applyingTemplate || !currentTemplateId}
+                disabled={applyingTemplate || !pendingTemplateId}
               >
                 {applyingTemplate ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
