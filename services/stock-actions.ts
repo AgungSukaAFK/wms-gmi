@@ -254,6 +254,7 @@ export async function clearMinMaxBatch(batchCode: string): Promise<void> {
 
 export interface SohStageRow {
   part_number: string;
+  part_name: string;
   nama_cabang: string;
   qty: number;
   source_row: number;
@@ -278,6 +279,7 @@ export async function stageSohChunk(
   const payload = rows.map((r) => ({
     batch_code: batchCode,
     part_number: String(r.part_number).trim(),
+    part_name: String(r.part_name ?? "").trim() || null,
     nama_cabang: String(r.nama_cabang).trim(),
     qty: toInt(r.qty),
     source_row: Math.trunc(Number(r.source_row) || 0),
@@ -313,9 +315,11 @@ export interface SohProblemReport {
 
 /**
  * Validasi batch staging SOH dan kembalikan daftar masalah detail. Tidak
- * menerapkan apa pun. `unmatched_parts` bersifat informatif saja (akan
- * dilewati, tidak memblokir) -- yang lain (negatif/duplikat/pecahan)
- * memblokir apply.
+ * menerapkan apa pun. Dipakai untuk debug manual saja -- alur upload utama
+ * di StockClient langsung stage -> apply (lebih cepat untuk ~190rb baris),
+ * karena duplikat/pecahan pada dasarnya mustahil terjadi dari data yang
+ * sudah di-dedupe di client, dan negatif/part baru sekarang ditangani oleh
+ * applySohBatch sendiri (skip & auto-create, bukan pemblokir).
  */
 export async function validateSohBatch(
   batchCode: string,
@@ -335,18 +339,31 @@ export async function validateSohBatch(
 }
 
 /**
- * Terapkan batch SOH (update qty riil + default max_qty 999999 untuk baris
- * yang max-nya belum diset) lalu bersihkan staging. Pakai SETELAH
- * validateSohBatch memastikan tidak ada error pemblokir.
+ * Terapkan batch SOH lalu bersihkan staging:
+ * - Update qty riil untuk part yang sudah terdaftar.
+ * - Default max_qty jadi 999999 untuk baris yang max-nya belum diset (masih 0).
+ * - Auto-create barang baru (part_satuan default "UNIT") + stock row untuk
+ *   part yang belum terdaftar, selama qty-nya valid (bukan negatif).
+ * - Qty negatif di-skip per baris (dilaporkan, tidak memblokir batch).
+ * - Duplikat/qty pecahan tetap memblokir seluruh batch (raise exception) --
+ *   ini seharusnya mustahil terjadi dari jalur upload web.
  */
-export async function applySohBatch(
-  batchCode: string,
-): Promise<
+export interface SohNegativeSample {
+  source_row: number;
+  part_number: string;
+  nama_cabang: string;
+  qty: number;
+}
+
+export async function applySohBatch(batchCode: string): Promise<
   | {
       success: true;
       updatedRows: number;
       maxDefaultedRows: number;
-      skippedUnmatchedBarang: number;
+      newPartsCreated: number;
+      newStockRows: number;
+      skippedNegativeQty: number;
+      negativeSamples: SohNegativeSample[];
     }
   | { success: false; error: string }
 > {
@@ -367,7 +384,10 @@ export async function applySohBatch(
       success: true,
       updatedRows: Number(row?.updated_rows ?? 0),
       maxDefaultedRows: Number(row?.max_defaulted_rows ?? 0),
-      skippedUnmatchedBarang: Number(row?.skipped_unmatched_barang ?? 0),
+      newPartsCreated: Number(row?.new_parts_created ?? 0),
+      newStockRows: Number(row?.new_stock_rows ?? 0),
+      skippedNegativeQty: Number(row?.skipped_negative_qty ?? 0),
+      negativeSamples: (row?.negative_samples ?? []) as SohNegativeSample[],
     };
   } catch (e: any) {
     return { success: false, error: e?.message || "Gagal menerapkan SOH." };

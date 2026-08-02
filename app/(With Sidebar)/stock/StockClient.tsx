@@ -47,10 +47,9 @@ import {
   clearMinMaxBatch,
   type MinMaxProblemReport,
   stageSohChunk,
-  validateSohBatch,
   applySohBatch,
   clearSohBatch,
-  type SohProblemReport,
+  type SohStageRow,
 } from "@/services/stock-actions";
 
 const TEMPLATE_SHEET = "STOCK MIN MAX";
@@ -144,6 +143,9 @@ export default function StockClient({
   const [problems, setProblems] = useState<MinMaxProblemReport | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [siteSelectOpen, setSiteSelectOpen] = useState(false);
+  const [templateKind, setTemplateKind] = useState<"minmax" | "soh">(
+    "minmax",
+  );
   const [selectedCabangIds, setSelectedCabangIds] = useState<number[]>(
     cabangList.map((c: any) => c.id),
   );
@@ -158,14 +160,19 @@ export default function StockClient({
     done: number;
     total: number;
   } | null>(null);
-  const [sohProblems, setSohProblems] = useState<SohProblemReport | null>(
-    null,
-  );
   const [sohUploadError, setSohUploadError] = useState<string | null>(null);
   const [sohSummary, setSohSummary] = useState<{
     updatedRows: number;
     maxDefaultedRows: number;
-    skippedUnmatchedBarang: number;
+    newPartsCreated: number;
+    newStockRows: number;
+    skippedNegativeQty: number;
+    negativeSamples: {
+      source_row: number;
+      part_number: string;
+      nama_cabang: string;
+      qty: number;
+    }[];
   } | null>(null);
   const sohStageStartRef = useRef(0);
 
@@ -282,6 +289,117 @@ export default function StockClient({
               .replace(/[^a-zA-Z0-9-]/g, "");
       XLSX.writeFile(wb, `TEMPLATE_MINMAX_STOCK_${siteSuffix}_${ymd}.xlsx`);
       toast.success(`Template diunduh (${parts.size} part).`);
+    } catch {
+      toast.error("Gagal mengunduh template.");
+    } finally {
+      setDownloading(false);
+      setDlProgress(null);
+    }
+  };
+
+  /**
+   * Template SOH: format wide persis seperti file SOH yang dipakai fitur
+   * Update SOH (No. Barang, Deskripsi Barang, satu kolom qty per cabang,
+   * SUM SOH) -- diisi qty stok saat ini, supaya hasil download ini bisa
+   * langsung diupload lagi lewat "Update SOH" tanpa perlu diubah strukturnya.
+   * Reuse data fetching yang sama dengan Template Min/Max (qty saja yang
+   * dipakai, min/max diabaikan).
+   */
+  const handleDownloadSohTemplate = async (cabangIds: number[]) => {
+    if (cabangIds.length === 0) {
+      toast.error("Pilih minimal 1 site terlebih dahulu.");
+      return;
+    }
+    setDownloading(true);
+    setDlProgress({ done: 0, total: 0 });
+    try {
+      const meta = await getStockMinMaxMeta(cabangIds);
+      if (!meta.success) {
+        toast.error(meta.error);
+        return;
+      }
+      const cabang = meta.cabang.filter((c: any) => cabangIds.includes(c.id));
+      const { total } = meta;
+      setDlProgress({ done: 0, total });
+      dlStartRef.current = Date.now();
+
+      const parts = new Map<
+        string,
+        { part_number: string; name: string; cab: Map<number, number> }
+      >();
+      const PAGE = 1000;
+      for (let off = 0; off < Math.max(total, 1); off += PAGE) {
+        const res = await fetchStockMinMaxPage(off, PAGE, cabangIds);
+        if (!res.success) {
+          toast.error(res.error);
+          return;
+        }
+        for (const r of res.rows) {
+          const key = r.part_number.trim().toUpperCase();
+          let p = parts.get(key);
+          if (!p) {
+            p = { part_number: r.part_number, name: r.part_name, cab: new Map() };
+            parts.set(key, p);
+          }
+          if (!p.cab.has(r.cabang_id)) p.cab.set(r.cabang_id, r.qty);
+        }
+        setDlProgress({ done: Math.min(off + PAGE, total), total });
+        if (res.rows.length < PAGE) break;
+      }
+
+      const header: string[] = [
+        "No. Barang",
+        "Deskripsi Barang",
+        ...cabang.map((c: any) => c.nama_cabang),
+        "SUM SOH",
+      ];
+      const aoa: (string | number)[][] = [header];
+      for (const key of [...parts.keys()].sort()) {
+        const p = parts.get(key)!;
+        const qtys = cabang.map((c: any) => p.cab.get(c.id) ?? 0);
+        const sum = qtys.reduce((a, b) => a + b, 0);
+        aoa.push([p.part_number, p.name, ...qtys, sum]);
+      }
+
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws["!cols"] = header.map((_, i) =>
+        i === 0 ? { wch: 22 } : i === 1 ? { wch: 40 } : { wch: 12 },
+      );
+      XLSX.utils.book_append_sheet(wb, ws, "SOH");
+      const guide = XLSX.utils.aoa_to_sheet([
+        ["PETUNJUK PENGISIAN SOH"],
+        [""],
+        [
+          "1. Kolom per cabang berisi qty stok saat ini -- edit angkanya sesuai " +
+            "hasil stock opname / SOH terbaru.",
+        ],
+        [
+          "2. JANGAN mengubah isi/header kolom 'No. Barang' & 'Deskripsi Barang'.",
+        ],
+        [
+          "3. Kolom SUM SOH cuma referensi (tidak diproses saat upload), boleh " +
+            "dibiarkan tidak sinkron kalau lupa update.",
+        ],
+        [
+          "4. Part yang tidak ada di file ini tidak akan berubah datanya. Part " +
+            "baru yang belum terdaftar akan otomatis dibuat sebagai barang baru.",
+        ],
+        ["5. Simpan tetap .xlsx, lalu upload via tombol 'Update SOH'."],
+      ]);
+      guide["!cols"] = [{ wch: 90 }];
+      XLSX.utils.book_append_sheet(wb, guide, "PETUNJUK");
+
+      const ymd = new Date().toLocaleDateString("sv-SE").replace(/-/g, "");
+      const siteSuffix =
+        cabangIds.length === cabangList.length
+          ? "SEMUA_SITE"
+          : cabang
+              .map((c: any) => c.nama_cabang)
+              .join("-")
+              .replace(/[^a-zA-Z0-9-]/g, "");
+      XLSX.writeFile(wb, `TEMPLATE_SOH_STOCK_${siteSuffix}_${ymd}.xlsx`);
+      toast.success(`Template SOH diunduh (${parts.size} part).`);
     } catch {
       toast.error("Gagal mengunduh template.");
     } finally {
@@ -485,7 +603,6 @@ export default function StockClient({
       return;
     }
     setSohUploading(true);
-    setSohProblems(null);
     setSohUploadError(null);
     setSohSummary(null);
     let batchCode = "";
@@ -550,19 +667,12 @@ export default function StockClient({
 
       // 2. Bangun baris, digabung per part+cabang case-insensitive (part bisa
       // muncul dengan variasi huruf besar/kecil untuk part yang sama).
-      const merged = new Map<
-        string,
-        {
-          part_number: string;
-          nama_cabang: string;
-          qty: number;
-          source_row: number;
-        }
-      >();
+      const merged = new Map<string, SohStageRow>();
       for (let r = 1; r < aoa.length; r++) {
         const row = aoa[r] || [];
         const pn = String(row[0] ?? "").trim();
         if (!pn) continue;
+        const partName = String(row[1] ?? "").trim();
         for (const { idx, name } of branchCols) {
           const qty = parseQtyCell(row[idx]);
           const key = `${N(pn)}|${N(name)}`;
@@ -571,6 +681,7 @@ export default function StockClient({
           else
             merged.set(key, {
               part_number: pn,
+              part_name: partName,
               nama_cabang: name,
               qty,
               source_row: r + 1,
@@ -583,56 +694,53 @@ export default function StockClient({
         return;
       }
 
-      // 3. Stage per chunk (progress)
+      // 3. Stage per chunk, beberapa chunk sekaligus (paralel) supaya cepat
+      // untuk ratusan ribu baris -- staging saja tidak perlu urut.
       batchCode = `SOH_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-      const CHUNK = 5000;
+      const CHUNK = 10000;
+      const CONCURRENCY = 6;
+      const chunks: SohStageRow[][] = [];
+      for (let i = 0; i < rows.length; i += CHUNK)
+        chunks.push(rows.slice(i, i + CHUNK));
+
       sohStageStartRef.current = Date.now();
       setSohUpProgress({
         phase: "Mengunggah data",
         done: 0,
         total: rows.length,
       });
-      for (let i = 0; i < rows.length; i += CHUNK) {
-        const res = await stageSohChunk(batchCode, rows.slice(i, i + CHUNK));
-        if (!res.success) {
-          setSohUploadError(res.error || "Gagal mengunggah data.");
-          await clearSohBatch(batchCode);
-          return;
+      let doneRows = 0;
+      let stageError: string | null = null;
+      let nextChunk = 0;
+      const worker = async () => {
+        while (nextChunk < chunks.length && !stageError) {
+          const my = nextChunk++;
+          const res = await stageSohChunk(batchCode, chunks[my]);
+          if (!res.success) {
+            stageError = res.error || "Gagal mengunggah data.";
+            return;
+          }
+          doneRows += chunks[my].length;
+          setSohUpProgress({
+            phase: "Mengunggah data",
+            done: doneRows,
+            total: rows.length,
+          });
         }
-        setSohUpProgress({
-          phase: "Mengunggah data",
-          done: Math.min(i + CHUNK, rows.length),
-          total: rows.length,
-        });
-      }
-
-      // 4. Validasi detail (server / DB). unmatched_parts bersifat informatif
-      // saja (akan dilewati saat apply) -- yang lain memblokir.
-      setSohUpProgress({
-        phase: "Memvalidasi",
-        done: rows.length,
-        total: rows.length,
-      });
-      const val = await validateSohBatch(batchCode);
-      if (!val.success) {
-        setSohUploadError(val.error);
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(CONCURRENCY, chunks.length) }, worker),
+      );
+      if (stageError) {
+        setSohUploadError(stageError);
         await clearSohBatch(batchCode);
         return;
       }
-      const rep = val.report;
-      const blocking =
-        rep.negative_count + rep.duplicate_count + rep.fractional_count;
-      if (blocking > 0) {
-        setSohProblems(rep);
-        toast.error(
-          "Ditemukan data yang salah — tidak ada perubahan diterapkan.",
-        );
-        await clearSohBatch(batchCode);
-        return;
-      }
-      if (rep.unmatched_parts_count > 0) setSohProblems(rep);
 
-      // 5. Terapkan
+      // 4. Terapkan langsung (skip validasi terpisah -- part baru & qty
+      // negatif ditangani oleh applySohBatch sendiri, bukan pemblokir;
+      // duplikat/pecahan pada dasarnya mustahil dari data yang sudah
+      // di-dedupe di atas, kalau tetap terjadi akan raise error di sini).
       setSohUpProgress({
         phase: "Menerapkan",
         done: rows.length,
@@ -646,10 +754,13 @@ export default function StockClient({
       setSohSummary({
         updatedRows: ap.updatedRows,
         maxDefaultedRows: ap.maxDefaultedRows,
-        skippedUnmatchedBarang: ap.skippedUnmatchedBarang,
+        newPartsCreated: ap.newPartsCreated,
+        newStockRows: ap.newStockRows,
+        skippedNegativeQty: ap.skippedNegativeQty,
+        negativeSamples: ap.negativeSamples,
       });
       toast.success(
-        `Berhasil. ${ap.updatedRows} baris qty diperbarui, ${ap.maxDefaultedRows} max stock di-default ke 999999.`,
+        `Berhasil. ${ap.updatedRows} baris qty diperbarui, ${ap.newPartsCreated} part baru dibuat, ${ap.maxDefaultedRows} max stock di-default ke 999999.`,
       );
       router.refresh();
     } catch (e: any) {
@@ -740,16 +851,19 @@ export default function StockClient({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => setSiteSelectOpen(true)}
+                  onClick={() => {
+                    setTemplateKind("minmax");
+                    setSiteSelectOpen(true);
+                  }}
                   disabled={downloading}
                   className="gap-2 border-input text-xs font-bold hover:bg-muted/40"
                 >
-                  {downloading ? (
+                  {downloading && templateKind === "minmax" ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                   ) : (
                     <Download className="h-3.5 w-3.5 text-success" />
                   )}
-                  {dlProgress && dlProgress.total > 0
+                  {downloading && templateKind === "minmax" && dlProgress && dlProgress.total > 0
                     ? `Menyiapkan ${dlProgress.done.toLocaleString("id-ID")}/${dlProgress.total.toLocaleString("id-ID")}`
                     : "Template Min/Max"}
                 </Button>
@@ -759,6 +873,25 @@ export default function StockClient({
                   className="gap-2 text-xs font-bold uppercase shadow-sm"
                 >
                   <Upload className="h-3.5 w-3.5" /> Update Min/Max
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setTemplateKind("soh");
+                    setSiteSelectOpen(true);
+                  }}
+                  disabled={downloading}
+                  className="gap-2 border-input text-xs font-bold hover:bg-muted/40"
+                >
+                  {downloading && templateKind === "soh" ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Download className="h-3.5 w-3.5 text-success" />
+                  )}
+                  {downloading && templateKind === "soh" && dlProgress && dlProgress.total > 0
+                    ? `Menyiapkan ${dlProgress.done.toLocaleString("id-ID")}/${dlProgress.total.toLocaleString("id-ID")}`
+                    : "Template SOH"}
                 </Button>
                 <Button
                   size="sm"
@@ -1014,19 +1147,22 @@ export default function StockClient({
         </div>
       </Content>
 
-      {/* Dialog Pilih Site untuk Template Min/Max */}
+      {/* Dialog Pilih Site untuk Template (Min/Max atau SOH) */}
       <Dialog open={siteSelectOpen} onOpenChange={setSiteSelectOpen}>
         <DialogContent className="max-h-[85vh] w-[calc(100%-2rem)] max-w-105 overflow-y-auto rounded-2xl p-6">
           <DialogHeader className="mb-2">
             <DialogTitle className="flex items-center gap-2 text-xl font-bold">
               <Download className="h-5 w-5 text-success" />
-              Pilih Site untuk Template
+              Pilih Site untuk Template{" "}
+              {templateKind === "soh" ? "SOH" : "Min/Max"}
             </DialogTitle>
             <DialogDescription className="text-xs">
               Cuma site yang dicentang yang ditarik datanya — makin sedikit
               site, makin cepat download & upload-nya. Site yang tidak dicentang
               tidak akan ada di file, jadi otomatis tidak akan ikut berubah saat
               di-upload nanti.
+              {templateKind === "soh" &&
+                " File yang dihasilkan formatnya kompatibel langsung dengan tombol \"Update SOH\"."}
             </DialogDescription>
           </DialogHeader>
 
@@ -1092,7 +1228,9 @@ export default function StockClient({
               className="flex-1 gap-2 rounded-xl font-bold shadow-md shadow-primary/20"
               onClick={() => {
                 setSiteSelectOpen(false);
-                handleDownloadTemplate(selectedCabangIds);
+                if (templateKind === "soh")
+                  handleDownloadSohTemplate(selectedCabangIds);
+                else handleDownloadTemplate(selectedCabangIds);
               }}
             >
               <Download className="h-4 w-4" />
@@ -1311,7 +1449,6 @@ export default function StockClient({
           setSohUploadOpen(o);
           if (!o) {
             setSohUploadFile(null);
-            setSohProblems(null);
             setSohUploadError(null);
             setSohSummary(null);
           }
@@ -1327,9 +1464,11 @@ export default function StockClient({
               Upload file SOH format wide (kolom: No. Barang, Deskripsi
               Barang, lalu satu kolom per cabang, opsional diakhiri SUM SOH).
               Hanya cabang yang terdaftar di master yang diproses — kolom
-              cabang lain otomatis dilewati. Qty akan diperbarui, dan max
-              stock yang belum pernah diset (masih 0) otomatis dibuat
-              999999.
+              cabang lain otomatis dilewati. Qty akan diperbarui, max stock
+              yang belum pernah diset (masih 0) otomatis dibuat 999999, dan
+              part yang belum terdaftar otomatis dibuat sebagai barang baru
+              (satuan default &ldquo;UNIT&rdquo; — cek &amp; perbaiki manual di halaman
+              Barang kalau perlu). Baris qty negatif dilewati.
             </DialogDescription>
           </DialogHeader>
 
@@ -1344,7 +1483,6 @@ export default function StockClient({
                 disabled={sohUploading}
                 onChange={(e) => {
                   setSohUploadFile(e.target.files?.[0] ?? null);
-                  setSohProblems(null);
                   setSohUploadError(null);
                   setSohSummary(null);
                 }}
@@ -1394,15 +1532,37 @@ export default function StockClient({
 
             {/* Ringkasan sukses */}
             {sohSummary && (
-              <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-[11px] leading-relaxed">
-                <p className="font-bold text-success">Berhasil diterapkan</p>
-                <p className="text-muted-foreground">
-                  {sohSummary.updatedRows} baris qty diperbarui ·{" "}
-                  {sohSummary.maxDefaultedRows} max stock di-default ke
-                  999999
-                  {sohSummary.skippedUnmatchedBarang > 0 &&
-                    ` · ${sohSummary.skippedUnmatchedBarang} part tidak dikenal dilewati`}
-                </p>
+              <div className="space-y-3">
+                <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-[11px] leading-relaxed">
+                  <p className="font-bold text-success">Berhasil diterapkan</p>
+                  <p className="text-muted-foreground">
+                    {sohSummary.updatedRows} baris qty diperbarui ·{" "}
+                    {sohSummary.maxDefaultedRows} max stock di-default ke
+                    999999 · {sohSummary.newPartsCreated} part baru dibuat
+                    ({sohSummary.newStockRows} baris stock)
+                    {sohSummary.skippedNegativeQty > 0 &&
+                      ` · ${sohSummary.skippedNegativeQty} baris qty negatif dilewati`}
+                  </p>
+                </div>
+
+                {sohSummary.negativeSamples.length > 0 && (
+                  <div className="max-h-40 overflow-y-auto rounded-lg border border-warning/30 bg-warning/5 p-3 text-[11px] leading-relaxed">
+                    <p className="font-bold text-foreground">
+                      Baris qty negatif yang dilewati (
+                      {sohSummary.skippedNegativeQty}) — cek data sumbernya
+                    </p>
+                    <ul className="text-muted-foreground">
+                      {sohSummary.negativeSamples.map((n, i) => (
+                        <li key={i}>
+                          Baris {n.source_row}: {n.part_number} @{" "}
+                          {n.nama_cabang} (qty {n.qty})
+                        </li>
+                      ))}
+                      {sohSummary.skippedNegativeQty >
+                        sohSummary.negativeSamples.length && <li>…</li>}
+                    </ul>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1418,97 +1578,12 @@ export default function StockClient({
               </div>
             )}
 
-            {/* Laporan (blocking dan/atau informatif) */}
-            {sohProblems && (
-              <div
-                className={cn(
-                  "max-h-56 space-y-3 overflow-y-auto rounded-lg border p-3 text-[11px] leading-relaxed",
-                  sohProblems.negative_count +
-                    sohProblems.duplicate_count +
-                    sohProblems.fractional_count >
-                    0
-                    ? "border-destructive/30 bg-destructive/5"
-                    : "border-warning/30 bg-warning/5",
-                )}
-              >
-                {sohProblems.negative_count +
-                  sohProblems.duplicate_count +
-                  sohProblems.fractional_count >
-                  0 && (
-                  <p className="font-bold text-destructive">
-                    Ditemukan data yang salah. Tidak ada perubahan yang
-                    diterapkan — perbaiki lalu upload ulang.
-                  </p>
-                )}
-
-                {sohProblems.unmatched_parts_count > 0 && (
-                  <div>
-                    <p className="font-bold text-foreground">
-                      Part tidak terdaftar, dilewati (
-                      {sohProblems.unmatched_parts_count})
-                    </p>
-                    <p className="wrap-break-word text-muted-foreground">
-                      {sohProblems.unmatched_parts.join(", ")}
-                      {sohProblems.unmatched_parts_count >
-                        sohProblems.unmatched_parts.length && " …"}
-                    </p>
-                  </div>
-                )}
-
-                {sohProblems.duplicate_count > 0 && (
-                  <div>
-                    <p className="font-bold text-foreground">
-                      Duplikat part+cabang ({sohProblems.duplicate_count})
-                    </p>
-                    <ul className="text-muted-foreground">
-                      {sohProblems.duplicates.map((d, i) => (
-                        <li key={i}>
-                          {d.part_number} @ {d.nama_cabang} ({d.n}×)
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {sohProblems.negative_count > 0 && (
-                  <div>
-                    <p className="font-bold text-foreground">
-                      Qty negatif ({sohProblems.negative_count})
-                    </p>
-                    <ul className="text-muted-foreground">
-                      {sohProblems.negatives.map((n, i) => (
-                        <li key={i}>
-                          Baris {n.source_row}: {n.part_number} @{" "}
-                          {n.nama_cabang} (qty {n.qty})
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {sohProblems.fractional_count > 0 && (
-                  <div>
-                    <p className="font-bold text-foreground">
-                      Qty pecahan ({sohProblems.fractional_count})
-                    </p>
-                    <ul className="text-muted-foreground">
-                      {sohProblems.fractional.map((f, i) => (
-                        <li key={i}>
-                          Baris {f.source_row}: {f.part_number} @{" "}
-                          {f.nama_cabang} (qty {f.qty})
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </div>
-            )}
-
-            {!sohProblems && !sohUpProgress && !sohSummary && (
+            {!sohUpProgress && !sohSummary && !sohUploadError && (
               <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-[11px] leading-relaxed text-muted-foreground">
-                Proses memvalidasi cabang & format qty. Part yang belum
-                terdaftar akan dilewati (bukan pemblokir); duplikat/negatif/
-                pecahan akan membatalkan seluruh update.
+                Part yang belum terdaftar otomatis dibuat sebagai barang baru
+                (bukan pemblokir); baris qty negatif dilewati & dilaporkan.
+                Kalau ada duplikat part+cabang atau qty pecahan (seharusnya
+                tidak pernah terjadi), seluruh update dibatalkan.
               </div>
             )}
           </div>
