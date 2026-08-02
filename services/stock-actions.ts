@@ -252,6 +252,145 @@ export async function clearMinMaxBatch(batchCode: string): Promise<void> {
     .eq("batch_code", batchCode);
 }
 
+export interface SohStageRow {
+  part_number: string;
+  nama_cabang: string;
+  qty: number;
+  source_row: number;
+}
+
+/**
+ * Masukkan satu chunk baris SOH ke staging (`stock_import_staging`, sama
+ * tabel yang dipakai proses manual VPS). Dipanggil berulang oleh client
+ * supaya bisa menampilkan progress (chunk per chunk).
+ */
+export async function stageSohChunk(
+  batchCode: string,
+  rows: SohStageRow[],
+): Promise<{ success: boolean; error?: string }> {
+  const denied = await requireModerator();
+  if (denied) return { success: false, error: denied };
+  if (!batchCode || !batchCode.startsWith("SOH_"))
+    return { success: false, error: "Batch code tidak valid." };
+  if (!rows || rows.length === 0) return { success: true };
+
+  const admin = createAdminClient();
+  const payload = rows.map((r) => ({
+    batch_code: batchCode,
+    part_number: String(r.part_number).trim(),
+    nama_cabang: String(r.nama_cabang).trim(),
+    qty: toInt(r.qty),
+    source_row: Math.trunc(Number(r.source_row) || 0),
+  }));
+  const { error } = await admin.from("stock_import_staging").insert(payload);
+  if (error) return { success: false, error: error.message };
+  return { success: true };
+}
+
+export interface SohProblemReport {
+  total: number;
+  unmatched_parts_count: number;
+  unmatched_parts: string[];
+  unmatched_cabang_count: number;
+  unmatched_cabang: string[];
+  negative_count: number;
+  negatives: {
+    source_row: number;
+    part_number: string;
+    nama_cabang: string;
+    qty: number;
+  }[];
+  duplicate_count: number;
+  duplicates: { part_number: string; nama_cabang: string; n: number }[];
+  fractional_count: number;
+  fractional: {
+    source_row: number;
+    part_number: string;
+    nama_cabang: string;
+    qty: number;
+  }[];
+}
+
+/**
+ * Validasi batch staging SOH dan kembalikan daftar masalah detail. Tidak
+ * menerapkan apa pun. `unmatched_parts` bersifat informatif saja (akan
+ * dilewati, tidak memblokir) -- yang lain (negatif/duplikat/pecahan)
+ * memblokir apply.
+ */
+export async function validateSohBatch(
+  batchCode: string,
+): Promise<
+  | { success: true; report: SohProblemReport }
+  | { success: false; error: string }
+> {
+  const denied = await requireModerator();
+  if (denied) return { success: false, error: denied };
+
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc("report_soh_import_problems", {
+    p_batch_code: batchCode,
+  });
+  if (error) return { success: false, error: error.message };
+  return { success: true, report: data as SohProblemReport };
+}
+
+/**
+ * Terapkan batch SOH (update qty riil + default max_qty 999999 untuk baris
+ * yang max-nya belum diset) lalu bersihkan staging. Pakai SETELAH
+ * validateSohBatch memastikan tidak ada error pemblokir.
+ */
+export async function applySohBatch(
+  batchCode: string,
+): Promise<
+  | {
+      success: true;
+      updatedRows: number;
+      maxDefaultedRows: number;
+      skippedUnmatchedBarang: number;
+    }
+  | { success: false; error: string }
+> {
+  const denied = await requireModerator();
+  if (denied) return { success: false, error: denied };
+
+  const admin = createAdminClient();
+  try {
+    const { data, error } = await admin.rpc(
+      "apply_stock_soh_import_staging",
+      { p_batch_code: batchCode, p_reference_id: "WEB_SOH_IMPORT" },
+    );
+    if (error) throw new Error(error.message);
+    const row = Array.isArray(data) ? data[0] : data;
+    revalidatePath("/stock");
+    revalidatePath("/barang");
+    return {
+      success: true,
+      updatedRows: Number(row?.updated_rows ?? 0),
+      maxDefaultedRows: Number(row?.max_defaulted_rows ?? 0),
+      skippedUnmatchedBarang: Number(row?.skipped_unmatched_barang ?? 0),
+    };
+  } catch (e: any) {
+    return { success: false, error: e?.message || "Gagal menerapkan SOH." };
+  } finally {
+    await admin
+      .from("stock_import_staging")
+      .delete()
+      .eq("batch_code", batchCode);
+  }
+}
+
+/** Hapus baris staging SOH untuk batch (dipakai saat batal / validasi gagal). */
+export async function clearSohBatch(batchCode: string): Promise<void> {
+  const denied = await requireModerator();
+  if (denied) return;
+  if (!batchCode || !batchCode.startsWith("SOH_")) return;
+  const admin = createAdminClient();
+  await admin
+    .from("stock_import_staging")
+    .delete()
+    .eq("batch_code", batchCode);
+}
+
 export async function updateStock(
   id: number,
   data: {

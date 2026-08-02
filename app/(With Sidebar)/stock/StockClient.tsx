@@ -22,6 +22,7 @@ import {
   FileSpreadsheet,
   Upload,
   Download,
+  RefreshCw,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -45,6 +46,11 @@ import {
   applyMinMaxBatch,
   clearMinMaxBatch,
   type MinMaxProblemReport,
+  stageSohChunk,
+  validateSohBatch,
+  applySohBatch,
+  clearSohBatch,
+  type SohProblemReport,
 } from "@/services/stock-actions";
 
 const TEMPLATE_SHEET = "STOCK MIN MAX";
@@ -143,6 +149,25 @@ export default function StockClient({
   );
   const dlStartRef = useRef(0);
   const stageStartRef = useRef(0);
+
+  const [sohUploadOpen, setSohUploadOpen] = useState(false);
+  const [sohUploadFile, setSohUploadFile] = useState<File | null>(null);
+  const [sohUploading, setSohUploading] = useState(false);
+  const [sohUpProgress, setSohUpProgress] = useState<{
+    phase: string;
+    done: number;
+    total: number;
+  } | null>(null);
+  const [sohProblems, setSohProblems] = useState<SohProblemReport | null>(
+    null,
+  );
+  const [sohUploadError, setSohUploadError] = useState<string | null>(null);
+  const [sohSummary, setSohSummary] = useState<{
+    updatedRows: number;
+    maxDefaultedRows: number;
+    skippedUnmatchedBarang: number;
+  } | null>(null);
+  const sohStageStartRef = useRef(0);
 
   const handleDownloadTemplate = async (cabangIds: number[]) => {
     if (cabangIds.length === 0) {
@@ -445,6 +470,197 @@ export default function StockClient({
     }
   };
 
+  /** Angka bisa berupa number (sel numerik xlsx) atau string gaya ID "1.234,00". */
+  const parseQtyCell = (v: unknown): number => {
+    if (v === undefined || v === null || v === "") return 0;
+    if (typeof v === "number") return Math.round(v);
+    const normalized = String(v).trim().replace(/\./g, "").replace(",", ".");
+    const n = parseFloat(normalized);
+    return Number.isFinite(n) ? Math.round(n) : 0;
+  };
+
+  const handleSohUpload = async () => {
+    if (!sohUploadFile) {
+      toast.error("Pilih file Excel terlebih dahulu.");
+      return;
+    }
+    setSohUploading(true);
+    setSohProblems(null);
+    setSohUploadError(null);
+    setSohSummary(null);
+    let batchCode = "";
+    try {
+      // 1. Parse & validasi struktur (client-side) -- format wide: No. Barang,
+      // Deskripsi Barang, <kolom per cabang>, SUM SOH.
+      setSohUpProgress({ phase: "Membaca file", done: 0, total: 0 });
+      const buf = new Uint8Array(await sohUploadFile.arrayBuffer());
+      let wb: XLSX.WorkBook;
+      try {
+        wb = XLSX.read(buf, { type: "array" });
+      } catch {
+        toast.error("File bukan Excel yang valid.");
+        return;
+      }
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      if (!ws) {
+        toast.error("Sheet data tidak ditemukan dalam file.");
+        return;
+      }
+      const aoa = XLSX.utils.sheet_to_json<(string | number)[]>(ws, {
+        header: 1,
+        blankrows: false,
+      });
+      if (aoa.length < 2) {
+        toast.error("File kosong / tidak ada baris data.");
+        return;
+      }
+      const header = (aoa[0] || []).map((h) => String(h ?? "").trim());
+      const headerCol0 = N(header[0]);
+      const headerCol1 = N(header[1]);
+      const validCol0 = new Set(["NO. BARANG", "PART_NUMBER", "PART NUMBER"]);
+      const validCol1 = new Set([
+        "DESKRIPSI BARANG",
+        "PART_NAME",
+        "PART NAME",
+      ]);
+      if (!validCol0.has(headerCol0) || !validCol1.has(headerCol1)) {
+        toast.error(
+          "Struktur tidak sesuai: kolom 1 & 2 harus 'No. Barang' & 'Deskripsi Barang'.",
+        );
+        return;
+      }
+
+      // Kolom cabang: dari index 2 sampai sebelum kolom "SUM ...". Kolom yang
+      // namanya tidak dikenal sebagai cabang aktif (mis. GMI-HO, GMI-PIK,
+      // GMI-BIB BAWAH yang tidak ada di master cabang) otomatis dilewati.
+      const validCabang = new Set(
+        cabangList.map((c: any) => N(c.nama_cabang)),
+      );
+      const branchCols: { idx: number; name: string }[] = [];
+      for (let idx = 2; idx < header.length; idx++) {
+        const name = (header[idx] || "").trim();
+        if (!name) continue;
+        if (N(name).startsWith("SUM")) break;
+        if (validCabang.has(N(name))) branchCols.push({ idx, name });
+      }
+      if (branchCols.length === 0) {
+        toast.error("Tidak ada kolom cabang yang dikenali dalam file.");
+        return;
+      }
+
+      // 2. Bangun baris, digabung per part+cabang case-insensitive (part bisa
+      // muncul dengan variasi huruf besar/kecil untuk part yang sama).
+      const merged = new Map<
+        string,
+        {
+          part_number: string;
+          nama_cabang: string;
+          qty: number;
+          source_row: number;
+        }
+      >();
+      for (let r = 1; r < aoa.length; r++) {
+        const row = aoa[r] || [];
+        const pn = String(row[0] ?? "").trim();
+        if (!pn) continue;
+        for (const { idx, name } of branchCols) {
+          const qty = parseQtyCell(row[idx]);
+          const key = `${N(pn)}|${N(name)}`;
+          const existing = merged.get(key);
+          if (existing) existing.qty += qty;
+          else
+            merged.set(key, {
+              part_number: pn,
+              nama_cabang: name,
+              qty,
+              source_row: r + 1,
+            });
+        }
+      }
+      const rows = [...merged.values()];
+      if (rows.length === 0) {
+        toast.error("Tidak ada baris valid untuk diimport.");
+        return;
+      }
+
+      // 3. Stage per chunk (progress)
+      batchCode = `SOH_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+      const CHUNK = 5000;
+      sohStageStartRef.current = Date.now();
+      setSohUpProgress({
+        phase: "Mengunggah data",
+        done: 0,
+        total: rows.length,
+      });
+      for (let i = 0; i < rows.length; i += CHUNK) {
+        const res = await stageSohChunk(batchCode, rows.slice(i, i + CHUNK));
+        if (!res.success) {
+          setSohUploadError(res.error || "Gagal mengunggah data.");
+          await clearSohBatch(batchCode);
+          return;
+        }
+        setSohUpProgress({
+          phase: "Mengunggah data",
+          done: Math.min(i + CHUNK, rows.length),
+          total: rows.length,
+        });
+      }
+
+      // 4. Validasi detail (server / DB). unmatched_parts bersifat informatif
+      // saja (akan dilewati saat apply) -- yang lain memblokir.
+      setSohUpProgress({
+        phase: "Memvalidasi",
+        done: rows.length,
+        total: rows.length,
+      });
+      const val = await validateSohBatch(batchCode);
+      if (!val.success) {
+        setSohUploadError(val.error);
+        await clearSohBatch(batchCode);
+        return;
+      }
+      const rep = val.report;
+      const blocking =
+        rep.negative_count + rep.duplicate_count + rep.fractional_count;
+      if (blocking > 0) {
+        setSohProblems(rep);
+        toast.error(
+          "Ditemukan data yang salah — tidak ada perubahan diterapkan.",
+        );
+        await clearSohBatch(batchCode);
+        return;
+      }
+      if (rep.unmatched_parts_count > 0) setSohProblems(rep);
+
+      // 5. Terapkan
+      setSohUpProgress({
+        phase: "Menerapkan",
+        done: rows.length,
+        total: rows.length,
+      });
+      const ap = await applySohBatch(batchCode);
+      if (!ap.success) {
+        setSohUploadError(ap.error);
+        return;
+      }
+      setSohSummary({
+        updatedRows: ap.updatedRows,
+        maxDefaultedRows: ap.maxDefaultedRows,
+        skippedUnmatchedBarang: ap.skippedUnmatchedBarang,
+      });
+      toast.success(
+        `Berhasil. ${ap.updatedRows} baris qty diperbarui, ${ap.maxDefaultedRows} max stock di-default ke 999999.`,
+      );
+      router.refresh();
+    } catch (e: any) {
+      setSohUploadError(e?.message || "Gagal memproses file.");
+      if (batchCode) await clearSohBatch(batchCode);
+    } finally {
+      setSohUploading(false);
+      setSohUpProgress(null);
+    }
+  };
+
   const [search, setSearch] = useState(initialQuery);
   const [debouncedSearch] = useDebounce(search, 500);
   const [stockFrom, setStockFrom] = useState(initialStockFrom);
@@ -543,6 +759,14 @@ export default function StockClient({
                   className="gap-2 text-xs font-bold uppercase shadow-sm"
                 >
                   <Upload className="h-3.5 w-3.5" /> Update Min/Max
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setSohUploadOpen(true)}
+                  className="gap-2 border-input text-xs font-bold uppercase hover:bg-muted/40"
+                >
+                  <RefreshCw className="h-3.5 w-3.5 text-success" /> Update SOH
                 </Button>
               </>
             )}
@@ -1076,6 +1300,245 @@ export default function StockClient({
                 </>
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog Update SOH via Excel */}
+      <Dialog
+        open={sohUploadOpen}
+        onOpenChange={(o) => {
+          setSohUploadOpen(o);
+          if (!o) {
+            setSohUploadFile(null);
+            setSohProblems(null);
+            setSohUploadError(null);
+            setSohSummary(null);
+          }
+        }}
+      >
+        <DialogContent className="max-h-[85vh] w-[calc(100%-2rem)] max-w-105 overflow-y-auto rounded-2xl p-6">
+          <DialogHeader className="mb-4">
+            <DialogTitle className="flex items-center gap-2 text-xl font-bold">
+              <RefreshCw className="h-5 w-5 text-success" />
+              Update SOH
+            </DialogTitle>
+            <DialogDescription className="text-xs">
+              Upload file SOH format wide (kolom: No. Barang, Deskripsi
+              Barang, lalu satu kolom per cabang, opsional diakhiri SUM SOH).
+              Hanya cabang yang terdaftar di master yang diproses — kolom
+              cabang lain otomatis dilewati. Qty akan diperbarui, dan max
+              stock yang belum pernah diset (masih 0) otomatis dibuat
+              999999.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <Label className="ml-1 text-[10px] font-black uppercase text-muted-foreground">
+                File Excel (.xlsx)
+              </Label>
+              <Input
+                type="file"
+                accept=".xlsx"
+                disabled={sohUploading}
+                onChange={(e) => {
+                  setSohUploadFile(e.target.files?.[0] ?? null);
+                  setSohProblems(null);
+                  setSohUploadError(null);
+                  setSohSummary(null);
+                }}
+                className="h-10 cursor-pointer border-input bg-background text-xs file:mr-3 file:font-bold"
+              />
+              {sohUploadFile && (
+                <p className="ml-1 text-[11px] font-medium text-muted-foreground">
+                  {sohUploadFile.name}
+                </p>
+              )}
+            </div>
+
+            {/* Progress upload */}
+            {sohUpProgress && (
+              <div>
+                <div className="mb-1 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  <span>{sohUpProgress.phase}…</span>
+                  <span>
+                    {sohUpProgress.total > 0
+                      ? `${sohUpProgress.done.toLocaleString("id-ID")}/${sohUpProgress.total.toLocaleString("id-ID")}`
+                      : ""}
+                    {sohUpProgress.phase === "Mengunggah data"
+                      ? (() => {
+                          const e = etaText(
+                            sohStageStartRef.current,
+                            sohUpProgress.done,
+                            sohUpProgress.total,
+                          );
+                          return e ? ` · ${e}` : "";
+                        })()
+                      : ""}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary transition-all duration-300"
+                    style={{
+                      width:
+                        sohUpProgress.total > 0
+                          ? `${Math.min(100, (sohUpProgress.done / sohUpProgress.total) * 100)}%`
+                          : "15%",
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Ringkasan sukses */}
+            {sohSummary && (
+              <div className="rounded-lg border border-success/30 bg-success/5 p-3 text-[11px] leading-relaxed">
+                <p className="font-bold text-success">Berhasil diterapkan</p>
+                <p className="text-muted-foreground">
+                  {sohSummary.updatedRows} baris qty diperbarui ·{" "}
+                  {sohSummary.maxDefaultedRows} max stock di-default ke
+                  999999
+                  {sohSummary.skippedUnmatchedBarang > 0 &&
+                    ` · ${sohSummary.skippedUnmatchedBarang} part tidak dikenal dilewati`}
+                </p>
+              </div>
+            )}
+
+            {/* Error server / sistem */}
+            {sohUploadError && (
+              <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+                <p className="mb-1 text-[11px] font-bold text-destructive">
+                  Gagal memproses
+                </p>
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all text-[11px] leading-relaxed text-muted-foreground">
+                  {sohUploadError}
+                </pre>
+              </div>
+            )}
+
+            {/* Laporan (blocking dan/atau informatif) */}
+            {sohProblems && (
+              <div
+                className={cn(
+                  "max-h-56 space-y-3 overflow-y-auto rounded-lg border p-3 text-[11px] leading-relaxed",
+                  sohProblems.negative_count +
+                    sohProblems.duplicate_count +
+                    sohProblems.fractional_count >
+                    0
+                    ? "border-destructive/30 bg-destructive/5"
+                    : "border-warning/30 bg-warning/5",
+                )}
+              >
+                {sohProblems.negative_count +
+                  sohProblems.duplicate_count +
+                  sohProblems.fractional_count >
+                  0 && (
+                  <p className="font-bold text-destructive">
+                    Ditemukan data yang salah. Tidak ada perubahan yang
+                    diterapkan — perbaiki lalu upload ulang.
+                  </p>
+                )}
+
+                {sohProblems.unmatched_parts_count > 0 && (
+                  <div>
+                    <p className="font-bold text-foreground">
+                      Part tidak terdaftar, dilewati (
+                      {sohProblems.unmatched_parts_count})
+                    </p>
+                    <p className="wrap-break-word text-muted-foreground">
+                      {sohProblems.unmatched_parts.join(", ")}
+                      {sohProblems.unmatched_parts_count >
+                        sohProblems.unmatched_parts.length && " …"}
+                    </p>
+                  </div>
+                )}
+
+                {sohProblems.duplicate_count > 0 && (
+                  <div>
+                    <p className="font-bold text-foreground">
+                      Duplikat part+cabang ({sohProblems.duplicate_count})
+                    </p>
+                    <ul className="text-muted-foreground">
+                      {sohProblems.duplicates.map((d, i) => (
+                        <li key={i}>
+                          {d.part_number} @ {d.nama_cabang} ({d.n}×)
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {sohProblems.negative_count > 0 && (
+                  <div>
+                    <p className="font-bold text-foreground">
+                      Qty negatif ({sohProblems.negative_count})
+                    </p>
+                    <ul className="text-muted-foreground">
+                      {sohProblems.negatives.map((n, i) => (
+                        <li key={i}>
+                          Baris {n.source_row}: {n.part_number} @{" "}
+                          {n.nama_cabang} (qty {n.qty})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {sohProblems.fractional_count > 0 && (
+                  <div>
+                    <p className="font-bold text-foreground">
+                      Qty pecahan ({sohProblems.fractional_count})
+                    </p>
+                    <ul className="text-muted-foreground">
+                      {sohProblems.fractional.map((f, i) => (
+                        <li key={i}>
+                          Baris {f.source_row}: {f.part_number} @{" "}
+                          {f.nama_cabang} (qty {f.qty})
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {!sohProblems && !sohUpProgress && !sohSummary && (
+              <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-[11px] leading-relaxed text-muted-foreground">
+                Proses memvalidasi cabang & format qty. Part yang belum
+                terdaftar akan dilewati (bukan pemblokir); duplikat/negatif/
+                pecahan akan membatalkan seluruh update.
+              </div>
+            )}
+          </div>
+
+          <DialogFooter className="mt-6 flex items-center gap-3 sm:justify-between">
+            <Button
+              type="button"
+              variant="ghost"
+              className="flex-1 rounded-xl font-bold text-muted-foreground"
+              onClick={() => setSohUploadOpen(false)}
+              disabled={sohUploading}
+            >
+              {sohSummary ? "Tutup" : "Batal"}
+            </Button>
+            {!sohSummary && (
+              <Button
+                type="button"
+                onClick={handleSohUpload}
+                disabled={sohUploading || !sohUploadFile}
+                className="flex-1 rounded-xl font-bold shadow-md shadow-primary/20"
+              >
+                {sohUploading ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <>
+                    <Upload className="mr-1.5 h-4 w-4" /> Terapkan
+                  </>
+                )}
+              </Button>
+            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
