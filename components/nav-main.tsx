@@ -27,6 +27,7 @@ export function NavMain({
     icon?: LucideIcon;
     isActive?: boolean;
     badge?: number;
+    dot?: boolean;
     items?: {
       title: string;
       url: string;
@@ -61,7 +62,12 @@ export function NavMain({
                     item.isActive && "bg-primary/5",
                   )}
                 >
-                  {item.icon && <item.icon />}
+                  <span className="relative inline-flex">
+                    {item.icon && <item.icon />}
+                    {item.dot && (
+                      <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive" />
+                    )}
+                  </span>
                   <span className="grow text-left">{item.title}</span>
                   {item.badge != null && item.badge > 0 && (
                     <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">

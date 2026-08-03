@@ -17,6 +17,7 @@ import { NavMain } from "@/components/nav-main";
 import { NavUser } from "./nav-user";
 import { Button } from "@/components/ui/button";
 import { getUnreadNotificationsCount } from "@/services/notification-actions";
+import { getHasUnreadUpdateLogs } from "@/services/update-logs-actions";
 import {
   GalleryVerticalEnd,
   Bot,
@@ -52,6 +53,7 @@ import {
   PackageSearch,
   ClipboardList,
   SlidersHorizontal,
+  ScrollText,
 } from "lucide-react";
 
 // Update the menu data
@@ -129,6 +131,11 @@ const data = {
   ],
   navSecondary: [
     {
+      title: "Update Logs",
+      url: "/update-logs",
+      icon: ScrollText,
+    },
+    {
       title: "Dokumentasi",
       url: "/dokumentasi",
       icon: BookOpen,
@@ -148,6 +155,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const [user, setUser] = React.useState<any>(null);
   const [profile, setProfile] = React.useState<any>(null);
   const [unreadCount, setUnreadCount] = React.useState(0);
+  const [hasUnreadUpdateLogs, setHasUnreadUpdateLogs] = React.useState(false);
   type CollapsedGroups = {
     admin: boolean;
     main: boolean;
@@ -232,6 +240,13 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             roles: (profileWithRoles.roles as any[]).map((r) => r.roles),
           };
           setProfile(flattenedProfile);
+
+          const roleNames = flattenedProfile.roles.map((r: any) => r?.name);
+          if (roleNames.includes("moderator") && roleNames.includes("it")) {
+            const unread = await getHasUnreadUpdateLogs();
+            if (!isMounted) return;
+            setHasUnreadUpdateLogs(unread);
+          }
         }
 
         // Fetch unread notifications count
@@ -250,6 +265,12 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   const isModerator = profile?.roles?.some((r: any) => r.name === "moderator");
   const isAdmin = profile?.roles?.some((r: any) => r.name === "admin");
+  const isIT = profile?.roles?.some((r: any) => r.name === "it");
+
+  const secondaryItems = data.navSecondary.filter((item) => {
+    if (item.url === "/update-logs") return isModerator && isIT;
+    return true;
+  });
 
   const adminItems = data.navAdmin.filter((item) => {
     // Halaman Role & Permission disembunyikan sementara (matrix belum dipakai).
@@ -417,7 +438,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         />
         <NavMain
           label="Bantuan"
-          items={markActive(data.navSecondary)}
+          items={markActive(secondaryItems).map((item) =>
+            item.url === "/update-logs"
+              ? { ...item, dot: hasUnreadUpdateLogs }
+              : item,
+          )}
           collapsed={collapsedGroups.help}
           onToggle={() => toggleGroup("help")}
         />
