@@ -33,6 +33,14 @@ import {
 import { useDebounce } from "use-debounce";
 import type { PlanningSupply } from "@/type";
 import { businessToday } from "@/lib/business-date";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const SORT_ACCESSORS: Record<string, (r: PlanningSupply) => string | number> = {
+  part_number: (r) => r.part_number || "",
+  qty: (r) => r.qty || 0,
+  deadline: (r) => r.deadline || "",
+  status: (r) => r.status || "",
+};
 
 const STATUS_META: Record<
   string,
@@ -62,6 +70,7 @@ export default function PlanningSupplyPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 400);
   const [statusFilter, setStatusFilter] = useState<string>("active");
+  const [sortOrder, setSortOrder] = useState<string>("");
 
   const today = businessToday();
 
@@ -140,6 +149,20 @@ export default function PlanningSupplyPage() {
     );
   }, [rows, debouncedSearch]);
 
+  const sorted = useMemo(() => {
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const accessor = SORT_ACCESSORS[sortKeyRaw];
+    if (!accessor) return filtered;
+    const ascending = sortDirRaw === "asc";
+    return [...filtered].sort((a, b) => {
+      const av = accessor(a);
+      const bv = accessor(b);
+      if (av < bv) return ascending ? -1 : 1;
+      if (av > bv) return ascending ? 1 : -1;
+      return 0;
+    });
+  }, [filtered, sortOrder]);
+
   const totalInTransitQty = useMemo(
     () =>
       rows
@@ -214,6 +237,7 @@ export default function PlanningSupplyPage() {
             onClick={() => {
               setSearchQuery("");
               setStatusFilter("active");
+              setSortOrder("");
             }}
           >
             <FilterX className="h-4 w-4" />
@@ -227,24 +251,45 @@ export default function PlanningSupplyPage() {
           <Table>
             <TableHeader>
               <TableRow className="bg-muted/40">
-                <TableHead className="text-[10px] font-bold uppercase">
+                <SortableTableHead
+                  sortKey="part_number"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[10px] font-bold uppercase"
+                >
                   Barang
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-bold uppercase">
                   Rute
                 </TableHead>
-                <TableHead className="text-[10px] font-bold uppercase text-center">
+                <SortableTableHead
+                  sortKey="qty"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  defaultDir="desc"
+                  className="justify-center text-center text-[10px] font-bold uppercase"
+                >
                   Qty
-                </TableHead>
-                <TableHead className="text-[10px] font-bold uppercase">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="deadline"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[10px] font-bold uppercase"
+                >
                   Deadline
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-bold uppercase">
                   Referensi
                 </TableHead>
-                <TableHead className="text-[10px] font-bold uppercase">
+                <SortableTableHead
+                  sortKey="status"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[10px] font-bold uppercase"
+                >
                   Status / Keterangan
-                </TableHead>
+                </SortableTableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -254,7 +299,7 @@ export default function PlanningSupplyPage() {
                     <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : sorted.length === 0 ? (
                 <TableRow>
                   <TableCell
                     colSpan={6}
@@ -264,7 +309,7 @@ export default function PlanningSupplyPage() {
                   </TableCell>
                 </TableRow>
               ) : (
-                filtered.map((r) => {
+                sorted.map((r) => {
                   const meta = STATUS_META[r.status] || {
                     label: r.status,
                     className: "",

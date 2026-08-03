@@ -44,6 +44,14 @@ import {
   completedFilterStatuses,
   normalizeDocumentStatus,
 } from "@/lib/document-status";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const JOB_SORT_COLUMNS: Record<string, string> = {
+  job_kode: "job_kode",
+  job_tanggal: "job_tanggal",
+  finish_part: "finish_part",
+  status: "status",
+};
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-blue-100 text-blue-700 border-blue-200",
@@ -116,8 +124,13 @@ export default function JobCostingListPage() {
     if (dateFrom) query = query.gte("created_at", `${dateFrom}T00:00:00`);
     if (dateTo) query = query.lte("created_at", `${dateTo}T23:59:59`);
 
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = JOB_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn ? sortDirRaw === "asc" : sortOrder === "oldest";
+
     query = query
-      .order("created_at", { ascending: sortOrder === "oldest" })
+      .order(sortField, { ascending })
       .range(from, from + limit - 1);
 
     const { data, count, error } = await query;
@@ -322,18 +335,39 @@ export default function JobCostingListPage() {
                 <TableHead className="text-[11px] font-bold uppercase w-14">
                   No
                 </TableHead>
-                <TableHead className="text-[11px] font-bold uppercase">
+                <SortableTableHead
+                  sortKey="job_kode"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[11px] font-bold uppercase"
+                >
                   Batch No
-                </TableHead>
-                <TableHead className="text-[11px] font-bold uppercase">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="job_tanggal"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  defaultDir="desc"
+                  className="text-[11px] font-bold uppercase"
+                >
                   Tanggal
-                </TableHead>
-                <TableHead className="text-[11px] font-bold uppercase">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="finish_part"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[11px] font-bold uppercase"
+                >
                   Finish Part
-                </TableHead>
-                <TableHead className="text-[11px] font-bold uppercase">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="status"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[11px] font-bold uppercase"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[11px] font-bold uppercase w-16">
                   Aksi
                 </TableHead>

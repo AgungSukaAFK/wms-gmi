@@ -22,6 +22,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toast } from "sonner";
 import { getSpbReport } from "@/services/spb-actions";
@@ -74,6 +75,7 @@ export default function SpbReportPage() {
   >("all");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [sort, setSort] = useState("spb_tanggal_desc");
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
@@ -85,6 +87,7 @@ export default function SpbReportPage() {
       status,
       startDate: startDate || undefined,
       endDate: endDate || undefined,
+      sort,
       page,
       limit,
     });
@@ -98,7 +101,12 @@ export default function SpbReportPage() {
       setTotal(res.count || 0);
     }
     setLoading(false);
-  }, [debouncedSearch, status, startDate, endDate, page, limit]);
+  }, [debouncedSearch, status, startDate, endDate, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   const exportExcel = async () => {
     setExporting(true);
@@ -301,8 +309,21 @@ export default function SpbReportPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>TGL SPB</TableHead>
-                <TableHead>NO SPB</TableHead>
+                <SortableTableHead
+                  sortKey="spb_tanggal"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                >
+                  TGL SPB
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="spb_no"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  NO SPB
+                </SortableTableHead>
                 <TableHead>PART NUMBER</TableHead>
                 <TableHead>PART NAME</TableHead>
                 <TableHead>QTY</TableHead>
@@ -317,13 +338,37 @@ export default function SpbReportPage() {
                 <TableHead>PIC PPA</TableHead>
                 <TableHead>NO WO</TableHead>
                 <TableHead>DATE INPUT SPB</TableHead>
-                <TableHead>STATUS</TableHead>
-                <TableHead>NO PO</TableHead>
+                <SortableTableHead
+                  sortKey="spb_status"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  STATUS
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="po_no"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  NO PO
+                </SortableTableHead>
                 <TableHead>NO SO</TableHead>
                 <TableHead>DATE INPUT PO</TableHead>
-                <TableHead>NO DO</TableHead>
+                <SortableTableHead
+                  sortKey="do_no"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  NO DO
+                </SortableTableHead>
                 <TableHead>DATE INPUT DO</TableHead>
-                <TableHead>NO INVOICE</TableHead>
+                <SortableTableHead
+                  sortKey="invoice_no"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  NO INVOICE
+                </SortableTableHead>
                 <TableHead>TGL INVOICE</TableHead>
                 <TableHead>TGL EMAIL</TableHead>
               </TableRow>

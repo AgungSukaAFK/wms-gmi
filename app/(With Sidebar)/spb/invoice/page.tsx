@@ -53,6 +53,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
   approveSpbInvoice,
@@ -103,6 +104,7 @@ export default function SpbInvoicePage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -149,6 +151,7 @@ export default function SpbInvoicePage() {
     setLoading(true);
     const res = await getSpbInvoiceList({
       search: debouncedSearch || undefined,
+      sort,
       page,
       limit,
     });
@@ -174,7 +177,12 @@ export default function SpbInvoicePage() {
 
   useEffect(() => {
     fetchList();
-  }, [debouncedSearch, page, limit]);
+  }, [debouncedSearch, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   useEffect(() => {
     const loadUser = async () => {
@@ -409,11 +417,44 @@ export default function SpbInvoicePage() {
                   <TableHead>No SPB</TableHead>
                   <TableHead>No PO</TableHead>
                   <TableHead>No DO</TableHead>
-                  <TableHead>No Invoice</TableHead>
-                  <TableHead>Tanggal Invoice</TableHead>
-                  <TableHead>Tanggal Email</TableHead>
-                  <TableHead>Approval</TableHead>
-                  <TableHead>Created</TableHead>
+                  <SortableTableHead
+                    sortKey="invoice_no"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    No Invoice
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="invoice_date"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    Tanggal Invoice
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="invoice_email_date"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    Tanggal Email
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="approval_status"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    Approval
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="created_at"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    Created
+                  </SortableTableHead>
                   <TableHead>Aksi</TableHead>
                 </TableRow>
               </TableHeader>

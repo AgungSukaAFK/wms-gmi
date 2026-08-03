@@ -28,6 +28,7 @@ import {
 } from "@/services/moderator-edit-actions";
 import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { createClient } from "@/lib/supabase/client";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 export default function ReturnSpbPage() {
   const supabase = createClient();
@@ -38,6 +39,7 @@ export default function ReturnSpbPage() {
   const [debouncedSearch] = useDebounce(search, 500);
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+  const [sort, setSort] = useState("created_at_desc");
   const [userId, setUserId] = useState("");
 
   // Moderator Edit state
@@ -55,6 +57,7 @@ export default function ReturnSpbPage() {
     setLoading(true);
     const res = await getReturnSpbList({
       search: debouncedSearch || undefined,
+      sort,
       page,
       limit,
     });
@@ -71,7 +74,12 @@ export default function ReturnSpbPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, page, limit]);
+  }, [debouncedSearch, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   useEffect(() => {
     const loadUser = async () => {
@@ -216,11 +224,36 @@ export default function ReturnSpbPage() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Kode Return</TableHead>
+                <SortableTableHead
+                  sortKey="rtn_kode"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Kode Return
+                </SortableTableHead>
                 <TableHead>No SPB</TableHead>
-                <TableHead>Tanggal Return</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Approval</TableHead>
+                <SortableTableHead
+                  sortKey="rtn_tanggal"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                >
+                  Tanggal Return
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="rtn_status"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Status
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="approval_status"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                >
+                  Approval
+                </SortableTableHead>
                 <TableHead>Catatan</TableHead>
                 <TableHead>Created</TableHead>
                 <TableHead>Aksi</TableHead>

@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -59,6 +60,7 @@ import {
   LayoutGrid,
   List,
   SortAsc,
+  CalendarIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -72,6 +74,7 @@ import {
 } from "@/services/barang-actions";
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
+import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
@@ -102,6 +105,8 @@ interface BarangClientProps {
   initialQuery: string;
   initialSort: string;
   initialView: "table" | "grid";
+  initialUpdatedFrom: string;
+  initialUpdatedTo: string;
 }
 
 export default function BarangClient({
@@ -112,6 +117,8 @@ export default function BarangClient({
   initialQuery,
   initialSort,
   initialView,
+  initialUpdatedFrom,
+  initialUpdatedTo,
 }: BarangClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -119,6 +126,8 @@ export default function BarangClient({
   // Search & Filters
   const [search, setSearch] = useState(initialQuery);
   const [debouncedSearch] = useDebounce(search, 500);
+  const [updatedFrom, setUpdatedFrom] = useState(initialUpdatedFrom);
+  const [updatedTo, setUpdatedTo] = useState(initialUpdatedTo);
 
   const profile = useAuthStore((s) => s.profile);
 
@@ -141,14 +150,21 @@ export default function BarangClient({
   // Pagination states
   const [jumpPage, setJumpPage] = useState(currentPage.toString());
 
-  // Sync Search with URL
+  // Sync Search & Filters with URL
   useEffect(() => {
     const params = new URLSearchParams(searchParams.toString());
     if (debouncedSearch) params.set("q", debouncedSearch);
     else params.delete("q");
+
+    if (updatedFrom) params.set("updated_from", updatedFrom);
+    else params.delete("updated_from");
+
+    if (updatedTo) params.set("updated_to", updatedTo);
+    else params.delete("updated_to");
+
     params.set("page", "1");
     router.push(`/barang?${params.toString()}`);
-  }, [debouncedSearch]);
+  }, [debouncedSearch, updatedFrom, updatedTo]);
 
   const totalPages = Math.ceil(totalCount / pageSize);
 
@@ -192,6 +208,8 @@ export default function BarangClient({
 
   const handleReset = () => {
     setSearch("");
+    setUpdatedFrom("");
+    setUpdatedTo("");
     router.push("/barang");
   };
 
@@ -393,6 +411,23 @@ export default function BarangClient({
               </Select>
             </div>
 
+            <div className="flex w-full items-center gap-2 sm:w-auto">
+              <CalendarIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <DatePickerString
+                value={updatedFrom}
+                onChange={setUpdatedFrom}
+                placeholder="Diubah dari"
+                className="h-8 w-full text-xs font-medium sm:w-38"
+              />
+            </div>
+
+            <DatePickerString
+              value={updatedTo}
+              onChange={setUpdatedTo}
+              placeholder="Diubah sampai"
+              className="h-8 w-full text-xs font-medium sm:w-38"
+            />
+
             <Button
               variant="ghost"
               size="sm"
@@ -416,15 +451,30 @@ export default function BarangClient({
                   <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
                     No
                   </TableHead>
-                  <TableHead className="w-45 text-[10px] font-black uppercase text-muted-foreground">
+                  <SortableTableHead
+                    sortKey="part_number"
+                    currentSort={initialSort}
+                    onSort={handleSortChange}
+                    className="w-45 text-[10px] font-black uppercase text-muted-foreground"
+                  >
                     Part Number
-                  </TableHead>
-                  <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="name"
+                    currentSort={initialSort}
+                    onSort={handleSortChange}
+                    className="text-[10px] font-black uppercase text-muted-foreground"
+                  >
                     Nama Suku Cadang
-                  </TableHead>
-                  <TableHead className="w-25 text-[10px] font-black uppercase text-muted-foreground">
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="part_satuan"
+                    currentSort={initialSort}
+                    onSort={handleSortChange}
+                    className="w-25 text-[10px] font-black uppercase text-muted-foreground"
+                  >
                     Satuan
-                  </TableHead>
+                  </SortableTableHead>
                   <TableHead className="w-20 text-right pr-6 text-[10px] font-black uppercase text-muted-foreground">
                     Aksi
                   </TableHead>

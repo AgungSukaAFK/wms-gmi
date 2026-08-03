@@ -28,6 +28,13 @@ import {
   ChevronRight,
 } from "lucide-react";
 import { ItemTransferDetailSheet } from "@/components/item-transfer/item-transfer-detail-sheet";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const IT_SORT_COLUMNS: Record<string, string> = {
+  it_kode: "it_kode",
+  it_tanggal: "it_tanggal",
+  status: "status",
+};
 
 export default function ItemTransferPage() {
   const supabase = createClient();
@@ -41,6 +48,7 @@ export default function ItemTransferPage() {
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [locationFilters, setLocationFilters] = useState<string[]>([]);
+  const [sortOrder, setSortOrder] = useState<string>("newest");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -76,9 +84,14 @@ export default function ItemTransferPage() {
         `dari_cabang_id.in.(${locationFilters.join(",")}),ke_cabang_id.in.(${locationFilters.join(",")})`,
       );
 
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = IT_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn ? sortDirRaw === "asc" : false;
+
     const from = (page - 1) * limit;
     const { data, count, error } = await query
-      .order("created_at", { ascending: false })
+      .order(sortField, { ascending })
       .range(from, from + limit - 1);
 
     if (!error) {
@@ -90,7 +103,12 @@ export default function ItemTransferPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, statusFilters, locationFilters, page, limit]);
+  }, [debouncedSearch, statusFilters, locationFilters, sortOrder, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -206,10 +224,32 @@ export default function ItemTransferPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode IT</TableHead>
+                <SortableTableHead
+                  sortKey="it_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
+                  Kode IT
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Rute Gudang</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">Tanggal</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">Status</TableHead>
+                <SortableTableHead
+                  sortKey="it_tanggal"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
+                  Tanggal
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
+                  Status
+                </SortableTableHead>
                 <TableHead className="w-16"></TableHead>
               </TableRow>
             </TableHeader>

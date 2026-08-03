@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   Building2,
   FilterX,
@@ -72,6 +73,7 @@ export default function CabangManagementClient() {
   >("all");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
+  const [sortOrder, setSortOrder] = useState("");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
@@ -117,8 +119,32 @@ export default function CabangManagementClient() {
       data = data.filter((r) => !r.is_active);
     }
 
+    if (sortOrder) {
+      const [sortKey, dir] = sortOrder.split(/_(asc|desc)$/);
+      const ascending = dir === "asc";
+      const getValue = (r: any) => {
+        switch (sortKey) {
+          case "nama_cabang":
+            return r.nama_cabang || "";
+          case "kode_cabang":
+            return r.kode_cabang || "";
+          case "is_active":
+            return r.is_active ? 1 : 0;
+          default:
+            return "";
+        }
+      };
+      data.sort((a, b) => {
+        const va = getValue(a);
+        const vb = getValue(b);
+        if (va < vb) return ascending ? -1 : 1;
+        if (va > vb) return ascending ? 1 : -1;
+        return 0;
+      });
+    }
+
     return data;
-  }, [rows, debouncedSearch, statusFilter]);
+  }, [rows, debouncedSearch, statusFilter, sortOrder]);
 
   const totalCount = filteredRows.length;
   const paginatedRows = useMemo(() => {
@@ -302,15 +328,30 @@ export default function CabangManagementClient() {
                 <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
                   No
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="nama_cabang"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Nama Cabang
-                </TableHead>
-                <TableHead className="w-35 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="kode_cabang"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="w-35 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Kode
-                </TableHead>
-                <TableHead className="w-28 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="is_active"
+                  currentSort={sortOrder}
+                  onSort={setSortOrder}
+                  className="w-28 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-26 text-right text-[10px] font-black uppercase text-muted-foreground">
                   Aksi
                 </TableHead>

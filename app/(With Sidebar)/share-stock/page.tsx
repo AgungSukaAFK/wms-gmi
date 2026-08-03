@@ -41,6 +41,13 @@ import { Separator } from "@/components/ui/separator";
 import { ShareStockDetailSheet } from "@/components/share-stock/share-stock-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const SHARE_STOCK_SORT_COLUMNS: Record<string, string> = {
+  mr_kode: "mr_kode",
+  mr_tanggal: "mr_tanggal",
+  mr_status: "mr_status",
+};
 
 export default function ShareStockPage() {
   const supabase = createClient();
@@ -54,6 +61,7 @@ export default function ShareStockPage() {
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [priorityFilter, setPriorityFilter] = useState<string>("all");
+  const [sortOrder, setSortOrder] = useState<string>("newest");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -119,11 +127,17 @@ export default function ShareStockPage() {
     if (dateFrom) query = query.gte("mr_tanggal", dateFrom);
     if (dateTo) query = query.lte("mr_tanggal", dateTo);
 
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = SHARE_STOCK_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn
+      ? sortDirRaw === "asc"
+      : sortOrder === "oldest";
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
     const { data, count, error } = await query
-      .order("created_at", { ascending: false })
+      .order(sortField, { ascending })
       .range(from, to);
 
     if (!error) {
@@ -146,9 +160,15 @@ export default function ShareStockPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    sortOrder,
     page,
     limit,
   ]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -317,6 +337,7 @@ export default function ShareStockPage() {
                 setLocationFilters([]);
                 setDateFrom("");
                 setDateTo("");
+                setSortOrder("newest");
                 setPage(1);
               }}
             >
@@ -360,9 +381,14 @@ export default function ShareStockPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
-                <TableHead className="w-45 text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="mr_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-45 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Material Request
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Personnel / Source
                 </TableHead>
@@ -372,12 +398,23 @@ export default function ShareStockPage() {
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Gudang Tujuan (Peminta)
                 </TableHead>
-                <TableHead className="w-35 text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="mr_tanggal"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="w-35 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Tanggal MR
-                </TableHead>
-                <TableHead className="w-37.5 text-[10px] font-black uppercase text-muted-foreground text-center">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="mr_status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-37.5 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Status MR
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-20"></TableHead>
               </TableRow>
             </TableHeader>

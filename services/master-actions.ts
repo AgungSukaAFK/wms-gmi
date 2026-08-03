@@ -335,6 +335,7 @@ type VendorListParams = {
   limit?: number;
   search?: string;
   is_aktif?: "all" | "active" | "inactive";
+  sort?: string;
 };
 
 type VendorPayload = {
@@ -419,8 +420,19 @@ export async function getVendorList(params: VendorListParams = {}) {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
+  // Konvensi sort key: `${kolom}_${asc|desc}`.
+  const VENDOR_SORT_COLUMNS: Record<string, string> = {
+    vendor_name: "vendor_name",
+    vendor_no: "vendor_no",
+    is_active: "is_active",
+  };
+  const [sortKeyRaw, sortDirRaw] = (params.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = VENDOR_SORT_COLUMNS[sortKeyRaw];
+  const sortField = sortColumn || "vendor_name";
+  const sortAscending = sortColumn ? sortDirRaw === "asc" : true;
+
   const { data, error, count } = await query
-    .order("vendor_name", { ascending: true })
+    .order(sortField, { ascending: sortAscending })
     .range(from, to);
 
   if (error) {
@@ -583,6 +595,8 @@ type CustomerListParams = {
   limit?: number;
   search?: string;
   is_aktif?: "all" | "active" | "inactive";
+  sortField?: string;
+  ascending?: boolean;
 };
 
 type CustomerPayload = {
@@ -668,7 +682,9 @@ export async function getCustomerList(params: CustomerListParams = {}) {
   const to = from + limit - 1;
 
   const { data, error, count } = await query
-    .order("customer_name", { ascending: true })
+    .order(params.sortField || "customer_name", {
+      ascending: params.ascending ?? true,
+    })
     .range(from, to);
 
   if (error) {

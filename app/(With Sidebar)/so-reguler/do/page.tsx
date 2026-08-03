@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { useDebounce } from "use-debounce";
 import { useRouter } from "next/navigation";
@@ -30,6 +31,12 @@ import {
 } from "lucide-react";
 import { DoRegulerDetailSheet } from "@/components/do-reguler/do-reguler-detail-sheet";
 
+const SORT_COLUMNS: Record<string, string> = {
+  do_kode: "do_kode",
+  do_tanggal: "do_tanggal",
+  status: "status",
+};
+
 export default function DoRegulerPage() {
   const supabase = createClient();
   const router = useRouter();
@@ -42,6 +49,7 @@ export default function DoRegulerPage() {
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [locationFilters, setLocationFilters] = useState<string[]>([]);
+  const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -75,9 +83,14 @@ export default function DoRegulerPage() {
     if (locationFilters.length > 0)
       query = query.in("dari_cabang_id", locationFilters);
 
+    const [sortKeyRaw, sortDirRaw] = sort.split(/_(asc|desc)$/);
+    const sortColumn = SORT_COLUMNS[sortKeyRaw];
+
     const from = (page - 1) * limit;
     const { data, count, error } = await query
-      .order("created_at", { ascending: false })
+      .order(sortColumn || "created_at", {
+        ascending: sortColumn ? sortDirRaw === "asc" : false,
+      })
       .range(from, from + limit - 1);
 
     if (!error) {
@@ -89,7 +102,12 @@ export default function DoRegulerPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, statusFilters, locationFilters, page, limit]);
+  }, [debouncedSearch, statusFilters, locationFilters, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -203,18 +221,34 @@ export default function DoRegulerPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="do_kode"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Kode DO
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Gudang → Customer
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="do_tanggal"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="text-[10px] font-black uppercase text-muted-foreground text-center"
+                >
                   Tanggal
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="status"
+                  currentSort={sort}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground text-center"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-32 text-right">Aksi</TableHead>
               </TableRow>
             </TableHeader>

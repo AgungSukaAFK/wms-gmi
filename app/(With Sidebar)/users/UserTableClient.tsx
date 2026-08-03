@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -97,6 +98,7 @@ export default function UserTableClient({
   const [roleFilters, setRoleFilters] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [sortOrder, setSortOrder] = useState("");
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -153,6 +155,31 @@ export default function UserTableClient({
     });
   }, [users, search, statusFilter, cabangFilters, roleFilters]);
 
+  const sortedUsers = useMemo(() => {
+    if (!sortOrder) return filteredUsers;
+    const [sortKey, dir] = sortOrder.split(/_(asc|desc)$/);
+    const ascending = dir === "asc";
+    const getValue = (u: UserProfile) => {
+      switch (sortKey) {
+        case "nama":
+          return u.nama || "";
+        case "cabang":
+          return u.cabang?.nama_cabang || "";
+        case "status":
+          return u.is_active ? 1 : 0;
+        default:
+          return "";
+      }
+    };
+    return [...filteredUsers].sort((a, b) => {
+      const va = getValue(a);
+      const vb = getValue(b);
+      if (va < vb) return ascending ? -1 : 1;
+      if (va > vb) return ascending ? 1 : -1;
+      return 0;
+    });
+  }, [filteredUsers, sortOrder]);
+
   useEffect(() => {
     setCurrentPage(1);
   }, [search, statusFilter, cabangFilters, roleFilters, pageSize]);
@@ -175,7 +202,7 @@ export default function UserTableClient({
   const safeCurrentPage = Math.min(currentPage, totalPages);
   const startIndex = (safeCurrentPage - 1) * pageSize;
   const endIndex = startIndex + pageSize;
-  const paginatedUsers = filteredUsers.slice(startIndex, endIndex);
+  const paginatedUsers = sortedUsers.slice(startIndex, endIndex);
 
   const handleToggleStatus = async (user: UserProfile) => {
     const label = user.is_active ? "Nonaktifkan" : "Aktifkan";
@@ -454,21 +481,36 @@ export default function UserTableClient({
         <Table>
           <TableHeader>
             <TableRow className="bg-muted/50 hover:bg-muted/50">
-              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+              <SortableTableHead
+                sortKey="nama"
+                currentSort={sortOrder}
+                onSort={setSortOrder}
+                className="text-[10px] font-black uppercase tracking-wide text-muted-foreground"
+              >
                 Nama
-              </TableHead>
+              </SortableTableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
                 Email / NRP
               </TableHead>
               <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
                 Roles
               </TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+              <SortableTableHead
+                sortKey="cabang"
+                currentSort={sortOrder}
+                onSort={setSortOrder}
+                className="text-[10px] font-black uppercase tracking-wide text-muted-foreground"
+              >
                 Cabang
-              </TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+              </SortableTableHead>
+              <SortableTableHead
+                sortKey="status"
+                currentSort={sortOrder}
+                onSort={setSortOrder}
+                className="text-[10px] font-black uppercase tracking-wide text-muted-foreground"
+              >
                 Status
-              </TableHead>
+              </SortableTableHead>
               <TableHead className="w-15 text-[10px] font-black uppercase tracking-wide text-muted-foreground">
                 Aksi
               </TableHead>

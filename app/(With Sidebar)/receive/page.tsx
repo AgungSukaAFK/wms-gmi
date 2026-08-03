@@ -43,6 +43,14 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { ReceiveDetailSheet } from "@/components/receive/receive-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const RECEIVE_SORT_COLUMNS: Record<string, string> = {
+  ri_kode: "ri_kode",
+  ri_tanggal: "ri_tanggal",
+  ri_pic: "ri_pic",
+  ri_status: "ri_status",
+};
 
 export default function ReceiveItemPage() {
   const supabase = createClient();
@@ -119,12 +127,17 @@ export default function ReceiveItemPage() {
   const fetchReceives = async () => {
     setLoading(true);
 
-    const ascending = sortOrder === "oldest";
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = RECEIVE_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn
+      ? sortDirRaw === "asc"
+      : sortOrder === "oldest";
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
     const { data, count, error } = await buildFilteredRiQuery()
-      .order("created_at", { ascending })
+      .order(sortField, { ascending })
       .range(from, to);
 
     if (!error) {
@@ -200,6 +213,11 @@ export default function ReceiveItemPage() {
     page,
     limit,
   ]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const resetFilters = () => {
     setSearchQuery("");
@@ -357,24 +375,45 @@ export default function ReceiveItemPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent border-b border-border h-11">
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground pl-5 w-40">
+                <SortableTableHead
+                  sortKey="ri_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground pl-5 w-40"
+                >
                   Kode RI
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground w-36">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="ri_tanggal"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="text-[10px] font-black uppercase text-muted-foreground w-36"
+                >
                   Tanggal
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground w-36">
                   No. PO
                 </TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground w-44">
                   Lokasi
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="ri_pic"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
                   PIC
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center w-28">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="ri_status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground w-28"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center w-24">
                   Items
                 </TableHead>

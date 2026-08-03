@@ -53,6 +53,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
   approveSpbDo,
@@ -98,6 +99,7 @@ export default function SpbDoPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -145,6 +147,7 @@ export default function SpbDoPage() {
     setLoading(true);
     const res = await getSpbDoList({
       search: debouncedSearch || undefined,
+      sort,
       page,
       limit,
     });
@@ -170,7 +173,12 @@ export default function SpbDoPage() {
 
   useEffect(() => {
     fetchList();
-  }, [debouncedSearch, page, limit]);
+  }, [debouncedSearch, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   useEffect(() => {
     const loadUser = async () => {
@@ -409,12 +417,50 @@ export default function SpbDoPage() {
                 <TableRow>
                   <TableHead>No SPB</TableHead>
                   <TableHead>No PO</TableHead>
-                  <TableHead>No DO</TableHead>
-                  <TableHead>Tanggal DO</TableHead>
-                  <TableHead>Status Part</TableHead>
-                  <TableHead>PIC</TableHead>
-                  <TableHead>Approval</TableHead>
-                  <TableHead>Created</TableHead>
+                  <SortableTableHead
+                    sortKey="do_no"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    No DO
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="do_date"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    Tanggal DO
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="do_status_part"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    Status Part
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="do_pic"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    PIC
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="approval_status"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    Approval
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="created_at"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    Created
+                  </SortableTableHead>
                   <TableHead>Aksi</TableHead>
                 </TableRow>
               </TableHeader>

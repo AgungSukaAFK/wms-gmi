@@ -7,6 +7,8 @@ interface SearchParams {
   limit?: string;
   sort?: string;
   view?: string;
+  updated_from?: string;
+  updated_to?: string;
 }
 
 export default async function BarangPage({
@@ -20,6 +22,8 @@ export default async function BarangPage({
   const limit = parseInt(params.limit || "25");
   const sort = params.sort || "name_asc";
   const view = (params.view as "table" | "grid") || "table";
+  const updatedFrom = params.updated_from || "";
+  const updatedTo = params.updated_to || "";
 
   const supabase = await createClient();
 
@@ -32,7 +36,22 @@ export default async function BarangPage({
     query = query.or(`part_number.ilike.%${q}%,part_name.ilike.%${q}%`);
   }
 
-  // Handle Sorting
+  // "to" pakai batas awal hari berikutnya (bukan lte tanggal itu sendiri)
+  // supaya baris yang diubah di hari yang sama tetap ikut ke-filter.
+  if (updatedFrom) {
+    query = query.gte("updated_at", `${updatedFrom}T00:00:00`);
+  }
+  if (updatedTo) {
+    const nextDay = new Date(`${updatedTo}T00:00:00`);
+    nextDay.setDate(nextDay.getDate() + 1);
+    query = query.lt("updated_at", nextDay.toISOString().slice(0, 10));
+  }
+
+  // Handle Sorting -- konvensi key kolom: `${kolom}_${asc|desc}`.
+  const SORT_COLUMNS: Record<string, string> = {
+    part_number: "part_number",
+    part_satuan: "part_satuan",
+  };
   switch (sort) {
     case "name_asc":
       query = query.order("part_name", { ascending: true });
@@ -43,8 +62,15 @@ export default async function BarangPage({
     case "latest":
       query = query.order("created_at", { ascending: false });
       break;
-    default:
-      query = query.order("part_name", { ascending: true });
+    default: {
+      const [sortKeyRaw, sortDirRaw] = sort.split(/_(asc|desc)$/);
+      const sortColumn = SORT_COLUMNS[sortKeyRaw];
+      if (sortColumn) {
+        query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+      } else {
+        query = query.order("part_name", { ascending: true });
+      }
+    }
   }
 
   const { data, count, error } = await query.range(from, to);
@@ -62,6 +88,8 @@ export default async function BarangPage({
       initialQuery={q}
       initialSort={sort}
       initialView={view}
+      initialUpdatedFrom={updatedFrom}
+      initialUpdatedTo={updatedTo}
     />
   );
 }

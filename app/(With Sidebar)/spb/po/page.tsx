@@ -52,6 +52,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
   approveSpbPo,
@@ -91,6 +92,7 @@ export default function SpbPoPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -137,6 +139,7 @@ export default function SpbPoPage() {
     setLoading(true);
     const res = await getSpbPoList({
       search: debouncedSearch || undefined,
+      sort,
       page,
       limit,
     });
@@ -162,7 +165,12 @@ export default function SpbPoPage() {
 
   useEffect(() => {
     fetchList();
-  }, [debouncedSearch, page, limit]);
+  }, [debouncedSearch, sort, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSort(nextSort);
+    setPage(1);
+  };
 
   useEffect(() => {
     const loadUser = async () => {
@@ -398,13 +406,45 @@ export default function SpbPoPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>No SPB</TableHead>
-                  <TableHead>No PO</TableHead>
-                  <TableHead>No SO</TableHead>
-                  <TableHead>SO Date</TableHead>
+                  <SortableTableHead
+                    sortKey="po_no"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    No PO
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="so_no"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    No SO
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="so_date"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    SO Date
+                  </SortableTableHead>
                   <TableHead>Lokasi</TableHead>
                   <TableHead>Item Count</TableHead>
-                  <TableHead>Approval</TableHead>
-                  <TableHead>Created</TableHead>
+                  <SortableTableHead
+                    sortKey="approval_status"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                  >
+                    Approval
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="created_at"
+                    currentSort={sort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                  >
+                    Created
+                  </SortableTableHead>
                   <TableHead>Aksi</TableHead>
                 </TableRow>
               </TableHeader>

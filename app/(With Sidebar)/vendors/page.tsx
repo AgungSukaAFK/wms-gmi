@@ -22,6 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   Building2,
   FilterX,
@@ -82,6 +83,7 @@ export default function VendorsPage() {
   >("all");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
+  const [sortOrder, setSortOrder] = useState("vendor_name_asc");
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -120,6 +122,7 @@ export default function VendorsPage() {
       limit,
       search: debouncedSearch,
       is_aktif: statusFilter,
+      sort: sortOrder,
     });
 
     if (result.error) {
@@ -139,7 +142,12 @@ export default function VendorsPage() {
 
   useEffect(() => {
     fetchVendors();
-  }, [page, limit, debouncedSearch, statusFilter]);
+  }, [page, limit, debouncedSearch, statusFilter, sortOrder]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const openCreateDialog = () => {
     setEditingVendorId(null);
@@ -163,12 +171,16 @@ export default function VendorsPage() {
   const resetFilters = () => {
     setSearch("");
     setStatusFilter("all");
+    setSortOrder("vendor_name_asc");
     setPage(1);
   };
 
   const hasActiveFilters = useMemo(
-    () => Boolean(search) || statusFilter !== "all",
-    [search, statusFilter],
+    () =>
+      Boolean(search) ||
+      statusFilter !== "all" ||
+      sortOrder !== "vendor_name_asc",
+    [search, statusFilter, sortOrder],
   );
 
   const handleSubmit = async () => {
@@ -326,18 +338,33 @@ export default function VendorsPage() {
                 <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
                   No
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="vendor_name"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Nama Vendor
-                </TableHead>
-                <TableHead className="w-35 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="vendor_no"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-35 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Kode Vendor
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-50 text-[10px] font-black uppercase text-muted-foreground">
                   Email / PIC
                 </TableHead>
-                <TableHead className="w-28 text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="is_active"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-28 text-[10px] font-black uppercase text-muted-foreground justify-center text-center"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
                   Aksi
                 </TableHead>

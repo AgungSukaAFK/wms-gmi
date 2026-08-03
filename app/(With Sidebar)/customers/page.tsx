@@ -48,6 +48,14 @@ import {
   toggleCustomerStatus,
   updateCustomer,
 } from "@/services/master-actions";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const CUSTOMER_SORT_COLUMNS: Record<string, string> = {
+  customer_name: "customer_name",
+  customer_no: "customer_no",
+  email: "email",
+  is_active: "is_active",
+};
 
 type CustomerFormState = {
   customer_name: string;
@@ -78,6 +86,7 @@ export default function CustomersPage() {
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "inactive"
   >("all");
+  const [sortOrder, setSortOrder] = useState<string>("customer_name_asc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
 
@@ -113,11 +122,18 @@ export default function CustomersPage() {
 
   const fetchCustomers = async () => {
     setLoading(true);
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = CUSTOMER_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "customer_name";
+    const ascending = sortColumn ? sortDirRaw === "asc" : true;
+
     const result = await getCustomerList({
       page,
       limit,
       search: debouncedSearch,
       is_aktif: statusFilter,
+      sortField,
+      ascending,
     });
 
     if (result.error) {
@@ -137,7 +153,12 @@ export default function CustomersPage() {
 
   useEffect(() => {
     fetchCustomers();
-  }, [page, limit, debouncedSearch, statusFilter]);
+  }, [page, limit, debouncedSearch, statusFilter, sortOrder]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const openCreateDialog = () => {
     setEditingCustomerId(null);
@@ -161,12 +182,16 @@ export default function CustomersPage() {
   const resetFilters = () => {
     setSearch("");
     setStatusFilter("all");
+    setSortOrder("customer_name_asc");
     setPage(1);
   };
 
   const hasActiveFilters = useMemo(
-    () => Boolean(search) || statusFilter !== "all",
-    [search, statusFilter],
+    () =>
+      Boolean(search) ||
+      statusFilter !== "all" ||
+      sortOrder !== "customer_name_asc",
+    [search, statusFilter, sortOrder],
   );
 
   const handleSubmit = async () => {
@@ -309,18 +334,38 @@ export default function CustomersPage() {
                 <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
                   No
                 </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="customer_name"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Nama Customer
-                </TableHead>
-                <TableHead className="w-35 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="customer_no"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-35 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Kode Customer
-                </TableHead>
-                <TableHead className="w-50 text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="email"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-50 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Email / PIC
-                </TableHead>
-                <TableHead className="w-28 text-[10px] font-black uppercase text-muted-foreground text-center">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="is_active"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-28 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-30 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
                   Aksi
                 </TableHead>

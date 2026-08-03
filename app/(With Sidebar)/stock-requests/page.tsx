@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   Table,
   TableBody,
@@ -9,6 +9,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -55,6 +56,7 @@ export default function StockRequestsPage() {
   );
   const [denied, setDenied] = useState(false);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
+  const [sortOrder, setSortOrder] = useState("");
 
   // Dialog set min/max
   const [settingRow, setSettingRow] = useState<any | null>(null);
@@ -91,6 +93,35 @@ export default function StockRequestsPage() {
       toast.error(res?.error || "Gagal memproses");
     }
   };
+
+  const sortedRows = useMemo(() => {
+    if (!sortOrder) return rows;
+    const [sortKey, dir] = sortOrder.split(/_(asc|desc)$/);
+    const ascending = dir === "asc";
+    const getValue = (r: any) => {
+      switch (sortKey) {
+        case "part_number":
+          return r.part_number || r.barang?.part_number || "";
+        case "cabang":
+          return r.cabang?.nama_cabang || "";
+        case "reason":
+          return r.reason || "";
+        case "current_qty":
+          return r.current_qty ?? 0;
+        case "requester":
+          return r.requester?.nama || "";
+        default:
+          return "";
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const va = getValue(a);
+      const vb = getValue(b);
+      if (va < vb) return ascending ? -1 : 1;
+      if (va > vb) return ascending ? 1 : -1;
+      return 0;
+    });
+  }, [rows, sortOrder]);
 
   const openSetDialog = (r: any) => {
     setSettingRow(r);
@@ -167,21 +198,47 @@ export default function StockRequestsPage() {
             <Table>
               <TableHeader>
                 <TableRow className="bg-muted/40">
-                  <TableHead className="text-[10px] font-bold uppercase">
+                  <SortableTableHead
+                    sortKey="part_number"
+                    currentSort={sortOrder}
+                    onSort={setSortOrder}
+                    className="text-[10px] font-bold uppercase"
+                  >
                     Barang
-                  </TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase">
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="cabang"
+                    currentSort={sortOrder}
+                    onSort={setSortOrder}
+                    className="text-[10px] font-bold uppercase"
+                  >
                     Cabang
-                  </TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase">
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="reason"
+                    currentSort={sortOrder}
+                    onSort={setSortOrder}
+                    className="text-[10px] font-bold uppercase"
+                  >
                     Alasan
-                  </TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-center">
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="current_qty"
+                    currentSort={sortOrder}
+                    onSort={setSortOrder}
+                    defaultDir="desc"
+                    className="justify-center text-center text-[10px] font-bold uppercase"
+                  >
                     Stok (saat minta)
-                  </TableHead>
-                  <TableHead className="text-[10px] font-bold uppercase">
+                  </SortableTableHead>
+                  <SortableTableHead
+                    sortKey="requester"
+                    currentSort={sortOrder}
+                    onSort={setSortOrder}
+                    className="text-[10px] font-bold uppercase"
+                  >
                     Peminta
-                  </TableHead>
+                  </SortableTableHead>
                   <TableHead className="text-[10px] font-bold uppercase text-right pr-4">
                     Aksi
                   </TableHead>
@@ -194,7 +251,7 @@ export default function StockRequestsPage() {
                       <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
                     </TableCell>
                   </TableRow>
-                ) : rows.length === 0 ? (
+                ) : sortedRows.length === 0 ? (
                   <TableRow>
                     <TableCell
                       colSpan={6}
@@ -204,7 +261,7 @@ export default function StockRequestsPage() {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  rows.map((r) => {
+                  sortedRows.map((r) => {
                     const meta = REASON_META[r.reason] || {
                       label: r.reason,
                       className: "",

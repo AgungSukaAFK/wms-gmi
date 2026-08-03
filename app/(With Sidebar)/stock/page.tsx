@@ -11,6 +11,8 @@ interface SearchParams {
   view?: string;
   stock_from?: string;
   stock_to?: string;
+  updated_from?: string;
+  updated_to?: string;
 }
 
 export default async function StockPage({
@@ -28,6 +30,8 @@ export default async function StockPage({
   const view = (params.view as "table" | "grid") || "table";
   const stockFrom = params.stock_from || "";
   const stockTo = params.stock_to || "";
+  const updatedFrom = params.updated_from || "";
+  const updatedTo = params.updated_to || "";
 
   const supabase = await createClient();
 
@@ -49,6 +53,18 @@ export default async function StockPage({
   const parsedStockTo = Number(stockTo);
   if (stockTo && !Number.isNaN(parsedStockTo)) {
     query = query.lte("total_qty", parsedStockTo);
+  }
+
+  // last_updated = MAX(stock.updated_at) per part (lihat v_stock_summary).
+  // "to" pakai batas awal hari berikutnya (bukan lte tanggal itu sendiri)
+  // supaya baris yang diubah di hari yang sama tetap ikut ke-filter.
+  if (updatedFrom) {
+    query = query.gte("last_updated", `${updatedFrom}T00:00:00`);
+  }
+  if (updatedTo) {
+    const nextDay = new Date(`${updatedTo}T00:00:00`);
+    nextDay.setDate(nextDay.getDate() + 1);
+    query = query.lt("last_updated", nextDay.toISOString().slice(0, 10));
   }
 
   // Note: Cabang filter is handled within the Detail Sheet in the grouped view,
@@ -94,6 +110,8 @@ export default async function StockPage({
       initialView={view}
       initialStockFrom={stockFrom}
       initialStockTo={stockTo}
+      initialUpdatedFrom={updatedFrom}
+      initialUpdatedTo={updatedTo}
     />
   );
 }

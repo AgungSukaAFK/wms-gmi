@@ -23,6 +23,7 @@ import {
   Upload,
   Download,
   RefreshCw,
+  CalendarIcon,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -89,6 +90,7 @@ import { StockDetailSheet } from "@/components/stock/stock-detail-sheet";
 import { cn } from "@/lib/utils";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { DatePickerString } from "@/components/date-picker-string";
 
 interface StockClientProps {
   initialData: any[];
@@ -103,6 +105,8 @@ interface StockClientProps {
   initialView: "table" | "grid";
   initialStockFrom: string;
   initialStockTo: string;
+  initialUpdatedFrom: string;
+  initialUpdatedTo: string;
 }
 
 export default function StockClient({
@@ -118,6 +122,8 @@ export default function StockClient({
   initialView,
   initialStockFrom,
   initialStockTo,
+  initialUpdatedFrom,
+  initialUpdatedTo,
 }: StockClientProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -778,6 +784,8 @@ export default function StockClient({
   const [stockTo, setStockTo] = useState(initialStockTo);
   const [debouncedStockFrom] = useDebounce(stockFrom, 500);
   const [debouncedStockTo] = useDebounce(stockTo, 500);
+  const [updatedFrom, setUpdatedFrom] = useState(initialUpdatedFrom);
+  const [updatedTo, setUpdatedTo] = useState(initialUpdatedTo);
 
   // Selected Part for Detail
   const [selectedPartId, setSelectedPartId] = useState<number | null>(null);
@@ -795,9 +803,21 @@ export default function StockClient({
     if (debouncedStockTo) params.set("stock_to", debouncedStockTo);
     else params.delete("stock_to");
 
+    if (updatedFrom) params.set("updated_from", updatedFrom);
+    else params.delete("updated_from");
+
+    if (updatedTo) params.set("updated_to", updatedTo);
+    else params.delete("updated_to");
+
     params.set("page", "1");
     router.push(`/stock?${params.toString()}`);
-  }, [debouncedSearch, debouncedStockFrom, debouncedStockTo]);
+  }, [
+    debouncedSearch,
+    debouncedStockFrom,
+    debouncedStockTo,
+    updatedFrom,
+    updatedTo,
+  ]);
 
   const handlePageChange = (newPage: number) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -991,6 +1011,23 @@ export default function StockClient({
               onChange={(e) => setStockTo(e.target.value)}
             />
 
+            <div className="flex w-full items-center gap-2 sm:w-auto">
+              <CalendarIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <DatePickerString
+                value={updatedFrom}
+                onChange={setUpdatedFrom}
+                placeholder="Diubah dari"
+                className="h-9 w-full text-xs font-medium sm:w-38"
+              />
+            </div>
+
+            <DatePickerString
+              value={updatedTo}
+              onChange={setUpdatedTo}
+              placeholder="Diubah sampai"
+              className="h-9 w-full text-xs font-medium sm:w-38"
+            />
+
             <Button
               variant="ghost"
               size="sm"
@@ -998,6 +1035,8 @@ export default function StockClient({
                 setSearch("");
                 setStockFrom("");
                 setStockTo("");
+                setUpdatedFrom("");
+                setUpdatedTo("");
                 router.push("/stock");
               }}
               className="h-9 text-xs font-bold text-muted-foreground hover:text-destructive"

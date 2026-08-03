@@ -63,6 +63,14 @@ import {
   MrLevelAutoRules,
   DEFAULT_MR_LEVEL_AUTO_RULES,
 } from "@/lib/mr-level";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const MR_SORT_COLUMNS: Record<string, string> = {
+  mr_kode: "mr_kode",
+  mr_priority: "mr_priority",
+  mr_tanggal: "mr_tanggal",
+  mr_status: "mr_status",
+};
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
@@ -87,6 +95,7 @@ export default function MaterialRequestPage() {
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [priorityFilters, setPriorityFilters] = useState<string[]>([]);
   const [accurateFilter, setAccurateFilter] = useState<string>("all");
+  const [sortOrder, setSortOrder] = useState<string>("newest");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -254,11 +263,17 @@ export default function MaterialRequestPage() {
 
   const fetchData = async () => {
     setLoading(true);
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = MR_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn
+      ? sortDirRaw === "asc"
+      : sortOrder === "oldest";
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
     const { data, count, error } = await buildFilteredQuery()
-      .order("created_at", { ascending: false })
+      .order(sortField, { ascending })
       .range(from, to);
 
     if (error) {
@@ -435,9 +450,15 @@ export default function MaterialRequestPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    sortOrder,
     page,
     limit,
   ]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const resetFilters = () => {
     setSearchQuery("");
@@ -447,6 +468,7 @@ export default function MaterialRequestPage() {
     setLocationFilters([]);
     setDateFrom("");
     setDateTo("");
+    setSortOrder("newest");
     setPage(1);
   };
 
@@ -764,24 +786,43 @@ export default function MaterialRequestPage() {
                 <TableHead className="w-12.5 text-center font-bold text-[10px] uppercase text-muted-foreground">
                   No
                 </TableHead>
-                <TableHead className="w-15 text-center font-bold text-[10px] uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="mr_priority"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-15 justify-center text-center font-bold text-[10px] uppercase text-muted-foreground"
+                >
                   Urgency
-                </TableHead>
-                <TableHead className="w-45 font-bold text-[10px] uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="mr_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-45 font-bold text-[10px] uppercase text-muted-foreground"
+                >
                   Kode MR
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="font-bold text-[10px] uppercase text-muted-foreground">
                   PIC & Lokasi
                 </TableHead>
-                <TableHead className="w-32.5 font-bold text-[10px] uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="mr_tanggal"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="w-32.5 justify-center text-center font-bold text-[10px] uppercase text-muted-foreground"
+                >
                   Tanggal
-                </TableHead>
-                <TableHead
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="mr_status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
                   style={{ width: 170 }}
-                  className="font-bold text-[10px] uppercase text-muted-foreground text-center"
+                  className="justify-center text-center font-bold text-[10px] uppercase text-muted-foreground"
                 >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 {/* ACCURATE_HIDDEN */}
                 {false && (
                   <TableHead className="w-32.5 font-bold text-[10px] uppercase text-muted-foreground text-center">

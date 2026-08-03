@@ -30,6 +30,13 @@ import { MultiSelect } from "@/components/ui/multi-select";
 
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useDebounce } from "use-debounce";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const TEMPLATE_SORT_COLUMNS: Record<string, string> = {
+  name: "name",
+  type: "type",
+  updated_at: "updated_at",
+};
 
 export default function ApprovalTemplatesPage() {
   const supabase = createClient();
@@ -48,6 +55,7 @@ export default function ApprovalTemplatesPage() {
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [typeFilters, setTypeFilters] = useState<string[]>([]);
   const [cabangFilters, setCabangFilters] = useState<string[]>([]);
+  const [sortOrder, setSortOrder] = useState<string>("updated_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
   const [totalCount, setTotalCount] = useState(0);
@@ -123,11 +131,16 @@ export default function ApprovalTemplatesPage() {
       }
     }
 
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = TEMPLATE_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "updated_at";
+    const ascending = sortColumn ? sortDirRaw === "asc" : false;
+
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
     const { data, count, error } = await query
-      .order("updated_at", { ascending: false })
+      .order(sortField, { ascending })
       .range(from, to);
 
     if (error) {
@@ -142,7 +155,12 @@ export default function ApprovalTemplatesPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, typeFilters, cabangFilters, page, limit]);
+  }, [debouncedSearch, typeFilters, cabangFilters, sortOrder, page, limit]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const handleAddTemplate = () => {
     setSelectedTemplate(null);
@@ -251,18 +269,34 @@ export default function ApprovalTemplatesPage() {
                 <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
                   No
                 </TableHead>
-                <TableHead className="w-50 text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="name"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-50 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Nama Template
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="type"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Jenis Dokumen
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Lokasi
                 </TableHead>
-                <TableHead className="w-37.5 text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="updated_at"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="w-37.5 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Pembaruan Terakhir
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-right w-25 text-[10px] font-black uppercase text-muted-foreground">
                   Aksi
                 </TableHead>

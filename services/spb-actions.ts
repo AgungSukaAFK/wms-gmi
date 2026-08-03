@@ -1007,10 +1007,19 @@ export async function deleteSpb(id: number) {
   return { success: true };
 }
 
+const SPB_PO_SORT_COLUMNS: Record<string, string> = {
+  po_no: "po_no",
+  so_no: "so_no",
+  so_date: "so_date",
+  approval_status: "approval_status",
+  created_at: "created_at",
+};
+
 export async function getSpbPoList(params?: {
   search?: string;
   page?: number;
   limit?: number;
+  sort?: string;
 }) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
@@ -1024,8 +1033,15 @@ export async function getSpbPoList(params?: {
       {
         count: "exact",
       },
-    )
-    .order("created_at", { ascending: false });
+    );
+
+  const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = SPB_PO_SORT_COLUMNS[sortKeyRaw];
+  if (sortColumn) {
+    query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+  } else {
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (params?.search) {
     query = query.or(
@@ -1112,10 +1128,20 @@ export async function createSpbPo(payload: {
   return { success: true, data: poHeader };
 }
 
+const SPB_DO_SORT_COLUMNS: Record<string, string> = {
+  do_no: "do_no",
+  do_date: "do_date",
+  do_status_part: "do_status_part",
+  do_pic: "do_pic",
+  approval_status: "approval_status",
+  created_at: "created_at",
+};
+
 export async function getSpbDoList(params?: {
   search?: string;
   page?: number;
   limit?: number;
+  sort?: string;
 }) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
@@ -1127,8 +1153,15 @@ export async function getSpbDoList(params?: {
     .select(
       "*, po:spb_po_id(id, po_no, so_no, spb:spb_id(id, spb_no, spb_gudang, spb_status)), details:spb_do_details(*)",
       { count: "exact" },
-    )
-    .order("created_at", { ascending: false });
+    );
+
+  const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = SPB_DO_SORT_COLUMNS[sortKeyRaw];
+  if (sortColumn) {
+    query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+  } else {
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (params?.search) {
     query = query.or(
@@ -1222,10 +1255,19 @@ export async function createSpbDo(payload: {
   return { success: true, data: doHeader };
 }
 
+const SPB_INVOICE_SORT_COLUMNS: Record<string, string> = {
+  invoice_no: "invoice_no",
+  invoice_date: "invoice_date",
+  invoice_email_date: "invoice_email_date",
+  approval_status: "approval_status",
+  created_at: "created_at",
+};
+
 export async function getSpbInvoiceList(params?: {
   search?: string;
   page?: number;
   limit?: number;
+  sort?: string;
 }) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
@@ -1237,8 +1279,15 @@ export async function getSpbInvoiceList(params?: {
     .select(
       "*, do:spb_do_id(id, do_no, po:spb_po_id(id, po_no, spb:spb_id(id, spb_no, spb_status))), details:spb_invoice_details(*)",
       { count: "exact" },
-    )
-    .order("created_at", { ascending: false });
+    );
+
+  const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = SPB_INVOICE_SORT_COLUMNS[sortKeyRaw];
+  if (sortColumn) {
+    query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+  } else {
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (params?.search) {
     query = query.or(`invoice_no.ilike.%${params.search}%`);
@@ -1338,10 +1387,18 @@ export async function createSpbInvoice(payload: {
   return { success: true, data: invHeader };
 }
 
+const RETURN_SPB_SORT_COLUMNS: Record<string, string> = {
+  rtn_kode: "rtn_kode",
+  rtn_tanggal: "rtn_tanggal",
+  rtn_status: "rtn_status",
+  approval_status: "approval_status",
+};
+
 export async function getReturnSpbList(params?: {
   search?: string;
   page?: number;
   limit?: number;
+  sort?: string;
 }) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
@@ -1355,8 +1412,15 @@ export async function getReturnSpbList(params?: {
       {
         count: "exact",
       },
-    )
-    .order("created_at", { ascending: false });
+    );
+
+  const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = RETURN_SPB_SORT_COLUMNS[sortKeyRaw];
+  if (sortColumn) {
+    query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+  } else {
+    query = query.order("created_at", { ascending: false });
+  }
 
   if (params?.search) {
     query = query.or(`rtn_kode.ilike.%${params.search}%`);
@@ -1791,6 +1855,15 @@ export async function rejectReturnSpb(id: number, reason: string) {
   return rejectStockOutDocument("return_spb", id, reason);
 }
 
+const SPB_REPORT_SORT_COLUMNS: Record<string, string> = {
+  spb_tanggal: "spb_tanggal",
+  spb_no: "spb_no",
+  spb_status: "spb_status",
+  po_no: "po_no",
+  do_no: "do_no",
+  invoice_no: "invoice_no",
+};
+
 export async function getSpbReport(params?: {
   search?: string;
   status?: "all" | "no_po" | "no_do" | "no_invoice";
@@ -1798,16 +1871,22 @@ export async function getSpbReport(params?: {
   endDate?: string;
   page?: number;
   limit?: number;
+  sort?: string;
 }) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 50;
   const from = (page - 1) * limit;
 
-  let query = supabase
-    .from("v_spb_report")
-    .select("*", { count: "exact" })
-    .order("spb_created_at", { ascending: false });
+  let query = supabase.from("v_spb_report").select("*", { count: "exact" });
+
+  const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = SPB_REPORT_SORT_COLUMNS[sortKeyRaw];
+  if (sortColumn) {
+    query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
+  } else {
+    query = query.order("spb_created_at", { ascending: false });
+  }
 
   if (params?.search) {
     query = query.or(

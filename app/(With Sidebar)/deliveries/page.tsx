@@ -40,6 +40,13 @@ import { DatePickerString } from "@/components/date-picker-string";
 import Link from "next/link";
 import { completedFilterStatuses } from "@/lib/document-status";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { SortableTableHead } from "@/components/ui/sortable-table-head";
+
+const DELIVERY_SORT_COLUMNS: Record<string, string> = {
+  dlv_kode: "dlv_kode",
+  created_at: "created_at",
+  status: "status",
+};
 
 export default function DeliveriesPage() {
   const supabase = createClient();
@@ -52,6 +59,7 @@ export default function DeliveriesPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
+  const [sortOrder, setSortOrder] = useState<string>("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
@@ -115,11 +123,16 @@ export default function DeliveriesPage() {
     if (dateFrom) query = query.gte("created_at", dateFrom);
     if (dateTo) query = query.lte("created_at", dateTo);
 
+    const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
+    const sortColumn = DELIVERY_SORT_COLUMNS[sortKeyRaw];
+    const sortField = sortColumn || "created_at";
+    const ascending = sortColumn ? sortDirRaw === "asc" : false;
+
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
     const { data, count, error } = await query
-      .order("created_at", { ascending: false })
+      .order(sortField, { ascending })
       .range(from, to);
 
     if (!error) {
@@ -141,9 +154,15 @@ export default function DeliveriesPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    sortOrder,
     page,
     limit,
   ]);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -263,6 +282,7 @@ export default function DeliveriesPage() {
                 setLocationFilters([]);
                 setDateFrom("");
                 setDateTo("");
+                setSortOrder("created_at_desc");
                 setPage(1);
               }}
             >
@@ -306,18 +326,34 @@ export default function DeliveriesPage() {
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
-                <TableHead className="w-45 text-[10px] font-black uppercase text-muted-foreground">
+                <SortableTableHead
+                  sortKey="dlv_kode"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-45 text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Delivery
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Route / PIC
                 </TableHead>
-                <TableHead className="w-35 text-[10px] font-black uppercase text-muted-foreground text-center">
+                <SortableTableHead
+                  sortKey="created_at"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  defaultDir="desc"
+                  className="w-35 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Tanggal
-                </TableHead>
-                <TableHead className="w-37.5 text-[10px] font-black uppercase text-muted-foreground text-center">
+                </SortableTableHead>
+                <SortableTableHead
+                  sortKey="status"
+                  currentSort={sortOrder}
+                  onSort={handleSortChange}
+                  className="w-37.5 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
+                >
                   Status
-                </TableHead>
+                </SortableTableHead>
                 <TableHead className="w-20"></TableHead>
               </TableRow>
             </TableHeader>
