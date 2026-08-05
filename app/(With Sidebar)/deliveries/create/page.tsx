@@ -908,6 +908,8 @@ export default function CreateDeliveryPage() {
                       "Ninja Xpress",
                       "Wahana",
                       "SAP Express",
+                      "Indah Cargo",
+                      "Flexo Fast",
                     ].map((c) => (
                       <SelectItem
                         key={c}

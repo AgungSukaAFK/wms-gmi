@@ -622,6 +622,8 @@ export default function CreateItemTransferPage() {
                       "Ninja Xpress",
                       "Wahana",
                       "SAP Express",
+                      "Indah Cargo",
+                      "Flexo Fast",
                     ].map((c) => (
                       <SelectItem key={c} value={c} className="font-bold text-xs">
                         {c}
