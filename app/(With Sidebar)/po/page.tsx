@@ -44,6 +44,7 @@ import { Separator } from "@/components/ui/separator";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
 import { PODetailSheet } from "@/components/po/po-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
@@ -59,6 +60,8 @@ const PO_SORT_COLUMNS: Record<string, string> = {
 
 export default function POListPage() {
   const supabase = createClient();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [pos, setPos] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
@@ -275,6 +278,15 @@ export default function POListPage() {
   useEffect(() => {
     fetchUser();
   }, []);
+
+  useEffect(() => {
+    const idParam = searchParams.get("id");
+    if (idParam) {
+      setSelectedPoId(Number(idParam));
+      setSheetOpen(true);
+      router.replace("/po");
+    }
+  }, [searchParams, router]);
 
   useEffect(() => {
     fetchPOs();
