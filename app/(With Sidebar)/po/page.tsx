@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
@@ -58,7 +58,7 @@ const PO_SORT_COLUMNS: Record<string, string> = {
   po_receive_status: "po_receive_status",
 };
 
-export default function POListPage() {
+function POListPageContent() {
   const supabase = createClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -794,5 +794,13 @@ export default function POListPage() {
         onUpdate={fetchPOs}
       />
     </>
+  );
+}
+
+export default function POListPage() {
+  return (
+    <Suspense fallback={null}>
+      <POListPageContent />
+    </Suspense>
   );
 }

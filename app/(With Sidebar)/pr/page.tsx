@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import { createClient } from "@/lib/supabase/client";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
@@ -58,7 +58,7 @@ const PR_SORT_COLUMNS: Record<string, string> = {
   accurate: "accurate",
 };
 
-export default function PRListPage() {
+function PRListPageContent() {
   const supabase = createClient();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -713,5 +713,13 @@ export default function PRListPage() {
         onUpdate={fetchPRs}
       />
     </>
+  );
+}
+
+export default function PRListPage() {
+  return (
+    <Suspense fallback={null}>
+      <PRListPageContent />
+    </Suspense>
   );
 }
