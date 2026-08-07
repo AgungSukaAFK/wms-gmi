@@ -44,6 +44,7 @@ import {
   Save,
   RotateCcw,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -96,6 +97,7 @@ export function PRDetailSheet({
   onUpdate,
 }: PRDetailSheetProps) {
   const supabase = createClient();
+  const router = useRouter();
   const [pr, setPr] = useState<any>(null);
   const [prItems, setPrItems] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -1176,17 +1178,28 @@ export function PRDetailSheet({
                   <Loader2 className="h-3 w-3 animate-spin text-slate-400 shrink-0" />
                 )}
               </button>
-              <div className="flex gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Button
                   variant="outline"
-                  className="flex-1 h-11 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
+                  className="h-11 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
                   onClick={() => onOpenChange(false)}
                 >
                   <X className="h-3.5 w-3.5" /> Tutup Panel
                 </Button>
                 <Button
+                  className="h-11 font-bold text-xs uppercase rounded-xl shadow-md transition-all gap-2"
+                  onClick={() => {
+                    router.push(`/pr/${prId}`);
+                    onOpenChange(false);
+                  }}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" /> Buka Detail
+                </Button>
+              </div>
+              <div className="flex gap-3">
+                <Button
                   variant="outline"
-                  className="h-11 px-4 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
+                  className="flex-1 h-11 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
                   onClick={handlePrint}
                 >
                   <Printer className="h-3.5 w-3.5" /> Cetak PR

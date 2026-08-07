@@ -33,7 +33,10 @@ import {
   Trash2,
   Save,
   RotateCcw,
+  X,
+  ExternalLink,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -72,6 +75,7 @@ export function PODetailSheet({
   onUpdate,
 }: PODetailSheetProps) {
   const supabase = createClient();
+  const router = useRouter();
   const [po, setPo] = useState<any>(null);
   const [poItems, setPoItems] = useState<any[]>([]);
   const [linkedPrs, setLinkedPrs] = useState<any[]>([]);
@@ -1003,6 +1007,25 @@ export function PODetailSheet({
                   docId={Number(poId)}
                   refreshKey={modLogRefreshKey}
                 />
+              </div>
+
+              <div className="p-6 border-t border-border bg-muted/30 grid grid-cols-1 sm:grid-cols-2 gap-3 shrink-0">
+                <Button
+                  variant="outline"
+                  className="h-10 border-border text-muted-foreground font-bold text-xs uppercase rounded-lg hover:bg-background hover:text-foreground transition-all gap-2"
+                  onClick={() => onOpenChange(false)}
+                >
+                  <X className="h-3.5 w-3.5" /> Tutup Panel
+                </Button>
+                <Button
+                  className="h-10 font-bold text-xs uppercase rounded-lg shadow-md transition-all gap-2"
+                  onClick={() => {
+                    router.push(`/po/${poId}`);
+                    onOpenChange(false);
+                  }}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" /> Buka Detail
+                </Button>
               </div>
             </>
           )}

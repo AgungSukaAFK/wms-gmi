@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, Suspense } from "react";
+import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
@@ -43,7 +43,6 @@ import { Separator } from "@/components/ui/separator";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
 import { PRDetailSheet } from "@/components/pr/pr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
@@ -58,10 +57,8 @@ const PR_SORT_COLUMNS: Record<string, string> = {
   accurate: "accurate",
 };
 
-function PRListPageContent() {
+export default function PRListPage() {
   const supabase = createClient();
-  const router = useRouter();
-  const searchParams = useSearchParams();
   const [prs, setPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [totalCount, setTotalCount] = useState(0);
@@ -255,15 +252,6 @@ function PRListPageContent() {
   useEffect(() => {
     fetchUser();
   }, []);
-
-  useEffect(() => {
-    const idParam = searchParams.get("id");
-    if (idParam) {
-      setSelectedPrId(Number(idParam));
-      setSheetOpen(true);
-      router.replace("/pr");
-    }
-  }, [searchParams, router]);
 
   useEffect(() => {
     fetchPRs();
@@ -713,13 +701,5 @@ function PRListPageContent() {
         onUpdate={fetchPRs}
       />
     </>
-  );
-}
-
-export default function PRListPage() {
-  return (
-    <Suspense fallback={null}>
-      <PRListPageContent />
-    </Suspense>
   );
 }
