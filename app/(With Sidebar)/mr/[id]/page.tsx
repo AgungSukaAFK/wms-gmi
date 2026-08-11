@@ -1578,8 +1578,7 @@ export default function MRDetailPage({
                           }
                         />
                         <span className="text-[10px] font-medium text-muted-foreground">
-                          Lewat tanggal ini & delivery belum dibuat → MR
-                          di-freeze.
+                          Target tanggal cabang sumber mengirim stok ini.
                         </span>
                       </div>
                     )}

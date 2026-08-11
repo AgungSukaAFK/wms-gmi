@@ -107,14 +107,19 @@ export function MRItemSelector({
 
   const fetchItems = async (q: string) => {
     setLoading(true);
-    let query = supabase
-      .from("barang")
-      .select("*")
-      .order("part_name")
-      .limit(15);
+    let query = supabase.from("barang").select("*").limit(50);
 
     if (q) {
-      query = query.or(`part_number.ilike.%${q}%,part_name.ilike.%${q}%`);
+      // Escape karakter reserved PostgREST (koma, kurung, kutip) supaya
+      // part number yang mengandungnya tidak merusak sintaks filter .or().
+      const escaped = q.replace(/["\\]/g, "\\$&");
+      query = query
+        .or(
+          `part_number.ilike."%${escaped}%",part_name.ilike."%${escaped}%"`,
+        )
+        .order("part_number");
+    } else {
+      query = query.order("part_name");
     }
 
     const { data } = await query;

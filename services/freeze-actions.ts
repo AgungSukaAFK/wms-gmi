@@ -8,10 +8,11 @@ import { businessToday } from "@/lib/business-date";
 // ============================================================
 // FREEZE MR — terkait fitur Planning Supply / Deadline Share Stock
 //
-// MR ter-freeze (lazy, dicek saat server action terkait dipanggil) bila ada
-// alokasi share stock yang sudah lewat deadline DAN belum ada delivery sama
-// sekali untuk item tsb (delivery 'cancelled' tidak dihitung). Freeze berlaku
-// untuk SELURUH MR beserta alurnya. Hanya moderator yang dapat unfreeze/reset.
+// MR ter-freeze (lazy, dicek saat server action terkait dipanggil) bila
+// mrs.mr_due_date sudah lewat DAN masih ada item share stock MR ini yang
+// belum ada delivery sama sekali (delivery 'cancelled' tidak dihitung).
+// Freeze berlaku untuk SELURUH MR beserta alurnya. Hanya moderator yang
+// dapat unfreeze/reset (reset = perpanjang mr_due_date).
 // ============================================================
 
 async function fetchRoleNames(
@@ -64,41 +65,41 @@ export async function evaluateMrFreeze(mrId: number): Promise<boolean> {
 
   const { data: mr } = await supabase
     .from("mrs")
-    .select("id, is_frozen")
+    .select("id, is_frozen, mr_due_date")
     .eq("id", mrId)
     .maybeSingle();
   if (!mr) return false;
   if (mr.is_frozen) return true;
+  if (!mr.mr_due_date) return false;
 
   const today = businessToday();
+  if (mr.mr_due_date >= today) return false;
 
-  // Alokasi share stock MR ini yang deadline-nya sudah lewat.
+  // MR sudah lewat due date. Cek item share stock MR ini yang belum ada delivery sama sekali.
   const { data: allocs } = await supabase
     .from("mr_sharestock_allocations")
-    .select("mr_item_id, deadline, mr_items!inner(mr_id)")
-    .eq("mr_items.mr_id", mrId)
-    .not("deadline", "is", null)
-    .lt("deadline", today);
+    .select("mr_item_id, mr_items!inner(mr_id)")
+    .eq("mr_items.mr_id", mrId);
 
-  const overdueItemIds = Array.from(
+  const allocatedItemIds = Array.from(
     new Set((allocs || []).map((a: any) => a.mr_item_id)),
   );
-  if (overdueItemIds.length === 0) return false;
+  if (allocatedItemIds.length === 0) return false;
 
   // Item yang sudah punya delivery (selain yang dibatalkan) tidak memicu freeze.
   const { data: delivered } = await supabase
     .from("delivery_items")
     .select("mr_item_id, deliveries!inner(status)")
-    .in("mr_item_id", overdueItemIds)
+    .in("mr_item_id", allocatedItemIds)
     .neq("deliveries.status", "cancelled");
   const deliveredSet = new Set(
     (delivered || []).map((d: any) => d.mr_item_id),
   );
 
-  const pendingOverdue = overdueItemIds.filter((id) => !deliveredSet.has(id));
-  if (pendingOverdue.length === 0) return false;
+  const pendingItems = allocatedItemIds.filter((id) => !deliveredSet.has(id));
+  if (pendingItems.length === 0) return false;
 
-  const reason = `Freeze otomatis: ${pendingOverdue.length} item share stock melewati deadline tanpa delivery dibuat.`;
+  const reason = `Freeze otomatis: MR melewati due date (${mr.mr_due_date}) dengan ${pendingItems.length} item share stock yang belum ada delivery.`;
   await supabase
     .from("mrs")
     .update({
@@ -173,15 +174,15 @@ export async function reportFrozenMr(mrId: number, kendala: string) {
 /**
  * Moderator membuka freeze MR.
  *   - action 'unfreeze' : lanjut dari posisi terakhir.
- *   - action 'reset'    : set deadline baru per item lalu unfreeze.
+ *   - action 'reset'    : perpanjang mr_due_date lalu unfreeze.
  */
 export async function resolveFrozenMr(params: {
   mrId: number;
   action: "unfreeze" | "reset";
   resolution?: string;
-  deadlines?: { mr_item_id: number; deadline: string }[];
+  newDueDate?: string;
 }) {
-  const { mrId, action, resolution, deadlines } = params;
+  const { mrId, action, resolution, newDueDate } = params;
   const supabase = await createClient();
   const {
     data: { user },
@@ -203,18 +204,16 @@ export async function resolveFrozenMr(params: {
 
   if (action === "reset") {
     const today = businessToday();
-    for (const d of deadlines || []) {
-      if (!d.deadline || d.deadline < today) {
-        return {
-          error: "Deadline baru harus diisi dan tidak boleh tanggal lampau.",
-        };
-      }
-      const { error: dErr } = await supabase
-        .from("mr_sharestock_allocations")
-        .update({ deadline: d.deadline })
-        .eq("mr_item_id", d.mr_item_id);
-      if (dErr) return { error: dErr.message };
+    if (!newDueDate || newDueDate < today) {
+      return {
+        error: "Due date baru harus diisi dan tidak boleh tanggal lampau.",
+      };
     }
+    const { error: dErr } = await supabase
+      .from("mrs")
+      .update({ mr_due_date: newDueDate })
+      .eq("id", mrId);
+    if (dErr) return { error: dErr.message };
   }
 
   const { error: unfreezeError } = await supabase
@@ -242,7 +241,7 @@ export async function resolveFrozenMr(params: {
       title: `MR ${mr.mr_kode} di-${action === "reset" ? "reset" : "unfreeze"}`,
       message:
         action === "reset"
-          ? `Moderator mereset deadline MR ${mr.mr_kode}. Alur dapat dilanjutkan.`
+          ? `Moderator memperpanjang due date MR ${mr.mr_kode}. Alur dapat dilanjutkan.`
           : `Moderator membuka freeze MR ${mr.mr_kode}. Alur dapat dilanjutkan.`,
       documentType: "MR",
       documentId: mrId,
@@ -256,8 +255,9 @@ export async function resolveFrozenMr(params: {
 }
 
 /**
- * Info freeze untuk UI MR detail: status freeze, daftar laporan, dan alokasi
- * (untuk form reset deadline). Sekaligus mengevaluasi freeze (lazy).
+ * Info freeze untuk UI MR detail: status freeze, daftar laporan, due date,
+ * dan item share stock yang masih pending delivery. Sekaligus mengevaluasi
+ * freeze (lazy).
  */
 export async function getMrFreezeInfo(mrId: number) {
   await evaluateMrFreeze(mrId);
@@ -265,7 +265,7 @@ export async function getMrFreezeInfo(mrId: number) {
 
   const { data: mr } = await supabase
     .from("mrs")
-    .select("id, mr_kode, is_frozen, frozen_at, frozen_reason, mr_pic_id")
+    .select("id, mr_kode, is_frozen, frozen_at, frozen_reason, mr_pic_id, mr_due_date")
     .eq("id", mrId)
     .single();
 
@@ -280,6 +280,20 @@ export async function getMrFreezeInfo(mrId: number) {
     .select("mr_item_id, deadline, mr_items!inner(part_number, part_name, mr_id)")
     .eq("mr_items.mr_id", mrId);
 
+  const allocatedItemIds = Array.from(
+    new Set((allocItems || []).map((a: any) => a.mr_item_id)),
+  );
+  const { data: delivered } = allocatedItemIds.length
+    ? await supabase
+        .from("delivery_items")
+        .select("mr_item_id, deliveries!inner(status)")
+        .in("mr_item_id", allocatedItemIds)
+        .neq("deliveries.status", "cancelled")
+    : { data: [] as any[] };
+  const deliveredSet = new Set(
+    (delivered || []).map((d: any) => d.mr_item_id),
+  );
+
   // Ringkas per item (deadline sama untuk semua sumber dalam 1 item).
   const itemMap = new Map<number, any>();
   for (const a of allocItems || []) {
@@ -289,6 +303,7 @@ export async function getMrFreezeInfo(mrId: number) {
         deadline: a.deadline,
         part_number: (a as any).mr_items?.part_number,
         part_name: (a as any).mr_items?.part_name,
+        delivered: deliveredSet.has(a.mr_item_id),
       });
     }
   }

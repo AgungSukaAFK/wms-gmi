@@ -44,9 +44,7 @@ export function MrFreezePanel({
     null,
   );
   const [resolution, setResolution] = useState("");
-  const [resetDeadlines, setResetDeadlines] = useState<Record<number, string>>(
-    {},
-  );
+  const [newDueDate, setNewDueDate] = useState("");
 
   const load = async () => {
     setLoading(true);
@@ -65,12 +63,7 @@ export function MrFreezePanel({
     }
     const res = await getMrFreezeInfo(mrId);
     setInfo(res);
-    // Prefill deadline reset dengan nilai existing.
-    const dl: Record<number, string> = {};
-    (res.items || []).forEach((it: any) => {
-      if (it.deadline) dl[it.mr_item_id] = it.deadline;
-    });
-    setResetDeadlines(dl);
+    setNewDueDate("");
     setLoading(false);
   };
 
@@ -108,18 +101,16 @@ export function MrFreezePanel({
 
   const handleResolve = async () => {
     if (!resolveMode) return;
+    if (resolveMode === "reset" && !newDueDate) {
+      toast.error("Due date baru wajib diisi.");
+      return;
+    }
     setSubmitting(true);
     const res = await resolveFrozenMr({
       mrId,
       action: resolveMode,
       resolution: resolution.trim() || undefined,
-      deadlines:
-        resolveMode === "reset"
-          ? items.map((it) => ({
-              mr_item_id: it.mr_item_id,
-              deadline: resetDeadlines[it.mr_item_id],
-            }))
-          : undefined,
+      newDueDate: resolveMode === "reset" ? newDueDate : undefined,
     });
     setSubmitting(false);
     if (res?.success) {
@@ -154,8 +145,13 @@ export function MrFreezePanel({
             </Badge>
           </div>
           <p className="text-[11px] font-semibold text-sky-800 mt-1">
-            {mr.frozen_reason || "MR melewati deadline share stock."}
+            {mr.frozen_reason || "MR melewati due date."}
           </p>
+          {mr.mr_due_date && (
+            <p className="text-[10px] text-sky-700/70 mt-0.5">
+              Due date: {mr.mr_due_date}
+            </p>
+          )}
           {mr.frozen_at && (
             <p className="text-[10px] text-sky-700/70 mt-0.5">
               Sejak: {new Date(mr.frozen_at).toLocaleString("id-ID")}
@@ -197,7 +193,9 @@ export function MrFreezePanel({
                 {r.status === "resolved" && (
                   <p className="text-[10px] text-success mt-1 font-semibold">
                     Tindakan:{" "}
-                    {r.resolution_action === "reset" ? "Reset deadline" : "Unfreeze"}
+                    {r.resolution_action === "reset"
+                      ? "Perpanjang due date"
+                      : "Unfreeze"}
                     {r.resolution ? ` — ${r.resolution}` : ""}
                   </p>
                 )}
@@ -222,7 +220,7 @@ export function MrFreezePanel({
                 <Textarea
                   value={kendala}
                   onChange={(e) => setKendala(e.target.value)}
-                  placeholder="Jelaskan kendala kenapa sampai lewat deadline tapi delivery belum dibuat..."
+                  placeholder="Jelaskan kendala kenapa sampai lewat due date tapi delivery belum dibuat..."
                   className="min-h-20 bg-white border-sky-200 text-xs"
                   disabled={submitting}
                 />
@@ -270,7 +268,7 @@ export function MrFreezePanel({
                   className="flex-1 text-xs font-bold border-amber-300 text-amber-700 hover:bg-amber-50"
                   onClick={() => setResolveMode("reset")}
                 >
-                  Reset Deadline
+                  Perpanjang Due Date
                 </Button>
               </div>
             )}
@@ -278,35 +276,47 @@ export function MrFreezePanel({
             {resolveMode === "reset" && (
               <div className="space-y-2">
                 <p className="text-[10px] font-bold text-amber-700 uppercase tracking-widest flex items-center gap-1">
-                  <AlertTriangle className="h-3 w-3" /> Set deadline baru per item
+                  <AlertTriangle className="h-3 w-3" /> Due date MR baru
                 </p>
-                {items.map((it) => (
-                  <div
-                    key={it.mr_item_id}
-                    className="flex items-center gap-2 rounded-md border border-border bg-muted/30 p-2"
-                  >
-                    <div className="min-w-0 flex-1">
-                      <div className="font-mono text-[11px] font-bold truncate">
-                        {it.part_number}
+                <Input
+                  type="date"
+                  min={today}
+                  value={newDueDate}
+                  onChange={(e) => setNewDueDate(e.target.value)}
+                  className="h-8 w-40 text-[11px] font-bold"
+                />
+                {items.length > 0 && (
+                  <div className="space-y-1.5 pt-1">
+                    <p className="text-[9px] font-bold text-muted-foreground uppercase tracking-widest">
+                      Item share stock terkait
+                    </p>
+                    {items.map((it) => (
+                      <div
+                        key={it.mr_item_id}
+                        className="flex items-center justify-between gap-2 rounded-md border border-border bg-muted/30 p-2"
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="font-mono text-[11px] font-bold truncate">
+                            {it.part_number}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground truncate">
+                            {it.part_name}
+                          </div>
+                        </div>
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] font-bold uppercase shrink-0 ${
+                            it.delivered
+                              ? "text-success border-success/40 bg-success/10"
+                              : "text-destructive border-destructive/40 bg-destructive/10"
+                          }`}
+                        >
+                          {it.delivered ? "Sudah delivery" : "Belum delivery"}
+                        </Badge>
                       </div>
-                      <div className="text-[10px] text-muted-foreground truncate">
-                        {it.part_name}
-                      </div>
-                    </div>
-                    <Input
-                      type="date"
-                      min={today}
-                      value={resetDeadlines[it.mr_item_id] || ""}
-                      onChange={(e) =>
-                        setResetDeadlines((prev) => ({
-                          ...prev,
-                          [it.mr_item_id]: e.target.value,
-                        }))
-                      }
-                      className="h-8 w-40 text-[11px] font-bold"
-                    />
+                    ))}
                   </div>
-                ))}
+                )}
               </div>
             )}
 
