@@ -1222,7 +1222,7 @@ export function PRDetailSheet({
 
       {/* Approve PR Dialog */}
       <Dialog open={approveDialogOpen} onOpenChange={setApproveDialogOpen}>
-        <DialogContent className="sm:max-w-md">
+        <DialogContent className="sm:max-w-md max-h-[85vh] flex flex-col overflow-hidden">
           <DialogHeader>
             <DialogTitle className="text-base font-bold uppercase tracking-tight">
               Setujui Purchase Request
@@ -1232,9 +1232,9 @@ export function PRDetailSheet({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="border border-slate-100 rounded-xl overflow-hidden">
+          <div className="border border-slate-100 rounded-xl overflow-y-auto flex-1 min-h-0">
             <table className="w-full text-xs">
-              <thead className="bg-slate-50 border-b border-slate-100">
+              <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
                 <tr>
                   <th className="text-left px-3 py-2 text-[9px] font-bold uppercase text-slate-400">
                     Item

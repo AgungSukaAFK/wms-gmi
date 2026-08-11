@@ -214,7 +214,7 @@ export function JobCostingDetailSheet({
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
-        className="w-full sm:max-w-2xl overflow-y-auto p-0"
+        className="w-full sm:max-w-2xl overflow-hidden p-0 flex flex-col"
         side="right"
       >
         <SheetTitle className="sr-only">Detail Job Costing</SheetTitle>
