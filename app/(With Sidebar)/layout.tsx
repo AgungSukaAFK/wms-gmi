@@ -21,6 +21,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { Fragment, ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { DailyResetGuard } from "@/components/daily-reset-guard";
+import { useAuthStore } from "@/stores/auth-store";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -63,9 +64,14 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       const supabase = createClient();
       const {
         data: { user },
+        error,
       } = await supabase.auth.getUser();
 
       if (!user) {
+        if (error) {
+          await supabase.auth.signOut();
+        }
+        useAuthStore.getState().clearSession();
         // Gunakan router.push untuk navigasi client-side di dalam useEffect
         router.push("/auth/login");
         return;

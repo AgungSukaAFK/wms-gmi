@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore } from "@/stores/auth-store";
 import { getUserPermissions } from "@/services/role-actions";
@@ -12,8 +13,9 @@ interface DailyResetGuardProps {
 }
 
 export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
-  const { setSession, profile, lastLoginDate } = useAuthStore();
+  const { setSession, clearSession, profile, lastLoginDate } = useAuthStore();
   const [isInitializing, setIsInitializing] = useState(true);
+  const router = useRouter();
 
   useEffect(() => {
     let isMounted = true;
@@ -29,11 +31,22 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
       const shouldReinitialize =
         !profile || profile.id !== userId || lastLoginDate !== today;
       if (shouldReinitialize && userId) {
-        const { data: profileData } = await supabase
+        const { data: profileData, error: profileError } = await supabase
           .from("profiles")
           .select("*, cabang(id, nama_cabang, kode_cabang)")
           .eq("id", userId)
           .single();
+
+        if (!profileData || profileError) {
+          // Sesi/akun sudah tidak valid — bersihkan cache lokal supaya
+          // login berikutnya tidak mewarisi data yang stale, lalu paksa login ulang.
+          clearSession();
+          await supabase.auth.signOut();
+          if (isMounted) {
+            router.push("/auth/login");
+          }
+          return;
+        }
 
         const { data: rolesData } = await supabase
           .from("user_roles")
@@ -42,15 +55,13 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
 
         const permissions = await getUserPermissions(userId);
 
-        if (profileData) {
-          setSession(
-            {
-              ...profileData,
-              roles: rolesData?.map((r: any) => r.roles).filter(Boolean) ?? [],
-            },
-            permissions,
-          );
-        }
+        setSession(
+          {
+            ...profileData,
+            roles: rolesData?.map((r: any) => r.roles).filter(Boolean) ?? [],
+          },
+          permissions,
+        );
       }
 
       if (isMounted) {

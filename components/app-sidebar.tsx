@@ -18,6 +18,7 @@ import { NavUser } from "./nav-user";
 import { Button } from "@/components/ui/button";
 import { getUnreadNotificationsCount } from "@/services/notification-actions";
 import { getHasUnreadUpdateLogs } from "@/services/update-logs-actions";
+import { useAuthStore } from "@/stores/auth-store";
 import {
   GalleryVerticalEnd,
   Bot,
@@ -209,7 +210,13 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
       if (!isMounted) return;
 
-      if (!data.user && !error) {
+      if (!data.user || error) {
+        if (error) {
+          await supabase.auth.signOut();
+        }
+        // Bersihkan cache profil/permission tersimpan (localStorage) supaya
+        // sesi baru tidak mewarisi data akun yang sudah invalid.
+        useAuthStore.getState().clearSession();
         router.push("/auth/login");
         return;
       }
