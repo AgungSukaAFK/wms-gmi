@@ -220,8 +220,11 @@ export default function SpbCreatePage() {
 
       const keyword = partSearch.trim();
       if (keyword) {
+        // part_number: prefix match saja (bukan "mengandung di mana saja"),
+        // supaya cari "14L-0135" tidak nyangkut ke kode lain yang sekadar
+        // mengandung "14L-0135" di tengah/akhir string.
         query = query.or(
-          `part_number.ilike.%${keyword}%,part_name.ilike.%${keyword}%`,
+          `part_number.ilike.${keyword}%,part_name.ilike.%${keyword}%`,
         );
       }
 
@@ -230,7 +233,17 @@ export default function SpbCreatePage() {
         toast.error(error.message);
         setPartOptions([]);
       } else {
-        setPartOptions((data || []) as Barang[]);
+        const results = (data || []) as Barang[];
+        if (keyword) {
+          // exact match part_number diutamakan tampil paling atas
+          results.sort((a, b) => {
+            const aExact = a.part_number.toLowerCase() === keyword.toLowerCase() ? 0 : 1;
+            const bExact = b.part_number.toLowerCase() === keyword.toLowerCase() ? 0 : 1;
+            if (aExact !== bExact) return aExact - bExact;
+            return a.part_name.localeCompare(b.part_name);
+          });
+        }
+        setPartOptions(results);
       }
       setPartLoading(false);
     };
