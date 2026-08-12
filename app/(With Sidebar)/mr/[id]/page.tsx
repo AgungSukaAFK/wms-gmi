@@ -119,6 +119,9 @@ export default function MRDetailPage({
   const [deadlineByItem, setDeadlineByItem] = useState<Record<number, string>>(
     {},
   );
+  const [sourcesByItem, setSourcesByItem] = useState<
+    Record<number, { nama_cabang: string; qty: number }[]>
+  >({});
 
   // Approval states
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -268,14 +271,24 @@ export default function MRDetailPage({
       const itemIds = itemsData.map((i: any) => i.id);
       const { data: allocDeadlines } = await supabase
         .from("mr_sharestock_allocations")
-        .select("mr_item_id, deadline")
+        .select("mr_item_id, deadline, qty, cabang:source_cabang_id(nama_cabang)")
         .in("mr_item_id", itemIds);
       const dlMap: Record<number, string> = {};
+      const srcMap: Record<number, { nama_cabang: string; qty: number }[]> =
+        {};
       (allocDeadlines || []).forEach((a: any) => {
         if (a.deadline && !dlMap[a.mr_item_id])
           dlMap[a.mr_item_id] = a.deadline;
+        if (a.cabang?.nama_cabang) {
+          if (!srcMap[a.mr_item_id]) srcMap[a.mr_item_id] = [];
+          srcMap[a.mr_item_id].push({
+            nama_cabang: a.cabang.nama_cabang,
+            qty: a.qty,
+          });
+        }
       });
       setDeadlineByItem(dlMap);
+      setSourcesByItem(srcMap);
     }
 
     if (itemsData) {
@@ -1349,6 +1362,26 @@ export default function MRDetailPage({
                                         </Badge>
                                       )}
                                     </div>
+                                    {sourcesByItem[item.id]?.length > 0 && (
+                                      <div className="space-y-1">
+                                        {sourcesByItem[item.id].map(
+                                          (s, i) => (
+                                            <div
+                                              key={i}
+                                              className="flex items-center gap-1.5 text-xs font-bold text-foreground"
+                                            >
+                                              <Building2 className="h-3.5 w-3.5 text-success shrink-0" />
+                                              <span className="uppercase">
+                                                {s.nama_cabang}
+                                              </span>
+                                              <span className="text-muted-foreground font-black">
+                                                ({s.qty})
+                                              </span>
+                                            </div>
+                                          ),
+                                        )}
+                                      </div>
+                                    )}
                                     {deadlineByItem[item.id] && (
                                       <div
                                         className={`flex items-center gap-1 text-[9px] font-bold uppercase ${
