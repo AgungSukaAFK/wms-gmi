@@ -1060,7 +1060,6 @@ export async function createSpbPo(payload: {
   po_no: string;
   so_no?: string;
   so_date?: string;
-  approval_template_id: number;
   details: { spb_dtl_id: number }[];
 }) {
   const supabase = await createClient();
@@ -1068,10 +1067,6 @@ export async function createSpbPo(payload: {
   if (me.error || !me.user) return { error: me.error || "Unauthorized" };
 
   if (!payload.details?.length) return { error: "Pilih minimal 1 item SPB." };
-
-  if (!payload.approval_template_id) {
-    return { error: "Template approval wajib dipilih sebelum membuat SPB PO." };
-  }
 
   const { data: spbHeader } = await supabase
     .from("spb")
@@ -1083,20 +1078,9 @@ export async function createSpbPo(payload: {
     return { error: "SPB sumber tidak valid." };
   }
 
-  const approvals = await buildStockOutApprovalFlow(
-    supabase,
-    "spb_po",
-    spbHeader.cabang_id,
-    me.user.id,
-    payload.approval_template_id,
-  );
-
-  if (!approvals.length) {
-    return {
-      error: "Template approval SPB PO tidak ditemukan atau tidak sesuai site.",
-    };
-  }
-
+  // SPB PO tidak punya approval digital -- langsung 'completed' saat dibuat
+  // (lihat komentar serupa di createSpb; berbeda dengan spb, print SPB PO
+  // tidak baca approvals sama sekali, jadi template tidak perlu dipertahankan).
   const { data: poHeader, error: poErr } = await supabase
     .from("spb_po")
     .insert({
@@ -1104,9 +1088,9 @@ export async function createSpbPo(payload: {
       po_no: payload.po_no,
       so_no: payload.so_no || null,
       so_date: payload.so_date || null,
-      approval_template_id: payload.approval_template_id,
-      approvals,
-      approval_status: "open",
+      approvals: [],
+      approval_status: "completed",
+      completed_at: new Date().toISOString(),
     })
     .select()
     .single();
@@ -1124,8 +1108,25 @@ export async function createSpbPo(payload: {
     return { error: rowsErr.message };
   }
 
+  await finalizeSpbPoStatus(poHeader.id);
+
   revalidateStockOutPaths();
   return { success: true, data: poHeader };
+}
+
+export async function updateSpbPo(
+  id: number,
+  payload: Partial<{ so_no: string | null; so_date: string | null }>,
+) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const { supabase } = auth;
+  const { error } = await supabase.from("spb_po").update(payload).eq("id", id);
+
+  if (error) return { error: error.message };
+  revalidateStockOutPaths();
+  return { success: true };
 }
 
 const SPB_DO_SORT_COLUMNS: Record<string, string> = {
@@ -1181,7 +1182,6 @@ export async function createSpbDo(payload: {
   do_date?: string;
   do_status_part?: string;
   do_pic?: string;
-  approval_template_id: number;
   details: { spb_po_dtl_id: number }[];
 }) {
   const supabase = await createClient();
@@ -1190,10 +1190,6 @@ export async function createSpbDo(payload: {
 
   if (!payload.details?.length)
     return { error: "Pilih minimal 1 item PO detail." };
-
-  if (!payload.approval_template_id) {
-    return { error: "Template approval wajib dipilih sebelum membuat SPB DO." };
-  }
 
   const { data: poHeader } = await supabase
     .from("spb_po")
@@ -1209,20 +1205,8 @@ export async function createSpbDo(payload: {
     return { error: "PO sumber tidak valid." };
   }
 
-  const approvals = await buildStockOutApprovalFlow(
-    supabase,
-    "spb_do",
-    cabangId,
-    me.user.id,
-    payload.approval_template_id,
-  );
-
-  if (!approvals.length) {
-    return {
-      error: "Template approval SPB DO tidak ditemukan atau tidak sesuai site.",
-    };
-  }
-
+  // SPB DO tidak punya approval digital -- langsung 'completed' saat dibuat,
+  // sama seperti SPB PO (lihat komentar di createSpbPo).
   const { data: doHeader, error: doErr } = await supabase
     .from("spb_do")
     .insert({
@@ -1231,9 +1215,9 @@ export async function createSpbDo(payload: {
       do_date: payload.do_date || null,
       do_status_part: payload.do_status_part || "DELIVERED",
       do_pic: payload.do_pic || null,
-      approval_template_id: payload.approval_template_id,
-      approvals,
-      approval_status: "open",
+      approvals: [],
+      approval_status: "completed",
+      completed_at: new Date().toISOString(),
     })
     .select()
     .single();
@@ -1251,8 +1235,29 @@ export async function createSpbDo(payload: {
     return { error: rowsErr.message };
   }
 
+  await finalizeSpbDoStatus(doHeader.id);
+
   revalidateStockOutPaths();
   return { success: true, data: doHeader };
+}
+
+export async function updateSpbDo(
+  id: number,
+  payload: Partial<{
+    do_date: string | null;
+    do_status_part: string | null;
+    do_pic: string | null;
+  }>,
+) {
+  const auth = await requireModeratorOrAdmin();
+  if ("error" in auth) return { error: auth.error };
+
+  const { supabase } = auth;
+  const { error } = await supabase.from("spb_do").update(payload).eq("id", id);
+
+  if (error) return { error: error.message };
+  revalidateStockOutPaths();
+  return { success: true };
 }
 
 const SPB_INVOICE_SORT_COLUMNS: Record<string, string> = {
@@ -1812,26 +1817,6 @@ export async function cancelSpb(id: number, reason: string) {
 
   revalidateStockOutPaths();
   return { success: true };
-}
-
-export async function approveSpbPo(id: number) {
-  return approveStockOutDocument("spb_po", id, async (docId) => {
-    await finalizeSpbPoStatus(docId);
-  });
-}
-
-export async function rejectSpbPo(id: number, reason: string) {
-  return rejectStockOutDocument("spb_po", id, reason);
-}
-
-export async function approveSpbDo(id: number) {
-  return approveStockOutDocument("spb_do", id, async (docId) => {
-    await finalizeSpbDoStatus(docId);
-  });
-}
-
-export async function rejectSpbDo(id: number, reason: string) {
-  return rejectStockOutDocument("spb_do", id, reason);
 }
 
 export async function approveSpbInvoice(id: number) {

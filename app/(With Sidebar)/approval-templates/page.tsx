@@ -229,8 +229,6 @@ export default function ApprovalTemplatesPage() {
                 { label: "Receive Item", value: "Receive Item" },
                 { label: "Item Transfer", value: "Item Transfer" },
                 { label: "Stock Out - SPB", value: "Stock Out - SPB" },
-                { label: "Stock Out - SPB PO", value: "Stock Out - SPB PO" },
-                { label: "Stock Out - SPB DO", value: "Stock Out - SPB DO" },
                 {
                   label: "Stock Out - SPB Invoice",
                   value: "Stock Out - SPB Invoice",

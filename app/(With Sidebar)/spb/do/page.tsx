@@ -33,13 +33,6 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -56,19 +49,12 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
-  approveSpbDo,
   createSpbDo,
-  getStockOutApprovalTemplates,
   getSpbDoList,
   getSpbPoDetailsByPoId,
   getSpbPoOptionsForDo,
-  rejectSpbDo,
+  updateSpbDo,
 } from "@/services/spb-actions";
-import {
-  moderatorEditSpbDo,
-  ModeratorApprovalStep,
-} from "@/services/moderator-edit-actions";
-import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { cn, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
@@ -86,12 +72,6 @@ type PoDetailRow = {
     dtl_spb_qty: number;
     dtl_spb_part_satuan: string;
   } | null;
-};
-
-type ApprovalTemplateOption = {
-  id: number;
-  name: string;
-  cabang_id: number | null;
 };
 
 export default function SpbDoPage() {
@@ -118,13 +98,8 @@ export default function SpbDoPage() {
   const [doNo, setDoNo] = useState("");
   const [doDate, setDoDate] = useState("");
   const [doPic, setDoPic] = useState("");
-  const [approvalTemplateId, setApprovalTemplateId] = useState("");
-  const [approvalTemplates, setApprovalTemplates] = useState<
-    ApprovalTemplateOption[]
-  >([]);
   const [submitting, setSubmitting] = useState(false);
   const [openCreateModal, setOpenCreateModal] = useState(false);
-  const [userId, setUserId] = useState("");
 
   // Moderator Edit state
   const [isModerator, setIsModerator] = useState(false);
@@ -134,9 +109,6 @@ export default function SpbDoPage() {
   const [modDoDate, setModDoDate] = useState("");
   const [modDoStatusPart, setModDoStatusPart] = useState("");
   const [modDoPic, setModDoPic] = useState("");
-  const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
-  const [modRejectionReason, setModRejectionReason] = useState("");
-  const [modTemplateId, setModTemplateId] = useState<number | null>(null);
 
   const selectedPo = useMemo(
     () => poOptions.find((s) => String(s.id) === selectedPoId),
@@ -186,7 +158,6 @@ export default function SpbDoPage() {
         data: { user },
       } = await supabase.auth.getUser();
       if (user?.id) {
-        setUserId(user.id);
         const { data: roleRows } = await supabase
           .from("user_roles")
           .select("roles(name)")
@@ -203,18 +174,6 @@ export default function SpbDoPage() {
     if (!openCreateModal) return;
     fetchPoOptions();
   }, [openCreateModal, debouncedPoOptionSearch]);
-
-  useEffect(() => {
-    const loadTemplates = async () => {
-      if (!openCreateModal) return;
-      const res = await getStockOutApprovalTemplates("spb_do");
-      if (!res.error) {
-        setApprovalTemplates((res.data || []) as ApprovalTemplateOption[]);
-      }
-    };
-
-    loadTemplates();
-  }, [openCreateModal]);
 
   useEffect(() => {
     const loadDetails = async () => {
@@ -245,8 +204,6 @@ export default function SpbDoPage() {
   const submit = async () => {
     if (!selectedPoId) return toast.error("Pilih SPB-PO.");
     if (!doNo.trim()) return toast.error("No DO wajib diisi.");
-    if (!approvalTemplateId)
-      return toast.error("Template approval wajib dipilih.");
     if (!selectedDetailIds.length) return toast.error("Pilih minimal 1 item.");
 
     setSubmitting(true);
@@ -255,7 +212,6 @@ export default function SpbDoPage() {
       do_no: doNo,
       do_date: doDate ? ymdToLocalStartIso(doDate) : undefined,
       do_pic: doPic || undefined,
-      approval_template_id: Number(approvalTemplateId),
       details: selectedDetailIds.map((id) => ({ spb_po_dtl_id: id })),
     });
     setSubmitting(false);
@@ -275,7 +231,6 @@ export default function SpbDoPage() {
     setDoNo("");
     setDoDate("");
     setDoPic("");
-    setApprovalTemplateId("");
     setSelectedPoId("");
     setSelectedPoLabel("");
     setPoOptionSearch("");
@@ -291,70 +246,21 @@ export default function SpbDoPage() {
     }
   };
 
-  const onApprove = async (id: number) => {
-    const res = await approveSpbDo(id);
-    if (res.error) return toast.error(res.error);
-    toast.success("Approval SPB DO berhasil diproses.");
-    fetchList();
-  };
-
-  const onReject = async (id: number) => {
-    const reason = window.prompt("Alasan reject SPB DO:");
-    if (!reason) return;
-    const res = await rejectSpbDo(id, reason);
-    if (res.error) return toast.error(res.error);
-    toast.success("SPB DO berhasil direject.");
-    fetchList();
-  };
-
-  const isMyApprovalTurn = (row: any) => {
-    return (row.approvals || []).some(
-      (a: any) => a.userid === userId && a.status === "pending",
-    );
-  };
-
-  const normalizeApprovalStep = (a: any): ModeratorApprovalStep => ({
-    userid: a.userid || a.user_id || "",
-    nama: a.nama || "",
-    email: a.email || "",
-    approval_role:
-      a.approval_role === "mengetahui" || a.level === "mengetahui"
-        ? "mengetahui"
-        : "menyetujui",
-    status: a.status || "pending",
-    processed_at: a.processed_at ?? null,
-    signature_url: a.signature_url ?? null,
-    notes: a.notes ?? null,
-    snapshot: a.snapshot ?? null,
-    position: a.position ?? null,
-  });
-
   const openModEdit = (row: any) => {
     setModRow(row);
     setModDoDate(row.do_date ? String(row.do_date).slice(0, 10) : "");
     setModDoStatusPart(row.do_status_part || "");
     setModDoPic(row.do_pic || "");
-    setModApprovals((row.approvals || []).map(normalizeApprovalStep));
-    setModRejectionReason("");
-    setModTemplateId(row.approval_template_id ?? null);
     setModOpen(true);
   };
-
-  const modWillBeApproved =
-    modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
-  const modDowngradeLocked = modRow?.approval_status === "completed";
-  const modBlockedDowngrade = modDowngradeLocked && !modWillBeApproved;
 
   const handleModSave = async () => {
     if (!modRow) return;
     setModSaving(true);
-    const res = await moderatorEditSpbDo(modRow.id, {
+    const res = await updateSpbDo(modRow.id, {
       do_date: modDoDate ? ymdToLocalStartIso(modDoDate) : null,
       do_status_part: modDoStatusPart || null,
       do_pic: modDoPic || null,
-      approval_template_id: modTemplateId ?? undefined,
-      approvals: modApprovals,
-      rejection_reason: modRejectionReason,
     });
     if (res.error) {
       toast.error(res.error);
@@ -447,13 +353,6 @@ export default function SpbDoPage() {
                     PIC
                   </SortableTableHead>
                   <SortableTableHead
-                    sortKey="approval_status"
-                    currentSort={sort}
-                    onSort={handleSortChange}
-                  >
-                    Approval
-                  </SortableTableHead>
-                  <SortableTableHead
                     sortKey="created_at"
                     currentSort={sort}
                     onSort={handleSortChange}
@@ -468,7 +367,7 @@ export default function SpbDoPage() {
                 {loading ? (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       Memuat data...
@@ -477,7 +376,7 @@ export default function SpbDoPage() {
                 ) : rows.length === 0 ? (
                   <TableRow>
                     <TableCell
-                      colSpan={9}
+                      colSpan={8}
                       className="text-center text-muted-foreground"
                     >
                       Belum ada data SPB-DO.
@@ -496,7 +395,6 @@ export default function SpbDoPage() {
                       </TableCell>
                       <TableCell>{row.do_status_part || "-"}</TableCell>
                       <TableCell>{row.do_pic || "-"}</TableCell>
-                      <TableCell>{row.approval_status || "open"}</TableCell>
                       <TableCell>
                         {new Date(row.created_at).toLocaleDateString("id-ID")}
                       </TableCell>
@@ -512,25 +410,6 @@ export default function SpbDoPage() {
                             <Printer className="mr-1.5 h-3.5 w-3.5" />
                             Cetak
                           </Button>
-                          {row.approval_status === "open" &&
-                            isMyApprovalTurn(row) && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => onApprove(row.id)}
-                                >
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => onReject(row.id)}
-                                >
-                                  Reject
-                                </Button>
-                              </>
-                            )}
                           {isModerator && (
                             <Button
                               size="sm"
@@ -658,25 +537,6 @@ export default function SpbDoPage() {
                 />
               </div>
 
-              <div className="space-y-2">
-                <Label>Template Approval</Label>
-                <Select
-                  value={approvalTemplateId}
-                  onValueChange={setApprovalTemplateId}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Pilih template approval" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {approvalTemplates.map((tpl) => (
-                      <SelectItem key={tpl.id} value={String(tpl.id)}>
-                        {tpl.name}
-                        {tpl.cabang_id ? " (Site)" : " (Global)"}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
             </div>
 
             {selectedPoId && (
@@ -755,31 +615,44 @@ export default function SpbDoPage() {
         </DialogContent>
       </Dialog>
 
-      {modRow && (
-        <StockOutModeratorEditDialog
-          open={modOpen}
-          onOpenChange={setModOpen}
-          title={`Moderator Edit — SPB DO ${modRow.do_no}`}
-          docType="spb_do"
-          docId={modRow.id}
-          fields={[
-            { key: "do_date", label: "Tanggal DO", type: "date", value: modDoDate, onChange: setModDoDate },
-            { key: "do_status_part", label: "Status Part", type: "text", value: modDoStatusPart, onChange: setModDoStatusPart },
-            { key: "do_pic", label: "PIC", type: "text", value: modDoPic, onChange: setModDoPic },
-          ]}
-          approvals={modApprovals}
-          onApprovalsChange={setModApprovals}
-          rejectionReason={modRejectionReason}
-          onRejectionReasonChange={setModRejectionReason}
-          downgradeLocked={modDowngradeLocked}
-          downgradeLockedMessage="SPB DO ini berstatus completed. Kalau sudah ada SPB Invoice turunan, status approval tidak bisa diturunkan dari 'completed'."
-          blockedDowngrade={modBlockedDowngrade}
-          saving={modSaving}
-          onSave={handleModSave}
-          currentTemplateId={modTemplateId}
-          onTemplateIdChange={setModTemplateId}
-        />
-      )}
+      <Dialog open={modOpen} onOpenChange={setModOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Moderator Edit — SPB DO {modRow?.do_no}</DialogTitle>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Tanggal DO</Label>
+              <DatePickerString value={modDoDate} onChange={setModDoDate} />
+            </div>
+            <div className="space-y-2">
+              <Label>Status Part</Label>
+              <Input
+                value={modDoStatusPart}
+                onChange={(e) => setModDoStatusPart(e.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>PIC</Label>
+              <Input value={modDoPic} onChange={(e) => setModDoPic(e.target.value)} />
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setModOpen(false)}
+              disabled={modSaving}
+            >
+              Batal
+            </Button>
+            <Button onClick={handleModSave} disabled={modSaving}>
+              {modSaving ? "Menyimpan..." : "Simpan"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

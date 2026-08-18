@@ -5,8 +5,6 @@ import { revalidatePath } from "next/cache";
 import { notifyApprovers, notifyDocumentOwner } from "@/services/notification-actions";
 import {
   applyReturnSpbPosting,
-  finalizeSpbPoStatus,
-  finalizeSpbDoStatus,
   finalizeSpbInvoiceStatus,
 } from "@/services/spb-actions";
 import { applyReceiveCompletion } from "@/services/procurement-actions";
@@ -1307,18 +1305,19 @@ export async function moderatorEditReceive(riId: number, payload: ModeratorRecei
 }
 
 // ============================================================
-// STOCK OUT (SPB) — spb_po, spb_do, spb_invoice, return_spb
+// STOCK OUT (SPB) — spb_invoice, return_spb
 // ============================================================
 //
-// Base `spb` sengaja tidak dapat Moderator Edit: dokumennya tidak lagi punya
-// approval digital (langsung 'completed' saat dibuat — lihat komentar di
-// createSpb, services/spb-actions.ts) dan sudah punya jalur edit/cancel
-// khusus moderator sendiri (updateSpb/cancelSpb) dengan rollback stok yang
-// sudah benar. Empat dokumen turunannya (PO/DO/Invoice/Return) masing-masing
+// Base `spb`, SPB PO, dan SPB DO sengaja tidak dapat Moderator Edit lewat
+// jalur ini: ketiganya tidak lagi punya approval digital (langsung
+// 'completed' saat dibuat — lihat komentar di createSpb/createSpbPo/
+// createSpbDo, services/spb-actions.ts) dan punya jalur edit/cancel sendiri
+// yang lebih simpel (updateSpb/updateSpbPo/updateSpbDo, tanpa approvals).
+// Dua dokumen turunan yang tersisa (Invoice/Return) masing-masing masih
 // punya approval_status ('open'|'rejected'|'completed') + approvals JSONB +
 // kolom rejection_reason sendiri — pola yang sama dipakai di sini.
 
-type StockOutTable = "spb_po" | "spb_do" | "spb_invoice" | "return_spb";
+type StockOutTable = "spb_invoice" | "return_spb";
 
 function deriveStockOutStatus(
   approvals: ModeratorApprovalStep[],
@@ -1339,38 +1338,6 @@ async function _guardStockOutDowngrade(
   table: StockOutTable,
   id: number,
 ): Promise<string | null> {
-  if (table === "spb_po") {
-    const { data: details } = await supabase
-      .from("spb_po_details")
-      .select("id")
-      .eq("spb_po_id", id);
-    const detailIds = (details || []).map((d: any) => d.id);
-    if (detailIds.length === 0) return null;
-    const { count } = await supabase
-      .from("spb_do_details")
-      .select("id", { count: "exact", head: true })
-      .in("spb_po_dtl_id", detailIds);
-    if (count && count > 0) {
-      return "SPB PO ini sudah punya SPB DO turunan. Tidak bisa mengubah status approval keluar dari 'completed' tanpa membereskan DO tersebut terlebih dahulu.";
-    }
-    return null;
-  }
-  if (table === "spb_do") {
-    const { data: details } = await supabase
-      .from("spb_do_details")
-      .select("id")
-      .eq("spb_do_id", id);
-    const detailIds = (details || []).map((d: any) => d.id);
-    if (detailIds.length === 0) return null;
-    const { count } = await supabase
-      .from("spb_invoice_details")
-      .select("id", { count: "exact", head: true })
-      .in("spb_do_dtl_id", detailIds);
-    if (count && count > 0) {
-      return "SPB DO ini sudah punya SPB Invoice turunan. Tidak bisa mengubah status approval keluar dari 'completed' tanpa membereskan Invoice tersebut terlebih dahulu.";
-    }
-    return null;
-  }
   if (table === "return_spb") {
     const { data: row } = await supabase
       .from("return_spb")
@@ -1393,7 +1360,7 @@ async function _guardStockOutDowngrade(
 
 async function _moderatorEditStockOut(params: {
   table: StockOutTable;
-  docType: "spb_po" | "spb_do" | "spb_invoice" | "return_spb";
+  docType: "spb_invoice" | "return_spb";
   docLabel: string;
   id: number;
   headerPatch: Record<string, any>;
@@ -1508,63 +1475,6 @@ async function _moderatorEditStockOut(params: {
   return { success: true };
 }
 
-export type ModeratorSpbPoEditPayload = {
-  so_no?: string | null;
-  so_date?: string | null;
-  approval_template_id?: number;
-  approvals: ModeratorApprovalStep[];
-  rejection_reason?: string;
-};
-
-export async function moderatorEditSpbPo(id: number, payload: ModeratorSpbPoEditPayload) {
-  return _moderatorEditStockOut({
-    table: "spb_po",
-    docType: "spb_po",
-    docLabel: "SPB PO",
-    id,
-    headerPatch: {
-      so_no: payload.so_no || null,
-      so_date: payload.so_date || null,
-      ...(payload.approval_template_id !== undefined
-        ? { approval_template_id: payload.approval_template_id }
-        : {}),
-    },
-    approvals: payload.approvals,
-    rejectionReason: payload.rejection_reason,
-    onFirstComplete: (docId) => finalizeSpbPoStatus(docId),
-    documentUrl: "/spb/po",
-  });
-}
-
-export type ModeratorSpbDoEditPayload = {
-  do_date?: string | null;
-  do_status_part?: string | null;
-  do_pic?: string | null;
-  approval_template_id?: number;
-  approvals: ModeratorApprovalStep[];
-  rejection_reason?: string;
-};
-
-export async function moderatorEditSpbDo(id: number, payload: ModeratorSpbDoEditPayload) {
-  return _moderatorEditStockOut({
-    table: "spb_do",
-    docType: "spb_do",
-    docLabel: "SPB DO",
-    id,
-    headerPatch: {
-      do_date: payload.do_date || null,
-      do_status_part: payload.do_status_part || null,
-      do_pic: payload.do_pic || null,
-      ...(payload.approval_template_id !== undefined
-        ? { approval_template_id: payload.approval_template_id }
-        : {}),
-    },
-    approvals: payload.approvals,
-    rejectionReason: payload.rejection_reason,
-    onFirstComplete: (docId) => finalizeSpbDoStatus(docId),
-    documentUrl: "/spb/do",
-  });
-}
 
 export type ModeratorSpbInvoiceEditPayload = {
   invoice_date?: string | null;

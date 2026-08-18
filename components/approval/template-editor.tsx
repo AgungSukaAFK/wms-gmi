@@ -454,12 +454,6 @@ export function TemplateEditor({
                   <SelectItem value="Stock Out - SPB">
                     Stock Out - SPB
                   </SelectItem>
-                  <SelectItem value="Stock Out - SPB PO">
-                    Stock Out - SPB PO
-                  </SelectItem>
-                  <SelectItem value="Stock Out - SPB DO">
-                    Stock Out - SPB DO
-                  </SelectItem>
                   <SelectItem value="Stock Out - SPB Invoice">
                     Stock Out - SPB Invoice
                   </SelectItem>
