@@ -371,6 +371,17 @@ export async function approveMR(
 
     // Process allocations if provided
     if (allocations && allocations.length > 0) {
+      // ---------- VALIDATE ALL FIRST (belum ada mutasi DB) ----------
+      const allocItemIds = allocations
+        .map((a: any) => a.mr_item_id)
+        .filter((id: any): id is number => typeof id === "number");
+      const { data: mrItemRows, error: mrItemsError } = await supabase
+        .from("mr_items")
+        .select("id, part_number, qty_request")
+        .in("id", allocItemIds);
+      if (mrItemsError) return { error: mrItemsError.message };
+      const mrItemById = new Map((mrItemRows || []).map((r) => [r.id, r]));
+
       for (const alloc of allocations) {
         const allocationDeadline = alloc?.deadline
           ? String(alloc.deadline).slice(0, 10)
@@ -399,6 +410,33 @@ export async function approveMR(
           }
         }
 
+        // Total share stock tidak boleh melebihi qty_request OTORITATIF
+        // (fresh dari DB, bukan dari payload client).
+        const mrItemRow = mrItemById.get(alloc.mr_item_id);
+        if (!mrItemRow) {
+          return { error: `Item MR (id ${alloc.mr_item_id}) tidak ditemukan.` };
+        }
+        const requestedShare = Number(alloc.qty_sharestock_total || 0);
+        if (requestedShare > mrItemRow.qty_request) {
+          return {
+            error: `Total share stock item ${mrItemRow.part_number} (${requestedShare}) melebihi qty yang diminta MR (${mrItemRow.qty_request}).`,
+          };
+        }
+        // qty_sharestock_total harus konsisten dengan total baris alokasi
+        // yang benar-benar akan di-insert (cegah drift).
+        const sumSS = (alloc.sharestocks || []).reduce(
+          (s: number, ss: any) => s + Number(ss.qty || 0),
+          0,
+        );
+        if (sumSS !== requestedShare) {
+          return {
+            error: `Data alokasi item ${mrItemRow.part_number} tidak konsisten (total baris ${sumSS} != ${requestedShare}).`,
+          };
+        }
+      }
+
+      // ---------- SEMUA VALID -> APPLY MUTASI ----------
+      for (const alloc of allocations) {
         // Create sharestock entries
         if (alloc.sharestocks && alloc.sharestocks.length > 0) {
           const sharestockEntries = alloc.sharestocks.map((ss: any) => ({
@@ -409,19 +447,21 @@ export async function approveMR(
             // sumber alokasi item ini; dipakai mekanisme freeze MR.
             deadline: ss.deadline ?? alloc.deadline ?? null,
           }));
-          await supabase
+          const { error: insErr } = await supabase
             .from("mr_sharestock_allocations")
             .insert(sharestockEntries);
+          if (insErr) return { error: insErr.message };
         }
 
         // Update mr_items with qty_pr and qty_sharestock_total
-        await supabase
+        const { error: updErr } = await supabase
           .from("mr_items")
           .update({
             qty_pr: alloc.qty_pr,
             qty_sharestock_total: alloc.qty_sharestock_total,
           })
           .eq("id", alloc.mr_item_id);
+        if (updErr) return { error: updErr.message };
       }
     }
   }

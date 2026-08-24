@@ -729,7 +729,7 @@ export function TemplateEditor({
                             Jabatan (Cetak)
                           </Label>
                           <Input
-                            placeholder="mis. GL Plant"
+                            placeholder="(opsional)"
                             value={step.position_label ?? ""}
                             onChange={(e) =>
                               updateStep(step.local_id, {

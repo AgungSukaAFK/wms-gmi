@@ -239,6 +239,11 @@ export async function deleteCabangWithConfirmation(
       column: "finish_part_cabang_id",
       label: "Job Costing Finish Part",
     },
+    {
+      table: "job_costing_finish_parts",
+      column: "cabang_id",
+      label: "Job Costing Finish Parts",
+    },
   ];
 
   const refs: string[] = [];

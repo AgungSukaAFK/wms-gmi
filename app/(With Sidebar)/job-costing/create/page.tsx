@@ -69,6 +69,16 @@ interface LineItem {
   unit_price: number;
 }
 
+interface FinishPartLineItem {
+  id: string;
+  part_id: number;
+  part_number: string;
+  part_name: string;
+  cabang_id: number;
+  cabang_name: string;
+  qty: number;
+}
+
 interface BarangOption {
   id: number;
   part_number: string;
@@ -98,14 +108,13 @@ export default function JobCostingCreatePage() {
   const [selectedFinishPartId, setSelectedFinishPartId] = useState<
     number | null
   >(null);
-  const [selectedFinishPartLabel, setSelectedFinishPartLabel] = useState("");
-  const [finishPartQty, setFinishPartQty] = useState(1);
   const [finishPartCabangId, setFinishPartCabangId] = useState("");
   const [selectedSourceCabangId, setSelectedSourceCabangId] = useState("");
   const [status, setStatus] = useState("open");
   const [notes, setNotes] = useState("");
 
   const [items, setItems] = useState<LineItem[]>([]);
+  const [finishParts, setFinishParts] = useState<FinishPartLineItem[]>([]);
 
   const [barangOpen, setBarangOpen] = useState(false);
   const [barangSearch, setBarangSearch] = useState("");
@@ -302,6 +311,67 @@ export default function JobCostingCreatePage() {
     );
   }
 
+  function addFinishPartToList() {
+    if (!finishPartCabangId) {
+      toast.error("Pilih cabang tujuan finish part terlebih dahulu.");
+      return;
+    }
+
+    if (!selectedFinishPartId) {
+      toast.error("Pilih finish part terlebih dahulu.");
+      return;
+    }
+
+    const selected = finishPartOptions.find(
+      (b) => b.id === selectedFinishPartId,
+    );
+    if (!selected) {
+      toast.error("Finish part tidak ditemukan.");
+      return;
+    }
+
+    setFinishParts((prev) => {
+      const cabangId = parseInt(finishPartCabangId, 10);
+      const idx = prev.findIndex(
+        (fp) => fp.part_id === selected.id && fp.cabang_id === cabangId,
+      );
+      if (idx >= 0) {
+        const cloned = [...prev];
+        cloned[idx] = { ...cloned[idx], qty: cloned[idx].qty + 1 };
+        return cloned;
+      }
+
+      const cabang = cabangs.find((c) => String(c.id) === finishPartCabangId);
+
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          part_id: selected.id,
+          part_number: selected.part_number,
+          part_name: selected.part_name,
+          cabang_id: cabangId,
+          cabang_name: cabang?.nama_cabang || "-",
+          qty: 1,
+        },
+      ];
+    });
+
+    setSelectedFinishPartId(null);
+    setFinishPartSearch("");
+    setFinishPartOpen(false);
+  }
+
+  function removeFinishPart(id: string) {
+    setFinishParts((prev) => prev.filter((fp) => fp.id !== id));
+  }
+
+  function updateFinishPartQty(id: string, qty: number) {
+    setFinishParts((prev) =>
+      prev.map((fp) => (fp.id === id ? { ...fp, qty: qty < 0 ? 0 : qty } : fp)),
+    );
+  }
+
   async function handleSubmit() {
     if (!cabangId) {
       toast.error("Pilih cabang terlebih dahulu.");
@@ -311,16 +381,8 @@ export default function JobCostingCreatePage() {
       toast.error("Tanggal wajib diisi.");
       return;
     }
-    if (!selectedFinishPartId || !selectedFinishPartLabel) {
-      toast.error("Finish part wajib diisi.");
-      return;
-    }
-    if (!finishPartCabangId) {
-      toast.error("Cabang tujuan finish part wajib dipilih.");
-      return;
-    }
-    if (!Number.isFinite(finishPartQty) || finishPartQty <= 0) {
-      toast.error("Qty finish part wajib lebih dari 0.");
+    if (finishParts.length === 0) {
+      toast.error("Tambahkan minimal satu finish part.");
       return;
     }
     if (!jobKode.trim()) {
@@ -333,18 +395,25 @@ export default function JobCostingCreatePage() {
       return;
     }
 
+    const finishPartsSummary = finishParts
+      .map((fp) => `${fp.part_number} - ${fp.part_name} (${fp.qty})`)
+      .join(", ");
+
     setSubmitting(true);
     const result = await createJobCosting({
       job_kode: jobKode.trim(),
       cabang_id: parseInt(cabangId, 10),
-      finish_part_id: selectedFinishPartId,
-      finish_part_cabang_id: parseInt(finishPartCabangId, 10),
-      qty_finish_part: finishPartQty,
-      description: selectedFinishPartLabel,
-      finish_part: selectedFinishPartLabel,
+      description: finishPartsSummary,
       job_tanggal: jobTanggal,
       status: status as "open" | "approved" | "completed" | "rejected",
       notes: notes.trim(),
+      finish_parts: finishParts.map((fp) => ({
+        part_id: fp.part_id,
+        part_number: fp.part_number,
+        part_name: fp.part_name,
+        qty: fp.qty,
+        cabang_id: fp.cabang_id,
+      })),
       items: items.map((i) => ({
         part_id: i.part_id,
         part_number: i.part_number,
@@ -486,7 +555,7 @@ export default function JobCostingCreatePage() {
               Finish Part <span className="text-destructive">*</span>
             </Label>
 
-            <div className="mb-2 grid grid-cols-2 gap-2">
+            <div className="mb-2">
               <Select
                 value={finishPartCabangId}
                 onValueChange={setFinishPartCabangId}
@@ -502,17 +571,6 @@ export default function JobCostingCreatePage() {
                   ))}
                 </SelectContent>
               </Select>
-
-              <Input
-                type="number"
-                min={1}
-                value={finishPartQty}
-                onChange={(e) =>
-                  setFinishPartQty(parseInt(e.target.value || "0", 10))
-                }
-                placeholder="Qty finish part"
-                className="h-9"
-              />
             </div>
 
             <Popover open={finishPartOpen} onOpenChange={setFinishPartOpen}>
@@ -522,7 +580,14 @@ export default function JobCostingCreatePage() {
                   className="h-10 w-full justify-between font-medium"
                 >
                   {selectedFinishPartId
-                    ? selectedFinishPartLabel
+                    ? (() => {
+                        const picked = finishPartOptions.find(
+                          (b) => b.id === selectedFinishPartId,
+                        );
+                        return picked
+                          ? `${picked.part_number} - ${picked.part_name}`
+                          : "Pilih finish part";
+                      })()
                     : "Pilih finish part"}
                   <Search className="h-4 w-4 text-muted-foreground" />
                 </Button>
@@ -546,13 +611,7 @@ export default function JobCostingCreatePage() {
                         <CommandItem
                           key={b.id}
                           value={`${b.part_number} ${b.part_name}`}
-                          onSelect={() => {
-                            setSelectedFinishPartId(b.id);
-                            setSelectedFinishPartLabel(
-                              `${b.part_number} - ${b.part_name}`,
-                            );
-                            setFinishPartOpen(false);
-                          }}
+                          onSelect={() => setSelectedFinishPartId(b.id)}
                           className="py-3"
                         >
                           <div>
@@ -695,6 +754,76 @@ export default function JobCostingCreatePage() {
                         size="icon"
                         className="h-8 w-8 text-destructive"
                         onClick={() => removeItem(item.id)}
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+
+        <Button
+          type="button"
+          className="w-full h-10 gap-2 font-semibold"
+          onClick={addFinishPartToList}
+        >
+          <PlusSquare className="h-4 w-4" /> Tambah Finish Part
+        </Button>
+
+        <div className="rounded-md border overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-16">No</TableHead>
+                <TableHead>Part</TableHead>
+                <TableHead>Nama</TableHead>
+                <TableHead className="w-28">Qty</TableHead>
+                <TableHead>Cabang Tujuan</TableHead>
+                <TableHead className="w-16 text-center">Aksi</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {finishParts.length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={6}
+                    className="h-24 text-center text-muted-foreground"
+                  >
+                    Belum ada finish part ditambahkan.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                finishParts.map((fp, idx) => (
+                  <TableRow key={fp.id}>
+                    <TableCell>{idx + 1}</TableCell>
+                    <TableCell className="font-mono text-xs">
+                      {fp.part_number}
+                    </TableCell>
+                    <TableCell>{fp.part_name}</TableCell>
+                    <TableCell>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={fp.qty}
+                        onChange={(e) =>
+                          updateFinishPartQty(
+                            fp.id,
+                            parseInt(e.target.value || "0", 10),
+                          )
+                        }
+                        className="h-9"
+                      />
+                    </TableCell>
+                    <TableCell>{fp.cabang_name}</TableCell>
+                    <TableCell className="text-center">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-8 w-8 text-destructive"
+                        onClick={() => removeFinishPart(fp.id)}
                       >
                         <Trash2 className="h-4 w-4" />
                       </Button>

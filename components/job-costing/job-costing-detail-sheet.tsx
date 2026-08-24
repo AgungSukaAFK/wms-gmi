@@ -192,6 +192,21 @@ export function JobCostingDetailSheet({
     job?.total_cost ??
     0;
 
+  const finishPartRows: any[] =
+    (job?.job_costing_finish_parts as any[])?.length > 0
+      ? (job.job_costing_finish_parts as any[])
+      : job?.finish_part_id
+        ? [
+            {
+              id: "legacy",
+              part_number: job.finish_part,
+              part_name: "",
+              qty: job.qty_finish_part,
+              cabang: job.finish_part_cabang,
+            },
+          ]
+        : [];
+
   const roleNames = (profile?.roles || []).map((r) => r.name);
   const canManageStatus = roleNames.some((r) =>
     ["admin", "moderator"].includes(r),
@@ -263,21 +278,8 @@ export function JobCostingDetailSheet({
                   <span>{job.cabang?.nama_cabang ?? "-"}</span>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Calculator className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    Finish: {job.finish_part || "-"} ({job.qty_finish_part || 0}
-                    )
-                  </span>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <User className="h-3.5 w-3.5 shrink-0" />
                   <span>{job.creator_nama ?? job.profiles?.nama ?? "-"}</span>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <Building2 className="h-3.5 w-3.5 shrink-0" />
-                  <span>
-                    Cabang Finish: {job.finish_part_cabang?.nama_cabang ?? "-"}
-                  </span>
                 </div>
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Calendar className="h-3.5 w-3.5 shrink-0" />
@@ -513,6 +515,61 @@ export function JobCostingDetailSheet({
                       {formatRupiah(totalCost)}
                     </span>
                   </div>
+                </div>
+              </div>
+
+              {/* Finish Part (read-only, tidak bisa ditambah/dihapus pasca-create) */}
+              <div className="space-y-2">
+                <h4 className="text-xs font-bold uppercase text-muted-foreground">
+                  Finish Part
+                </h4>
+                <div className="rounded-lg border overflow-hidden">
+                  <Table>
+                    <TableHeader>
+                      <TableRow className="bg-muted/40 hover:bg-muted/40">
+                        <TableHead className="text-[10px] font-bold uppercase">
+                          Part
+                        </TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase text-right">
+                          Qty
+                        </TableHead>
+                        <TableHead className="text-[10px] font-bold uppercase">
+                          Cabang Tujuan
+                        </TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {finishPartRows.length === 0 ? (
+                        <TableRow>
+                          <TableCell
+                            colSpan={3}
+                            className="text-center text-xs text-muted-foreground py-6"
+                          >
+                            Belum ada finish part.
+                          </TableCell>
+                        </TableRow>
+                      ) : (
+                        finishPartRows.map((fp: any) => (
+                          <TableRow key={fp.id}>
+                            <TableCell className="text-xs">
+                              <p className="font-medium">{fp.part_number}</p>
+                              {fp.part_name && (
+                                <p className="text-[10px] text-muted-foreground">
+                                  {fp.part_name}
+                                </p>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-xs text-right">
+                              {fp.qty}
+                            </TableCell>
+                            <TableCell className="text-xs">
+                              {fp.cabang?.nama_cabang ?? "-"}
+                            </TableCell>
+                          </TableRow>
+                        ))
+                      )}
+                    </TableBody>
+                  </Table>
                 </div>
               </div>
 

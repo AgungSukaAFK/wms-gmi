@@ -41,7 +41,10 @@ import {
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { useDebounce } from "use-debounce";
-import { createDelivery } from "@/services/inventory-actions";
+import {
+  createDelivery,
+  getShareStockRemaining,
+} from "@/services/inventory-actions";
 import { cn, toYmdLocal } from "@/lib/utils";
 import {
   type ShipmentType,
@@ -102,6 +105,11 @@ export default function CreateDeliveryPage() {
 
   // Delivery Items
   const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
+  // Sisa alokasi share stock (belum terkirim lewat delivery aktif) per mr_item_id,
+  // untuk cabang asal yang sedang dipilih. Dipakai sbg cap qty di form ini.
+  const [remainingByItemId, setRemainingByItemId] = useState<
+    Record<number, number>
+  >({});
 
   // MR Selector
   const [selectedMrId, setSelectedMrId] = useState<number | null>(null);
@@ -188,6 +196,19 @@ export default function CreateDeliveryPage() {
     setInitialLoading(false);
   };
 
+  useEffect(() => {
+    const loadRemaining = async () => {
+      if (!dariCabang || shareStocks.length === 0) {
+        setRemainingByItemId({});
+        return;
+      }
+      const ids = shareStocks.map((ss) => ss.id);
+      const result = await getShareStockRemaining(ids, dariCabang);
+      if ("data" in result) setRemainingByItemId(result.data);
+    };
+    loadRemaining();
+  }, [dariCabang, shareStocks]);
+
   const handleAddShareStock = async (mrItem: any) => {
     // Find the allocation where current branch is the source/supplier
     const myAllocation = (mrItem.mr_sharestock_allocations as any[])?.find(
@@ -203,6 +224,14 @@ export default function CreateDeliveryPage() {
     const existing = deliveryItems.find((i) => i.mr_item_id === mrItem.id);
     if (existing) {
       toast.error("Item sudah ditambahkan ke delivery");
+      return;
+    }
+
+    const remaining = remainingByItemId[mrItem.id] ?? myAllocation?.qty ?? 0;
+    if (remaining <= 0) {
+      toast.error(
+        `Alokasi share stock ${mrItem.barang.part_name} dari cabang ini sudah habis terkirim.`,
+      );
       return;
     }
 
@@ -222,10 +251,7 @@ export default function CreateDeliveryPage() {
       return;
     }
 
-    const maxQty = Math.min(
-      stock.qty,
-      myAllocation?.qty ?? mrItem.qty_sharestock_total,
-    );
+    const maxQty = Math.min(stock.qty, remaining);
 
     setDeliveryItems([
       ...deliveryItems,
@@ -276,19 +302,27 @@ export default function CreateDeliveryPage() {
 
     // Pre-populate items from this MR for current source cabang
     const newItems: DeliveryItem[] = [];
+    let skippedCount = 0;
     for (const mrItem of mr.items as any[]) {
       if (deliveryItems.find((i) => i.mr_item_id === mrItem.id)) continue;
       const myAlloc = (mrItem.mr_sharestock_allocations as any[])?.find(
         (a) => a.source_cabang_id === dariCabang,
       );
       if (!myAlloc) continue;
+
+      const remaining = remainingByItemId[mrItem.id] ?? myAlloc.qty;
+      if (remaining <= 0) {
+        skippedCount++;
+        continue; // sudah full-terkirim lewat delivery lain
+      }
+
       newItems.push({
         mr_item_id: mrItem.id,
         part_id: mrItem.part_id,
         part_number: mrItem.barang.part_number,
         part_name: mrItem.barang.part_name,
         satuan: mrItem.barang.part_satuan,
-        qty_on_delivery: myAlloc.qty,
+        qty_on_delivery: Math.min(remaining, myAlloc.qty),
       });
     }
 
@@ -300,7 +334,16 @@ export default function CreateDeliveryPage() {
     ]);
 
     if (newItems.length > 0) {
-      toast.success(`${newItems.length} item dari ${mr.mr_kode} ditambahkan`);
+      toast.success(
+        `${newItems.length} item dari ${mr.mr_kode} ditambahkan` +
+          (skippedCount > 0
+            ? ` (${skippedCount} item dilewati karena sudah full-terkirim)`
+            : ""),
+      );
+    } else if (skippedCount > 0) {
+      toast.error(
+        "Semua item dari MR ini sudah full-terkirim lewat delivery sebelumnya.",
+      );
     } else {
       toast.error(
         "Tidak ada item dari MR ini yang dialokasikan untuk cabang Anda",
@@ -315,7 +358,13 @@ export default function CreateDeliveryPage() {
   const handleUpdateItemQty = (index: number, qty: number) => {
     setDeliveryItems((prev) => {
       const newItems = [...prev];
-      newItems[index].qty_on_delivery = Math.max(1, qty);
+      const item = newItems[index];
+      const cap = item.mr_item_id
+        ? (remainingByItemId[item.mr_item_id] ?? Infinity)
+        : Infinity;
+      const safeQty = Number.isFinite(qty) ? qty : 1;
+      const clamped = Math.min(Math.max(1, safeQty), Math.max(1, cap));
+      newItems[index] = { ...item, qty_on_delivery: clamped };
       return newItems;
     });
   };
@@ -337,6 +386,18 @@ export default function CreateDeliveryPage() {
       return toast.error("Tanda tangan pengirim harus ada");
     if (deliveryItems.length === 0)
       return toast.error("Tidak ada item delivery");
+
+    const overCapItem = deliveryItems.find(
+      (i) =>
+        i.mr_item_id &&
+        typeof remainingByItemId[i.mr_item_id] === "number" &&
+        i.qty_on_delivery > remainingByItemId[i.mr_item_id],
+    );
+    if (overCapItem) {
+      return toast.error(
+        `Qty ${overCapItem.part_name} melebihi sisa alokasi share stock (sisa: ${remainingByItemId[overCapItem.mr_item_id!]}).`,
+      );
+    }
 
     setLoading(true);
     try {
@@ -969,11 +1030,13 @@ export default function CreateDeliveryPage() {
                 </Badge>
               )}
             </div>
-            {selectedMr ? (
+            {selectedMr && (
               <span className="text-[9px] font-bold uppercase text-muted-foreground/60 flex items-center gap-1.5">
-                <Info className="h-3 w-3" /> Item terkunci sesuai alokasi MR
+                <Info className="h-3 w-3" /> Qty bisa dikurangi (kirim
+                sebagian) — tidak boleh melebihi sisa alokasi
               </span>
-            ) : (
+            )}
+            {!selectedMr && (
               <Popover
                 open={shareStockPopoverOpen}
                 onOpenChange={setShareStockPopoverOpen}
@@ -1008,8 +1071,12 @@ export default function CreateDeliveryPage() {
                       const matchesSearch =
                         ss.barang.part_number.toLowerCase().includes(keyword) ||
                         ss.barang.part_name.toLowerCase().includes(keyword);
+                      const remaining = remainingByItemId[ss.id];
+                      // undefined = belum termuat, tampilkan optimistis
+                      const hasRemaining =
+                        remaining === undefined || remaining > 0;
 
-                      return matchesSource && matchesSearch;
+                      return matchesSource && matchesSearch && hasRemaining;
                     })
                     .map((ss) => (
                       <button
@@ -1022,10 +1089,12 @@ export default function CreateDeliveryPage() {
                             {ss.barang.part_number} - {ss.barang.part_name}
                           </span>
                           <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
-                            Qty:{" "}
-                            {(ss.mr_sharestock_allocations as any[])?.find(
-                              (a) => a.source_cabang_id === dariCabang,
-                            )?.qty ?? ss.qty_sharestock_total}{" "}
+                            Sisa:{" "}
+                            {remainingByItemId[ss.id] ??
+                              ((ss.mr_sharestock_allocations as any[])?.find(
+                                (a) => a.source_cabang_id === dariCabang,
+                              )?.qty ??
+                                ss.qty_sharestock_total)}{" "}
                             {ss.barang.part_satuan}
                             {" | Tujuan: "} {ss.mrs.cabang.nama_cabang}
                           </span>
@@ -1081,36 +1150,60 @@ export default function CreateDeliveryPage() {
                         </span>
                       </TableCell>
                       <TableCell className="text-center">
-                        {selectedMr ? (
-                          <span className="text-sm font-bold text-foreground">
-                            {item.qty_on_delivery}
-                          </span>
-                        ) : (
-                          <Input
-                            type="number"
-                            min="1"
-                            className="h-8 w-16 text-center font-bold text-sm border-input"
-                            value={item.qty_on_delivery}
-                            onChange={(e) =>
-                              handleUpdateItemQty(idx, parseInt(e.target.value))
-                            }
-                          />
-                        )}
+                        {(() => {
+                          const cap = item.mr_item_id
+                            ? remainingByItemId[item.mr_item_id]
+                            : undefined;
+                          const exceedsCap =
+                            typeof cap === "number" &&
+                            item.qty_on_delivery > cap;
+                          return (
+                            <div className="flex flex-col items-center gap-0.5">
+                              <Input
+                                type="number"
+                                min="1"
+                                max={typeof cap === "number" ? cap : undefined}
+                                className={cn(
+                                  "h-8 w-20 text-center font-bold text-sm border-input",
+                                  exceedsCap &&
+                                    "border-destructive text-destructive",
+                                )}
+                                value={item.qty_on_delivery}
+                                onChange={(e) =>
+                                  handleUpdateItemQty(
+                                    idx,
+                                    parseInt(e.target.value),
+                                  )
+                                }
+                              />
+                              {typeof cap === "number" && (
+                                <span
+                                  className={cn(
+                                    "text-[9px] font-bold uppercase",
+                                    exceedsCap
+                                      ? "text-destructive"
+                                      : "text-muted-foreground/60",
+                                  )}
+                                >
+                                  Sisa alokasi: {cap}
+                                </span>
+                              )}
+                            </div>
+                          );
+                        })()}
                       </TableCell>
                       <TableCell className="text-center font-bold text-[10px] text-muted-foreground uppercase">
                         {item.satuan}
                       </TableCell>
                       <TableCell>
-                        {!selectedMr && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive rounded-md"
-                            onClick={() => handleRemoveItem(idx)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive rounded-md"
+                          onClick={() => handleRemoveItem(idx)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
                       </TableCell>
                     </TableRow>
                   ))}

@@ -13,6 +13,115 @@ const DELIVERY_ACTIVE_STATUSES = [
   "closed",
 ] as const;
 
+function isMissingMrItemColumnError(error: unknown): boolean {
+  const err = error as { message?: string; details?: string; hint?: string };
+  const text = `${err?.message || ""} ${err?.details || ""} ${err?.hint || ""}`
+    .toLowerCase()
+    .trim();
+  return text.includes("mr_item_id") && text.includes("does not exist");
+}
+
+/**
+ * Sisa alokasi share stock (mr_sharestock_allocations.qty dikurangi qty yang
+ * sudah "aktif" ter-delivery — lihat DELIVERY_ACTIVE_STATUSES), per pasangan
+ * (mr_item_id, source_cabang_id).
+ *
+ * - sourceCabangId diisi  -> scope ke satu cabang sumber (dipakai createDelivery
+ *   dan getShareStockRemaining, yang memang hanya peduli satu dari_cabang_id).
+ * - sourceCabangId kosong -> hitung untuk SEMUA cabang sumber yang punya
+ *   alokasi ke item-item ini (dipakai bypassShareStockCompletion).
+ *
+ * Nilai balik BELUM di-clamp ke >=0 -- caller yang memutuskan.
+ */
+async function computeShareStockRemaining(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  mrItemIds: number[],
+  sourceCabangId?: number,
+): Promise<{
+  remaining: Map<number, Map<number, number>>;
+  error?: string;
+  missingMrItemColumn?: boolean;
+}> {
+  const remaining = new Map<number, Map<number, number>>();
+  if (mrItemIds.length === 0) return { remaining };
+
+  let allocQuery = supabase
+    .from("mr_sharestock_allocations")
+    .select("mr_item_id, source_cabang_id, qty")
+    .in("mr_item_id", mrItemIds);
+  if (sourceCabangId) {
+    allocQuery = allocQuery.eq("source_cabang_id", sourceCabangId);
+  }
+  const { data: allocations, error: allocationError } = await allocQuery;
+  if (allocationError) return { remaining, error: allocationError.message };
+
+  for (const a of allocations || []) {
+    if (!remaining.has(a.mr_item_id)) remaining.set(a.mr_item_id, new Map());
+    const m = remaining.get(a.mr_item_id)!;
+    m.set(a.source_cabang_id, (m.get(a.source_cabang_id) || 0) + a.qty);
+  }
+
+  let dlvQuery = supabase
+    .from("delivery_items")
+    .select(
+      "mr_item_id, qty_on_delivery, deliveries!inner(dari_cabang_id, status)",
+    )
+    .in("mr_item_id", mrItemIds)
+    .in("deliveries.status", [...DELIVERY_ACTIVE_STATUSES]);
+  if (sourceCabangId) {
+    dlvQuery = dlvQuery.eq("deliveries.dari_cabang_id", sourceCabangId);
+  }
+  const { data: deliveredItems, error: deliveredError } = await dlvQuery;
+  if (deliveredError) {
+    if (isMissingMrItemColumnError(deliveredError)) {
+      return { remaining, missingMrItemColumn: true };
+    }
+    return { remaining, error: deliveredError.message };
+  }
+
+  for (const d of deliveredItems || []) {
+    if (!d.mr_item_id) continue;
+    const src = (d.deliveries as any)?.dari_cabang_id;
+    if (!src) continue;
+    if (!remaining.has(d.mr_item_id)) remaining.set(d.mr_item_id, new Map());
+    const m = remaining.get(d.mr_item_id)!;
+    m.set(src, (m.get(src) || 0) - d.qty_on_delivery);
+  }
+
+  return { remaining };
+}
+
+/**
+ * Sisa alokasi share stock (belum terkirim lewat delivery aktif) untuk
+ * sekumpulan mr_item dari SATU cabang sumber. Dipakai form create-delivery
+ * untuk cap qty input & tampilan "sisa" sebelum submit.
+ */
+export async function getShareStockRemaining(
+  mrItemIds: number[],
+  sourceCabangId: number,
+): Promise<{ data: Record<number, number> } | { error: string }> {
+  const supabase = await createClient();
+  const ids = Array.from(
+    new Set(
+      (mrItemIds || []).filter((id): id is number => typeof id === "number"),
+    ),
+  );
+  if (ids.length === 0 || !sourceCabangId) return { data: {} };
+
+  const result = await computeShareStockRemaining(
+    supabase,
+    ids,
+    sourceCabangId,
+  );
+  if (result.error) return { error: result.error };
+
+  const data: Record<number, number> = {};
+  for (const id of ids) {
+    data[id] = Math.max(0, result.remaining.get(id)?.get(sourceCabangId) ?? 0);
+  }
+  return { data };
+}
+
 /**
  * INVENTORY & STOCK SERVICES
  */
@@ -60,14 +169,6 @@ export async function createDelivery(data: {
   }[];
 }) {
   const supabase = await createClient();
-  const isMissingMrItemColumnError = (error: unknown) => {
-    const err = error as { message?: string; details?: string; hint?: string };
-    const text =
-      `${err?.message || ""} ${err?.details || ""} ${err?.hint || ""}`
-        .toLowerCase()
-        .trim();
-    return text.includes("mr_item_id") && text.includes("does not exist");
-  };
 
   let hasMrItemColumn = true;
 
@@ -118,49 +219,21 @@ export async function createDelivery(data: {
 
   const allocationByItemId = new Map<number, number>();
   if (mrItemIds.length > 0) {
-    const { data: allocations, error: allocationError } = await supabase
-      .from("mr_sharestock_allocations")
-      .select("mr_item_id, qty")
-      .eq("source_cabang_id", data.dari_cabang_id)
-      .in("mr_item_id", mrItemIds);
+    const remainResult = await computeShareStockRemaining(
+      supabase,
+      mrItemIds,
+      data.dari_cabang_id,
+    );
+    if (remainResult.error) return { error: remainResult.error };
 
-    if (allocationError) {
-      return { error: allocationError.message };
-    }
-
-    for (const allocation of allocations || []) {
-      const total = allocationByItemId.get(allocation.mr_item_id) || 0;
-      allocationByItemId.set(allocation.mr_item_id, total + allocation.qty);
-    }
-
-    const { data: deliveredItems, error: deliveredError } = await supabase
-      .from("delivery_items")
-      .select(
-        "mr_item_id, qty_on_delivery, deliveries!inner(dari_cabang_id, status)",
-      )
-      .in("mr_item_id", mrItemIds)
-      .eq("deliveries.dari_cabang_id", data.dari_cabang_id)
-      .in("deliveries.status", [...DELIVERY_ACTIVE_STATUSES]);
-
-    if (deliveredError) {
-      if (isMissingMrItemColumnError(deliveredError)) {
-        hasMrItemColumn = false;
-        mrItemIds = [];
-      } else {
-        return { error: deliveredError.message };
-      }
-    }
-
-    if (hasMrItemColumn) {
-      for (const deliveredItem of deliveredItems || []) {
-        if (!deliveredItem.mr_item_id) {
-          continue;
-        }
-        const currentDelivered =
-          allocationByItemId.get(deliveredItem.mr_item_id) || 0;
+    if (remainResult.missingMrItemColumn) {
+      hasMrItemColumn = false;
+      mrItemIds = [];
+    } else {
+      for (const id of mrItemIds) {
         allocationByItemId.set(
-          deliveredItem.mr_item_id,
-          currentDelivered - deliveredItem.qty_on_delivery,
+          id,
+          remainResult.remaining.get(id)?.get(data.dari_cabang_id) ?? 0,
         );
       }
     }
@@ -209,6 +282,57 @@ export async function createDelivery(data: {
             remainingAllocation <= 0
               ? `Alokasi share stock untuk ${stockInfo.item.part_name} sudah habis di cabang asal. Silakan pilih item lain atau ubah cabang asal.`
               : `Qty delivery ${stockInfo.item.part_name} melebihi sisa alokasi share stock (sisa: ${remainingAllocation}, diminta: ${stockInfo.item.qty_on_delivery})`,
+        };
+      }
+    }
+  }
+
+  // Defense-in-depth #2 (independen dari validasi qty_request di approveMR/
+  // moderatorEditMR): total qty yang sudah "aktif" ter-delivery untuk suatu
+  // mr_item, LINTAS SEMUA cabang sumber (bukan cuma dari_cabang_id delivery
+  // ini) + qty yang mau dikirim sekarang, tidak boleh melebihi qty_request
+  // MR-nya. Jaring pengaman terhadap data lama/jalur lain yang mungkin belum
+  // tunduk pada validasi qty_request di alur alokasi.
+  if (mrItemIds.length > 0) {
+    const { data: mrItemRows, error: mrItemError } = await supabase
+      .from("mr_items")
+      .select("id, part_number, qty_request")
+      .in("id", mrItemIds);
+    if (mrItemError) return { error: mrItemError.message };
+    const mrItemById = new Map((mrItemRows || []).map((r) => [r.id, r]));
+
+    const { data: activeAcrossAll, error: activeError } = await supabase
+      .from("delivery_items")
+      .select("mr_item_id, qty_on_delivery, deliveries!inner(status)")
+      .in("mr_item_id", mrItemIds)
+      .in("deliveries.status", [...DELIVERY_ACTIVE_STATUSES]);
+    if (activeError) return { error: activeError.message };
+
+    const activeTotalByItem = new Map<number, number>();
+    for (const row of activeAcrossAll || []) {
+      if (!row.mr_item_id) continue;
+      activeTotalByItem.set(
+        row.mr_item_id,
+        (activeTotalByItem.get(row.mr_item_id) || 0) + row.qty_on_delivery,
+      );
+    }
+
+    const requestedNowByItem = new Map<number, number>();
+    for (const item of data.items) {
+      if (typeof item.mr_item_id !== "number") continue;
+      requestedNowByItem.set(
+        item.mr_item_id,
+        (requestedNowByItem.get(item.mr_item_id) || 0) + item.qty_on_delivery,
+      );
+    }
+
+    for (const [itemId, requestedNow] of requestedNowByItem) {
+      const mrItemRow = mrItemById.get(itemId);
+      if (!mrItemRow) continue;
+      const alreadyActive = activeTotalByItem.get(itemId) || 0;
+      if (alreadyActive + requestedNow > mrItemRow.qty_request) {
+        return {
+          error: `Qty share stock ${mrItemRow.part_number} melebihi qty yang diminta MR (qty request: ${mrItemRow.qty_request}, sudah ter-delivery aktif: ${alreadyActive}, diminta sekarang: ${requestedNow}).`,
         };
       }
     }
@@ -904,10 +1028,38 @@ export async function bypassShareStockCompletion(mrItemId: number) {
   if (!allocations || allocations.length === 0)
     return { error: "Tidak ada alokasi share stock untuk item ini" };
 
+  // Sisa per source_cabang yang belum terkirim lewat delivery aktif -- formula
+  // sama persis dengan yang dipakai createDelivery, supaya Bypass tidak
+  // memindahkan qty yang sudah dipindah delivery normal (double-count).
+  const remainResult = await computeShareStockRemaining(supabase, [mrItemId]);
+  if (remainResult.error) return { error: remainResult.error };
+
+  const remainingBySource = new Map<number, number>();
+  let anyRemaining = false;
+  for (const alloc of allocations) {
+    const raw = remainResult.missingMrItemColumn
+      ? alloc.qty
+      : (remainResult.remaining.get(mrItemId)?.get(alloc.source_cabang_id) ??
+        alloc.qty);
+    const remainingQty = Math.max(0, Math.min(raw, alloc.qty));
+    remainingBySource.set(alloc.source_cabang_id, remainingQty);
+    if (remainingQty > 0) anyRemaining = true;
+  }
+  if (!anyRemaining) {
+    return {
+      error:
+        "Semua alokasi share stock item ini sudah terkirim penuh lewat delivery normal. Tidak ada sisa untuk di-bypass.",
+    };
+  }
+
   const bypassRef = `BYPASS-${(mrItem.mrs as any)?.mr_kode || mrItemId}`;
 
-  // Move stock from each source to destination
+  // Move stock from each source to destination (hanya sisa yang belum
+  // terkirim lewat delivery normal)
   for (const alloc of allocations) {
+    const remainingQty = remainingBySource.get(alloc.source_cabang_id) || 0;
+    if (remainingQty <= 0) continue;
+
     const { data: srcStock } = await supabase
       .from("stock")
       .select("id, qty")
@@ -916,21 +1068,21 @@ export async function bypassShareStockCompletion(mrItemId: number) {
       .maybeSingle();
 
     // Skip if source doesn't have enough (best-effort bypass)
-    if (!srcStock || srcStock.qty < alloc.qty) continue;
+    if (!srcStock || srcStock.qty < remainingQty) continue;
 
     await supabase
       .from("stock")
-      .update({ qty: srcStock.qty - alloc.qty })
+      .update({ qty: srcStock.qty - remainingQty })
       .eq("id", srcStock.id);
 
     await supabase.from("stock_movements").insert({
       part_id: mrItem.part_id,
       cabang_id: alloc.source_cabang_id,
-      qty_change: -alloc.qty,
+      qty_change: -remainingQty,
       type: "SS",
       reference_id: bypassRef,
       created_by: user.id,
-      notes: `Bypass SS: ${mrItem.part_number} keluar dari cabang ${alloc.source_cabang_id}`,
+      notes: `Bypass SS: ${mrItem.part_number} keluar dari cabang ${alloc.source_cabang_id} (sisa ${remainingQty} dari alokasi ${alloc.qty})`,
     });
 
     const { data: dstStock } = await supabase
@@ -943,14 +1095,14 @@ export async function bypassShareStockCompletion(mrItemId: number) {
     if (dstStock) {
       await supabase
         .from("stock")
-        .update({ qty: dstStock.qty + alloc.qty })
+        .update({ qty: dstStock.qty + remainingQty })
         .eq("id", dstStock.id);
     } else {
       await supabase.from("stock").insert([
         {
           part_id: mrItem.part_id,
           cabang_id: destCabangId,
-          qty: alloc.qty,
+          qty: remainingQty,
         },
       ]);
     }
@@ -958,11 +1110,11 @@ export async function bypassShareStockCompletion(mrItemId: number) {
     await supabase.from("stock_movements").insert({
       part_id: mrItem.part_id,
       cabang_id: destCabangId,
-      qty_change: alloc.qty,
+      qty_change: remainingQty,
       type: "SS",
       reference_id: bypassRef,
       created_by: user.id,
-      notes: `Bypass SS: ${mrItem.part_number} masuk ke cabang ${destCabangId}`,
+      notes: `Bypass SS: ${mrItem.part_number} masuk ke cabang ${destCabangId} (sisa ${remainingQty} dari alokasi ${alloc.qty})`,
     });
   }
 

@@ -834,9 +834,21 @@ export default function MRDetailPage({
     const cabangId =
       field === "source_cabang_id" ? value : line.source_cabang_id;
     const avail = getAvailableStock(alloc.part_id, cabangId);
+
+    // Clamp juga terhadap sisa qty_request item ini (dikurangi baris LAIN
+    // selain baris yang sedang diedit) — supaya total alokasi tidak pernah
+    // bisa melebihi qty yang diminta MR.
+    const otherRowsTotal = alloc.sharestocks.reduce(
+      (sum: number, s: any, i: number) =>
+        i === index ? sum : sum + Number(s.qty || 0),
+      0,
+    );
+    const remainingRequest = Math.max(0, alloc.qty_request - otherRowsTotal);
+
     let q = Number(line.qty) || 0;
     if (q < 0) q = 0;
     if (cabangId && q > avail) q = avail;
+    if (q > remainingRequest) q = remainingRequest;
     line.qty = q;
 
     newSS[index] = line;
@@ -1623,6 +1635,15 @@ export default function MRDetailPage({
                             alloc.part_id,
                             ss.source_cabang_id,
                           );
+                          const otherRowsTotal = alloc.sharestocks.reduce(
+                            (sum: number, s: any, i: number) =>
+                              i === idx ? sum : sum + Number(s.qty || 0),
+                            0,
+                          );
+                          const remainingRequest = Math.max(
+                            0,
+                            alloc.qty_request - otherRowsTotal,
+                          );
                           return (
                             <div key={idx} className="space-y-1">
                               <div className="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_110px_44px] gap-2 items-center bg-muted/40 p-2.5 rounded-lg border border-border">
@@ -1665,7 +1686,7 @@ export default function MRDetailPage({
                                   type="number"
                                   placeholder="Qty"
                                   min="0"
-                                  max={avail || undefined}
+                                  max={Math.min(avail, remainingRequest) || undefined}
                                   className="h-9 w-full text-center font-bold text-[11px]"
                                   value={ss.qty || ""}
                                   onChange={(e) =>
@@ -1708,6 +1729,18 @@ export default function MRDetailPage({
                                   )}
                                 </p>
                               )}
+                              <p className="px-1 text-[10px] font-semibold text-muted-foreground">
+                                Sisa qty request yang bisa dialokasikan:{" "}
+                                <span
+                                  className={
+                                    remainingRequest > 0
+                                      ? "text-success"
+                                      : "text-destructive"
+                                  }
+                                >
+                                  {remainingRequest}
+                                </span>
+                              </p>
                             </div>
                           );
                         })}

@@ -135,7 +135,7 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
 
   const { data: currentItems } = await supabase
     .from("mr_items")
-    .select("id, part_number, qty_pr, qty_sharestock_total")
+    .select("id, part_number, qty_pr, qty_sharestock_total, qty_request")
     .eq("mr_id", mrId);
   const itemById = new Map((currentItems || []).map((i: any) => [i.id, i]));
 
@@ -274,6 +274,17 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
     ];
     const allocByItem = new Map((payload.allocations || []).map((a) => [a.mr_item_id, a]));
 
+    // Ambil qty_request OTORITATIF langsung dari DB. Step 4 di atas SUDAH
+    // menjalankan delete/update/insert item, jadi qty_request di DB di sini
+    // sudah final untuk item lama yang di-update maupun item baru.
+    const { data: freshItems, error: freshItemsError } = await supabase
+      .from("mr_items")
+      .select("id, part_number, qty_request")
+      .in("id", allItemIds);
+    if (freshItemsError) return { error: freshItemsError.message };
+    const freshById = new Map((freshItems || []).map((i: any) => [i.id, i]));
+
+    // ---------- VALIDATE ALL FIRST (belum ada mutasi alokasi) ----------
     for (const itemId of allItemIds) {
       const alloc = allocByItem.get(itemId);
       if (!alloc) continue; // tanpa entri alokasi → default: sudah full qty_request di qty_pr lewat item update, tidak perlu apa2 di sini
@@ -307,23 +318,55 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
             error: `Gudang sumber untuk item ${alloc.part_number || itemId} tidak boleh sama dengan gudang tujuan MR.`,
           };
         }
+      }
 
+      const freshItem = freshById.get(itemId);
+      if (!freshItem) {
+        return { error: `Item MR (id ${itemId}) tidak ditemukan untuk validasi alokasi.` };
+      }
+      const requestedShare = Number(alloc.qty_sharestock_total || 0);
+      if (requestedShare > freshItem.qty_request) {
+        return {
+          error: `Total share stock item ${freshItem.part_number} (${requestedShare}) melebihi qty yang diminta MR (${freshItem.qty_request}).`,
+        };
+      }
+      const sumSS = (alloc.sharestocks || []).reduce(
+        (s, ss) => s + Number(ss.qty || 0),
+        0,
+      );
+      if (sumSS !== requestedShare) {
+        return {
+          error: `Data alokasi item ${freshItem.part_number} tidak konsisten (total baris ${sumSS} != ${requestedShare}).`,
+        };
+      }
+    }
+
+    // ---------- SEMUA VALID -> APPLY MUTASI ----------
+    for (const itemId of allItemIds) {
+      const alloc = allocByItem.get(itemId);
+      if (!alloc) continue;
+
+      if (alloc.sharestocks && alloc.sharestocks.length > 0) {
         const sharestockEntries = alloc.sharestocks.map((ss) => ({
           mr_item_id: itemId,
           source_cabang_id: ss.source_cabang_id,
           qty: ss.qty,
           deadline: ss.deadline ?? alloc.deadline ?? null,
         }));
-        await supabase.from("mr_sharestock_allocations").insert(sharestockEntries);
+        const { error: insErr } = await supabase
+          .from("mr_sharestock_allocations")
+          .insert(sharestockEntries);
+        if (insErr) return { error: insErr.message };
       }
 
-      await supabase
+      const { error: updErr } = await supabase
         .from("mr_items")
         .update({
           qty_pr: alloc.qty_pr,
           qty_sharestock_total: alloc.qty_sharestock_total,
         })
         .eq("id", itemId);
+      if (updErr) return { error: updErr.message };
     }
   }
 
