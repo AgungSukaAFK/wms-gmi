@@ -7,7 +7,18 @@ import {
   updateJobCostingStatus,
   addJobCostingItem,
   deleteJobCostingItem,
+  deleteJobCosting,
 } from "@/services/finance-actions";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Table,
   TableBody,
@@ -109,6 +120,8 @@ export function JobCostingDetailSheet({
   const [newPrice, setNewPrice] = useState(0);
   const [newNotes, setNewNotes] = useState("");
   const [statusDraft, setStatusDraft] = useState("open");
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     if (!open || !jobId) return;
@@ -139,6 +152,20 @@ export function JobCostingDetailSheet({
     }
     toast.success(`Status diubah ke ${status}.`);
     loadJob();
+    onRefresh();
+  }
+
+  async function handleDeleteConfirm() {
+    setDeleting(true);
+    const result = await deleteJobCosting(jobId!);
+    setDeleting(false);
+    if (result.error) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success(`Job Costing ${job.job_kode} berhasil dihapus.`);
+    setDeleteDialogOpen(false);
+    onOpenChange(false);
     onRefresh();
   }
 
@@ -609,12 +636,58 @@ export function JobCostingDetailSheet({
                       Simpan Status
                     </Button>
                   </div>
+
+                  <Separator className="my-1" />
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 text-xs gap-1.5 text-destructive border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setDeleteDialogOpen(true)}
+                    disabled={actionLoading}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Hapus Job Costing
+                  </Button>
                 </div>
               )}
             </div>
           </div>
         )}
       </SheetContent>
+
+      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Hapus Job Costing?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Job Costing{" "}
+              <span className="font-bold text-foreground">
+                {job?.job_kode}
+              </span>{" "}
+              akan dihapus permanen.
+              {job?.stock_applied_at
+                ? " Stok yang sudah diterapkan (bahan & finish part) akan otomatis dikembalikan ke kondisi semula."
+                : ""}{" "}
+              Tindakan ini tidak dapat dibatalkan.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={handleDeleteConfirm}
+              disabled={deleting}
+            >
+              {deleting ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                "Ya, Hapus"
+              )}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sheet>
   );
 }

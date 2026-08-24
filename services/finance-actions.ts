@@ -767,44 +767,18 @@ export async function createJobCosting(data: {
   return { success: true, data: job };
 }
 
-export async function updateJobCostingStatus(id: number, status: string) {
-  const access = await canManageJobCostingStatus();
-  if (!access.allowed) return { error: access.error };
-
-  const normalizedNewStatus = toCompletedIfLegacy(status);
-  if (
-    !["open", "approved", "completed", "rejected"].includes(
-      normalizedNewStatus,
-    )
-  ) {
-    return { error: "Status tidak valid." };
-  }
-
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { error: "Tidak terautentikasi." };
-
-  const { data: job, error: jobErr } = await supabase
-    .from("job_costing")
-    .select(
-      "id, job_kode, status, stock_applied_at, finish_part_id, finish_part_cabang_id, qty_finish_part, finish_part, job_costing_items(id, part_id, part_number, part_name, qty, source_cabang_id), job_costing_finish_parts(id, part_id, part_number, part_name, qty, cabang_id)",
-    )
-    .eq("id", id)
-    .single();
-  if (jobErr || !job) {
-    return { error: jobErr?.message || "Job Costing tidak ditemukan." };
-  }
-
-  const currentStatus = normalizeDocumentStatus(job.status);
-  if (currentStatus === normalizedNewStatus) {
-    return { error: "Status tidak berubah." };
-  }
-
-  const wasApplied = shouldApplyStock(currentStatus);
-  const willApply = shouldApplyStock(normalizedNewStatus);
-
+// Derivasi StockLine[] (bahan + finish part) dari row job_costing yang sudah
+// di-join dengan job_costing_items/job_costing_finish_parts -- dipakai baik
+// oleh updateJobCostingStatus maupun deleteJobCosting supaya definisi "apa
+// yang harus di-reverse" selalu konsisten di kedua alur.
+function deriveStockLinesFromJob(job: {
+  finish_part_id?: number | null;
+  finish_part_cabang_id?: number | null;
+  qty_finish_part?: number | null;
+  finish_part?: string | null;
+  job_costing_items?: unknown;
+  job_costing_finish_parts?: unknown;
+}): { materialLines: StockLine[]; finishPartLines: StockLine[] } {
   const materialLines: StockLine[] = ((job.job_costing_items as any[]) ?? [])
     .filter((i) => i.part_id && i.source_cabang_id)
     .map((i) => ({
@@ -841,6 +815,50 @@ export async function updateJobCostingStatus(id: number, status: string) {
       },
     ];
   }
+
+  return { materialLines, finishPartLines };
+}
+
+const JOB_COSTING_STOCK_SELECT =
+  "id, job_kode, status, stock_applied_at, finish_part_id, finish_part_cabang_id, qty_finish_part, finish_part, job_costing_items(id, part_id, part_number, part_name, qty, source_cabang_id), job_costing_finish_parts(id, part_id, part_number, part_name, qty, cabang_id)";
+
+export async function updateJobCostingStatus(id: number, status: string) {
+  const access = await canManageJobCostingStatus();
+  if (!access.allowed) return { error: access.error };
+
+  const normalizedNewStatus = toCompletedIfLegacy(status);
+  if (
+    !["open", "approved", "completed", "rejected"].includes(
+      normalizedNewStatus,
+    )
+  ) {
+    return { error: "Status tidak valid." };
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Tidak terautentikasi." };
+
+  const { data: job, error: jobErr } = await supabase
+    .from("job_costing")
+    .select(JOB_COSTING_STOCK_SELECT)
+    .eq("id", id)
+    .single();
+  if (jobErr || !job) {
+    return { error: jobErr?.message || "Job Costing tidak ditemukan." };
+  }
+
+  const currentStatus = normalizeDocumentStatus(job.status);
+  if (currentStatus === normalizedNewStatus) {
+    return { error: "Status tidak berubah." };
+  }
+
+  const wasApplied = shouldApplyStock(currentStatus);
+  const willApply = shouldApplyStock(normalizedNewStatus);
+
+  const { materialLines, finishPartLines } = deriveStockLinesFromJob(job);
 
   if (!wasApplied && willApply) {
     if (materialLines.length === 0) {
@@ -906,6 +924,70 @@ export async function updateJobCostingStatus(id: number, status: string) {
       .update({ status: normalizedNewStatus })
       .eq("id", id);
     if (updErr) return { error: updErr.message };
+  }
+
+  revalidatePath("/job-costing");
+  revalidatePath("/stock");
+  return { success: true };
+}
+
+/**
+ * Hapus Job Costing secara permanen. Kalau stok job ini sudah diterapkan
+ * (status pernah approved/completed, ditandai `stock_applied_at`), stok
+ * di-reverse dulu (bahan dikembalikan, finish part dikurangi lagi) SEBELUM
+ * row dihapus -- pakai helper yang sama dengan alur reject di
+ * updateJobCostingStatus, supaya qty kembali seperti semula. Kalau reverse
+ * gagal (mis. finish part sudah kepakai proses lain), penghapusan diblok
+ * dan job tetap utuh -- bukan dihapus dengan stok yang salah.
+ */
+export async function deleteJobCosting(id: number) {
+  const access = await canManageJobCostingStatus();
+  if (!access.allowed) return { error: access.error };
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Tidak terautentikasi." };
+
+  const { data: job, error: jobErr } = await supabase
+    .from("job_costing")
+    .select(JOB_COSTING_STOCK_SELECT)
+    .eq("id", id)
+    .single();
+  if (jobErr || !job) {
+    return { error: jobErr?.message || "Job Costing tidak ditemukan." };
+  }
+
+  const { materialLines, finishPartLines } = deriveStockLinesFromJob(job);
+
+  if (job.stock_applied_at) {
+    const reverseResult = await reverseJobCostingStock(supabase, {
+      jobKode: job.job_kode,
+      userId: user.id,
+      materialLines,
+      finishPartLines,
+    });
+    if (!reverseResult.success) return { error: reverseResult.error };
+  }
+
+  const { error: delErr } = await supabase
+    .from("job_costing")
+    .delete()
+    .eq("id", id);
+  if (delErr) {
+    if (job.stock_applied_at) {
+      // Jangan biarkan stok yang sudah di-reverse "hilang" dari sistem kalau
+      // delete-nya sendiri gagal -- terapkan ulang supaya konsisten dengan
+      // job yang masih ada.
+      await applyJobCostingStock(supabase, {
+        jobKode: job.job_kode,
+        userId: user.id,
+        materialLines,
+        finishPartLines,
+      });
+    }
+    return { error: delErr.message };
   }
 
   revalidatePath("/job-costing");
