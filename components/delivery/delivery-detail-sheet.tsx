@@ -30,6 +30,8 @@ import {
   RefreshCw,
   FileBox,
   AlertTriangle,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -45,12 +47,15 @@ import {
   updateDeliveryTrackingModerator,
   finalizeDelivery,
   cancelDelivery,
+  deleteDelivery,
 } from "@/services/inventory-actions";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { EditDeliveryDialog } from "@/components/delivery/edit-delivery-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeDocumentStatus } from "@/lib/document-status";
+import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 
 interface DeliveryDetailSheetProps {
   deliveryId: number | null;
@@ -83,6 +88,10 @@ export function DeliveryDetailSheet({
   const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
+  const [editDeliveryOpen, setEditDeliveryOpen] = useState(false);
+  const [deleteReason, setDeleteReason] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
 
   useEffect(() => {
     if (open && deliveryId) {
@@ -306,6 +315,25 @@ export function DeliveryDetailSheet({
     delivery?.status !== "completed" &&
     delivery?.tracking_status !== "completed";
 
+  // Edit item/qty/logistik cuma masuk akal selama delivery masih aktif —
+  // sekali completed (diterima) atau cancelled (mati), diedit dari sini
+  // diblok (persis batasan cancelDelivery).
+  const canEditDelivery =
+    Boolean(delivery) &&
+    isModeratorOrAdmin &&
+    delivery?.status !== "cancelled" &&
+    delivery?.status !== "completed" &&
+    delivery?.tracking_status !== "completed";
+
+  // Hapus permanen boleh dipakai untuk delivery aktif (otomatis reverse stok
+  // dulu) ATAU yang sudah cancelled (stok udah balik, tinggal purge) — tapi
+  // tetap dikunci begitu completed (barang sudah diterima).
+  const canDeleteDelivery =
+    Boolean(delivery) &&
+    isModeratorOrAdmin &&
+    delivery?.status !== "completed" &&
+    delivery?.tracking_status !== "completed";
+
   const handleCancelDelivery = async () => {
     if (!delivery) return;
     if (!cancelReason.trim()) {
@@ -322,6 +350,25 @@ export function DeliveryDetailSheet({
       onUpdate?.();
     } else {
       toast.error(result?.error || "Gagal membatalkan delivery");
+    }
+  };
+
+  const handleDeleteDelivery = async () => {
+    if (!delivery) return;
+    if (!deleteReason.trim()) {
+      toast.error("Alasan penghapusan wajib diisi.");
+      return;
+    }
+    setDeleting(true);
+    const result = await deleteDelivery(delivery.id, deleteReason.trim());
+    setDeleting(false);
+    if (result?.success) {
+      toast.success("Delivery dihapus permanen.");
+      setDeleteReason("");
+      onOpenChange(false);
+      onUpdate?.();
+    } else {
+      toast.error(result?.error || "Gagal menghapus delivery");
     }
   };
 
@@ -560,6 +607,22 @@ export function DeliveryDetailSheet({
                       Tracking Moderator/Admin
                     </h3>
                   </div>
+
+                  {(canEditDelivery || canDeleteDelivery) && (
+                    <div className="flex gap-2">
+                      {canEditDelivery && (
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="flex-1 gap-2 text-xs font-bold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
+                          onClick={() => setEditDeliveryOpen(true)}
+                        >
+                          <Pencil className="h-3.5 w-3.5" /> Edit Delivery
+                        </Button>
+                      )}
+                    </div>
+                  )}
+
                   <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3">
                     <Select
                       value={moderatorTrackingStatus}
@@ -662,6 +725,44 @@ export function DeliveryDetailSheet({
                           <AlertTriangle className="h-3.5 w-3.5" />
                         )}
                         Batalkan & Kembalikan Stok
+                      </Button>
+                    </div>
+                  )}
+
+                  {canDeleteDelivery && (
+                    <div className="p-4 bg-red-50/50 border border-red-200 rounded-xl space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Trash2 className="h-3.5 w-3.5 text-red-700" />
+                        <h4 className="text-[11px] font-bold text-red-800 uppercase tracking-tight">
+                          Hapus Delivery Permanen
+                        </h4>
+                      </div>
+                      <p className="text-[10px] font-medium text-red-700/80">
+                        Record delivery ini akan dihapus total dari database
+                        (tidak bisa dikembalikan). Kalau belum dibatalkan, qty
+                        otomatis dikembalikan ke stok cabang sumber dulu
+                        sebelum dihapus.
+                      </p>
+                      <Textarea
+                        value={deleteReason}
+                        onChange={(event) => setDeleteReason(event.target.value)}
+                        placeholder="Alasan penghapusan (wajib)"
+                        className="min-h-16 bg-white border-red-300 text-xs"
+                        disabled={deleting}
+                      />
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="w-full gap-2 text-xs font-bold border-red-300 text-red-800 hover:bg-red-100"
+                        onClick={handleDeleteDelivery}
+                        disabled={deleting}
+                      >
+                        {deleting ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3.5 w-3.5" />
+                        )}
+                        Hapus Permanen
                       </Button>
                     </div>
                   )}
@@ -893,6 +994,12 @@ export function DeliveryDetailSheet({
                   </Table>
                 </div>
               </div>
+
+              <ModeratorEditLogPanel
+                docType="delivery"
+                docId={delivery?.id}
+                refreshKey={modLogRefreshKey}
+              />
             </div>
 
             <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-3 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
@@ -923,6 +1030,19 @@ export function DeliveryDetailSheet({
         onOpenChange={setReceiverSignOpen}
         onConfirm={handleFinalizeWithSignature}
       />
+
+      {delivery && (
+        <EditDeliveryDialog
+          deliveryId={delivery.id}
+          open={editDeliveryOpen}
+          onOpenChange={setEditDeliveryOpen}
+          onUpdated={() => {
+            fetchDetails();
+            setModLogRefreshKey((k) => k + 1);
+            onUpdate?.();
+          }}
+        />
+      )}
     </Sheet>
   );
 }

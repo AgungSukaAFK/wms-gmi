@@ -1907,7 +1907,7 @@ export async function moderatorEditReturnSpb(id: number, payload: ModeratorRetur
 }
 
 export async function getModeratorEditLogs(
-  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive",
+  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive" | "delivery",
   docId: number,
 ) {
   const supabase = await createClient();
