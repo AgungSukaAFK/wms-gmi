@@ -22,6 +22,31 @@ function isMissingMrItemColumnError(error: unknown): boolean {
 }
 
 /**
+ * Daftar mr_id unik yang jadi sumber suatu delivery, dilihat dari
+ * delivery_items.mr_item_id (bukan cuma deliveries.mr_id, yang cuma nyimpan
+ * MR pertama sebagai referensi utama). Dipakai buat guard freeze yang harus
+ * ikut MR mana pun yang jadi sumber, bukan cuma MR pertama.
+ */
+async function getDeliverySourceMrIds(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  deliveryId: number,
+): Promise<number[]> {
+  const { data } = await supabase
+    .from("delivery_items")
+    .select("mr_items(mr_id)")
+    .eq("dlv_id", deliveryId);
+  return Array.from(
+    new Set(
+      (data || [])
+        .map((row: any) =>
+          Array.isArray(row.mr_items) ? row.mr_items[0]?.mr_id : row.mr_items?.mr_id,
+        )
+        .filter((id: unknown): id is number => typeof id === "number"),
+    ),
+  );
+}
+
+/**
  * Sisa alokasi share stock (mr_sharestock_allocations.qty dikurangi qty yang
  * sudah "aktif" ter-delivery — lihat DELIVERY_ACTIVE_STATUSES), per pasangan
  * (mr_item_id, source_cabang_id).
@@ -180,12 +205,48 @@ export async function createDelivery(data: {
     return { error: "Cabang asal dan tujuan tidak boleh sama" };
   }
 
-  // Guard freeze: MR yang ter-freeze tidak boleh membuat delivery baru.
-  if (data.mr_id && (await evaluateMrFreeze(data.mr_id))) {
-    return {
-      error:
-        "MR ini sedang di-FREEZE (lewat deadline share stock). Hubungi moderator untuk unfreeze/reset.",
-    };
+  // Item delivery bisa berasal dari beberapa MR sekaligus (mr_item_id per
+  // baris) — kumpulkan mr_item_id yang diminta client lalu resolve mr_id
+  // masing-masing. mrItemById dipakai lagi di bawah untuk cap qty_request
+  // (defense-in-depth #2), jadi cuma query sekali di sini.
+  const requestedMrItemIds = Array.from(
+    new Set(
+      data.items
+        .map((item) => item.mr_item_id)
+        .filter((itemId): itemId is number => typeof itemId === "number"),
+    ),
+  );
+
+  const mrItemById = new Map<
+    number,
+    { id: number; part_number: string; qty_request: number; mr_id: number | null }
+  >();
+  if (requestedMrItemIds.length > 0) {
+    const { data: mrItemRows, error: mrItemError } = await supabase
+      .from("mr_items")
+      .select("id, part_number, qty_request, mr_id")
+      .in("id", requestedMrItemIds);
+    if (mrItemError) return { error: mrItemError.message };
+    for (const row of mrItemRows || []) mrItemById.set(row.id, row);
+  }
+
+  const sourceMrIds = Array.from(
+    new Set(
+      requestedMrItemIds
+        .map((id) => mrItemById.get(id)?.mr_id)
+        .filter((id): id is number => typeof id === "number"),
+    ),
+  );
+
+  // Guard freeze: MR yang ter-freeze (salah satu, kalau lebih dari 1 MR
+  // sumber) tidak boleh membuat delivery baru.
+  for (const mrId of sourceMrIds) {
+    if (await evaluateMrFreeze(mrId)) {
+      return {
+        error:
+          "Salah satu MR sumber sedang di-FREEZE (lewat deadline share stock). Hubungi moderator untuk unfreeze/reset.",
+      };
+    }
   }
 
   const {
@@ -207,15 +268,7 @@ export async function createDelivery(data: {
     return { error: "Kode Delivery sudah digunakan. Gunakan kode lain." };
   }
 
-  let mrItemIds = hasMrItemColumn
-    ? Array.from(
-        new Set(
-          data.items
-            .map((item) => item.mr_item_id)
-            .filter((itemId): itemId is number => typeof itemId === "number"),
-        ),
-      )
-    : [];
+  let mrItemIds = hasMrItemColumn ? requestedMrItemIds : [];
 
   const allocationByItemId = new Map<number, number>();
   if (mrItemIds.length > 0) {
@@ -294,13 +347,6 @@ export async function createDelivery(data: {
   // MR-nya. Jaring pengaman terhadap data lama/jalur lain yang mungkin belum
   // tunduk pada validasi qty_request di alur alokasi.
   if (mrItemIds.length > 0) {
-    const { data: mrItemRows, error: mrItemError } = await supabase
-      .from("mr_items")
-      .select("id, part_number, qty_request")
-      .in("id", mrItemIds);
-    if (mrItemError) return { error: mrItemError.message };
-    const mrItemById = new Map((mrItemRows || []).map((r) => [r.id, r]));
-
     const { data: activeAcrossAll, error: activeError } = await supabase
       .from("delivery_items")
       .select("mr_item_id, qty_on_delivery, deliveries!inner(status)")
@@ -350,7 +396,9 @@ export async function createDelivery(data: {
         eksternal_id: data.eksternal_id || null,
         estimasi_hari: data.estimasi_hari ?? 1,
         tracking_status: "created",
-        mr_id: data.mr_id,
+        // mr_id diisi MR pertama sebagai referensi utama (backward-compat
+        // display) — sumber kebenaran tetap delivery_items.mr_item_id.
+        mr_id: sourceMrIds[0] ?? data.mr_id ?? null,
         dari_cabang_id: data.dari_cabang_id,
         ke_cabang_id: data.ke_cabang_id,
         ekspedisi: data.ekspedisi,
@@ -480,7 +528,12 @@ export async function createDelivery(data: {
     }
 
     const planningRows = data.items.map((item) => ({
-      mr_id: data.mr_id ?? null,
+      // mr_id per-baris ikut MR asal item itu sendiri (bukan header
+      // delivery), karena satu delivery bisa berisi item dari beberapa MR.
+      mr_id:
+        typeof item.mr_item_id === "number"
+          ? (mrItemById.get(item.mr_item_id)?.mr_id ?? null)
+          : (data.mr_id ?? null),
       mr_item_id: typeof item.mr_item_id === "number" ? item.mr_item_id : null,
       dlv_id: dlv.id,
       part_id: item.part_id,
@@ -532,17 +585,18 @@ export async function updateDeliveryTracking(
     return { error: "Status tracking tidak valid" };
   }
 
-  // Guard freeze: kunci progres tracking bila MR ter-freeze.
-  const { data: dlvForFreeze } = await supabase
-    .from("deliveries")
-    .select("mr_id")
-    .eq("id", deliveryId)
-    .maybeSingle();
-  if (dlvForFreeze?.mr_id && (await evaluateMrFreeze(dlvForFreeze.mr_id))) {
-    return {
-      error:
-        "MR ini sedang di-FREEZE. Update tracking ditahan sampai moderator unfreeze/reset.",
-    };
+  // Guard freeze: kunci progres tracking bila salah satu MR sumber ter-freeze.
+  const sourceMrIdsForTracking = await getDeliverySourceMrIds(
+    supabase,
+    deliveryId,
+  );
+  for (const mrId of sourceMrIdsForTracking) {
+    if (await evaluateMrFreeze(mrId)) {
+      return {
+        error:
+          "Salah satu MR sumber sedang di-FREEZE. Update tracking ditahan sampai moderator unfreeze/reset.",
+      };
+    }
   }
 
   const { error } = await supabase
@@ -616,17 +670,18 @@ export async function updateDeliveryTrackingModerator(
     return { error: "Catatan tracking maksimal 1000 karakter." };
   }
 
-  // Guard freeze: walau moderator, alur ditahan sampai MR di-unfreeze/reset.
-  const { data: dlvForFreeze } = await supabase
-    .from("deliveries")
-    .select("mr_id")
-    .eq("id", deliveryId)
-    .maybeSingle();
-  if (dlvForFreeze?.mr_id && (await evaluateMrFreeze(dlvForFreeze.mr_id))) {
-    return {
-      error:
-        "MR ini sedang di-FREEZE. Unfreeze/reset MR dulu sebelum mengubah tracking.",
-    };
+  // Guard freeze: walau moderator, alur ditahan sampai semua MR sumber di-unfreeze/reset.
+  const sourceMrIdsForModTracking = await getDeliverySourceMrIds(
+    supabase,
+    deliveryId,
+  );
+  for (const mrId of sourceMrIdsForModTracking) {
+    if (await evaluateMrFreeze(mrId)) {
+      return {
+        error:
+          "Salah satu MR sumber sedang di-FREEZE. Unfreeze/reset MR dulu sebelum mengubah tracking.",
+      };
+    }
   }
 
   const { error: updateError } = await supabase
@@ -677,18 +732,25 @@ export async function finalizeDelivery(
   const { data: delivery, error: dlvError } = await supabase
     .from("deliveries")
     .select(
-      "id, dlv_kode, ke_cabang_id, dari_cabang_id, tracking_status, signature_receiver_id, status, mr_id",
+      "id, dlv_kode, ke_cabang_id, dari_cabang_id, tracking_status, signature_receiver_id, status",
     )
     .eq("id", deliveryId)
     .single();
   if (dlvError || !delivery) return { error: "Delivery tidak ditemukan" };
 
-  // Guard freeze: MR ter-freeze mengunci seluruh alur termasuk penerimaan.
-  if (delivery.mr_id && (await evaluateMrFreeze(delivery.mr_id))) {
-    return {
-      error:
-        "MR ini sedang di-FREEZE. Penerimaan barang ditahan sampai moderator unfreeze/reset.",
-    };
+  // Guard freeze: MR ter-freeze (salah satu MR sumber) mengunci seluruh alur
+  // termasuk penerimaan.
+  const sourceMrIdsForFinalize = await getDeliverySourceMrIds(
+    supabase,
+    deliveryId,
+  );
+  for (const mrId of sourceMrIdsForFinalize) {
+    if (await evaluateMrFreeze(mrId)) {
+      return {
+        error:
+          "Salah satu MR sumber sedang di-FREEZE. Penerimaan barang ditahan sampai moderator unfreeze/reset.",
+      };
+    }
   }
 
   if (delivery.signature_receiver_id) {
@@ -1251,7 +1313,7 @@ export async function updateDeliveryReceiverSignature(
   return { success: true };
 }
 
-async function syncShareStockStatuses(mrItemIds: number[]) {
+export async function syncShareStockStatuses(mrItemIds: number[]) {
   const supabase = await createClient();
 
   const { data: mrItems } = await supabase

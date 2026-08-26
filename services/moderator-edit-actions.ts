@@ -2,12 +2,30 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { notifyApprovers, notifyDocumentOwner } from "@/services/notification-actions";
+import {
+  notifyApprovers,
+  notifyDocumentOwner,
+  createNotification,
+} from "@/services/notification-actions";
 import {
   applyReturnSpbPosting,
   finalizeSpbInvoiceStatus,
 } from "@/services/spb-actions";
 import { applyReceiveCompletion } from "@/services/procurement-actions";
+import { evaluateMrFreeze } from "@/services/freeze-actions";
+import { syncShareStockStatuses } from "@/services/inventory-actions";
+
+// Duplikat dari DELIVERY_ACTIVE_STATUSES di inventory-actions.ts — file itu
+// "use server" jadi cuma bisa export async function, tidak bisa export const
+// array biasa (lihat juga _recomputeMrConvertStatus di bawah untuk alasan
+// yang sama). Dijaga tetap sinkron manual dengan daftar di inventory-actions.ts.
+const DELIVERY_ACTIVE_STATUSES = [
+  "open",
+  "approved",
+  "completed",
+  "done",
+  "closed",
+] as const;
 
 export type ModeratorApprovalStep = {
   userid: string;
@@ -199,7 +217,14 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
             .in("mr_item_id", itemIds)
         : Promise.resolve({ count: 0 } as any),
       supabase.from("pr_items").select("id", { count: "exact", head: true }).eq("mr_id", mrId),
-      supabase.from("deliveries").select("id", { count: "exact", head: true }).eq("mr_id", mrId),
+      // Cek via delivery_items.mr_item_id (bukan deliveries.mr_id, yang cuma
+      // nyimpan MR pertama) — satu delivery bisa berisi item dari beberapa MR.
+      itemIds.length > 0
+        ? supabase
+            .from("delivery_items")
+            .select("id", { count: "exact", head: true })
+            .in("mr_item_id", itemIds)
+        : Promise.resolve({ count: 0 } as any),
     ]);
     hasExistingDistribution = !!((ssCount || 0) > 0 || (prCount || 0) > 0 || (dlvCount || 0) > 0);
     if (hasExistingDistribution) {
@@ -451,6 +476,306 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
 
   revalidatePath("/mr");
   revalidatePath(`/mr/${mrId}`);
+  return { success: true };
+}
+
+export type ModeratorShareStockEditPayload = {
+  reason: string;
+  items: ModeratorAllocation[];
+};
+
+/**
+ * Override alokasi Share Stock (qty_pr / qty_sharestock_total /
+ * mr_sharestock_allocations) untuk MR yang SUDAH approved — mr_status &
+ * riwayat approval (siapa approver terakhir, kapan) tidak disentuh sama
+ * sekali. Ini aksi override terpisah, bukan bagian dari alur approval, untuk
+ * mengoreksi keputusan approver terakhir kalau ada salah alokasi / kondisi
+ * stok berubah setelah approval.
+ *
+ * Dibatasi: qty yang sudah aktif ter-delivery (bukan cancelled) atau sudah
+ * dikonversi ke PR tidak boleh dikurangi di bawah itu — supaya tidak ada
+ * delivery/PR yang jadi melebihi alokasi barunya.
+ */
+export async function moderatorEditShareStockAllocations(
+  mrId: number,
+  payload: ModeratorShareStockEditPayload,
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired." };
+
+  const roleNames = await fetchRoleNames(supabase, user.id);
+  if (!roleNames.includes("moderator")) {
+    return { error: "Hanya moderator yang dapat mengubah alokasi share stock." };
+  }
+
+  const reason = payload.reason?.trim();
+  if (!reason) {
+    return { error: "Alasan perubahan wajib diisi." };
+  }
+
+  const items = payload.items || [];
+  if (items.length === 0) {
+    return { error: "Tidak ada item yang diubah." };
+  }
+
+  const { data: mr, error: mrError } = await supabase
+    .from("mrs")
+    .select("id, mr_kode, mr_status, mr_due_date, cabang_id, mr_pic_id")
+    .eq("id", mrId)
+    .single();
+  if (mrError || !mr) return { error: "MR tidak ditemukan." };
+
+  if (!["approved", "done", "closed", "completed"].includes(mr.mr_status)) {
+    return {
+      error:
+        "MR ini belum approved. Gunakan alur approval biasa untuk menentukan alokasi share stock.",
+    };
+  }
+
+  if (await evaluateMrFreeze(mrId)) {
+    return {
+      error:
+        "MR ini sedang di-FREEZE. Unfreeze/reset dulu sebelum mengubah alokasi share stock.",
+    };
+  }
+
+  const itemIds = items.map((i) => i.mr_item_id);
+
+  const { data: freshItems, error: freshItemsError } = await supabase
+    .from("mr_items")
+    .select("id, part_number, qty_request, qty_pr, qty_sharestock_total")
+    .eq("mr_id", mrId)
+    .in("id", itemIds);
+  if (freshItemsError) return { error: freshItemsError.message };
+  const freshById = new Map((freshItems || []).map((i: any) => [i.id, i]));
+  for (const id of itemIds) {
+    if (!freshById.has(id)) {
+      return { error: `Item (id ${id}) tidak ditemukan di MR ini.` };
+    }
+  }
+
+  // State existing (sebelum diubah) — basis log before/after.
+  const { data: existingAllocRows } = await supabase
+    .from("mr_sharestock_allocations")
+    .select("mr_item_id, source_cabang_id, qty")
+    .in("mr_item_id", itemIds);
+  const existingByItem = new Map<number, Map<number, number>>();
+  for (const row of existingAllocRows || []) {
+    if (!existingByItem.has(row.mr_item_id)) existingByItem.set(row.mr_item_id, new Map());
+    existingByItem.get(row.mr_item_id)!.set(row.source_cabang_id, row.qty);
+  }
+
+  // Floor guard #1: qty yang sudah "aktif" ter-delivery (bukan cancelled) per
+  // (item, source cabang) — tidak boleh dikurangi di bawah ini.
+  const { data: activeDeliveryRows } = await supabase
+    .from("delivery_items")
+    .select("mr_item_id, qty_on_delivery, deliveries!inner(dari_cabang_id, status)")
+    .in("mr_item_id", itemIds)
+    .in("deliveries.status", [...DELIVERY_ACTIVE_STATUSES]);
+  const activeByItem = new Map<number, Map<number, number>>();
+  for (const row of activeDeliveryRows || []) {
+    const src = (row as any).deliveries?.dari_cabang_id;
+    if (!src) continue;
+    if (!activeByItem.has(row.mr_item_id)) activeByItem.set(row.mr_item_id, new Map());
+    const m = activeByItem.get(row.mr_item_id)!;
+    m.set(src, (m.get(src) || 0) + row.qty_on_delivery);
+  }
+
+  // Floor guard #2: qty yang sudah dikonversi ke PR (PR belum rejected) per
+  // item — qty_pr baru tidak boleh turun di bawah ini.
+  const { data: prItemRows } = await supabase
+    .from("pr_items")
+    .select("mr_item_id, qty, prs!inner(pr_status)")
+    .in("mr_item_id", itemIds);
+  const alreadyPrByItem = new Map<number, number>();
+  for (const row of prItemRows || []) {
+    const prStatus = Array.isArray((row as any).prs)
+      ? (row as any).prs[0]?.pr_status
+      : (row as any).prs?.pr_status;
+    if (prStatus === "rejected") continue;
+    alreadyPrByItem.set(
+      row.mr_item_id,
+      (alreadyPrByItem.get(row.mr_item_id) || 0) + row.qty,
+    );
+  }
+
+  // ---------- VALIDATE ALL FIRST (belum ada mutasi) ----------
+  for (const item of items) {
+    const freshItem = freshById.get(item.mr_item_id)!;
+    const seenCabang = new Set<number>();
+    let sumSS = 0;
+    for (const ss of item.sharestocks || []) {
+      if (ss.source_cabang_id === mr.cabang_id) {
+        return {
+          error: `Gudang sumber untuk item ${freshItem.part_number} tidak boleh sama dengan gudang tujuan MR.`,
+        };
+      }
+      if (seenCabang.has(ss.source_cabang_id)) {
+        return {
+          error: `Item ${freshItem.part_number} punya baris alokasi ganda untuk cabang sumber yang sama.`,
+        };
+      }
+      seenCabang.add(ss.source_cabang_id);
+      sumSS += Number(ss.qty || 0);
+    }
+
+    if (sumSS !== Number(item.qty_sharestock_total || 0)) {
+      return {
+        error: `Data alokasi item ${freshItem.part_number} tidak konsisten (total baris ${sumSS} != ${item.qty_sharestock_total}).`,
+      };
+    }
+    if (sumSS > freshItem.qty_request) {
+      return {
+        error: `Total share stock item ${freshItem.part_number} (${sumSS}) melebihi qty yang diminta MR (${freshItem.qty_request}).`,
+      };
+    }
+
+    const newQtyPr = freshItem.qty_request - sumSS;
+    const alreadyPr = alreadyPrByItem.get(item.mr_item_id) || 0;
+    if (newQtyPr < alreadyPr) {
+      return {
+        error: `Qty PR item ${freshItem.part_number} tidak bisa dikurangi di bawah ${alreadyPr} unit yang sudah dikonversi ke PR.`,
+      };
+    }
+
+    if (sumSS > 0) {
+      const deadline = item.deadline ? String(item.deadline).slice(0, 10) : null;
+      if (!deadline) {
+        return { error: `Deadline supply wajib diisi untuk item ${freshItem.part_number}.` };
+      }
+      if (mr.mr_due_date && deadline > String(mr.mr_due_date).slice(0, 10)) {
+        return {
+          error: `Deadline supply item ${freshItem.part_number} tidak boleh melewati due date MR (${mr.mr_due_date}).`,
+        };
+      }
+    }
+
+    const activeForItem = activeByItem.get(item.mr_item_id) || new Map();
+    const newBySrc = new Map(
+      (item.sharestocks || []).map((ss) => [ss.source_cabang_id, Number(ss.qty || 0)]),
+    );
+    for (const [srcId, activeQty] of activeForItem) {
+      if (activeQty <= 0) continue;
+      const newQty = newBySrc.get(srcId) || 0;
+      if (newQty < activeQty) {
+        return {
+          error: `Alokasi share stock item ${freshItem.part_number} dari salah satu cabang sumber tidak bisa dikurangi di bawah ${activeQty} unit yang sudah ter-delivery.`,
+        };
+      }
+    }
+  }
+
+  // ---------- SEMUA VALID -> APPLY ----------
+  const changeLogItems: any[] = [];
+  for (const item of items) {
+    const freshItem = freshById.get(item.mr_item_id)!;
+    const newQtyShareTotal = Number(item.qty_sharestock_total || 0);
+    const newQtyPr = freshItem.qty_request - newQtyShareTotal;
+    const deadline = item.deadline ? String(item.deadline).slice(0, 10) : null;
+
+    const { error: delErr } = await supabase
+      .from("mr_sharestock_allocations")
+      .delete()
+      .eq("mr_item_id", item.mr_item_id);
+    if (delErr) return { error: delErr.message };
+
+    const rows = (item.sharestocks || [])
+      .filter((ss) => Number(ss.qty || 0) > 0)
+      .map((ss) => ({
+        mr_item_id: item.mr_item_id,
+        source_cabang_id: ss.source_cabang_id,
+        qty: ss.qty,
+        deadline,
+      }));
+    if (rows.length > 0) {
+      const { error: insErr } = await supabase
+        .from("mr_sharestock_allocations")
+        .insert(rows);
+      if (insErr) return { error: insErr.message };
+    }
+
+    const { error: updErr } = await supabase
+      .from("mr_items")
+      .update({
+        qty_pr: newQtyPr,
+        qty_sharestock_total: newQtyShareTotal,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", item.mr_item_id);
+    if (updErr) return { error: updErr.message };
+
+    changeLogItems.push({
+      mr_item_id: item.mr_item_id,
+      part_number: freshItem.part_number,
+      before: {
+        qty_pr: freshItem.qty_pr,
+        qty_sharestock_total: freshItem.qty_sharestock_total,
+        sharestocks: Array.from(
+          (existingByItem.get(item.mr_item_id) || new Map()).entries(),
+        ).map(([source_cabang_id, qty]) => ({ source_cabang_id, qty })),
+      },
+      after: {
+        qty_pr: newQtyPr,
+        qty_sharestock_total: newQtyShareTotal,
+        sharestocks: rows.map((r) => ({
+          source_cabang_id: r.source_cabang_id,
+          qty: r.qty,
+        })),
+        deadline,
+      },
+    });
+  }
+
+  // Reset ss_status supaya konsisten sama qty_sharestock_total yang baru
+  // (mis. item yang tadinya "closed" karena sudah full-delivered di qty lama
+  // sekarang harus balik ke "approved" kalau qty-nya dinaikkan).
+  await syncShareStockStatuses(itemIds).catch(console.error);
+
+  const { data: myProfile } = await supabase
+    .from("profiles")
+    .select("nama")
+    .eq("id", user.id)
+    .single();
+
+  const summary =
+    `Override alokasi share stock: ` +
+    changeLogItems
+      .map(
+        (c) =>
+          `${c.part_number} (share ${c.before.qty_sharestock_total}→${c.after.qty_sharestock_total})`,
+      )
+      .join(", ") +
+    `. Alasan: ${reason}`;
+
+  await supabase.from("moderator_edit_logs").insert({
+    doc_type: "mr",
+    doc_id: mrId,
+    user_id: user.id,
+    user_nama: myProfile?.nama || user.email,
+    summary,
+    changes: { reason, items: changeLogItems },
+  });
+
+  if (mr.mr_pic_id) {
+    createNotification({
+      userId: mr.mr_pic_id,
+      type: "general",
+      title: `Alokasi Share Stock ${mr.mr_kode} diubah moderator`,
+      message: `Moderator ${myProfile?.nama || "?"} mengubah alokasi share stock MR ${mr.mr_kode}. Alasan: ${reason}`,
+      documentType: "mr",
+      documentId: mrId,
+      documentUrl: `/mr/${mrId}`,
+    }).catch(console.error);
+  }
+
+  revalidatePath("/mr");
+  revalidatePath(`/mr/${mrId}`);
+  revalidatePath("/share-stock");
+  revalidatePath("/deliveries");
+  revalidatePath("/pr");
   return { success: true };
 }
 

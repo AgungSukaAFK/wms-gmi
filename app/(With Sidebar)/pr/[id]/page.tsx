@@ -196,10 +196,16 @@ export default function PRDetailPage({
           );
         setSsAllocations(allocs || []);
 
+        // Filter lewat delivery_items.mr_item_id (bukan deliveries.mr_id,
+        // yang cuma nyimpan MR pertama sebagai referensi utama) — satu
+        // delivery bisa berisi item dari beberapa MR sekaligus.
         const { data: dItems } = await supabase
           .from("delivery_items")
           .select("*, deliveries!inner(dlv_kode, status)")
-          .in("deliveries.mr_id", mrIds);
+          .in(
+            "mr_item_id",
+            (mItems || []).map((item: any) => item.id),
+          );
         setDeliveryRecords(dItems || []);
       }
     } catch (err) {

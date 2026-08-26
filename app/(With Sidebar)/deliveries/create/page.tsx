@@ -64,6 +64,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 
 interface DeliveryItem {
   mr_item_id?: number;
+  mr_kode?: string;
   part_id: number;
   part_number: string;
   part_name: string;
@@ -111,8 +112,9 @@ export default function CreateDeliveryPage() {
     Record<number, number>
   >({});
 
-  // MR Selector
-  const [selectedMrId, setSelectedMrId] = useState<number | null>(null);
+  // MR Selector (multi — satu delivery bisa digabung dari beberapa MR
+  // selama tujuannya sama)
+  const [selectedMrIds, setSelectedMrIds] = useState<number[]>([]);
   const [mrSearch, setMrSearch] = useState("");
   const [mrPopoverOpen, setMrPopoverOpen] = useState(false);
   const [debouncedMrSearch] = useDebounce(mrSearch, 300);
@@ -227,6 +229,15 @@ export default function CreateDeliveryPage() {
       return;
     }
 
+    // Satu delivery cuma punya 1 cabang tujuan — item share stock dari MR
+    // yang tujuannya beda tidak boleh digabung ke delivery yang sama.
+    if (keCabang && mrItem.mrs.cabang_id !== keCabang) {
+      toast.error(
+        `Item ini untuk MR ${mrItem.mrs.mr_kode} yang tujuannya ke ${mrItem.mrs.cabang?.nama_cabang}, beda dengan cabang tujuan delivery ini.`,
+      );
+      return;
+    }
+
     const remaining = remainingByItemId[mrItem.id] ?? myAllocation?.qty ?? 0;
     if (remaining <= 0) {
       toast.error(
@@ -257,6 +268,7 @@ export default function CreateDeliveryPage() {
       ...deliveryItems,
       {
         mr_item_id: mrItem.id,
+        mr_kode: mrItem.mrs.mr_kode,
         part_id: mrItem.part_id,
         part_number: mrItem.barang.part_number,
         part_name: mrItem.barang.part_name,
@@ -291,16 +303,41 @@ export default function CreateDeliveryPage() {
     return Array.from(map.values());
   }, [shareStocks, dariCabang]);
 
-  const selectedMr = uniqueMrs.find((m) => m.id === selectedMrId) ?? null;
+  const selectedMrs = useMemo(
+    () => uniqueMrs.filter((m) => selectedMrIds.includes(m.id)),
+    [uniqueMrs, selectedMrIds],
+  );
 
-  const handleSelectMR = (mr: any) => {
-    setSelectedMrId(mr.id);
-    // Auto-fill destination cabang
-    setKeCabang(mr.cabang_id);
-    setMrPopoverOpen(false);
-    setMrSearch("");
+  const handleToggleMR = (mr: any) => {
+    const isSelected = selectedMrIds.includes(mr.id);
 
-    // Pre-populate items from this MR for current source cabang
+    if (isSelected) {
+      // Deselect: lepas MR ini + buang item2 delivery yang berasal darinya
+      setSelectedMrIds((prev) => prev.filter((id) => id !== mr.id));
+      const mrItemIdSet = new Set((mr.items as any[]).map((i) => i.id));
+      setDeliveryItems((prev) =>
+        prev.filter((i) => !(i.mr_item_id && mrItemIdSet.has(i.mr_item_id))),
+      );
+      return;
+    }
+
+    // Satu delivery cuma punya 1 cabang tujuan — MR yang digabung harus
+    // sama-sama menuju cabang yang sama dengan MR yang sudah dipilih.
+    if (selectedMrs.length > 0 && mr.cabang_id !== selectedMrs[0]?.cabang_id) {
+      toast.error(
+        `MR ${mr.mr_kode} tujuannya ke ${mr.cabang?.nama_cabang}, beda dengan MR yang sudah dipilih (tujuan ${selectedMrs[0]?.cabang?.nama_cabang}). Satu delivery cuma bisa ke 1 cabang tujuan.`,
+      );
+      return;
+    }
+
+    setSelectedMrIds((prev) => [...prev, mr.id]);
+    if (selectedMrs.length === 0) {
+      // Auto-fill destination cabang dari MR pertama yang dipilih
+      setKeCabang(mr.cabang_id);
+    }
+
+    // Pre-populate items dari MR ini (union — tidak menghapus item dari MR
+    // lain yang sudah dipilih sebelumnya)
     const newItems: DeliveryItem[] = [];
     let skippedCount = 0;
     for (const mrItem of mr.items as any[]) {
@@ -318,6 +355,7 @@ export default function CreateDeliveryPage() {
 
       newItems.push({
         mr_item_id: mrItem.id,
+        mr_kode: mr.mr_kode,
         part_id: mrItem.part_id,
         part_number: mrItem.barang.part_number,
         part_name: mrItem.barang.part_name,
@@ -326,12 +364,7 @@ export default function CreateDeliveryPage() {
       });
     }
 
-    setDeliveryItems((prev) => [
-      ...prev.filter(
-        (i) => !newItems.find((n) => n.mr_item_id === i.mr_item_id),
-      ),
-      ...newItems,
-    ]);
+    setDeliveryItems((prev) => [...prev, ...newItems]);
 
     if (newItems.length > 0) {
       toast.success(
@@ -403,7 +436,6 @@ export default function CreateDeliveryPage() {
     try {
       const result = await createDelivery({
         dlv_kode: dlvKode,
-        mr_id: selectedMr?.id ?? undefined,
         dari_cabang_id: dariCabang,
         ke_cabang_id: keCabang,
         shipment_type: shipmentType,
@@ -504,7 +536,7 @@ export default function CreateDeliveryPage() {
           <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5 px-0.5">
             <FileText className="h-3 w-3" /> Berdasarkan Material Request
             <span className="text-muted-foreground/50 font-medium normal-case">
-              (opsional — auto-isi tujuan & item)
+              (opsional, bisa lebih dari 1 — auto-isi tujuan & item)
             </span>
           </Label>
           <Popover open={mrPopoverOpen} onOpenChange={setMrPopoverOpen}>
@@ -513,16 +545,16 @@ export default function CreateDeliveryPage() {
                 variant="outline"
                 className="h-10 w-full justify-start font-bold text-sm border-input bg-muted/40 rounded-lg gap-2 text-left"
               >
-                {selectedMr ? (
-                  <span className="flex items-center gap-2 flex-1 min-w-0">
+                {selectedMrs.length > 0 ? (
+                  <span className="flex items-center gap-2 flex-1 min-w-0 overflow-hidden">
                     <Badge className="text-[9px] font-black uppercase shrink-0 bg-primary/10 text-primary border-0">
-                      {selectedMr.mr_kode}
+                      {selectedMrs.length} MR Dipilih
                     </Badge>
                     <span className="text-xs text-muted-foreground font-medium truncate">
-                      → {selectedMr.cabang?.nama_cabang}
+                      {selectedMrs.map((m) => m.mr_kode).join(", ")}
                     </span>
                     <span className="text-[9px] text-muted-foreground/60 font-medium ml-auto shrink-0">
-                      {selectedMr.items?.length} item
+                      → {selectedMrs[0]?.cabang?.nama_cabang}
                     </span>
                   </span>
                 ) : (
@@ -559,41 +591,62 @@ export default function CreateDeliveryPage() {
                         mr.cabang?.nama_cabang?.toLowerCase().includes(kw)
                       );
                     })
-                    .map((mr) => (
-                      <button
-                        key={mr.id}
-                        onClick={() => handleSelectMR(mr)}
-                        className="w-full text-left p-3 rounded-lg hover:bg-muted transition-all flex items-center justify-between group mb-1"
-                      >
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-black text-xs uppercase tracking-tight text-foreground">
-                              {mr.mr_kode}
-                            </span>
-                            <Badge
-                              variant="secondary"
-                              className="text-[8px] font-bold uppercase h-4 px-1.5"
-                            >
-                              {mr.items?.length} item
-                            </Badge>
+                    .map((mr) => {
+                      const isChecked = selectedMrIds.includes(mr.id);
+                      return (
+                        <button
+                          key={mr.id}
+                          onClick={() => handleToggleMR(mr)}
+                          className={cn(
+                            "w-full text-left p-3 rounded-lg transition-all flex items-center justify-between group mb-1",
+                            isChecked
+                              ? "bg-foreground text-background"
+                              : "hover:bg-muted",
+                          )}
+                        >
+                          <div className="flex flex-col gap-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-black text-xs uppercase tracking-tight">
+                                {mr.mr_kode}
+                              </span>
+                              <Badge
+                                variant="secondary"
+                                className="text-[8px] font-bold uppercase h-4 px-1.5"
+                              >
+                                {mr.items?.length} item
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-1.5 text-[10px] font-medium opacity-70">
+                              <Building2 className="h-3 w-3" />
+                              <span>
+                                {cabangs.find((c) => c.id === dariCabang)
+                                  ?.nama_cabang ?? "Cabang Anda"}
+                              </span>
+                              <ArrowRight className="h-2.5 w-2.5" />
+                              <span className="font-bold">
+                                {mr.cabang?.nama_cabang}
+                              </span>
+                            </div>
                           </div>
-                          <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground font-medium">
-                            <Building2 className="h-3 w-3" />
-                            <span>
-                              {cabangs.find((c) => c.id === dariCabang)
-                                ?.nama_cabang ?? "Cabang Anda"}
-                            </span>
-                            <ArrowRight className="h-2.5 w-2.5" />
-                            <span className="font-bold text-primary">
-                              {mr.cabang?.nama_cabang}
-                            </span>
-                          </div>
-                        </div>
-                        <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-all" />
-                      </button>
-                    ))}
+                          {isChecked ? (
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                          ) : (
+                            <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-all" />
+                          )}
+                        </button>
+                      );
+                    })}
                 </div>
               )}
+              <div className="p-2 border-t border-border bg-muted/40">
+                <Button
+                  size="sm"
+                  className="w-full h-8 text-xs font-bold"
+                  onClick={() => setMrPopoverOpen(false)}
+                >
+                  Selesai ({selectedMrIds.length} dipilih)
+                </Button>
+              </div>
             </PopoverContent>
           </Popover>
         </div>
@@ -625,7 +678,7 @@ export default function CreateDeliveryPage() {
             <div className="space-y-1.5">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5 px-0.5">
                 <Building2 className="h-3 w-3" /> Cabang Tujuan
-                {selectedMr && (
+                {selectedMrs.length > 0 && (
                   <Badge className="text-[8px] font-bold bg-primary/10 text-primary border-0 ml-1">
                     dari MR
                   </Badge>
@@ -1024,23 +1077,25 @@ export default function CreateDeliveryPage() {
               <h3 className="text-xs font-bold text-foreground uppercase">
                 Pilih Item Share Stock
               </h3>
-              {selectedMr && (
-                <Badge className="text-[9px] font-black bg-primary/10 text-primary border-0">
-                  {selectedMr.mr_kode}
+              {selectedMrs.map((mr) => (
+                <Badge
+                  key={mr.id}
+                  className="text-[9px] font-black bg-primary/10 text-primary border-0"
+                >
+                  {mr.mr_kode}
                 </Badge>
-              )}
+              ))}
             </div>
-            {selectedMr && (
+            {selectedMrs.length > 0 && (
               <span className="text-[9px] font-bold uppercase text-muted-foreground/60 flex items-center gap-1.5">
                 <Info className="h-3 w-3" /> Qty bisa dikurangi (kirim
                 sebagian) — tidak boleh melebihi sisa alokasi
               </span>
             )}
-            {!selectedMr && (
-              <Popover
-                open={shareStockPopoverOpen}
-                onOpenChange={setShareStockPopoverOpen}
-              >
+            <Popover
+              open={shareStockPopoverOpen}
+              onOpenChange={setShareStockPopoverOpen}
+            >
               <PopoverTrigger asChild>
                 <Button
                   variant="outline"
@@ -1067,6 +1122,8 @@ export default function CreateDeliveryPage() {
                         (ss.mr_sharestock_allocations as any[])?.some(
                           (a) => a.source_cabang_id === dariCabang,
                         );
+                      const matchesDestination =
+                        !keCabang || ss.mrs.cabang_id === keCabang;
                       const keyword = debouncedShareStockSearch.toLowerCase();
                       const matchesSearch =
                         ss.barang.part_number.toLowerCase().includes(keyword) ||
@@ -1076,7 +1133,12 @@ export default function CreateDeliveryPage() {
                       const hasRemaining =
                         remaining === undefined || remaining > 0;
 
-                      return matchesSource && matchesSearch && hasRemaining;
+                      return (
+                        matchesSource &&
+                        matchesDestination &&
+                        matchesSearch &&
+                        hasRemaining
+                      );
                     })
                     .map((ss) => (
                       <button
@@ -1089,7 +1151,7 @@ export default function CreateDeliveryPage() {
                             {ss.barang.part_number} - {ss.barang.part_name}
                           </span>
                           <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
-                            Sisa:{" "}
+                            {ss.mrs.mr_kode} | Sisa:{" "}
                             {remainingByItemId[ss.id] ??
                               ((ss.mr_sharestock_allocations as any[])?.find(
                                 (a) => a.source_cabang_id === dariCabang,
@@ -1104,8 +1166,7 @@ export default function CreateDeliveryPage() {
                     ))}
                 </div>
               </PopoverContent>
-              </Popover>
-            )}
+            </Popover>
           </div>
 
           {deliveryItems.length === 0 ? (
@@ -1121,6 +1182,9 @@ export default function CreateDeliveryPage() {
                 <TableHeader className="bg-muted/50">
                   <TableRow className="hover:bg-transparent h-10">
                     <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4">
+                      MR Asal
+                    </TableHead>
+                    <TableHead className="text-[9px] font-bold uppercase text-muted-foreground">
                       Part Info
                     </TableHead>
                     <TableHead className="text-[9px] font-bold uppercase text-muted-foreground">
@@ -1141,7 +1205,21 @@ export default function CreateDeliveryPage() {
                       key={idx}
                       className="hover:bg-muted/30 border-b border-border/50 h-14"
                     >
-                      <TableCell className="pl-4 font-mono text-[10px] font-bold text-muted-foreground uppercase">
+                      <TableCell className="pl-4">
+                        {item.mr_kode ? (
+                          <Badge
+                            variant="outline"
+                            className="text-[9px] font-bold uppercase"
+                          >
+                            {item.mr_kode}
+                          </Badge>
+                        ) : (
+                          <span className="text-muted-foreground/30 text-xs font-bold">
+                            —
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-mono text-[10px] font-bold text-muted-foreground uppercase">
                         {item.part_number}
                       </TableCell>
                       <TableCell>

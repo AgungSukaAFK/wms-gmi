@@ -75,6 +75,7 @@ import {
   ModeratorApprovalStep,
 } from "@/services/moderator-edit-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { EditShareStockAllocationDialog } from "@/components/mr/edit-sharestock-allocation-dialog";
 import { MrFreezePanel } from "@/components/mr/mr-freeze-panel";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
@@ -169,6 +170,9 @@ export default function MRDetailPage({
   const [modApprovals, setModApprovals] = useState<ModeratorApprovalStep[]>([]);
   const [modRejectionReason, setModRejectionReason] = useState("");
   const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
+  // Edit Alokasi Share Stock — override terpisah dari Moderator Edit di atas
+  // (tidak menyentuh mr_status/approval history), khusus untuk MR yang sudah approved.
+  const [editShareStockOpen, setEditShareStockOpen] = useState(false);
 
   useEffect(() => {
     if (mrId) {
@@ -259,11 +263,18 @@ export default function MRDetailPage({
       });
     }
 
-    // Fetch related deliveries for Share Stock progress
-    const { data: deliveriesData } = await supabase
-      .from("delivery_items")
-      .select("*, deliveries!inner(dlv_kode, status, mr_id)")
-      .eq("deliveries.mr_id", mrId);
+    // Fetch related deliveries for Share Stock progress — filter lewat
+    // delivery_items.mr_item_id (bukan deliveries.mr_id, yang cuma nyimpan
+    // MR pertama sebagai referensi utama), karena satu delivery bisa berisi
+    // item dari beberapa MR sekaligus.
+    const mrItemIdsForDelivery = (itemsData || []).map((i: any) => i.id);
+    const { data: deliveriesData } =
+      mrItemIdsForDelivery.length > 0
+        ? await supabase
+            .from("delivery_items")
+            .select("*, deliveries!inner(dlv_kode, status, mr_id)")
+            .in("mr_item_id", mrItemIdsForDelivery)
+        : { data: [] };
     setDeliveryRecords(deliveriesData || []);
 
     // Deadline supply per item (dari alokasi share stock) untuk ditampilkan di list.
@@ -976,6 +987,16 @@ export default function MRDetailPage({
                 onClick={enterModEditMode}
               >
                 <ShieldAlert className="h-4 w-4" /> Moderator Edit
+              </Button>
+            )}
+            {isModerator && !editMode && !modEditMode && modPreviouslyApprovedLike && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-2 font-semibold border-warning/40 text-warning hover:bg-warning/10"
+                onClick={() => setEditShareStockOpen(true)}
+              >
+                <ShieldAlert className="h-4 w-4" /> Edit Item Share Stock
               </Button>
             )}
             {modEditMode && (
@@ -2006,6 +2027,16 @@ export default function MRDetailPage({
         open={isSignatureDialogOpen}
         onOpenChange={setIsSignatureDialogOpen}
         onConfirm={handleApproveConfirm}
+      />
+
+      <EditShareStockAllocationDialog
+        mrId={Number(mrId)}
+        open={editShareStockOpen}
+        onOpenChange={setEditShareStockOpen}
+        onUpdated={() => {
+          fetchDetails();
+          setModLogRefreshKey((k) => k + 1);
+        }}
       />
     </>
   );

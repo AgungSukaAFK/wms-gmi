@@ -136,7 +136,7 @@ export function DeliveryDetailSheet({
       const { data: itemsData } = await supabase
         .from("delivery_items")
         .select(
-          "*, barang(part_number, part_name, part_satuan), mr_items(qty_sharestock_total)",
+          "*, barang(part_number, part_name, part_satuan), mr_items(qty_sharestock_total, mr_id, mrs(mr_kode))",
         )
         .eq("dlv_id", deliveryId)
         .order("created_at");
@@ -332,6 +332,16 @@ export function DeliveryDetailSheet({
   const canAdvanceTracking =
     currentTrackingIndex >= 0 && currentTrackingIndex < deliveredIndex;
 
+  // Kode MR unik yang tergabung di delivery ini — satu delivery bisa berisi
+  // item dari lebih dari 1 MR.
+  const linkedMrCodes = Array.from(
+    new Set(
+      items
+        .map((item: any) => item.mr_items?.mrs?.mr_kode)
+        .filter((code: unknown): code is string => Boolean(code)),
+    ),
+  );
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 overflow-hidden text-slate-900 shadow-2xl">
@@ -374,6 +384,20 @@ export function DeliveryDetailSheet({
                     <div className="flex items-center gap-2 text-[10px] font-bold text-slate-600 uppercase tracking-tight mt-1">
                       <FileText className="h-3.5 w-3.5 text-slate-400" /> Resi:{" "}
                       {delivery.no_resi}
+                    </div>
+                  )}
+                  {linkedMrCodes.length > 0 && (
+                    <div className="flex items-center gap-1.5 flex-wrap mt-1">
+                      <FileText className="h-3.5 w-3.5 text-slate-400 shrink-0" />
+                      {linkedMrCodes.map((code) => (
+                        <Badge
+                          key={code}
+                          variant="outline"
+                          className="text-[9px] font-bold uppercase border-slate-200 text-slate-600"
+                        >
+                          {code}
+                        </Badge>
+                      ))}
                     </div>
                   )}
                 </div>
