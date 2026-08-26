@@ -89,6 +89,7 @@ export function EditDeliveryDialog({
     Record<number, number>
   >({});
 
+  const [dlvKode, setDlvKode] = useState("");
   const [ekspedisi, setEkspedisi] = useState("");
   const [shipmentType, setShipmentType] =
     useState<ShipmentType>("ekspedisi_laut");
@@ -128,6 +129,7 @@ export function EditDeliveryDialog({
         .single();
       setDelivery(dlvData);
       if (dlvData) {
+        setDlvKode(dlvData.dlv_kode || "");
         setEkspedisi(dlvData.ekspedisi || "");
         setShipmentType(
           (dlvData.shipment_type as ShipmentType) || "ekspedisi_laut",
@@ -273,6 +275,10 @@ export function EditDeliveryDialog({
       toast.error("Alasan perubahan wajib diisi");
       return;
     }
+    if (!dlvKode.trim()) {
+      toast.error("Nomor Delivery tidak boleh kosong");
+      return;
+    }
 
     const itemsChanged =
       itemsTouched && itemsSignature(items) !== originalItemsKey;
@@ -285,6 +291,7 @@ export function EditDeliveryDialog({
     }
 
     const headerChanged =
+      dlvKode.trim() !== (delivery.dlv_kode || "") ||
       ekspedisi !== (delivery.ekspedisi || "") ||
       shipmentType !== (delivery.shipment_type || "ekspedisi_laut") ||
       senderName !== (delivery.sender_name || "") ||
@@ -307,6 +314,7 @@ export function EditDeliveryDialog({
         reason: reason.trim(),
         header: headerChanged
           ? {
+              dlv_kode: dlvKode.trim(),
               ekspedisi,
               shipment_type: shipmentType,
               sender_name:
@@ -388,6 +396,21 @@ export function EditDeliveryDialog({
                 <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                   Info Logistik
                 </h4>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] font-bold uppercase">
+                    Nomor Delivery
+                  </Label>
+                  <Input
+                    value={dlvKode}
+                    onChange={(e) => setDlvKode(e.target.value)}
+                    placeholder="DLV/XXXX/2026..."
+                    className="h-9 font-bold text-xs uppercase text-primary"
+                  />
+                  <p className="text-[9px] font-medium text-muted-foreground/70">
+                    Referensi lama (mis. di stock movement/riwayat sebelumnya)
+                    tetap menampilkan nomor lama — cuma dokumen ini yang berganti nomor.
+                  </p>
+                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold uppercase">

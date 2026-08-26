@@ -1153,6 +1153,7 @@ export async function cancelDelivery(deliveryId: number, reason: string) {
 export type ModeratorEditDeliveryPayload = {
   reason: string;
   header?: {
+    dlv_kode?: string;
     ekspedisi?: string;
     shipment_type?: string;
     sender_name?: string | null;
@@ -1237,6 +1238,28 @@ export async function moderatorEditDelivery(
     return {
       error: "Delivery yang sudah selesai atau dibatalkan tidak bisa diedit dari sini.",
     };
+  }
+
+  // Validasi nomor delivery baru (kalau diubah) di awal, sebelum ada mutasi
+  // apapun — dicek terhadap SEMUA delivery lain (persis pola createDelivery),
+  // kecuali dirinya sendiri.
+  let newDlvKode: string | undefined;
+  if (payload.header?.dlv_kode !== undefined) {
+    newDlvKode = payload.header.dlv_kode.trim();
+    if (!newDlvKode) {
+      return { error: "Nomor Delivery tidak boleh kosong." };
+    }
+    if (newDlvKode !== delivery.dlv_kode) {
+      const { data: dupDelivery } = await supabase
+        .from("deliveries")
+        .select("id")
+        .eq("dlv_kode", newDlvKode)
+        .neq("id", deliveryId)
+        .maybeSingle();
+      if (dupDelivery) {
+        return { error: "Nomor Delivery sudah dipakai delivery lain. Gunakan nomor lain." };
+      }
+    }
   }
 
   // Guard freeze: MR sumber SEBELUM edit (item lama) — kalau salah satu MR
@@ -1339,6 +1362,7 @@ export async function moderatorEditDelivery(
     const headerPatch: Record<string, string | number | null> = {
       updated_at: new Date().toISOString(),
     };
+    if (newDlvKode !== undefined) headerPatch.dlv_kode = newDlvKode;
     if (h.ekspedisi !== undefined) headerPatch.ekspedisi = h.ekspedisi;
     if (h.shipment_type !== undefined) headerPatch.shipment_type = h.shipment_type;
     if (h.sender_name !== undefined) headerPatch.sender_name = h.sender_name || null;
@@ -1355,7 +1379,15 @@ export async function moderatorEditDelivery(
       .from("deliveries")
       .update(headerPatch)
       .eq("id", deliveryId);
-    if (headerError) return { error: headerError.message };
+    if (headerError) {
+      // Jaring pengaman terhadap race condition (dua rename bentrok di waktu
+      // yang sama) — constraint UNIQUE di DB (deliveries.dlv_kode) yang
+      // akhirnya menolak, bukan pre-check di atas.
+      if (headerError.message.toLowerCase().includes("dlv_kode")) {
+        return { error: "Nomor Delivery sudah dipakai delivery lain. Gunakan nomor lain." };
+      }
+      return { error: headerError.message };
+    }
   }
 
   // Audit log.
@@ -1366,18 +1398,31 @@ export async function moderatorEditDelivery(
     .single();
 
   const summaryParts: string[] = [];
+  if (newDlvKode !== undefined && newDlvKode !== delivery.dlv_kode) {
+    summaryParts.push(`nomor: ${delivery.dlv_kode} → ${newDlvKode}`);
+  }
   if (payload.items)
     summaryParts.push(`item diubah (${itemsBefore.length} → ${itemsAfterCount} baris)`);
-  if (payload.header) summaryParts.push("info logistik diubah");
+  if (payload.header) {
+    const otherHeaderChanged = Object.keys(payload.header).some(
+      (k) => k !== "dlv_kode",
+    );
+    if (otherHeaderChanged) summaryParts.push("info logistik diubah");
+  }
 
   await supabase.from("moderator_edit_logs").insert({
     doc_type: "delivery",
+    // dlv_kode boleh berubah di tengah proses ini — pakai kode LAMA sebagai
+    // penanda dokumen di summary supaya konsisten dengan riwayat sebelumnya,
+    // tapi nomor barunya tetap tercatat jelas di summaryParts & changes.header.
     doc_id: deliveryId,
     user_id: user.id,
     user_nama: myProfile?.nama || user.email,
     summary: `Edit Delivery ${delivery.dlv_kode}: ${summaryParts.join(", ")}. Alasan: ${reason}`,
     changes: {
       reason,
+      dlv_kode_before: delivery.dlv_kode,
+      dlv_kode_after: newDlvKode ?? undefined,
       header: payload.header ?? null,
       items_before: payload.items ? itemsBefore : undefined,
       items_after: payload.items ?? undefined,
