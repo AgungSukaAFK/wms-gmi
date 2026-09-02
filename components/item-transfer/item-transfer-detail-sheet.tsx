@@ -30,7 +30,9 @@ import {
   Clock,
   PackageCheck,
   Printer,
+  ExternalLink,
 } from "lucide-react";
+import { useRouter } from "next/navigation";
 import {
   Select,
   SelectContent,
@@ -91,6 +93,7 @@ export function ItemTransferDetailSheet({
   onUpdate,
 }: Props) {
   const supabase = createClient();
+  const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [it, setIt] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
@@ -538,15 +541,26 @@ export function ItemTransferDetailSheet({
                     <PackageCheck className="h-4 w-4" /> Konfirmasi Barang Diterima
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  className="w-full gap-2"
-                  onClick={() =>
-                    itId && window.open(`/item-transfer/${itId}/print`, "_blank")
-                  }
-                >
-                  <Printer className="h-4 w-4" /> Cetak
-                </Button>
+                <div className="flex gap-2">
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    onClick={() =>
+                      itId && window.open(`/item-transfer/${itId}/print`, "_blank")
+                    }
+                  >
+                    <Printer className="h-4 w-4" /> Cetak
+                  </Button>
+                  <Button
+                    className="flex-1 gap-2"
+                    onClick={() => {
+                      if (itId) router.push(`/item-transfer/${itId}`);
+                      onOpenChange(false);
+                    }}
+                  >
+                    <ExternalLink className="h-4 w-4" /> Buka Detail
+                  </Button>
+                </div>
               </div>
           </>
         )}
