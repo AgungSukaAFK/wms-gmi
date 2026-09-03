@@ -26,6 +26,7 @@ import {
   type Notification,
   type PendingApproval,
 } from "@/services/notification-actions";
+import { formatDate } from "@/lib/utils";
 
 // ============================================================
 // Helpers
@@ -63,11 +64,7 @@ function formatRelativeTime(dateStr: string) {
   if (diffHour < 24) return `${diffHour} jam lalu`;
   if (diffDay === 1) return "Kemarin";
   if (diffDay < 7) return `${diffDay} hari lalu`;
-  return date.toLocaleDateString("id-ID", {
-    day: "numeric",
-    month: "short",
-    year: diffDay > 365 ? "numeric" : undefined,
-  });
+  return formatDate(date);
 }
 
 const levelLabel: Record<string, string> = {

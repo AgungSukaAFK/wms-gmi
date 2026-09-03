@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, use } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate, formatDateTime } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -934,11 +935,7 @@ export default function MRDetailPage({
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
                 Dibuat pada{" "}
-                {new Date(mr?.created_at).toLocaleDateString("id-ID", {
-                  day: "numeric",
-                  month: "long",
-                  year: "numeric",
-                })}
+                {formatDate(mr?.created_at)}
               </p>
             </div>
           </div>
@@ -1127,9 +1124,7 @@ export default function MRDetailPage({
                     />
                   ) : (
                     <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
-                      {new Date(
-                        mr?.mr_tanggal || mr?.created_at,
-                      ).toLocaleDateString()}
+                      {formatDate(mr?.mr_tanggal || mr?.created_at)}
                     </div>
                   )}
                 </div>
@@ -1157,11 +1152,7 @@ export default function MRDetailPage({
                           : "border-border bg-muted/40 text-foreground"
                       }`}
                     >
-                      {new Date(mr.mr_due_date).toLocaleDateString("id-ID", {
-                        day: "numeric",
-                        month: "long",
-                        year: "numeric",
-                      })}
+                      {formatDate(mr.mr_due_date)}
                       {mr.mr_status === "open" &&
                         mr.mr_due_date < businessToday() && (
                           <span className="ml-2 text-[10px] font-black uppercase tracking-wide">
@@ -1931,15 +1922,7 @@ export default function MRDetailPage({
                         <div className="flex items-center gap-1.5 mt-1.5 text-muted-foreground">
                           <Clock className="h-2.5 w-2.5 shrink-0" />
                           <span className="text-[9px] font-black uppercase tracking-tighter">
-                            {new Date(approval.processed_at).toLocaleString(
-                              "id-ID",
-                              {
-                                hour: "2-digit",
-                                minute: "2-digit",
-                                day: "numeric",
-                                month: "short",
-                              },
-                            )}
+                            {formatDateTime(approval.processed_at)}
                           </span>
                         </div>
                       ) : (

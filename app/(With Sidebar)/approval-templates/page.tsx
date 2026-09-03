@@ -4,6 +4,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -359,7 +360,7 @@ export default function ApprovalTemplatesPage() {
                       )}
                     </TableCell>
                     <TableCell className="text-muted-foreground text-xs">
-                      {new Date(template.updated_at).toLocaleDateString()}
+                      {formatDate(template.updated_at)}
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

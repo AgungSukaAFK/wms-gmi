@@ -29,6 +29,7 @@ import {
 import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { createClient } from "@/lib/supabase/client";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { formatDate } from "@/lib/utils";
 
 export default function ReturnSpbPage() {
   const supabase = createClient();
@@ -286,13 +287,13 @@ export default function ReturnSpbPage() {
                     </TableCell>
                     <TableCell>{row.spb?.spb_no || "-"}</TableCell>
                     <TableCell>
-                      {new Date(row.rtn_tanggal).toLocaleDateString("id-ID")}
+                      {formatDate(row.rtn_tanggal)}
                     </TableCell>
                     <TableCell>{row.rtn_status}</TableCell>
                     <TableCell>{row.approval_status || "open"}</TableCell>
                     <TableCell>{row.rtn_note || "-"}</TableCell>
                     <TableCell>
-                      {new Date(row.created_at).toLocaleDateString("id-ID")}
+                      {formatDate(row.created_at)}
                     </TableCell>
                     <TableCell>
                       <div className="flex gap-1">

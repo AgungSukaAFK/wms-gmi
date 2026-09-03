@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -402,12 +403,8 @@ export default function MaterialRequestPage() {
           PRIORITAS: mr?.mr_priority || "-",
           PIC: mr?.mr_pic || "-",
           LOKASI: mr?.cabang?.nama_cabang || "-",
-          "TANGGAL REQUEST": mr?.mr_tanggal
-            ? new Date(mr.mr_tanggal).toLocaleDateString("id-ID")
-            : "-",
-          "DUE DATE": mr?.mr_due_date
-            ? new Date(mr.mr_due_date).toLocaleDateString("id-ID")
-            : "-",
+          "TANGGAL REQUEST": mr?.mr_tanggal ? formatDate(mr.mr_tanggal) : "-",
+          "DUE DATE": mr?.mr_due_date ? formatDate(mr.mr_due_date) : "-",
           STATUS: mr?.mr_status || "-",
           FROZEN: mr?.is_frozen ? "YA" : "-",
           "PART NUMBER": item.part_number || "-",
@@ -901,24 +898,14 @@ export default function MaterialRequestPage() {
                         <div className="flex flex-col items-center gap-0.5">
                           <div className="flex items-center gap-1 text-xs font-bold text-foreground">
                             <CalendarIcon className="h-3 w-3 text-muted-foreground" />
-                            {new Date(mr.mr_tanggal).toLocaleDateString(
-                              "id-ID",
-                              {
-                                day: "numeric",
-                                month: "short",
-                                year: "numeric",
-                              },
-                            )}
+                            {formatDate(mr.mr_tanggal)}
                           </div>
                           <div className="flex items-center gap-1 opacity-60">
                             <span className="text-[8px] text-destructive font-bold uppercase">
                               DUE:
                             </span>
                             <span className="text-[8px] text-muted-foreground font-bold">
-                              {new Date(mr.mr_due_date).toLocaleDateString(
-                                "id-ID",
-                                { day: "numeric", month: "short" },
-                              )}
+                              {formatDate(mr.mr_due_date)}
                             </span>
                           </div>
                         </div>

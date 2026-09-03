@@ -27,6 +27,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toast } from "sonner";
 import { getSpbReport } from "@/services/spb-actions";
 import * as XLSX from "xlsx";
+import { formatDate } from "@/lib/utils";
 
 type SpbReportRow = {
   spb_id?: number | string | null;
@@ -57,10 +58,6 @@ type SpbReportRow = {
   invoice_date?: string | null;
   invoice_email_date?: string | null;
 };
-
-function formatReportDate(value?: string | null) {
-  return value ? new Date(value).toLocaleDateString("id-ID") : "-";
-}
 
 export default function SpbReportPage() {
   const [loading, setLoading] = useState(true);
@@ -157,9 +154,7 @@ export default function SpbReportPage() {
       }
 
       const data = allRows.map((row) => ({
-        "TGL SPB": row.spb_tanggal
-          ? new Date(row.spb_tanggal).toLocaleDateString("id-ID")
-          : "-",
+        "TGL SPB": formatDate(row.spb_tanggal),
         "NO SPB": row.spb_no || "-",
         "PART NUMBER": row.dtl_spb_part_number || "-",
         "PART NAME": row.dtl_spb_part_name || "-",
@@ -174,26 +169,16 @@ export default function SpbReportPage() {
         "PIC GMI": row.spb_pic_gmi || "-",
         "PIC PPA": row.spb_pic_ppa || "-",
         "NO WO": row.spb_no_wo || "-",
-        "DATE INPUT SPB": row.spb_created_at
-          ? new Date(row.spb_created_at).toLocaleDateString("id-ID")
-          : "-",
+        "DATE INPUT SPB": formatDate(row.spb_created_at),
         STATUS: row.spb_status || "-",
         "NO PO": row.po_no || "-",
         "NO SO": row.so_no || "-",
-        "DATE INPUT PO": row.po_created_at
-          ? new Date(row.po_created_at).toLocaleDateString("id-ID")
-          : "-",
+        "DATE INPUT PO": formatDate(row.po_created_at),
         "NO DO": row.do_no || "-",
-        "DATE INPUT DO": row.do_created_at
-          ? new Date(row.do_created_at).toLocaleDateString("id-ID")
-          : "-",
+        "DATE INPUT DO": formatDate(row.do_created_at),
         "NO INVOICE": row.invoice_no || "-",
-        "TGL INVOICE": row.invoice_date
-          ? new Date(row.invoice_date).toLocaleDateString("id-ID")
-          : "-",
-        "TGL EMAIL": row.invoice_email_date
-          ? new Date(row.invoice_email_date).toLocaleDateString("id-ID")
-          : "-",
+        "TGL INVOICE": formatDate(row.invoice_date),
+        "TGL EMAIL": formatDate(row.invoice_email_date),
       }));
 
       const ws = XLSX.utils.json_to_sheet(data);
@@ -395,7 +380,7 @@ export default function SpbReportPage() {
               ) : (
                 rows.map((row, idx) => (
                   <TableRow key={`${row.spb_id}-${row.spb_dtl_id}-${idx}`}>
-                    <TableCell>{formatReportDate(row.spb_tanggal)}</TableCell>
+                    <TableCell>{formatDate(row.spb_tanggal)}</TableCell>
                     <TableCell>{row.spb_no}</TableCell>
                     <TableCell>{row.dtl_spb_part_number}</TableCell>
                     <TableCell>{row.dtl_spb_part_name}</TableCell>
@@ -411,18 +396,18 @@ export default function SpbReportPage() {
                     <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
                     <TableCell>{row.spb_no_wo || "-"}</TableCell>
                     <TableCell>
-                      {formatReportDate(row.spb_created_at)}
+                      {formatDate(row.spb_created_at)}
                     </TableCell>
                     <TableCell>{row.spb_status}</TableCell>
                     <TableCell>{row.po_no || "-"}</TableCell>
                     <TableCell>{row.so_no || "-"}</TableCell>
-                    <TableCell>{formatReportDate(row.po_created_at)}</TableCell>
+                    <TableCell>{formatDate(row.po_created_at)}</TableCell>
                     <TableCell>{row.do_no || "-"}</TableCell>
-                    <TableCell>{formatReportDate(row.do_created_at)}</TableCell>
+                    <TableCell>{formatDate(row.do_created_at)}</TableCell>
                     <TableCell>{row.invoice_no || "-"}</TableCell>
-                    <TableCell>{formatReportDate(row.invoice_date)}</TableCell>
+                    <TableCell>{formatDate(row.invoice_date)}</TableCell>
                     <TableCell>
-                      {formatReportDate(row.invoice_email_date)}
+                      {formatDate(row.invoice_email_date)}
                     </TableCell>
                   </TableRow>
                 ))

@@ -43,6 +43,7 @@ import {
   Building2,
   PackageCheck,
   Truck,
+  Handshake,
   ArrowLeftRight,
   FileText,
   FileSpreadsheet,
@@ -129,6 +130,16 @@ const data = {
   ],
   navSoReguler: [
     { title: "DO Reguler", url: "/so-reguler/do", icon: Truck },
+    {
+      title: "Dashboard Consignment",
+      url: "/so-reguler/consignment/dashboard",
+      icon: LayoutDashboard,
+    },
+    {
+      title: "Sales Order",
+      url: "/so-reguler/consignment/so",
+      icon: Handshake,
+    },
   ],
   navSecondary: [
     {

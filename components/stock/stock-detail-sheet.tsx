@@ -48,7 +48,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { updateStock } from "@/services/stock-actions";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, formatDateTime } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
@@ -359,9 +359,7 @@ export function StockDetailSheet({
                                 {item.cabang?.nama_cabang}
                               </span>
                               <span className="shrink-0">
-                                {new Date(item.created_at).toLocaleString(
-                                  "id-ID",
-                                )}
+                                {formatDateTime(item.created_at)}
                               </span>
                             </div>
                             <div className="text-[9px] text-slate-400 mt-1">

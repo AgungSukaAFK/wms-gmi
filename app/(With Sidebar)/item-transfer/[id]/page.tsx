@@ -31,7 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import {
@@ -417,13 +417,7 @@ export default function ItemTransferDetailPage({
             </p>
             <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
               <Calendar className="h-3 w-3 text-muted-foreground" />
-              {it?.it_tanggal
-                ? new Date(it.it_tanggal).toLocaleDateString("id-ID", {
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })
-                : "-"}
+              {it?.it_tanggal ? formatDate(it.it_tanggal) : "-"}
             </div>
           </div>
           <div className="bg-muted/40 border border-border rounded-lg p-3">
@@ -652,7 +646,7 @@ export default function ItemTransferDetailPage({
                   Diperbarui oleh{" "}
                   {profilesMap[it.tracking_note_updated_by] || "-"}
                   {it.tracking_note_updated_at &&
-                    ` · ${new Date(it.tracking_note_updated_at).toLocaleString("id-ID")}`}
+                    ` · ${formatDateTime(it.tracking_note_updated_at)}`}
                 </p>
               )}
             </div>
@@ -774,12 +768,7 @@ export default function ItemTransferDetailPage({
                     </Badge>
                   ) : (
                     <p className="text-[9px] text-muted-foreground font-medium">
-                      {step.processed_at
-                        ? new Date(step.processed_at).toLocaleDateString(
-                            "id-ID",
-                            { day: "numeric", month: "short" },
-                          )
-                        : ""}
+                      {step.processed_at ? formatDate(step.processed_at) : ""}
                     </p>
                   )}
                 </div>

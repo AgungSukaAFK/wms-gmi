@@ -55,6 +55,7 @@ import {
 } from "lucide-react";
 import { useAuthStore } from "@/stores/auth-store";
 import { normalizeDocumentStatus } from "@/lib/document-status";
+import { formatDate } from "@/lib/utils";
 
 const STATUS_COLORS: Record<string, string> = {
   open: "bg-blue-100 text-blue-700 border-blue-200",
@@ -84,14 +85,6 @@ function formatRupiah(n: number) {
     currency: "IDR",
     minimumFractionDigits: 0,
   }).format(n || 0);
-}
-
-function formatDate(d: string) {
-  return new Date(d).toLocaleDateString("id-ID", {
-    day: "2-digit",
-    month: "short",
-    year: "numeric",
-  });
 }
 
 interface Props {

@@ -43,6 +43,7 @@ import {
   type UpdateLogChange,
   type UpdateLogChangeType,
 } from "@/services/update-logs-actions";
+import { formatDate } from "@/lib/utils";
 
 const CHANGE_TYPE_META: Record<
   UpdateLogChangeType,
@@ -221,11 +222,7 @@ export default function UpdateLogsClient({
                       {log.title}
                     </h2>
                     <span className="text-[11px] font-medium text-muted-foreground">
-                      {new Date(log.release_date).toLocaleDateString("id-ID", {
-                        day: "numeric",
-                        month: "long",
-                        year: "numeric",
-                      })}
+                      {formatDate(log.release_date)}
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1">

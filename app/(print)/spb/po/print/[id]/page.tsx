@@ -6,6 +6,7 @@ import { ChevronLeft, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/client";
+import { formatDateDocument } from "@/lib/utils";
 
 export default function SpbPoPrintPage() {
   const params = useParams<{ id: string }>();
@@ -71,12 +72,7 @@ export default function SpbPoPrintPage() {
             <p>No SPB: {header.spb?.spb_no || "-"}</p>
             <p>Lokasi: {header.spb?.spb_gudang || "-"}</p>
             <p>No SO: {header.so_no || "-"}</p>
-            <p>
-              SO Date:{" "}
-              {header.so_date
-                ? new Date(header.so_date).toLocaleDateString("id-ID")
-                : "-"}
-            </p>
+            <p>SO Date: {formatDateDocument(header.so_date)}</p>
           </div>
           <table className="w-full mt-6 border text-sm">
             <thead>

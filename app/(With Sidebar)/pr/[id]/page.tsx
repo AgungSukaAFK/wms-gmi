@@ -64,7 +64,7 @@ import {
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { normalizeDocumentStatus } from "@/lib/document-status";
@@ -704,13 +704,7 @@ export default function PRDetailPage({
                   </p>
                   <p className="text-[10px] text-muted-foreground font-medium uppercase mt-1.5 flex items-center gap-1.5">
                     <Calendar className="h-3 w-3" />
-                    {mr.mr_tanggal
-                      ? new Date(mr.mr_tanggal).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })
-                      : "-"}
+                    {formatDate(mr.mr_tanggal)}
                   </p>
                 </div>
                 <ExternalLink className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
@@ -778,16 +772,7 @@ export default function PRDetailPage({
                       </p>
                       {step.status !== "pending" && step.processed_at && (
                         <p className="text-[9px] text-muted-foreground font-medium mt-0.5">
-                          {new Date(step.processed_at).toLocaleDateString(
-                            "id-ID",
-                            {
-                              day: "numeric",
-                              month: "short",
-                              year: "numeric",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            },
-                          )}
+                          {formatDateTime(step.processed_at)}
                         </p>
                       )}
                       {step.notes && (

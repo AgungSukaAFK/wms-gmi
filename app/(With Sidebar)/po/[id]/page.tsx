@@ -53,7 +53,7 @@ import {
 } from "@/services/moderator-edit-actions";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 import Link from "next/link";
@@ -635,13 +635,7 @@ export default function PODetailPage({
               </p>
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
                 <Calendar className="h-3 w-3 text-muted-foreground" />
-                {po?.po_tanggal
-                  ? new Date(po.po_tanggal).toLocaleDateString("id-ID", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })
-                  : "-"}
+                {formatDate(po?.po_tanggal)}
               </div>
             </div>
             <div className="bg-muted/40 border border-border rounded-lg p-3">
@@ -650,13 +644,7 @@ export default function PODetailPage({
               </p>
               <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
                 <Truck className="h-3 w-3 text-muted-foreground" />
-                {po?.po_estimasi
-                  ? new Date(po.po_estimasi).toLocaleDateString("id-ID", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })
-                  : "-"}
+                {formatDate(po?.po_estimasi)}
               </div>
             </div>
             {po?.po_payment_term && (
@@ -787,10 +775,7 @@ export default function PODetailPage({
                       ) : (
                         <p className="text-[9px] text-muted-foreground font-medium">
                           {step.processed_at
-                            ? new Date(step.processed_at).toLocaleDateString(
-                                "id-ID",
-                                { day: "numeric", month: "short" },
-                              )
+                            ? formatDate(step.processed_at)
                             : ""}
                         </p>
                       )}

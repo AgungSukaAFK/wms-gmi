@@ -43,6 +43,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import type { UserSignature } from "@/type";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 
 const MAX_SIGNATURES = 6;
 
@@ -310,7 +311,7 @@ export default function SignatureManagerPage() {
                 <CardFooter className="p-3 bg-muted/30 flex items-center justify-between border-t border-border">
                   <div className="text-[10px] text-muted-foreground font-medium">
                     Dibuat:{" "}
-                    {new Date(sig.created_at).toLocaleDateString("id-ID")}
+                    {formatDate(sig.created_at)}
                   </div>
                   <div className="flex items-center gap-1">
                     <Button

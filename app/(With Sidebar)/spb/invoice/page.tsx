@@ -69,7 +69,7 @@ import {
   ModeratorApprovalStep,
 } from "@/services/moderator-edit-actions";
 import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
-import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { cn, formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 type DoOption = {
@@ -487,23 +487,15 @@ export default function SpbInvoicePage() {
                         {row.invoice_no}
                       </TableCell>
                       <TableCell>
-                        {row.invoice_date
-                          ? new Date(row.invoice_date).toLocaleDateString(
-                              "id-ID",
-                            )
-                          : "-"}
+                        {row.invoice_date ? formatDate(row.invoice_date) : "-"}
                       </TableCell>
                       <TableCell>
                         {row.invoice_email_date
-                          ? new Date(row.invoice_email_date).toLocaleDateString(
-                              "id-ID",
-                            )
+                          ? formatDate(row.invoice_email_date)
                           : "-"}
                       </TableCell>
                       <TableCell>{row.approval_status || "open"}</TableCell>
-                      <TableCell>
-                        {new Date(row.created_at).toLocaleDateString("id-ID")}
-                      </TableCell>
+                      <TableCell>{formatDate(row.created_at)}</TableCell>
                       <TableCell>
                         <div className="flex gap-1">
                           <Button

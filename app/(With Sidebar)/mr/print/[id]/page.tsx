@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
+import { formatDate, formatDateDocument, formatDateTime } from "@/lib/utils";
 
 export default function MRPrintPage() {
   const { id } = useParams();
@@ -97,14 +98,7 @@ export default function MRPrintPage() {
   const allocsForItem = (itemId: number) =>
     ssAllocations.filter((a) => a.mr_item_id === itemId);
 
-  const formatDeadline = (d: string | null) =>
-    d
-      ? new Date(d).toLocaleDateString("id-ID", {
-          day: "numeric",
-          month: "long",
-          year: "numeric",
-        })
-      : "-";
+  const formatDeadline = (d: string | null) => formatDate(d);
 
   const hasShareStock = items.some(
     (item) => (item.qty_sharestock_total || 0) > 0,
@@ -208,12 +202,7 @@ export default function MRPrintPage() {
                   Tgl. Permintaan
                 </span>
                 <span className="font-bold text-slate-900">
-                  :{" "}
-                  {new Date(mr.mr_tanggal).toLocaleDateString("id-ID", {
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric",
-                  })}
+                  : {formatDateDocument(mr.mr_tanggal)}
                 </span>
               </div>
               <div className="flex border-b border-slate-100 pb-1.5">
@@ -221,12 +210,7 @@ export default function MRPrintPage() {
                   Tgl. Diperlukan
                 </span>
                 <span className="font-bold text-slate-900">
-                  :{" "}
-                  {new Date(mr.mr_due_date).toLocaleDateString("id-ID", {
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric",
-                  })}
+                  : {formatDateDocument(mr.mr_due_date)}
                 </span>
               </div>
               <div className="flex border-b border-slate-100 pb-1.5">
@@ -461,7 +445,7 @@ export default function MRPrintPage() {
                   </div>
                   <div className="text-[8px] text-slate-400 font-medium">
                     {app.processed_at
-                      ? new Date(app.processed_at).toLocaleString("id-ID")
+                      ? formatDateTime(app.processed_at)
                       : "Waiting..."}
                   </div>
                 </div>
@@ -472,7 +456,7 @@ export default function MRPrintPage() {
           {/* Footer Info */}
           <div className="mt-24 border-t border-slate-100 pt-6 flex justify-between items-end grayscale opacity-50">
             <div className="text-[8px] font-bold text-slate-400 uppercase space-y-1">
-              <p>Printed on: {new Date().toLocaleString("id-ID")}</p>
+              <p>Printed on: {formatDateTime(new Date())}</p>
               <p>WMS-GMI System Documentation - Secure Record</p>
             </div>
             <div className="text-[8px] font-bold text-slate-400 flex gap-2">

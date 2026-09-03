@@ -45,6 +45,7 @@ import {
   normalizeDocumentStatus,
 } from "@/lib/document-status";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { formatDate } from "@/lib/utils";
 
 const JOB_SORT_COLUMNS: Record<string, string> = {
   job_kode: "job_kode",
@@ -59,11 +60,6 @@ const STATUS_COLORS: Record<string, string> = {
   completed: "bg-gray-100 text-gray-600 border-gray-200",
   rejected: "bg-red-100 text-red-700 border-red-200",
 };
-
-function formatDate(value?: string | null) {
-  if (!value) return "-";
-  return new Date(value).toLocaleDateString("id-ID");
-}
 
 export default function JobCostingListPage() {
   const supabase = createClient();

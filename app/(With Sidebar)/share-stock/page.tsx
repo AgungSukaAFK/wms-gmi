@@ -42,6 +42,7 @@ import { ShareStockDetailSheet } from "@/components/share-stock/share-stock-deta
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { formatDate } from "@/lib/utils";
 
 const SHARE_STOCK_SORT_COLUMNS: Record<string, string> = {
   mr_kode: "mr_kode",
@@ -509,11 +510,7 @@ export default function ShareStockPage() {
                     <TableCell className="text-center">
                       <div className="flex items-center justify-center gap-2 text-xs font-bold text-foreground uppercase">
                         <CalendarIcon className="h-3.5 w-3.5 text-muted-foreground/40" />
-                        {new Date(mr.mr_tanggal).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })}
+                        {formatDate(mr.mr_tanggal)}
                       </div>
                     </TableCell>
                     <TableCell className="text-center">

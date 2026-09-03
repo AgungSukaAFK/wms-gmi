@@ -38,6 +38,7 @@ import { useDebounce } from "use-debounce";
 import { DeliveryDetailSheet } from "@/components/delivery/delivery-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import Link from "next/link";
+import { formatDate } from "@/lib/utils";
 import { completedFilterStatuses } from "@/lib/document-status";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -420,11 +421,7 @@ export default function DeliveriesPage() {
                     <TableCell className="text-center">
                       <div className="flex items-center justify-center gap-2 text-xs font-bold text-foreground uppercase">
                         <CalendarIcon className="h-3.5 w-3.5 text-muted-foreground/40" />
-                        {new Date(dlv.created_at).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })}
+                        {formatDate(dlv.created_at)}
                       </div>
                     </TableCell>
                     <TableCell className="text-center">

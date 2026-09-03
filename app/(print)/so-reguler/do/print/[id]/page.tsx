@@ -6,6 +6,7 @@ import { ChevronLeft, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/client";
+import { formatDateDocument } from "@/lib/utils";
 
 export default function DoRegulerPrintPage() {
   const params = useParams<{ id: string }>();
@@ -70,12 +71,7 @@ export default function DoRegulerPrintPage() {
             Kode DO: {header.do_kode}
           </p>
           <div className="mt-4 grid grid-cols-2 gap-2 text-sm">
-            <p>
-              Tanggal:{" "}
-              {header.do_tanggal
-                ? new Date(header.do_tanggal).toLocaleDateString("id-ID")
-                : "-"}
-            </p>
+            <p>Tanggal: {formatDateDocument(header.do_tanggal)}</p>
             <p>Status: {header.status || "-"}</p>
             <p>Gudang: {header.dari?.nama_cabang || "-"}</p>
             <p>Customer: {header.customer?.customer_name || "-"}</p>

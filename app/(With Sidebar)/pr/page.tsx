@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
@@ -226,9 +227,7 @@ export default function PRListPage() {
             Array.from(new Set(mrCodesByPr.get(pr.id) || [])).join(", ") || "-",
           PIC: pr.profiles?.nama || "-",
           LOKASI: pr.cabang?.nama_cabang || "-",
-          TANGGAL: pr.pr_tanggal
-            ? new Date(pr.pr_tanggal).toLocaleDateString("id-ID")
-            : "-",
+          TANGGAL: formatDate(pr.pr_tanggal),
           STATUS: pr.pr_status || "-",
           "PROGRES APPROVAL": `${summary.approvedCount}/${summary.totalCount}`,
           "CONVERT STATUS": pr.pr_convert_status || "-",
@@ -657,11 +656,7 @@ export default function PRListPage() {
                     <TableCell className="text-right pr-6">
                       <div className="flex items-center justify-end gap-2 text-xs font-bold text-foreground uppercase tracking-tighter">
                         <Calendar className="h-3.5 w-3.5 text-muted-foreground/40" />
-                        {new Date(pr.pr_tanggal).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })}
+                        {formatDate(pr.pr_tanggal)}
                       </div>
                     </TableCell>
                     <TableCell className="pr-4">

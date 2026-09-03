@@ -21,7 +21,7 @@ import {
   ShoppingCart,
   Truck,
 } from "lucide-react";
-import { toYmdLocal } from "@/lib/utils";
+import { formatDate, toYmdLocal } from "@/lib/utils";
 
 type TrendData = {
   bulan: string;
@@ -51,11 +51,6 @@ const STATUS_CLASSES: Record<string, string> = {
   done: "bg-emerald-100 text-emerald-700 border-emerald-200",
   closed: "bg-gray-100 text-gray-600 border-gray-200",
 };
-
-function formatDate(value?: string | null) {
-  if (!value) return "-";
-  return new Date(value).toLocaleDateString("id-ID");
-}
 
 function renderStatusBadge(status?: string | null) {
   if (!status) {
@@ -341,12 +336,7 @@ export default async function DashboardPage() {
     (pendingPrResult.count ?? 0) +
     (pendingPoResult.count ?? 0);
 
-  const todayLabel = new Date().toLocaleDateString("id-ID", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
+  const todayLabel = formatDate(new Date());
 
   return (
     <>

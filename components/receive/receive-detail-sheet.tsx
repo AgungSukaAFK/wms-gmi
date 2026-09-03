@@ -41,7 +41,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
-import { cn } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { toast } from "sonner";
 import { approveReceive, rejectReceive } from "@/services/procurement-actions";
 import {
@@ -448,11 +448,7 @@ export function ReceiveDetailSheet({
                     />
                   ) : (
                     <p className="text-sm font-semibold text-foreground">
-                      {new Date(receive.ri_tanggal).toLocaleDateString("id-ID", {
-                        day: "numeric",
-                        month: "long",
-                        year: "numeric",
-                      })}
+                      {formatDate(receive.ri_tanggal)}
                     </p>
                   )}
                 </div>
@@ -783,10 +779,7 @@ export function ReceiveDetailSheet({
               <div className="flex items-center justify-end">
                 <p className="text-[9px] font-medium text-muted-foreground/60 uppercase">
                   Dibuat:{" "}
-                  {new Date(receive.created_at).toLocaleString("id-ID", {
-                    dateStyle: "medium",
-                    timeStyle: "short",
-                  })}
+                  {formatDateTime(receive.created_at)}
                 </p>
               </div>
             </div>

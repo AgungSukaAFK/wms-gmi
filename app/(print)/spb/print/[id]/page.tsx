@@ -6,6 +6,7 @@ import { ChevronLeft, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate, formatDateDocument } from "@/lib/utils";
 
 export default function SpbPrintPage() {
   const params = useParams<{ id: string }>();
@@ -123,9 +124,7 @@ export default function SpbPrintPage() {
           {isCancelled && (
             <div className="mb-3 border-2 border-black p-2 text-center font-bold">
               SPB INI TELAH DIBATALKAN (CANCELLED)
-              {header.cancelled_at
-                ? ` - ${new Date(header.cancelled_at).toLocaleDateString("id-ID")}`
-                : ""}
+              {header.cancelled_at ? ` - ${formatDate(header.cancelled_at)}` : ""}
               {header.cancel_reason ? ` - Alasan: ${header.cancel_reason}` : ""}
             </div>
           )}
@@ -154,9 +153,7 @@ export default function SpbPrintPage() {
                 <span className="w-24 shrink-0">TANGGAL</span>
                 <span className="mr-1">:</span>
                 <span className="font-medium">
-                  {header.spb_tanggal
-                    ? new Date(header.spb_tanggal).toLocaleDateString("id-ID")
-                    : "-"}
+                  {formatDateDocument(header.spb_tanggal)}
                 </span>
               </div>
               <div className="flex">

@@ -8,6 +8,7 @@
 import React, { useEffect, useState } from "react";
 import { History, Loader2, ShieldAlert } from "lucide-react";
 import { getModeratorEditLogs } from "@/services/moderator-edit-actions";
+import { formatDateTime } from "@/lib/utils";
 
 interface ModeratorEditLogPanelProps {
   docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive" | "delivery";
@@ -65,13 +66,7 @@ export function ModeratorEditLogPanel({
                 </span>
                 <div className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground uppercase">
                   <History className="h-2.5 w-2.5" />
-                  {new Date(log.created_at).toLocaleString("id-ID", {
-                    hour: "2-digit",
-                    minute: "2-digit",
-                    day: "numeric",
-                    month: "short",
-                    year: "numeric",
-                  })}
+                  {formatDateTime(log.created_at)}
                 </div>
               </div>
               <p className="text-[11px] text-muted-foreground leading-relaxed">

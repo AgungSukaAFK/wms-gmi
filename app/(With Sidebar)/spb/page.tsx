@@ -54,6 +54,7 @@ import {
   updateSpb,
 } from "@/services/spb-actions";
 import { useAuthStore } from "@/stores/auth-store";
+import { formatDate } from "@/lib/utils";
 
 type SpbRow = {
   id: number;
@@ -449,7 +450,7 @@ export default function SpbPage() {
                     <TableCell className="font-medium">{row.spb_no}</TableCell>
                     <TableCell>{row.spb_no_wo || "-"}</TableCell>
                     <TableCell>
-                      {new Date(row.spb_tanggal).toLocaleDateString("id-ID")}
+                      {formatDate(row.spb_tanggal)}
                     </TableCell>
                     <TableCell>{row.spb_kode_unit || "-"}</TableCell>
                     <TableCell>{row.spb_tipe_unit || "-"}</TableCell>

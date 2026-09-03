@@ -55,7 +55,7 @@ import {
   getSpbPoOptionsForDo,
   updateSpbDo,
 } from "@/services/spb-actions";
-import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { cn, formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 type PoOption = {
@@ -389,14 +389,12 @@ export default function SpbDoPage() {
                       <TableCell>{row.po?.po_no || "-"}</TableCell>
                       <TableCell className="font-medium">{row.do_no}</TableCell>
                       <TableCell>
-                        {row.do_date
-                          ? new Date(row.do_date).toLocaleDateString("id-ID")
-                          : "-"}
+                        {formatDate(row.do_date)}
                       </TableCell>
                       <TableCell>{row.do_status_part || "-"}</TableCell>
                       <TableCell>{row.do_pic || "-"}</TableCell>
                       <TableCell>
-                        {new Date(row.created_at).toLocaleDateString("id-ID")}
+                        {formatDate(row.created_at)}
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-1">

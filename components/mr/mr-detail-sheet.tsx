@@ -9,6 +9,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { createClient } from "@/lib/supabase/client";
+import { formatDateTime } from "@/lib/utils";
 import {
   Table,
   TableBody,
@@ -472,14 +473,7 @@ export function MRDetailSheet({
                               <div className="flex flex-wrap items-center gap-1.5 text-muted-foreground">
                                 <Clock className="h-3 w-3 shrink-0" />
                                 <span className="text-[10px] font-semibold whitespace-normal wrap-break-word">
-                                  {new Date(
-                                    approval.processed_at,
-                                  ).toLocaleString("id-ID", {
-                                    day: "numeric",
-                                    month: "short",
-                                    hour: "2-digit",
-                                    minute: "2-digit",
-                                  })}
+                                  {formatDateTime(approval.processed_at)}
                                 </span>
                                 {approval.signature_url && (
                                   <Badge
@@ -496,14 +490,7 @@ export function MRDetailSheet({
                                   <div className="flex items-center gap-1.5 text-muted-foreground">
                                     <Clock className="h-3 w-3 shrink-0" />
                                     <span className="text-[10px] font-semibold">
-                                      {new Date(
-                                        approval.processed_at,
-                                      ).toLocaleString("id-ID", {
-                                        day: "numeric",
-                                        month: "short",
-                                        hour: "2-digit",
-                                        minute: "2-digit",
-                                      })}
+                                      {formatDateTime(approval.processed_at)}
                                     </span>
                                   </div>
                                 )}

@@ -6,6 +6,7 @@ import { ChevronLeft, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate, formatDateDocument } from "@/lib/utils";
 
 export default function SpbInvoicePrintPage() {
   const params = useParams<{ id: string }>();
@@ -75,20 +76,8 @@ export default function SpbInvoicePrintPage() {
             <p>No SPB: {header.do?.po?.spb?.spb_no || "-"}</p>
             <p>No PO: {header.do?.po?.po_no || "-"}</p>
             <p>No DO: {header.do?.do_no || "-"}</p>
-            <p>
-              Tgl Invoice:{" "}
-              {header.invoice_date
-                ? new Date(header.invoice_date).toLocaleDateString("id-ID")
-                : "-"}
-            </p>
-            <p>
-              Tgl Email:{" "}
-              {header.invoice_email_date
-                ? new Date(header.invoice_email_date).toLocaleDateString(
-                    "id-ID",
-                  )
-                : "-"}
-            </p>
+            <p>Tgl Invoice: {formatDateDocument(header.invoice_date)}</p>
+            <p>Tgl Email: {formatDate(header.invoice_email_date)}</p>
           </div>
           <table className="w-full mt-6 border text-sm">
             <thead>

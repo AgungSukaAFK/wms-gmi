@@ -29,6 +29,7 @@ import {
 } from "lucide-react";
 import { ItemTransferDetailSheet } from "@/components/item-transfer/item-transfer-detail-sheet";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { formatDate } from "@/lib/utils";
 
 const IT_SORT_COLUMNS: Record<string, string> = {
   it_kode: "it_kode",
@@ -289,13 +290,7 @@ export default function ItemTransferPage() {
                     <TableCell className="text-center">
                       <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-foreground uppercase">
                         <CalendarIcon className="h-3.5 w-3.5 text-muted-foreground/40" />
-                        {r.it_tanggal
-                          ? new Date(r.it_tanggal).toLocaleDateString("id-ID", {
-                              day: "numeric",
-                              month: "short",
-                              year: "numeric",
-                            })
-                          : "-"}
+                        {r.it_tanggal ? formatDate(r.it_tanggal) : "-"}
                       </div>
                     </TableCell>
                     <TableCell className="text-center">

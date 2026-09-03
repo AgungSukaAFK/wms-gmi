@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
@@ -179,9 +180,7 @@ export default function ReceiveItemPage() {
         "PO ASAL": ri.pos?.po_kode || "-",
         PIC: ri.ri_pic || "-",
         LOKASI: ri.cabang?.nama_cabang || "-",
-        TANGGAL: ri.ri_tanggal
-          ? new Date(ri.ri_tanggal).toLocaleDateString("id-ID")
-          : "-",
+        TANGGAL: formatDate(ri.ri_tanggal),
         STATUS: ri.ri_status || "-",
       }));
 
@@ -458,11 +457,7 @@ export default function ReceiveItemPage() {
                     <TableCell>
                       <div className="flex items-center gap-1.5 text-xs text-muted-foreground font-medium">
                         <Calendar className="h-3 w-3 shrink-0" />
-                        {new Date(ri.ri_tanggal).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                        })}
+                        {formatDate(ri.ri_tanggal)}
                       </div>
                     </TableCell>
                     <TableCell>

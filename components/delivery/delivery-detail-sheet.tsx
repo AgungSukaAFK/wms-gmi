@@ -50,7 +50,7 @@ import {
   deleteDelivery,
 } from "@/services/inventory-actions";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { EditDeliveryDialog } from "@/components/delivery/edit-delivery-dialog";
 import { Textarea } from "@/components/ui/textarea";
@@ -498,10 +498,7 @@ export function DeliveryDetailSheet({
                       Tanggal
                     </p>
                     <p className="font-bold text-slate-900">
-                      {new Date(delivery?.created_at).toLocaleDateString(
-                        "id-ID",
-                        { day: "numeric", month: "short", year: "numeric" },
-                      )}
+                      {formatDate(delivery?.created_at)}
                     </p>
                   </div>
                   <div className="bg-slate-50 p-3 rounded-lg">
@@ -838,15 +835,7 @@ export function DeliveryDetailSheet({
                     {delivery?.signed_by_sender_at && (
                       <p className="text-[8px] text-slate-500 font-medium mt-1">
                         Ditandatangani:{" "}
-                        {new Date(
-                          delivery.signed_by_sender_at,
-                        ).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {formatDateTime(delivery.signed_by_sender_at)}
                       </p>
                     )}
                   </div>
@@ -871,15 +860,7 @@ export function DeliveryDetailSheet({
                     {delivery?.signed_by_receiver_at ? (
                       <p className="text-[8px] text-slate-500 font-medium mt-1">
                         Ditandatangani:{" "}
-                        {new Date(
-                          delivery.signed_by_receiver_at,
-                        ).toLocaleDateString("id-ID", {
-                          day: "numeric",
-                          month: "short",
-                          year: "numeric",
-                          hour: "2-digit",
-                          minute: "2-digit",
-                        })}
+                        {formatDateTime(delivery.signed_by_receiver_at)}
                       </p>
                     ) : (
                       <p className="text-[8px] text-orange-600 font-bold mt-1">

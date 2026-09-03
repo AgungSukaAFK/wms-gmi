@@ -9,7 +9,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useState, type Dispatch } from "react";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 
 type DatePickerProps = {
   value?: Date;
@@ -35,11 +35,7 @@ export function DatePicker({
           className={cn("w-full justify-between font-normal", className)}
         >
           {value
-            ? value.toLocaleDateString("id-ID", {
-                day: "numeric",
-                month: "long",
-                year: "numeric",
-              })
+            ? formatDate(value)
             : placeholder
               ? placeholder
               : "Pilih tanggal"}

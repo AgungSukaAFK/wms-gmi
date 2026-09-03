@@ -20,6 +20,7 @@ import {
   getMrFreezeInfo,
 } from "@/services/freeze-actions";
 import { businessToday } from "@/lib/business-date";
+import { formatDateTime } from "@/lib/utils";
 
 interface MrFreezePanelProps {
   mrId: number;
@@ -154,7 +155,7 @@ export function MrFreezePanel({
           )}
           {mr.frozen_at && (
             <p className="text-[10px] text-sky-700/70 mt-0.5">
-              Sejak: {new Date(mr.frozen_at).toLocaleString("id-ID")}
+              Sejak: {formatDateTime(mr.frozen_at)}
             </p>
           )}
         </div>

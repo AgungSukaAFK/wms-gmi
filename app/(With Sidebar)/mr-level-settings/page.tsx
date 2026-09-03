@@ -4,6 +4,7 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDateTime } from "@/lib/utils";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -312,10 +313,7 @@ export default function MrLevelSettingsPage() {
             {updatedAt && (
               <span className="text-[10px] text-muted-foreground">
                 Terakhir diubah:{" "}
-                {new Date(updatedAt).toLocaleString("id-ID", {
-                  dateStyle: "medium",
-                  timeStyle: "short",
-                })}
+                {formatDateTime(updatedAt)}
               </span>
             )}
           </div>

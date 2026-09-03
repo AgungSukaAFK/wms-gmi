@@ -75,7 +75,7 @@ import {
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
 import { DatePickerString } from "@/components/date-picker-string";
-import { toYmdLocal } from "@/lib/utils";
+import { formatDate, toYmdLocal } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
 
@@ -310,7 +310,7 @@ export default function BarangClient({
         "Part Number": b.part_number,
         "Nama Part": b.part_name,
         Satuan: b.part_satuan,
-        "Tanggal Input": new Date(b.created_at).toLocaleDateString("id-ID"),
+        "Tanggal Input": formatDate(b.created_at),
       })),
     );
     const wb = XLSX.utils.book_new();

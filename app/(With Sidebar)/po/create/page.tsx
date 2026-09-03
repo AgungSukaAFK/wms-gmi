@@ -57,7 +57,7 @@ import { toast } from "sonner";
 import { createPurchaseOrder } from "@/services/procurement-actions";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
-import { cn, toYmdLocal } from "@/lib/utils";
+import { cn, formatDate, toYmdLocal } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { DatePickerString } from "@/components/date-picker-string";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
@@ -553,14 +553,7 @@ export default function CreatePOPage() {
                               variant="outline"
                               className="text-[9px] font-bold uppercase shrink-0"
                             >
-                              {new Date(pr.pr_tanggal).toLocaleDateString(
-                                "id-ID",
-                                {
-                                  day: "numeric",
-                                  month: "short",
-                                  year: "numeric",
-                                },
-                              )}
+                              {formatDate(pr.pr_tanggal)}
                             </Badge>
                           </CommandItem>
                         );

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { formatDateDocument, formatDateTime } from "@/lib/utils";
 
 const TRACKING_LABEL: Record<string, string> = {
   created: "Item Transfer Dibuat",
@@ -181,18 +182,7 @@ export default function ItemTransferPrintPage() {
         {/* Info */}
         <div className="grid grid-cols-2 gap-x-12 gap-y-2.5 mb-10 text-xs">
           <InfoRow label="PIC" value={it.pic || "-"} />
-          <InfoRow
-            label="Tanggal"
-            value={
-              it.it_tanggal
-                ? new Date(it.it_tanggal).toLocaleDateString("id-ID", {
-                    day: "numeric",
-                    month: "long",
-                    year: "numeric",
-                  })
-                : "-"
-            }
-          />
+          <InfoRow label="Tanggal" value={formatDateDocument(it.it_tanggal)} />
           <InfoRow label="Gudang Asal" value={it.dari?.nama_cabang || "-"} />
           <InfoRow
             label="Gudang Tujuan"
@@ -300,7 +290,7 @@ export default function ItemTransferPrintPage() {
                 </div>
                 <div className="text-[8px] text-slate-400 font-medium">
                   {s.processed_at
-                    ? new Date(s.processed_at).toLocaleString("id-ID")
+                    ? formatDateTime(s.processed_at)
                     : "Menunggu..."}
                 </div>
               </div>
@@ -311,7 +301,7 @@ export default function ItemTransferPrintPage() {
         {/* Footer */}
         <div className="mt-16 pt-5 flex justify-between items-end text-[8px] font-bold text-slate-400 uppercase">
           <div className="space-y-0.5">
-            <p>Dicetak: {new Date().toLocaleString("id-ID")}</p>
+            <p>Dicetak: {formatDateTime(new Date())}</p>
             <p>WMS-GMI System Documentation</p>
           </div>
           <span className="tracking-widest">Original Document</span>

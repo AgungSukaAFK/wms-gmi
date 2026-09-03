@@ -1,5 +1,5 @@
 import { clsx, type ClassValue } from "clsx";
-import { differenceInCalendarDays, isValid, parse } from "date-fns";
+import { isValid } from "date-fns";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
@@ -11,51 +11,65 @@ export const hasEnvVars =
   process.env.NEXT_PUBLIC_SUPABASE_URL &&
   process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY;
 
-export function formatTanggal(timestamp: number | string): string {
-  const hari = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu"];
-  const bulan = [
-    "Januari",
-    "Februari",
-    "Maret",
-    "April",
-    "Mei",
-    "Juni",
-    "Juli",
-    "Agustus",
-    "September",
-    "Oktober",
-    "November",
-    "Desember",
-  ];
+const HARI_ID = ["Minggu", "Senin", "Selasa", "Rabu", "Kamis", "Jum'at", "Sabtu"];
+const BULAN_ID = [
+  "Januari",
+  "Februari",
+  "Maret",
+  "April",
+  "Mei",
+  "Juni",
+  "Juli",
+  "Agustus",
+  "September",
+  "Oktober",
+  "November",
+  "Desember",
+];
 
-  let date: Date | null = null;
-
-  if (typeof timestamp === "number") {
-    date = new Date(timestamp);
-  } else if (typeof timestamp === "string") {
-    // Coba parse ISOString terlebih dahulu
-    const isoDate = new Date(timestamp);
-    if (isValid(isoDate)) {
-      date = isoDate;
-    } else {
-      // Jika bukan ISOString, parse dengan format d/M/yyyy
-      const parsed = parse(timestamp, "d/M/yyyy", new Date());
-      if (isValid(parsed)) {
-        date = parsed;
-      }
-    }
-  }
-
-  if (date && isValid(date)) {
-    const hariNama = hari[date.getDay()];
-    const tanggal = date.getDate();
-    const bulanNama = bulan[date.getMonth()];
-    const tahun = date.getFullYear();
-    return `${hariNama}, ${tanggal} ${bulanNama} ${tahun}`;
-  }
-
-  return "Tanggal tidak valid";
+function toValidDate(date?: string | number | Date | null): Date | null {
+  if (date === null || date === undefined || date === "") return null;
+  const d = date instanceof Date ? date : new Date(date);
+  return isValid(d) ? d : null;
 }
+
+/**
+ * Format tanggal standar aplikasi (tanpa nama hari).
+ * Dipakai untuk tampilan biasa: tabel, detail, form, dsb.
+ * @example formatDate("2026-04-01") // "01 April 2026"
+ */
+export const formatDate = (date?: string | number | Date | null): string => {
+  const d = toValidDate(date);
+  if (!d) return "-";
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${day} ${BULAN_ID[d.getMonth()]} ${d.getFullYear()}`;
+};
+
+/**
+ * Format tanggal untuk dokumen resmi (dengan nama hari).
+ * Dipakai di halaman cetak: SPB, PO, DO, Invoice, MR, PR, Item Transfer, dsb.
+ * @example formatDateDocument("2026-04-15") // "Jum'at, 15 April 2026"
+ */
+export const formatDateDocument = (date?: string | number | Date | null): string => {
+  const d = toValidDate(date);
+  if (!d) return "-";
+  return `${HARI_ID[d.getDay()]}, ${formatDate(d)}`;
+};
+
+/**
+ * Format tanggal + jam WIB, untuk timestamp audit trail / log approval.
+ * @example formatDateTime("2026-04-01T07:30:00Z") // "01 April 2026, 14.30 WIB"
+ */
+export const formatDateTime = (date?: string | number | Date | null): string => {
+  const d = toValidDate(date);
+  if (!d) return "-";
+  const time = d.toLocaleTimeString("id-ID", {
+    hour: "2-digit",
+    minute: "2-digit",
+    timeZone: "Asia/Jakarta",
+  });
+  return `${formatDate(d)}, ${time} WIB`;
+};
 
 export function toYmdLocal(date: Date = new Date()): string {
   const year = date.getFullYear();
@@ -114,21 +128,6 @@ export function validateCSV(csv: string) {
 }
 
 /**
- * Memformat tanggal menjadi format lengkap bahasa Indonesia.
- * @param dateString Tanggal dalam format string atau Date
- * @returns String tanggal yang diformat, cth: "Minggu, 12 Oktober 2025"
- */
-export const formatDate = (dateString?: string | Date): string => {
-  if (!dateString) return "N/A";
-  return new Date(dateString).toLocaleDateString("id-ID", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-};
-
-/**
  * Memformat angka atau string angka menjadi format mata uang Rupiah.
  * @param value Angka atau string yang akan diformat
  * @returns String mata uang yang diformat, cth: "Rp 1.500.000"
@@ -143,38 +142,6 @@ export const formatCurrency = (value?: string | number): string => {
     currency: "IDR",
     minimumFractionDigits: 0,
   }).format(numericValue);
-};
-
-export const formatDateFriendly = (date?: Date | string): string => {
-  if (!date) return "N/A";
-
-  const dateObj = new Date(date);
-  // Cek apakah tanggal valid
-  if (isNaN(dateObj.getTime())) {
-    return "N/A";
-  }
-
-  return dateObj.toLocaleDateString("id-ID", {
-    weekday: "long",
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-};
-
-// --- TAMBAHKAN FUNGSI BARU DI BAWAH INI ---
-export const formatDateWithTime = (date?: Date | string | null): string => {
-  if (!date) return "";
-  return (
-    new Date(date).toLocaleString("id-ID", {
-      year: "numeric",
-      month: "long",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-      timeZone: "Asia/Jakarta", // Pastikan zona waktu WIB
-    }) + " WIB"
-  );
 };
 
 export const calculatePriority = (

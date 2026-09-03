@@ -30,6 +30,7 @@ import {
   resolveMrLevelDisplay,
 } from "@/lib/mr-level";
 import { setMrManualLevel } from "@/services/mr-level-actions";
+import { formatDate } from "@/lib/utils";
 
 interface MrLevelBadgeProps {
   mrId: number;
@@ -184,12 +185,7 @@ export function MrLevelBadge({
                   <span className="font-semibold">
                     {manualSetByName || "-"}
                   </span>
-                  {manualSetAt &&
-                    ` · ${new Date(manualSetAt).toLocaleDateString("id-ID", {
-                      day: "numeric",
-                      month: "short",
-                      year: "numeric",
-                    })}`}
+                  {manualSetAt && ` · ${formatDate(manualSetAt)}`}
                 </p>
               )}
             </div>

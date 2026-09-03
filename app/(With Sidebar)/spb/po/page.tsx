@@ -55,7 +55,7 @@ import {
   updateSpbPo,
 } from "@/services/spb-actions";
 import { useDebounce } from "use-debounce";
-import { cn, ymdToLocalStartIso } from "@/lib/utils";
+import { cn, formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 type SpbOption = { id: number; spb_no: string; spb_status: string };
@@ -373,14 +373,12 @@ export default function SpbPoPage() {
                       <TableCell className="font-medium">{row.po_no}</TableCell>
                       <TableCell>{row.so_no || "-"}</TableCell>
                       <TableCell>
-                        {row.so_date
-                          ? new Date(row.so_date).toLocaleDateString("id-ID")
-                          : "-"}
+                        {formatDate(row.so_date)}
                       </TableCell>
                       <TableCell>{row.spb?.spb_gudang || "-"}</TableCell>
                       <TableCell>{row.details?.length || 0}</TableCell>
                       <TableCell>
-                        {new Date(row.created_at).toLocaleDateString("id-ID")}
+                        {formatDate(row.created_at)}
                       </TableCell>
                       <TableCell>
                         <div className="flex gap-1">

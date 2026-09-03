@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
@@ -248,12 +249,8 @@ export default function POListPage() {
             "-",
           VENDOR: vendorNames.join(", ") || "-",
           PIC: po.po_pic || "-",
-          TANGGAL: po.po_tanggal
-            ? new Date(po.po_tanggal).toLocaleDateString("id-ID")
-            : "-",
-          ESTIMASI: po.po_estimasi
-            ? new Date(po.po_estimasi).toLocaleDateString("id-ID")
-            : "-",
+          TANGGAL: formatDate(po.po_tanggal),
+          ESTIMASI: formatDate(po.po_estimasi),
           STATUS: po.po_status || "-",
           "RECEIVE STATUS": po.po_receive_status || "-",
         };
@@ -737,11 +734,7 @@ export default function POListPage() {
                       <TableCell className="text-right pr-6">
                         <div className="flex items-center justify-end gap-2 text-xs font-bold text-foreground uppercase tracking-tighter">
                           <Calendar className="h-3.5 w-3.5 text-muted-foreground/40" />
-                          {new Date(po.po_tanggal).toLocaleDateString("id-ID", {
-                            day: "numeric",
-                            month: "short",
-                            year: "numeric",
-                          })}
+                          {formatDate(po.po_tanggal)}
                         </div>
                       </TableCell>
                       <TableCell className="pr-4">
