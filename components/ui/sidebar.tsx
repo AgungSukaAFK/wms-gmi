@@ -27,10 +27,17 @@ import {
 
 const SIDEBAR_COOKIE_NAME = "sidebar_state";
 const SIDEBAR_COOKIE_MAX_AGE = 60 * 60 * 24 * 7;
-const SIDEBAR_WIDTH = "16rem";
+const SIDEBAR_WIDTH_DEFAULT = 256; // 16rem
+const SIDEBAR_WIDTH_MIN = 220;
+const SIDEBAR_WIDTH_MAX = 384; // 24rem
+const SIDEBAR_WIDTH_STORAGE_KEY = "sidebar_width";
 const SIDEBAR_WIDTH_MOBILE = "18rem";
 const SIDEBAR_WIDTH_ICON = "3rem";
 const SIDEBAR_KEYBOARD_SHORTCUT = "b";
+
+function clampSidebarWidth(value: number) {
+  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, value));
+}
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed";
@@ -40,6 +47,8 @@ type SidebarContextProps = {
   setOpenMobile: (open: boolean) => void;
   isMobile: boolean;
   toggleSidebar: () => void;
+  width: number;
+  setWidth: (width: number) => void;
 };
 
 const SidebarContext = React.createContext<SidebarContextProps | null>(null);
@@ -68,6 +77,19 @@ function SidebarProvider({
 }) {
   const isMobile = useIsMobile();
   const [openMobile, setOpenMobile] = React.useState(false);
+
+  // Resizable width (px), persisted to localStorage so it survives refresh.
+  const [width, _setWidth] = React.useState(SIDEBAR_WIDTH_DEFAULT);
+  React.useEffect(() => {
+    const saved = window.localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY);
+    const parsed = saved ? parseInt(saved, 10) : NaN;
+    if (!Number.isNaN(parsed)) _setWidth(clampSidebarWidth(parsed));
+  }, []);
+  const setWidth = React.useCallback((value: number) => {
+    const clamped = clampSidebarWidth(value);
+    _setWidth(clamped);
+    window.localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(clamped));
+  }, []);
 
   // This is the internal state of the sidebar.
   // We use openProp and setOpenProp for control from outside the component.
@@ -122,8 +144,20 @@ function SidebarProvider({
       openMobile,
       setOpenMobile,
       toggleSidebar,
+      width,
+      setWidth,
     }),
-    [state, open, setOpen, isMobile, openMobile, setOpenMobile, toggleSidebar],
+    [
+      state,
+      open,
+      setOpen,
+      isMobile,
+      openMobile,
+      setOpenMobile,
+      toggleSidebar,
+      width,
+      setWidth,
+    ],
   );
 
   return (
@@ -133,7 +167,7 @@ function SidebarProvider({
           data-slot="sidebar-wrapper"
           style={
             {
-              "--sidebar-width": SIDEBAR_WIDTH,
+              "--sidebar-width": `${width}px`,
               "--sidebar-width-icon": SIDEBAR_WIDTH_ICON,
               ...style,
             } as React.CSSProperties
@@ -280,16 +314,58 @@ function SidebarTrigger({
 }
 
 function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
-  const { toggleSidebar } = useSidebar();
+  const { toggleSidebar, state, width, setWidth } = useSidebar();
+  const dragRef = React.useRef<{
+    startX: number;
+    startWidth: number;
+    side: "left" | "right";
+  } | null>(null);
+  const draggedRef = React.useRef(false);
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (state !== "expanded") return;
+    const sideEl = event.currentTarget.closest("[data-side]");
+    const side = sideEl?.getAttribute("data-side") === "right" ? "right" : "left";
+    dragRef.current = { startX: event.clientX, startWidth: width, side };
+    draggedRef.current = false;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.style.userSelect = "none";
+  };
+
+  const handlePointerMove = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!dragRef.current) return;
+    const delta = event.clientX - dragRef.current.startX;
+    if (Math.abs(delta) > 3) draggedRef.current = true;
+    const signedDelta = dragRef.current.side === "right" ? -delta : delta;
+    setWidth(dragRef.current.startWidth + signedDelta);
+  };
+
+  const handlePointerUp = (event: React.PointerEvent<HTMLButtonElement>) => {
+    if (!dragRef.current) return;
+    dragRef.current = null;
+    document.body.style.userSelect = "";
+    event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+
+  const handleClick = () => {
+    if (draggedRef.current) {
+      draggedRef.current = false;
+      return;
+    }
+    toggleSidebar();
+  };
 
   return (
     <button
       data-sidebar="rail"
       data-slot="sidebar-rail"
-      aria-label="Toggle Sidebar"
+      aria-label="Tarik untuk mengubah lebar, klik untuk buka/tutup sidebar"
       tabIndex={-1}
-      onClick={toggleSidebar}
-      title="Toggle Sidebar"
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onClick={handleClick}
+      title="Tarik untuk mengubah lebar, klik untuk buka/tutup sidebar"
       className={cn(
         "hover:after:bg-sidebar-border absolute inset-y-0 z-20 hidden w-4 -translate-x-1/2 transition-all ease-linear group-data-[side=left]:-right-4 group-data-[side=right]:left-0 after:absolute after:inset-y-0 after:left-1/2 after:w-[2px] sm:flex",
         "in-data-[side=left]:cursor-w-resize in-data-[side=right]:cursor-e-resize",

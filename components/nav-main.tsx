@@ -62,8 +62,8 @@ export function NavMain({
                     item.isActive && "bg-primary/5",
                   )}
                 >
-                  <span className="relative inline-flex">
-                    {item.icon && <item.icon />}
+                  <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
+                    {item.icon && <item.icon className="h-4 w-4 shrink-0" />}
                     {item.dot && (
                       <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive" />
                     )}
