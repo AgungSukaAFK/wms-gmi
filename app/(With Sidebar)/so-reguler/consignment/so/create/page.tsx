@@ -88,6 +88,7 @@ export default function CreateConsignmentSoPage() {
         .from("customers")
         .select("id, customer_no, customer_name")
         .eq("is_active", true)
+        .in("customer_type", ["consignment", "both"])
         .order("customer_name")
         .limit(20);
       if (debouncedCustomerSearch)

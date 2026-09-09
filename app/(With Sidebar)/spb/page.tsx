@@ -8,6 +8,7 @@ import {
   Edit2,
   FileWarning,
   Loader2,
+  MapPin,
   Plus,
   Printer,
   RefreshCcw,
@@ -20,6 +21,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
 import {
   Select,
   SelectContent,
@@ -53,8 +56,11 @@ import {
   previewStockOutApprovalFromTemplate,
   updateSpb,
 } from "@/services/spb-actions";
+import { getCabangList } from "@/services/master-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { formatDate } from "@/lib/utils";
+
+type CabangOption = { id: number; nama_cabang: string };
 
 type SpbRow = {
   id: number;
@@ -82,6 +88,10 @@ export default function SpbPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 500);
   const [status, setStatus] = useState("all");
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
+  const [dateFrom, setDateFrom] = useState("");
+  const [dateTo, setDateTo] = useState("");
+  const [availableCabang, setAvailableCabang] = useState<CabangOption[]>([]);
   const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
@@ -131,6 +141,9 @@ export default function SpbPage() {
     const res = await getSpbList({
       search: debouncedSearch || undefined,
       status,
+      cabangIds: locationFilters.length > 0 ? locationFilters.map(Number) : undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
       sort,
       page,
       limit,
@@ -149,7 +162,25 @@ export default function SpbPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, status, sort, page, limit]);
+  }, [debouncedSearch, status, locationFilters, dateFrom, dateTo, sort, page, limit]);
+
+  useEffect(() => {
+    getCabangList().then((data) => setAvailableCabang((data || []) as CabangOption[]));
+  }, []);
+
+  const hasActiveFilters =
+    status !== "all" ||
+    locationFilters.length > 0 ||
+    dateFrom !== "" ||
+    dateTo !== "";
+
+  const resetFilters = () => {
+    setStatus("all");
+    setLocationFilters([]);
+    setDateFrom("");
+    setDateTo("");
+    setPage(1);
+  };
 
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
@@ -335,6 +366,52 @@ export default function SpbPage() {
                 <SelectItem value="CANCELLED">CANCELLED</SelectItem>
               </SelectContent>
             </Select>
+
+            <MultiSelect
+              className="h-9 w-full sm:w-45"
+              placeholder="Semua Lokasi"
+              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
+                setPage(1);
+              }}
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: c.id.toString(),
+              }))}
+            />
+
+            <DatePickerString
+              value={dateFrom}
+              onChange={(value) => {
+                setDateFrom(value);
+                setPage(1);
+              }}
+              placeholder="Tanggal dari"
+              className="h-9 w-full text-xs font-medium sm:w-40"
+            />
+            <DatePickerString
+              value={dateTo}
+              onChange={(value) => {
+                setDateTo(value);
+                setPage(1);
+              }}
+              placeholder="Tanggal sampai"
+              className="h-9 w-full text-xs font-medium sm:w-40"
+            />
+
+            {hasActiveFilters && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-9 shrink-0 text-xs font-semibold text-muted-foreground"
+                onClick={resetFilters}
+              >
+                Reset Filter
+              </Button>
+            )}
           </div>
         </div>
       </Content>

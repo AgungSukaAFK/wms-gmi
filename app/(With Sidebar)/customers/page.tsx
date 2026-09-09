@@ -57,6 +57,8 @@ const CUSTOMER_SORT_COLUMNS: Record<string, string> = {
   is_active: "is_active",
 };
 
+type CustomerType = "consignment" | "non_consignment" | "both";
+
 type CustomerFormState = {
   customer_name: string;
   address: string;
@@ -64,6 +66,7 @@ type CustomerFormState = {
   email: string;
   pic_name: string;
   is_active: boolean;
+  customer_type: CustomerType;
 };
 
 const emptyCustomerForm: CustomerFormState = {
@@ -73,6 +76,13 @@ const emptyCustomerForm: CustomerFormState = {
   email: "",
   pic_name: "",
   is_active: true,
+  customer_type: "non_consignment",
+};
+
+const CUSTOMER_TYPE_LABEL: Record<CustomerType, string> = {
+  consignment: "Consignment",
+  non_consignment: "Non-Consignment",
+  both: "Keduanya",
 };
 
 export default function CustomersPage() {
@@ -86,6 +96,7 @@ export default function CustomersPage() {
   const [statusFilter, setStatusFilter] = useState<
     "all" | "active" | "inactive"
   >("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | CustomerType>("all");
   const [sortOrder, setSortOrder] = useState<string>("customer_name_asc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(20);
@@ -132,6 +143,7 @@ export default function CustomersPage() {
       limit,
       search: debouncedSearch,
       is_aktif: statusFilter,
+      customer_type: typeFilter,
       sortField,
       ascending,
     });
@@ -153,7 +165,7 @@ export default function CustomersPage() {
 
   useEffect(() => {
     fetchCustomers();
-  }, [page, limit, debouncedSearch, statusFilter, sortOrder]);
+  }, [page, limit, debouncedSearch, statusFilter, typeFilter, sortOrder]);
 
   const handleSortChange = (nextSort: string) => {
     setSortOrder(nextSort);
@@ -175,6 +187,7 @@ export default function CustomersPage() {
       email: customer.email || "",
       pic_name: customer.pic_name || "",
       is_active: Boolean(customer.is_active),
+      customer_type: (customer.customer_type as CustomerType) || "non_consignment",
     });
     setDialogOpen(true);
   };
@@ -182,6 +195,7 @@ export default function CustomersPage() {
   const resetFilters = () => {
     setSearch("");
     setStatusFilter("all");
+    setTypeFilter("all");
     setSortOrder("customer_name_asc");
     setPage(1);
   };
@@ -190,8 +204,9 @@ export default function CustomersPage() {
     () =>
       Boolean(search) ||
       statusFilter !== "all" ||
+      typeFilter !== "all" ||
       sortOrder !== "customer_name_asc",
-    [search, statusFilter, sortOrder],
+    [search, statusFilter, typeFilter, sortOrder],
   );
 
   const handleSubmit = async () => {
@@ -209,6 +224,7 @@ export default function CustomersPage() {
         email: form.email,
         pic_name: form.pic_name,
         is_active: form.is_active,
+        customer_type: form.customer_type,
       };
 
       const result = editingCustomerId
@@ -313,6 +329,24 @@ export default function CustomersPage() {
               </SelectContent>
             </Select>
 
+            <Select
+              value={typeFilter}
+              onValueChange={(val: "all" | CustomerType) => {
+                setTypeFilter(val);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="h-9 w-full sm:w-42.5 border-input bg-background text-xs font-bold text-foreground">
+                <SelectValue placeholder="Jenis Customer" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Semua Jenis</SelectItem>
+                <SelectItem value="consignment">Consignment</SelectItem>
+                <SelectItem value="non_consignment">Non-Consignment</SelectItem>
+                <SelectItem value="both">Keduanya</SelectItem>
+              </SelectContent>
+            </Select>
+
             <Button
               variant="ghost"
               size="sm"
@@ -358,6 +392,9 @@ export default function CustomersPage() {
                 >
                   Email / PIC
                 </SortableTableHead>
+                <TableHead className="w-32 text-[10px] font-black uppercase text-muted-foreground">
+                  Jenis
+                </TableHead>
                 <SortableTableHead
                   sortKey="is_active"
                   currentSort={sortOrder}
@@ -374,7 +411,7 @@ export default function CustomersPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-40 text-center">
+                  <TableCell colSpan={7} className="h-40 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                       <span className="text-[10px] font-bold text-muted-foreground uppercase">
@@ -386,7 +423,7 @@ export default function CustomersPage() {
               ) : customers.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     className="h-40 text-center text-muted-foreground italic text-sm"
                   >
                     {hasActiveFilters
@@ -427,6 +464,23 @@ export default function CustomersPage() {
                           PIC: {customer.pic_name || "-"}
                         </span>
                       </div>
+                    </TableCell>
+                    <TableCell>
+                      <Badge
+                        variant={
+                          customer.customer_type === "consignment"
+                            ? "default"
+                            : customer.customer_type === "both"
+                              ? "outline"
+                              : "secondary"
+                        }
+                        className="text-[10px] font-bold uppercase"
+                      >
+                        {CUSTOMER_TYPE_LABEL[
+                          (customer.customer_type as CustomerType) ||
+                            "non_consignment"
+                        ]}
+                      </Badge>
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge
@@ -567,6 +621,27 @@ export default function CustomersPage() {
                 <SelectContent>
                   <SelectItem value="active">Aktif</SelectItem>
                   <SelectItem value="inactive">Nonaktif</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Jenis Customer</Label>
+              <Select
+                value={form.customer_type}
+                onValueChange={(val: CustomerType) =>
+                  setForm((prev) => ({ ...prev, customer_type: val }))
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="consignment">Consignment</SelectItem>
+                  <SelectItem value="non_consignment">
+                    Non-Consignment
+                  </SelectItem>
+                  <SelectItem value="both">Keduanya</SelectItem>
                 </SelectContent>
               </Select>
             </div>

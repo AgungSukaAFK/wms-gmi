@@ -133,6 +133,7 @@ export default function CreateDoRegulerPage() {
         .from("customers")
         .select("id, customer_no, customer_name")
         .eq("is_active", true)
+        .in("customer_type", ["non_consignment", "both"])
         .order("customer_name")
         .limit(20);
       if (debouncedCustomerSearch)

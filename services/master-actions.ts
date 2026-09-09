@@ -600,9 +600,12 @@ type CustomerListParams = {
   limit?: number;
   search?: string;
   is_aktif?: "all" | "active" | "inactive";
+  customer_type?: "all" | CustomerType;
   sortField?: string;
   ascending?: boolean;
 };
+
+type CustomerType = "consignment" | "non_consignment" | "both";
 
 type CustomerPayload = {
   customer_name: string;
@@ -611,6 +614,7 @@ type CustomerPayload = {
   email?: string;
   pic_name?: string;
   is_active?: boolean;
+  customer_type?: CustomerType;
 };
 
 async function hasCustomerWriteAccess() {
@@ -683,6 +687,11 @@ export async function getCustomerList(params: CustomerListParams = {}) {
     query = query.eq("is_active", false);
   }
 
+  const typeFilter = params.customer_type || "all";
+  if (typeFilter !== "all") {
+    query = query.eq("customer_type", typeFilter);
+  }
+
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
@@ -734,6 +743,7 @@ export async function createCustomer(payload: CustomerPayload) {
         email: payload.email?.trim() || null,
         pic_name: payload.pic_name?.trim() || null,
         is_active: payload.is_active ?? true,
+        customer_type: payload.customer_type || "non_consignment",
       },
     ])
     .select()
@@ -765,6 +775,7 @@ export async function updateCustomer(id: number, payload: CustomerPayload) {
       email: payload.email?.trim() || null,
       pic_name: payload.pic_name?.trim() || null,
       is_active: payload.is_active ?? true,
+      customer_type: payload.customer_type || "non_consignment",
     })
     .eq("id", id);
 
@@ -810,6 +821,8 @@ export async function upsertCustomer(formData: FormData) {
     email: (formData.get("email") as string) || "",
     pic_name: (formData.get("pic_name") as string) || "",
     is_active: formData.get("is_active") !== "false",
+    customer_type:
+      (formData.get("customer_type") as CustomerType) || "non_consignment",
   };
 
   if (id) {

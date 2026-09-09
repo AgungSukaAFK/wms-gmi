@@ -726,8 +726,10 @@ const SPB_SORT_COLUMNS: Record<string, string> = {
 
 export async function getSpbList(params?: {
   search?: string;
-  cabangId?: number;
+  cabangIds?: number[];
   status?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -757,11 +759,17 @@ export async function getSpbList(params?: {
       `spb_no.ilike.%${params.search}%,spb_no_wo.ilike.%${params.search}%,spb_pic_gmi.ilike.%${params.search}%,spb_pic_ppa.ilike.%${params.search}%`,
     );
   }
-  if (params?.cabangId) {
-    query = query.eq("cabang_id", params.cabangId);
+  if (params?.cabangIds && params.cabangIds.length > 0) {
+    query = query.in("cabang_id", params.cabangIds);
   }
   if (params?.status && params.status !== "all") {
     query = query.eq("spb_status", params.status);
+  }
+  if (params?.dateFrom) {
+    query = query.gte("spb_tanggal", params.dateFrom);
+  }
+  if (params?.dateTo) {
+    query = query.lte("spb_tanggal", params.dateTo);
   }
 
   const { data, error, count } = await query.range(from, from + limit - 1);
