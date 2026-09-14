@@ -74,8 +74,12 @@ export type ModeratorMrEditPayload = {
   cabang_id?: number;
   mr_tanggal?: string;
   mr_due_date?: string | null;
-  mr_priority?: string;
-  updatedItems?: { id: number; qty_request: number; remarks?: string }[];
+  updatedItems?: {
+    id: number;
+    qty_request: number;
+    remarks?: string;
+    item_priority?: string;
+  }[];
   newItems?: {
     part_id: number;
     part_number: string;
@@ -83,6 +87,7 @@ export type ModeratorMrEditPayload = {
     satuan: string;
     qty_request: number;
     remarks?: string;
+    item_priority?: string;
   }[];
   deletedItemIds?: number[];
   approvals: ModeratorApprovalStep[];
@@ -249,6 +254,8 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
     for (const item of payload.updatedItems) {
       const itemPatch: Record<string, any> = { qty_request: item.qty_request };
       if (item.remarks !== undefined) itemPatch.remarks = item.remarks || null;
+      if (item.item_priority !== undefined)
+        itemPatch.item_priority = item.item_priority;
       const { error: itemErr } = await supabase
         .from("mr_items")
         .update(itemPatch)
@@ -278,7 +285,6 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
   if (payload.cabang_id !== undefined) headerPatch.cabang_id = payload.cabang_id;
   if (payload.mr_tanggal !== undefined) headerPatch.mr_tanggal = payload.mr_tanggal;
   if (payload.mr_due_date !== undefined) headerPatch.mr_due_date = payload.mr_due_date || null;
-  if (payload.mr_priority !== undefined) headerPatch.mr_priority = payload.mr_priority;
 
   const { error: updateErr } = await supabase.from("mrs").update(headerPatch).eq("id", mrId);
   if (updateErr) return { error: updateErr.message };
@@ -408,8 +414,6 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
   if (payload.mr_tanggal !== undefined && payload.mr_tanggal !== mr.mr_tanggal)
     summaryParts.push("tanggal");
   if (payload.mr_due_date !== undefined) summaryParts.push("due date");
-  if (payload.mr_priority !== undefined && payload.mr_priority !== mr.mr_priority)
-    summaryParts.push("prioritas");
   if (payload.updatedItems?.length) summaryParts.push(`${payload.updatedItems.length} item diubah`);
   if (payload.newItems?.length) summaryParts.push(`${payload.newItems.length} item ditambah`);
   if (payload.deletedItemIds?.length) summaryParts.push(`${payload.deletedItemIds.length} item dihapus`);
@@ -427,7 +431,6 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
         cabang_id: mr.cabang_id,
         mr_tanggal: mr.mr_tanggal,
         mr_due_date: mr.mr_due_date,
-        mr_priority: mr.mr_priority,
         mr_status: mr.mr_status,
         approvals: mr.approvals,
       },
@@ -435,7 +438,6 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
         cabang_id: headerPatch.cabang_id ?? mr.cabang_id,
         mr_tanggal: headerPatch.mr_tanggal ?? mr.mr_tanggal,
         mr_due_date: headerPatch.mr_due_date ?? mr.mr_due_date,
-        mr_priority: headerPatch.mr_priority ?? mr.mr_priority,
         mr_status: newStatus,
         approvals: payload.approvals,
       },

@@ -259,17 +259,19 @@ export function ConsignmentSoDetailSheet({
                       {items.map((line) => (
                         <TableRow key={line.id} className="h-12">
                           <TableCell>
-                            <span className="text-xs font-semibold">{line.part_name}</span>
-                            <code className="block text-[10px] text-muted-foreground">
-                              {line.part_number}
-                            </code>
-                            {(line.part_number_customer || line.code_item_customer) && (
-                              <span className="block text-[9px] text-muted-foreground/80 mt-0.5">
-                                {line.part_number_customer && `PN Cust: ${line.part_number_customer}`}
-                                {line.part_number_customer && line.code_item_customer && " · "}
-                                {line.code_item_customer && `Code: ${line.code_item_customer}`}
+                            <div className="max-w-48">
+                              <code className="block text-sm font-bold truncate">
+                                {line.part_number}
+                              </code>
+                              <span className="block text-[10px] text-muted-foreground truncate">
+                                {line.part_name}
                               </span>
-                            )}
+                              {line.part_number_customer && (
+                                <span className="block text-[9px] text-muted-foreground/80 mt-0.5 truncate">
+                                  PN Cust: {line.part_number_customer}
+                                </span>
+                              )}
+                            </div>
                           </TableCell>
                           <TableCell className="text-center text-xs font-bold">
                             {line.qty} {line.satuan}

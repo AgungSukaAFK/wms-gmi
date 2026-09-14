@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { Content } from "@/components/content";
 import { DocumentTrendChart } from "@/components/dashboard/document-trend-chart";
 import { MrByCabangChart } from "@/components/dashboard/mr-by-cabang-chart";
@@ -199,7 +200,7 @@ export default async function DashboardPage() {
     supabase
       .from("mrs")
       .select(
-        "id, mr_kode, mr_pic, mr_tanggal, mr_status, mr_priority, cabang(nama_cabang)",
+        "id, mr_kode, mr_pic, mr_tanggal, mr_status, cabang(nama_cabang), mr_items(item_priority)",
       )
       .order("created_at", { ascending: false })
       .limit(5),
@@ -581,7 +582,17 @@ export default async function DashboardPage() {
                       {formatDate(mr.mr_tanggal)}
                     </TableCell>
                     <TableCell className="text-xs font-medium text-foreground">
-                      {renderPriorityBadge(mr.mr_priority)}
+                      <div className="flex flex-wrap gap-1">
+                        {Array.from(
+                          new Set(
+                            (mr.mr_items || [])
+                              .map((i: any) => i.item_priority)
+                              .filter(Boolean),
+                          ),
+                        ).map((p: any) => (
+                          <Fragment key={p}>{renderPriorityBadge(p)}</Fragment>
+                        ))}
+                      </div>
                     </TableCell>
                     <TableCell className="text-xs font-medium text-foreground">
                       {renderStatusBadge(mr.mr_status)}

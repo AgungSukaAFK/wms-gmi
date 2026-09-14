@@ -9,29 +9,24 @@ import { Label } from "@/components/ui/label";
 import {
   ChevronLeft,
   Calendar as CalendarIcon,
-  User,
-  ClipboardCheck,
-  Building2,
-  CheckCircle2,
-  Hash,
   Loader2,
-  FileText,
   ShieldCheck,
   Search,
-  Clock,
-  ArrowRight,
   AlertTriangle,
+  CalendarRange,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { MRItemSelector, MRItem } from "@/components/mr/mr-item-selector";
+import {
+  ScheduledMRItemSelector,
+  ScheduledMRItem,
+} from "@/components/mr/scheduled-mr-item-selector";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
-import { createMaterialRequest } from "@/services/procurement-actions";
+import { createScheduledMaterialRequest } from "@/services/scheduled-mr-actions";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectContent,
@@ -40,38 +35,42 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { canCreateMR } from "@/lib/mr-permissions";
 
-export default function CreateMRPage() {
+function addMonths(ymd: string, months: number): string {
+  const d = new Date(ymd);
+  d.setMonth(d.getMonth() + months);
+  return toYmdLocal(d);
+}
+
+export default function CreateScheduledMRPage() {
   const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
 
-  // User & Data State
   const [userProfile, setUserProfile] = useState<any>(null);
   const [templates, setTemplates] = useState<any[]>([]);
 
-  // Form State
   const [mrKode, setMrKode] = useState("");
   const [mrTanggal, setMrTanggal] = useState(toYmdLocal());
-  const [mrDueDate, setMrDueDate] = useState("");
   const [mrPriority, setMrPriority] = useState("P3");
-  const [mrAccurate, setMrAccurate] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
-  const [items, setItems] = useState<MRItem[]>([]);
+  const [items, setItems] = useState<ScheduledMRItem[]>([]);
 
-  // Template Search State
+  // Default due date/priority dipakai untuk prefill item baru saja (bukan
+  // field dokumen) — mempercepat input kalau sebagian besar item punya
+  // jadwal yang sama.
+  const [defaultDueDate, setDefaultDueDate] = useState(addMonths(toYmdLocal(), 1));
+
   const [templateSearch, setTemplateSearch] = useState("");
   const [debouncedTemplateSearch] = useDebounce(templateSearch, 300);
   const [templatePopoverOpen, setTemplatePopoverOpen] = useState(false);
 
-  // Signature Modal
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
 
   useEffect(() => {
@@ -91,13 +90,12 @@ export default function CreateMRPage() {
         .eq("id", user.id)
         .single();
 
-      // Guard: role yang tidak diizinkan membuat MR dialihkan kembali ke list.
       if (
         profile &&
         !canCreateMR((profile.roles as any[])?.map((r: any) => r.roles?.name))
       ) {
         toast.error("Akses ditolak. Role Anda tidak diizinkan membuat MR.");
-        router.push("/mr");
+        router.push("/mr/scheduled");
         return;
       }
 
@@ -124,9 +122,22 @@ export default function CreateMRPage() {
   const validateForm = () => {
     if (!mrKode.trim()) return "Nomor Dokumen harus diisi";
     if (!mrTanggal) return "Tanggal MR harus diisi";
-    if (!mrDueDate) return "Due Date harus diisi";
     if (!selectedTemplateId) return "Pilih Alur Approval";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
+    const missingDueDate = items.find((i) => !i.item_due_date);
+    if (missingDueDate)
+      return `${missingDueDate.part_number}: due date item wajib diisi`;
+    const currentMonth = toYmdLocal().slice(0, 7);
+    const sameMonthItem = items.find(
+      (i) => i.item_due_date.slice(0, 7) === currentMonth,
+    );
+    if (sameMonthItem)
+      return `${sameMonthItem.part_number}: due date tidak boleh di bulan berjalan (${currentMonth}). Scheduled MR khusus perencanaan bulan depan atau lebih — gunakan MR biasa untuk kebutuhan bulan ini.`;
+    const inconsistent = items.find(
+      (i) => i.qty_pr + i.qty_sharestock_total !== i.qty_request,
+    );
+    if (inconsistent)
+      return `${inconsistent.part_number}: alokasi PR + Share Stock belum sama dengan qty diminta`;
     return null;
   };
 
@@ -181,23 +192,31 @@ export default function CreateMRPage() {
         };
       });
 
-      const result = await createMaterialRequest({
+      const result = await createScheduledMaterialRequest({
         mr_kode: mrKode.trim(),
         cabang_id: userProfile.cabang_id,
         mr_pic: userProfile.nama,
         mr_pic_id: userProfile.id,
         mr_tanggal: mrTanggal,
-        mr_due_date: mrDueDate,
-        accurate: mrAccurate,
         approvals: approvalData,
         items: items.map((item) => ({
           part_id: item.part_id,
           part_number: item.part_number,
           part_name: item.part_name,
           satuan: item.satuan,
-          qty_request: item.qty,
+          qty_request: item.qty_request,
+          item_due_date: item.item_due_date,
           item_priority: item.item_priority,
+          item_site_cabang_id: item.item_site_cabang_id || undefined,
           remarks: item.remarks?.trim() || undefined,
+          qty_pr: item.qty_pr,
+          qty_sharestock_total: item.qty_sharestock_total,
+          sharestocks: item.sharestocks
+            .filter((ss) => ss.source_cabang_id !== "")
+            .map((ss) => ({
+              source_cabang_id: Number(ss.source_cabang_id),
+              qty: ss.qty,
+            })),
         })),
       });
 
@@ -205,8 +224,8 @@ export default function CreateMRPage() {
         throw new Error(result.error);
       }
 
-      toast.success("Material Request berhasil dibuat");
-      router.push("/mr");
+      toast.success("Scheduled MR berhasil dibuat");
+      router.push("/mr/scheduled");
     } catch (err: any) {
       toast.error(err.message);
     } finally {
@@ -249,7 +268,6 @@ export default function CreateMRPage() {
 
   return (
     <>
-      {/* Section 1: Header */}
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
@@ -262,14 +280,14 @@ export default function CreateMRPage() {
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <div className="h-10 w-10 bg-primary rounded flex items-center justify-center shadow-sm text-primary-foreground">
-              <FileText className="h-5 w-5" />
+              <CalendarRange className="h-5 w-5" />
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight">
-                BUAT MATERIAL REQUEST
+                BUAT SCHEDULED MR
               </h1>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-                Dokumentasi Internal
+                Perencanaan Kebutuhan s/d 3 Bulan
               </p>
             </div>
           </div>
@@ -287,151 +305,82 @@ export default function CreateMRPage() {
         </div>
       </Content>
 
-      {/* Section 2: Form Fields + Item Selector */}
       <Content>
-        <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 xl:grid-cols-3">
-          {/* Column 1: Requester + Priority */}
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                Pemohon (Requester)
-              </Label>
-              <div className="rounded-md border border-input bg-background p-3">
-                <p className="text-sm font-semibold text-foreground leading-none">
-                  {userProfile?.nama}
-                </p>
-                <p className="text-[11px] text-muted-foreground mt-1">
-                  {userProfile?.email}
-                </p>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-                <AlertTriangle className="h-3 w-3 text-warning" /> Prioritas
-                Default Item
-              </Label>
-              <Select value={mrPriority} onValueChange={setMrPriority}>
-                <SelectTrigger
-                  className={`h-9 w-full rounded-md border-input bg-background text-xs font-semibold ${getPriorityColor(mrPriority)}`}
-                >
-                  <SelectValue placeholder="Pilih Prioritas" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="P1" className="text-destructive font-bold">
-                    P1 - EMERGENCY
-                  </SelectItem>
-                  <SelectItem value="P2" className="text-warning font-bold">
-                    P2 - HIGH
-                  </SelectItem>
-                  <SelectItem value="P3" className="text-primary font-bold">
-                    P3 - NORMAL
-                  </SelectItem>
-                  <SelectItem
-                    value="P4"
-                    className="text-muted-foreground font-bold"
-                  >
-                    P4 - LOW
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-[9px] text-muted-foreground italic">
-                Prioritas sekarang per barang — ini cuma nilai awal tiap item
-                baru, bisa diubah sendiri-sendiri di tabel Daftar Barang.
+        <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 xl:grid-cols-4">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+              Pemohon (Requester)
+            </Label>
+            <div className="rounded-md border border-input bg-background p-3">
+              <p className="text-sm font-semibold text-foreground leading-none">
+                {userProfile?.nama}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                {userProfile?.cabang?.nama_cabang}
               </p>
             </div>
           </div>
 
-          {/* Column 2: Location + Remarks */}
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                Lokasi Site
-              </Label>
-              <div className="rounded-md border border-input bg-background p-3">
-                <p className="text-sm font-semibold text-foreground leading-none uppercase">
-                  {userProfile?.cabang?.nama_cabang}
-                </p>
-                <p className="text-[10px] font-semibold text-primary mt-1 uppercase tracking-tighter">
-                  Authorized Location
-                </p>
-              </div>
-            </div>
-            {/* ACCURATE_HIDDEN: hidden per request, default always false */}
-            {false && (
-              <div className="flex items-center gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-md">
-                <Checkbox
-                  id="mr-accurate"
-                  checked={mrAccurate}
-                  onCheckedChange={(v) => setMrAccurate(Boolean(v))}
-                  className="border-amber-400 data-[state=checked]:bg-amber-500 data-[state=checked]:border-amber-500"
-                />
-                <label
-                  htmlFor="mr-accurate"
-                  className="cursor-pointer select-none"
-                >
-                  <p className="text-[10px] font-bold text-amber-700 uppercase tracking-tight leading-none">
-                    Sudah Input ke Accurate
-                  </p>
-                  <p className="text-[9px] text-amber-500 font-medium mt-0.5">
-                    Centang jika dokumen ini sudah terdata di sistem Accurate
-                  </p>
-                </label>
-              </div>
-            )}
+          <div className="space-y-1.5">
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+              <AlertTriangle className="h-3 w-3 text-warning" /> Prioritas
+              Umum
+            </Label>
+            <Select value={mrPriority} onValueChange={setMrPriority}>
+              <SelectTrigger
+                className={`h-9 w-full rounded-md border-input bg-background text-xs font-semibold ${getPriorityColor(mrPriority)}`}
+              >
+                <SelectValue placeholder="Pilih Prioritas" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="P1">P1 - EMERGENCY</SelectItem>
+                <SelectItem value="P2">P2 - HIGH</SelectItem>
+                <SelectItem value="P3">P3 - NORMAL</SelectItem>
+                <SelectItem value="P4">P4 - LOW</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
 
-          {/* Column 3: Dates */}
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label className="text-[10px] font-bold text-muted-foreground uppercase">
-                Input & Deadline
-              </Label>
-              <div className="space-y-3 rounded-md border border-input bg-background p-3">
-                <div className="space-y-1.5">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <CalendarIcon className="h-3 w-3 text-muted-foreground" />
-                    <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                      Tgl Input
-                    </span>
-                  </div>
-                  <DatePickerString
-                    className="h-9 w-full rounded-md border-input bg-background px-2 text-xs font-semibold text-foreground"
-                    value={mrTanggal}
-                    onChange={setMrTanggal}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <div className="flex min-w-0 items-center gap-1.5">
-                    <Clock className="h-3 w-3 text-destructive/60" />
-                    <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                      Deadline
-                    </span>
-                  </div>
-                  <DatePickerString
-                    className="h-9 w-full rounded-md border-input bg-background px-2 text-xs font-semibold text-destructive"
-                    value={mrDueDate}
-                    onChange={setMrDueDate}
-                  />
-                </div>
-              </div>
-            </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5">
+              <CalendarIcon className="h-3 w-3" /> Tgl Input
+            </Label>
+            <DatePickerString
+              className="h-9 w-full rounded-md border-input bg-background px-2 text-xs font-semibold text-foreground"
+              value={mrTanggal}
+              onChange={setMrTanggal}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label className="text-[10px] font-bold text-muted-foreground uppercase flex items-center gap-1.5">
+              <CalendarRange className="h-3 w-3" /> Default Due Date Item
+            </Label>
+            <DatePickerString
+              className="h-9 w-full rounded-md border-input bg-background px-2 text-xs font-semibold text-foreground"
+              value={defaultDueDate}
+              onChange={setDefaultDueDate}
+            />
+            <p className="text-[9px] text-muted-foreground italic">
+              Prefill item baru — tiap item tetap bisa diatur ulang sendiri.
+            </p>
           </div>
         </div>
 
         <Separator className="my-4" />
 
         <div className="min-h-50">
-          <MRItemSelector
+          <ScheduledMRItemSelector
             items={items}
             onItemsChange={setItems}
             cabangId={userProfile?.cabang_id ?? null}
-            onCancelMR={() => router.push("/mr")}
+            onCancelMR={() => router.push("/mr/scheduled")}
+            defaultDueDate={defaultDueDate}
             defaultPriority={mrPriority}
           />
         </div>
       </Content>
 
-      {/* Section 3: Approval + Submit */}
       <Content>
         <div className="flex flex-col lg:flex-row justify-between gap-8">
           <div className="flex-1 space-y-4 max-w-full lg:max-w-125">
@@ -567,7 +516,8 @@ export default function CreateMRPage() {
               </Button>
             </div>
             <p className="text-center text-[9px] text-muted-foreground font-medium italic">
-              Pastikan data benar sebelum tanda tangan.
+              Alokasi PR/Share Stock per item sudah ditentukan di tabel item —
+              approver tinggal menyetujui dokumen ini.
             </p>
           </div>
         </div>

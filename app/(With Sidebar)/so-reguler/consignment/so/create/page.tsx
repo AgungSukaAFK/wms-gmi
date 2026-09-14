@@ -47,7 +47,6 @@ interface ConsignmentItem {
   satuan: string;
   qty: number;
   part_number_customer: string;
-  code_item_customer: string;
 }
 
 export default function CreateConsignmentSoPage() {
@@ -127,7 +126,6 @@ export default function CreateConsignmentSoPage() {
         satuan: barang.part_satuan,
         qty: 1,
         part_number_customer: "",
-        code_item_customer: "",
       },
     ]);
     setSearchOpen(false);
@@ -171,7 +169,6 @@ export default function CreateConsignmentSoPage() {
           satuan: i.satuan,
           qty: i.qty,
           part_number_customer: i.part_number_customer || undefined,
-          code_item_customer: i.code_item_customer || undefined,
         })),
       });
 
@@ -351,7 +348,7 @@ export default function CreateConsignmentSoPage() {
                       disabled={items.some((i) => i.part_id === r.id)}
                       className="w-full text-left p-2 hover:bg-muted rounded-md disabled:opacity-50"
                     >
-                      <code className="text-xs font-bold">{r.part_number}</code>
+                      <code className="block text-sm font-bold">{r.part_number}</code>
                       <span className="block text-[10px] text-muted-foreground truncate">
                         {r.part_name}
                       </span>
@@ -373,7 +370,6 @@ export default function CreateConsignmentSoPage() {
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">PN GMI / Desc</TableHead>
                 <TableHead className="w-16 text-center text-[10px] font-black uppercase text-muted-foreground">Unit</TableHead>
                 <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground">PN Cust</TableHead>
-                <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground">Code Item Cust</TableHead>
                 <TableHead className="w-28 text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
                 <TableHead className="w-14"></TableHead>
               </TableRow>
@@ -383,8 +379,12 @@ export default function CreateConsignmentSoPage() {
                 items.map((item) => (
                   <TableRow key={item.part_id} className="h-14">
                     <TableCell>
-                      <span className="font-semibold text-xs">{item.part_name}</span>
-                      <code className="block text-[10px] text-muted-foreground">{item.part_number}</code>
+                      <div className="max-w-48">
+                        <code className="block text-sm font-bold truncate">{item.part_number}</code>
+                        <span className="block text-[10px] text-muted-foreground truncate">
+                          {item.part_name}
+                        </span>
+                      </div>
                     </TableCell>
                     <TableCell className="text-center text-[10px] font-medium text-muted-foreground uppercase">
                       {item.satuan}
@@ -394,16 +394,6 @@ export default function CreateConsignmentSoPage() {
                         value={item.part_number_customer}
                         onChange={(e) =>
                           updateItem(item.part_id, { part_number_customer: e.target.value })
-                        }
-                        placeholder="Opsional"
-                        className="h-8 text-xs"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <Input
-                        value={item.code_item_customer}
-                        onChange={(e) =>
-                          updateItem(item.part_id, { code_item_customer: e.target.value })
                         }
                         placeholder="Opsional"
                         className="h-8 text-xs"
@@ -431,7 +421,7 @@ export default function CreateConsignmentSoPage() {
                 ))
               ) : (
                 <TableRow className="h-24 hover:bg-transparent">
-                  <TableCell colSpan={6} className="text-center text-xs italic text-muted-foreground">
+                  <TableCell colSpan={5} className="text-center text-xs italic text-muted-foreground">
                     Belum ada item.
                   </TableCell>
                 </TableRow>

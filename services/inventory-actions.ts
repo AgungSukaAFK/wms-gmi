@@ -1,7 +1,7 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
-import { evaluateMrFreeze } from "./freeze-actions";
+import { evaluateMrFreeze, evaluateMrItemFreeze } from "./freeze-actions";
 import { revalidatePath } from "next/cache";
 import { toCompletedIfLegacy } from "@/lib/document-status";
 
@@ -44,6 +44,67 @@ async function getDeliverySourceMrIds(
         .filter((id: unknown): id is number => typeof id === "number"),
     ),
   );
+}
+
+/**
+ * Scheduled MR: freeze dievaluasi per-item, bukan per dokumen. Dipakai oleh
+ * createDelivery yang sudah punya `mrItemById` di tangan (belum ada
+ * deliveryId karena delivery belum dibuat).
+ */
+async function guardScheduledMrItemFreeze(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  mrItemById: Map<number, { mr_id: number | null; part_number: string }>,
+): Promise<string | null> {
+  if (mrItemById.size === 0) return null;
+  const mrIds = Array.from(
+    new Set(
+      Array.from(mrItemById.values())
+        .map((i) => i.mr_id)
+        .filter((id): id is number => typeof id === "number"),
+    ),
+  );
+  const { data: mrRows } = await supabase
+    .from("mrs")
+    .select("id")
+    .in("id", mrIds)
+    .eq("mr_type", "scheduled");
+  const scheduledIds = new Set((mrRows || []).map((r: any) => r.id));
+  if (scheduledIds.size === 0) return null;
+
+  for (const [itemId, info] of mrItemById.entries()) {
+    if (!info.mr_id || !scheduledIds.has(info.mr_id)) continue;
+    if (await evaluateMrItemFreeze(itemId)) {
+      return `Item ${info.part_number} sedang di-FREEZE (lewat due date item tanpa delivery). Hubungi moderator untuk unfreeze/reset.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Varian di atas untuk aksi yang sudah punya deliveryId (tracking/finalize/
+ * edit) — resolve item mr_item_id-nya dari delivery_items dulu.
+ */
+async function guardDeliveryItemFreeze(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  deliveryId: number,
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("delivery_items")
+    .select("mr_items(id, part_number, mr_id, mrs(mr_type))")
+    .eq("dlv_id", deliveryId);
+
+  for (const row of data || []) {
+    const mrItem: any = Array.isArray((row as any).mr_items)
+      ? (row as any).mr_items[0]
+      : (row as any).mr_items;
+    if (!mrItem) continue;
+    const mrsRow = Array.isArray(mrItem.mrs) ? mrItem.mrs[0] : mrItem.mrs;
+    if (mrsRow?.mr_type !== "scheduled") continue;
+    if (await evaluateMrItemFreeze(mrItem.id)) {
+      return `Item ${mrItem.part_number} sedang di-FREEZE (lewat due date item tanpa delivery). Hubungi moderator untuk unfreeze/reset.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -446,7 +507,7 @@ async function _validateAndApplyDeliveryItems(
     }
   }
 
-  // 3. Catat Planning Supply (barang akan masuk ke cabang tujuan).
+  // 3. Catat Barang dalam Pengiriman (barang akan masuk ke cabang tujuan).
   //    Saldo "in_transit" sampai barang diterima (finalizeDelivery) atau
   //    dibatalkan (cancelDelivery).
   {
@@ -500,7 +561,7 @@ async function _validateAndApplyDeliveryItems(
       .from("planning_supplies")
       .insert(planningRows);
     if (planningError) {
-      console.error("Gagal mencatat planning supply:", planningError.message);
+      console.error("Gagal mencatat barang dalam pengiriman:", planningError.message);
     }
   }
 
@@ -620,10 +681,29 @@ export async function createDelivery(data: {
       };
     }
   }
+  const itemFreezeError = await guardScheduledMrItemFreeze(supabase, mrItemById);
+  if (itemFreezeError) return { error: itemFreezeError };
 
   const {
     data: { user },
   } = await supabase.auth.getUser();
+
+  // Bekukan gambar/nama tanda tangan pengirim ke kolom deliveries sendiri,
+  // supaya kalau signature ini nanti dihapus, bukti serah-terima yang sudah
+  // selesai tidak ikut kehilangan gambar tanda tangannya.
+  let senderSignatureSnapshot: {
+    image_url: string;
+    printed_name: string;
+    label: string;
+  } | null = null;
+  if (data.signature_sender_id) {
+    const { data: sig } = await supabase
+      .from("user_signatures")
+      .select("image_url, printed_name, label")
+      .eq("id", data.signature_sender_id)
+      .single();
+    senderSignatureSnapshot = sig || null;
+  }
 
   const deliveryCode = data.dlv_kode?.trim();
   if (!deliveryCode) {
@@ -676,6 +756,11 @@ export async function createDelivery(data: {
             signed_by_sender_at: data.signature_sender_id
               ? new Date().toISOString()
               : null,
+            signature_sender_image_url:
+              senderSignatureSnapshot?.image_url || null,
+            signature_sender_printed_name:
+              senderSignatureSnapshot?.printed_name || null,
+            signature_sender_label: senderSignatureSnapshot?.label || null,
             no_resi: data.no_resi?.trim() || null,
             status: "open",
           },
@@ -726,6 +811,8 @@ export async function updateDeliveryTracking(
       };
     }
   }
+  const trackingItemFreezeError = await guardDeliveryItemFreeze(supabase, deliveryId);
+  if (trackingItemFreezeError) return { error: trackingItemFreezeError };
 
   const { error } = await supabase
     .from("deliveries")
@@ -811,6 +898,11 @@ export async function updateDeliveryTrackingModerator(
       };
     }
   }
+  const modTrackingItemFreezeError = await guardDeliveryItemFreeze(
+    supabase,
+    deliveryId,
+  );
+  if (modTrackingItemFreezeError) return { error: modTrackingItemFreezeError };
 
   const { error: updateError } = await supabase
     .from("deliveries")
@@ -880,6 +972,11 @@ export async function finalizeDelivery(
       };
     }
   }
+  const finalizeItemFreezeError = await guardDeliveryItemFreeze(
+    supabase,
+    deliveryId,
+  );
+  if (finalizeItemFreezeError) return { error: finalizeItemFreezeError };
 
   if (delivery.signature_receiver_id) {
     if (
@@ -929,7 +1026,7 @@ export async function finalizeDelivery(
   // Validate signature belongs to user
   const { data: sig } = await supabase
     .from("user_signatures")
-    .select("id")
+    .select("id, image_url, printed_name, label")
     .eq("id", signatureId)
     .eq("user_id", user.id)
     .eq("is_hidden", false)
@@ -991,6 +1088,9 @@ export async function finalizeDelivery(
     .update({
       signature_receiver_id: signatureId,
       signed_by_receiver_at: new Date().toISOString(),
+      signature_receiver_image_url: sig.image_url,
+      signature_receiver_printed_name: sig.printed_name,
+      signature_receiver_label: sig.label,
       uid_receiver: user.id,
       status: "completed",
       tracking_status: "completed",
@@ -1014,7 +1114,7 @@ export async function finalizeDelivery(
     await syncShareStockStatuses(mrItemIds);
   }
 
-  // Tutup saldo planning supply: barang sudah diterima di cabang tujuan.
+  // Tutup saldo barang dalam pengiriman: barang sudah diterima di cabang tujuan.
   const { error: planningReceivedError } = await supabase
     .from("planning_supplies")
     .update({ status: "received" })
@@ -1022,7 +1122,7 @@ export async function finalizeDelivery(
     .eq("status", "in_transit");
   if (planningReceivedError) {
     console.error(
-      "Gagal update planning supply jadi received:",
+      "Gagal update barang dalam pengiriman jadi received:",
       planningReceivedError.message,
     );
   }
@@ -1039,7 +1139,7 @@ export async function finalizeDelivery(
  * BATALKAN DELIVERY (share stock) — moderator/admin.
  *
  * Dipakai bila pengiriman batal (tidak diapprove / kendala lain) SEBELUM barang
- * diterima. Qty dikembalikan ke stok cabang sumber, saldo planning supply
+ * diterima. Qty dikembalikan ke stok cabang sumber, saldo barang dalam pengiriman
  * di-void (status 'cancelled') dengan keterangan, dan delivery jadi 'cancelled'.
  * Delivery yang sudah selesai (barang diterima) tidak bisa dibatalkan lewat sini.
  */
@@ -1105,7 +1205,7 @@ export async function cancelDelivery(deliveryId: number, reason: string) {
       `Pembatalan Delivery ${delivery.dlv_kode}: ${item.part_number} ${item.part_name} dikembalikan ke cabang ${delivery.dari_cabang_id}. Alasan: ${trimmedReason}`,
   });
 
-  // Void saldo planning supply dengan keterangan.
+  // Void saldo barang dalam pengiriman dengan keterangan.
   const { error: planningCancelError } = await supabase
     .from("planning_supplies")
     .update({ status: "cancelled", note: trimmedReason })
@@ -1113,7 +1213,7 @@ export async function cancelDelivery(deliveryId: number, reason: string) {
     .eq("status", "in_transit");
   if (planningCancelError) {
     console.error(
-      "Gagal membatalkan planning supply:",
+      "Gagal membatalkan barang dalam pengiriman:",
       planningCancelError.message,
     );
   }
@@ -1273,6 +1373,8 @@ export async function moderatorEditDelivery(
       };
     }
   }
+  const editItemFreezeError = await guardDeliveryItemFreeze(supabase, deliveryId);
+  if (editItemFreezeError) return { error: editItemFreezeError };
 
   let itemsBefore: {
     part_id: number;
@@ -1301,6 +1403,11 @@ export async function moderatorEditDelivery(
         };
       }
     }
+    const newItemFreezeError = await guardScheduledMrItemFreeze(
+      supabase,
+      newMrInfo.mrItemById,
+    );
+    if (newItemFreezeError) return { error: newItemFreezeError };
 
     const { data: oldItems } = await supabase
       .from("delivery_items")
@@ -1565,7 +1672,7 @@ export async function bypassShareStockCompletion(mrItemId: number) {
   const { data: mrItem } = await supabase
     .from("mr_items")
     .select(
-      "id, part_id, part_number, part_name, qty_sharestock_total, ss_status, mrs(id, cabang_id, mr_kode)",
+      "id, part_id, part_number, part_name, qty_sharestock_total, ss_status, mrs(id, cabang_id, mr_kode, mr_type)",
     )
     .eq("id", mrItemId)
     .single();
@@ -1577,8 +1684,17 @@ export async function bypassShareStockCompletion(mrItemId: number) {
   if (!destCabangId) return { error: "Cabang tujuan tidak ditemukan" };
 
   // Guard freeze: bypass termasuk alur MR yang ikut terkunci saat freeze.
+  // Scheduled MR: freeze dievaluasi per-item, bukan lewat evaluateMrFreeze.
   const bypassMrId = (mrItem.mrs as any)?.id;
-  if (bypassMrId && (await evaluateMrFreeze(bypassMrId))) {
+  const bypassMrType = (mrItem.mrs as any)?.mr_type;
+  if (bypassMrType === "scheduled") {
+    if (await evaluateMrItemFreeze(mrItemId)) {
+      return {
+        error:
+          "Item ini sedang di-FREEZE. Hubungi moderator untuk unfreeze/reset sebelum bypass.",
+      };
+    }
+  } else if (bypassMrId && (await evaluateMrFreeze(bypassMrId))) {
     return {
       error:
         "MR ini sedang di-FREEZE. Hubungi moderator untuk unfreeze/reset sebelum bypass.",
@@ -1787,7 +1903,7 @@ export async function updateDeliveryReceiverSignature(
 
   const { data: signature, error: signatureError } = await supabase
     .from("user_signatures")
-    .select("id")
+    .select("id, image_url, printed_name, label")
     .eq("id", signatureId)
     .eq("user_id", user.id)
     .eq("is_hidden", false)
@@ -1802,6 +1918,9 @@ export async function updateDeliveryReceiverSignature(
     .update({
       signature_receiver_id: signatureId,
       signed_by_receiver_at: new Date().toISOString(),
+      signature_receiver_image_url: signature.image_url,
+      signature_receiver_printed_name: signature.printed_name,
+      signature_receiver_label: signature.label,
       updated_at: new Date().toISOString(),
     })
     .eq("id", deliveryId);

@@ -270,7 +270,13 @@ export function MRDetailSheet({
                   </span>
                 </div>
                 <div className="flex items-center gap-2 overflow-hidden">
-                  {mr && getPriorityBadge(mr.mr_priority)}
+                  {Array.from(
+                    new Set(
+                      items.map((i: any) => i.item_priority).filter(Boolean),
+                    ),
+                  ).map((p: any) => (
+                    <React.Fragment key={p}>{getPriorityBadge(p)}</React.Fragment>
+                  ))}
                   {mr && getStatusBadge(mr.mr_status)}
                   {mr &&
                     mr.mr_status !== "open" &&
@@ -359,13 +365,16 @@ export function MRDetailSheet({
                         <TableHead className="text-[9px] font-bold uppercase text-muted-foreground text-right pr-4">
                           Qty
                         </TableHead>
+                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground text-center pr-4">
+                          Prioritas
+                        </TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
                       {items.length === 0 ? (
                         <TableRow>
                           <TableCell
-                            colSpan={3}
+                            colSpan={4}
                             className="h-20 text-center text-muted-foreground text-[11px] italic"
                           >
                             Belum ada barang
@@ -393,6 +402,9 @@ export function MRDetailSheet({
                               <span className="text-muted-foreground font-medium ml-0.5">
                                 {item.satuan}
                               </span>
+                            </TableCell>
+                            <TableCell className="text-center pr-4 py-2">
+                              {getPriorityBadge(item.item_priority)}
                             </TableCell>
                           </TableRow>
                         ))

@@ -9,7 +9,6 @@ type ConsignmentSoItemInput = {
   part_name: string;
   satuan: string;
   part_number_customer?: string;
-  code_item_customer?: string;
   qty: number;
 };
 
@@ -111,7 +110,6 @@ export async function createConsignmentSo(data: {
     part_name: item.part_name,
     satuan: item.satuan,
     part_number_customer: item.part_number_customer?.trim() || null,
-    code_item_customer: item.code_item_customer?.trim() || null,
     qty: item.qty,
   }));
   const { error: itemsError } = await supabase
@@ -221,7 +219,7 @@ export async function getConsignmentDashboardReport(params?: {
 
   if (params?.search) {
     query = query.or(
-      `so_no.ilike.%${params.search}%,no_po.ilike.%${params.search}%,site.ilike.%${params.search}%,part_number.ilike.%${params.search}%,part_name.ilike.%${params.search}%,code_item_customer.ilike.%${params.search}%,part_number_customer.ilike.%${params.search}%`,
+      `so_no.ilike.%${params.search}%,no_po.ilike.%${params.search}%,site.ilike.%${params.search}%,part_number.ilike.%${params.search}%,part_name.ilike.%${params.search}%,part_number_customer.ilike.%${params.search}%`,
     );
   }
 

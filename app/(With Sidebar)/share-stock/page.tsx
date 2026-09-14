@@ -108,7 +108,7 @@ export default function ShareStockPage() {
     let query = supabase
       .from("mrs")
       .select(
-        "*, cabang(nama_cabang), mr_items!inner(qty_sharestock_total, mr_sharestock_allocations(source_cabang_id, source_cabang:cabang!source_cabang_id(nama_cabang)))",
+        "*, cabang(nama_cabang), mr_items!inner(item_priority, qty_sharestock_total, mr_sharestock_allocations(source_cabang_id, source_cabang:cabang!source_cabang_id(nama_cabang)))",
         {
           count: "exact",
         },
@@ -121,8 +121,10 @@ export default function ShareStockPage() {
       );
     }
     if (statusFilter !== "all") query = query.eq("mr_status", statusFilter);
+    // Prioritas sekarang per-item; filter berdasarkan item share-stock yang
+    // sudah diembed di atas (bukan lagi kolom mrs.mr_priority).
     if (priorityFilter !== "all")
-      query = query.eq("mr_priority", priorityFilter);
+      query = query.eq("mr_items.item_priority", priorityFilter);
     if (locationFilters.length > 0)
       query = query.in("cabang_id", locationFilters);
     if (dateFrom) query = query.gte("mr_tanggal", dateFrom);
@@ -459,8 +461,18 @@ export default function ShareStockPage() {
                           <span className="font-bold text-foreground tracking-tight uppercase text-sm">
                             {mr.mr_kode}
                           </span>
-                          <div className="mt-1">
-                            {getPriorityBadge(mr.mr_priority)}
+                          <div className="mt-1 flex flex-wrap gap-1">
+                            {Array.from(
+                              new Set(
+                                (mr.mr_items || [])
+                                  .map((i: any) => i.item_priority)
+                                  .filter(Boolean),
+                              ),
+                            ).map((p: any) => (
+                              <React.Fragment key={p}>
+                                {getPriorityBadge(p)}
+                              </React.Fragment>
+                            ))}
                           </div>
                         </div>
                       </div>

@@ -56,6 +56,7 @@ import {
   ClipboardList,
   SlidersHorizontal,
   ScrollText,
+  CalendarRange,
 } from "lucide-react";
 
 // Update the menu data
@@ -111,11 +112,12 @@ const data = {
     { title: "Delivery", url: "/deliveries", icon: Truck },
     { title: "Item Transfer", url: "/item-transfer", icon: ArrowLeftRight },
     { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
-    { title: "Planning Supply", url: "/planning-supply", icon: PackageSearch },
+    { title: "Barang dalam Pengiriman", url: "/planning-supply", icon: PackageSearch },
     { title: "Job Costing", url: "/job-costing", icon: Calculator },
   ],
   navProcurement: [
     { title: "Material Request", url: "/mr", icon: FileText },
+    { title: "Scheduled MR", url: "/mr/scheduled", icon: CalendarRange },
     { title: "Purchase Request", url: "/pr", icon: FileSpreadsheet },
     { title: "Purchase Order", url: "/po", icon: ShoppingCart },
     { title: "Receive Item", url: "/receive", icon: PackageCheck },
@@ -141,6 +143,11 @@ const data = {
       title: "Sales Order",
       url: "/so-reguler/consignment/so",
       icon: Handshake,
+    },
+    {
+      title: "Instruksi Kerja",
+      url: "/so-reguler/consignment/ik",
+      icon: ClipboardList,
     },
   ],
   navSecondary: [

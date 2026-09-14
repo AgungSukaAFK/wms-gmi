@@ -182,7 +182,11 @@ export default function CreatePRPage() {
       .eq("mr_id", mr.id)
       .or("qty_pr.gt.0,qty_sharestock_total.gt.0");
 
-    const relevantItems = (items || []).filter((i: any) => i.qty_pr > 0);
+    // Item Scheduled MR yang sedang di-freeze (per-item) disembunyikan dari
+    // picker supaya user tidak memilih item lalu ditolak saat submit.
+    const relevantItems = (items || []).filter(
+      (i: any) => i.qty_pr > 0 && !i.is_item_frozen,
+    );
     const convertedMap = await fetchConvertedMap(
       relevantItems.map((i: any) => i.id),
     );

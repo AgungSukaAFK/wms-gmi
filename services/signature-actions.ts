@@ -172,6 +172,31 @@ export async function toggleSignatureVisibility(id: string, isHidden: boolean) {
 }
 
 /**
+ * Hapus Tanda Tangan (permanen)
+ * File gambar di storage TETAP dibiarkan — deliveries/item_transfers/
+ * approval MR-PO-PR-Receive yang sudah membekukan URL ini ke kolom/JSONB
+ * snapshot tetap butuh file-nya untuk tampil, jadi hanya baris DB yang
+ * dihapus di sini.
+ */
+export async function deleteSignature(id: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Unauthorized" };
+
+  const { error } = await supabase
+    .from("user_signatures")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", user.id);
+
+  if (error) return { error: error.message };
+  revalidatePath("/signatures");
+  return { success: true };
+}
+
+/**
  * Verifikasi Password Signature dengan Lockout Mechanism
  */
 export async function verifySignaturePassword(

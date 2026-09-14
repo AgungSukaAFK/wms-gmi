@@ -73,7 +73,7 @@ export default function MRPrintPage() {
       setSohByPartId({});
     }
 
-    // Ambil alokasi share stock (planning supply) per item: gudang sumber, qty, deadline
+    // Ambil alokasi share stock (barang dalam pengiriman) per item: gudang sumber, qty, deadline
     if (itemsData && itemsData.length > 0) {
       const { data: allocs } = await supabase
         .from("mr_sharestock_allocations")
@@ -189,10 +189,15 @@ export default function MRPrintPage() {
               </div>
               <div className="flex border-b border-slate-100 pb-1.5">
                 <span className="w-24 text-slate-500 font-bold uppercase text-[9px]">
-                  Prioritas
+                  Prioritas Item
                 </span>
                 <span className="font-bold text-slate-900">
-                  : {mr.mr_priority}
+                  :{" "}
+                  {Array.from(
+                    new Set(
+                      items.map((i: any) => i.item_priority).filter(Boolean),
+                    ),
+                  ).join(", ") || "-"}
                 </span>
               </div>
             </div>
@@ -257,6 +262,11 @@ export default function MRPrintPage() {
                       <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                         {item.part_number}
                       </div>
+                      {item.item_priority && (
+                        <div className="mt-1 inline-block text-[8px] font-bold text-slate-700 border border-slate-400 bg-slate-100 px-1.5 py-0.5 rounded uppercase tracking-wide">
+                          Prioritas: {item.item_priority}
+                        </div>
+                      )}
                       {(item.qty_sharestock_total || 0) > 0 && (
                         <div className="mt-1 inline-block text-[8px] font-bold text-blue-700 border border-blue-300 bg-blue-50 px-1.5 py-0.5 rounded uppercase tracking-wide">
                           Share Stock: {item.qty_sharestock_total} {item.satuan}
@@ -300,11 +310,11 @@ export default function MRPrintPage() {
             </table>
           </div>
 
-          {/* Share Stock / Planning Supply Detail */}
+          {/* Share Stock / Barang dalam Pengiriman Detail */}
           {hasShareStock && (
             <div className="mb-12">
               <h3 className="text-[11px] font-black uppercase tracking-widest text-slate-900 mb-1">
-                Rincian Share Stock (Planning Supply)
+                Rincian Share Stock (Barang dalam Pengiriman)
               </h3>
               <p className="text-[9px] text-slate-500 font-medium mb-3">
                 Pemenuhan sebagian/seluruh item via transfer antar gudang.

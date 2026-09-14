@@ -27,7 +27,6 @@ import {
   CircleUser,
   Building,
   Calendar,
-  Tag,
   Layers,
   Building2,
   Info,
@@ -139,7 +138,6 @@ export default function MRDetailPage({
   const [saving, setSaving] = useState(false);
   // Header edit fields
   const [editTanggal, setEditTanggal] = useState("");
-  const [editPriority, setEditPriority] = useState("");
   // Items edit
   type EditableItem = {
     id?: number;
@@ -148,6 +146,7 @@ export default function MRDetailPage({
     part_name: string;
     satuan: string;
     qty_request: number;
+    item_priority: string;
     remarks?: string;
   };
   const [editItemsList, setEditItemsList] = useState<EditableItem[]>([]);
@@ -160,10 +159,10 @@ export default function MRDetailPage({
   const [barangLoading, setBarangLoading] = useState(false);
 
   // Moderator Edit state — edit bebas (header + items + jalur/status approval)
-  // di luar giliran approval normal. Item list & header tanggal/priority pakai
-  // state yang sama dengan "Edit Isi MR" approver di atas (editItemsList,
-  // deletedItemIds, editTanggal, editPriority) karena bentuknya identik; hanya
-  // cabang, due date, dan jalur approval yang butuh state tambahan di sini.
+  // di luar giliran approval normal. Item list & header tanggal pakai state
+  // yang sama dengan "Edit Isi MR" approver di atas (editItemsList,
+  // deletedItemIds, editTanggal) karena bentuknya identik; hanya cabang, due
+  // date, dan jalur approval yang butuh state tambahan di sini.
   const [modEditMode, setModEditMode] = useState(false);
   const [modSaving, setModSaving] = useState(false);
   const [modCabangId, setModCabangId] = useState("");
@@ -465,7 +464,6 @@ export default function MRDetailPage({
 
   const enterEditMode = () => {
     setEditTanggal(mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "");
-    setEditPriority(mr?.mr_priority || "");
     setEditItemsList(
       items.map((i) => ({
         id: i.id,
@@ -474,6 +472,7 @@ export default function MRDetailPage({
         part_name: i.part_name,
         satuan: i.satuan,
         qty_request: i.qty_request,
+        item_priority: i.item_priority || "P3",
         remarks: i.remarks || "",
       })),
     );
@@ -490,6 +489,7 @@ export default function MRDetailPage({
         id: e.id!,
         qty_request: e.qty_request,
         remarks: e.remarks || "",
+        item_priority: e.item_priority,
       }));
     const newItems = editItemsList
       .filter((e) => e.id === undefined)
@@ -500,12 +500,12 @@ export default function MRDetailPage({
         satuan: e.satuan,
         qty_request: e.qty_request,
         remarks: e.remarks || undefined,
+        item_priority: e.item_priority,
       }));
 
     setSaving(true);
     const res = await editMrByApprover(Number(mrId), {
       mr_tanggal: editTanggal || undefined,
-      mr_priority: editPriority || undefined,
       updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
       newItems: newItems.length > 0 ? newItems : undefined,
       deletedItemIds: deletedItemIds.length > 0 ? deletedItemIds : undefined,
@@ -542,7 +542,6 @@ export default function MRDetailPage({
     setModCabangId(mr?.cabang_id ? String(mr.cabang_id) : "");
     setEditTanggal(mr?.mr_tanggal ? mr.mr_tanggal.substring(0, 10) : "");
     setModDueDate(mr?.mr_due_date ? String(mr.mr_due_date).slice(0, 10) : "");
-    setEditPriority(mr?.mr_priority || "");
     setEditItemsList(
       items.map((i) => ({
         id: i.id,
@@ -551,6 +550,7 @@ export default function MRDetailPage({
         part_name: i.part_name,
         satuan: i.satuan,
         qty_request: i.qty_request,
+        item_priority: i.item_priority || "P3",
         remarks: i.remarks || "",
       })),
     );
@@ -624,6 +624,7 @@ export default function MRDetailPage({
         id: e.id!,
         qty_request: e.qty_request,
         remarks: e.remarks || "",
+        item_priority: e.item_priority,
       }));
     const newItems = editItemsList
       .filter((e) => e.id === undefined)
@@ -634,6 +635,7 @@ export default function MRDetailPage({
         satuan: e.satuan,
         qty_request: e.qty_request,
         remarks: e.remarks || undefined,
+        item_priority: e.item_priority,
       }));
 
     setModSaving(true);
@@ -641,7 +643,6 @@ export default function MRDetailPage({
       cabang_id: modCabangId ? Number(modCabangId) : undefined,
       mr_tanggal: editTanggal || undefined,
       mr_due_date: modDueDate || null,
-      mr_priority: editPriority || undefined,
       updatedItems: updatedItems.length > 0 ? updatedItems : undefined,
       newItems: newItems.length > 0 ? newItems : undefined,
       deletedItemIds: deletedItemIds.length > 0 ? deletedItemIds : undefined,
@@ -679,6 +680,7 @@ export default function MRDetailPage({
         part_name: barang.part_name,
         satuan: barang.part_satuan,
         qty_request: 1,
+        item_priority: "P3",
         remarks: "",
       },
     ]);
@@ -696,6 +698,12 @@ export default function MRDetailPage({
   const updateEditItemRemarks = (index: number, remarks: string) => {
     setEditItemsList((prev) =>
       prev.map((e, i) => (i === index ? { ...e, remarks } : e)),
+    );
+  };
+
+  const updateEditItemPriority = (index: number, item_priority: string) => {
+    setEditItemsList((prev) =>
+      prev.map((e, i) => (i === index ? { ...e, item_priority } : e)),
     );
   };
 
@@ -1168,35 +1176,6 @@ export default function MRDetailPage({
                 </div>
               </div>
 
-              <div className="space-y-1.5">
-                <Label className="text-[11px] font-bold uppercase text-muted-foreground">
-                  Tingkat Prioritas
-                </Label>
-                <div className="flex items-center gap-2">
-                  <Tag className="w-4 h-4 text-muted-foreground" />
-                  {editMode || modEditMode ? (
-                    <Select
-                      value={editPriority}
-                      onValueChange={setEditPriority}
-                    >
-                      <SelectTrigger className="h-10 w-full text-sm font-semibold">
-                        <SelectValue placeholder="Pilih prioritas..." />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="P1">P1 - Emergency</SelectItem>
-                        <SelectItem value="P2">P2 - High</SelectItem>
-                        <SelectItem value="P3">P3 - Normal</SelectItem>
-                        <SelectItem value="P4">P4 - Low</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                    <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
-                      {getPriorityBadge(mr?.mr_priority)}
-                    </div>
-                  )}
-                </div>
-              </div>
-
             </div>
           </Content>
 
@@ -1223,6 +1202,9 @@ export default function MRDetailPage({
                     <TableHead className="text-right text-[10px] font-bold uppercase text-muted-foreground pr-4">
                       Qty Req
                     </TableHead>
+                    <TableHead className="text-center text-[10px] font-bold uppercase text-muted-foreground">
+                      Prioritas
+                    </TableHead>
                     {/* Fulfillment Columns (Only show when approved and not in edit) */}
                     {!editMode &&
                       !modEditMode &&
@@ -1245,7 +1227,7 @@ export default function MRDetailPage({
                     editItemsList.length === 0 ? (
                       <TableRow>
                         <TableCell
-                          colSpan={5}
+                          colSpan={6}
                           className="text-center text-[11px] text-muted-foreground py-6"
                         >
                           Belum ada barang. Tambahkan di bawah.
@@ -1313,6 +1295,24 @@ export default function MRDetailPage({
                               className="h-8 w-24 text-right text-sm font-bold ml-auto"
                             />
                           </TableCell>
+                          <TableCell className="text-center">
+                            <Select
+                              value={item.item_priority}
+                              onValueChange={(v) =>
+                                updateEditItemPriority(idx, v)
+                              }
+                            >
+                              <SelectTrigger className="h-8 w-28 mx-auto text-xs font-semibold">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="P1">P1 - Emergency</SelectItem>
+                                <SelectItem value="P2">P2 - High</SelectItem>
+                                <SelectItem value="P3">P3 - Normal</SelectItem>
+                                <SelectItem value="P4">P4 - Low</SelectItem>
+                              </SelectContent>
+                            </Select>
+                          </TableCell>
                         </TableRow>
                       ))
                     )
@@ -1358,6 +1358,9 @@ export default function MRDetailPage({
                             <span className="font-black text-foreground text-base">
                               {item.qty_request}
                             </span>
+                          </TableCell>
+                          <TableCell className="text-center">
+                            {getPriorityBadge(item.item_priority)}
                           </TableCell>
 
                           {/* Fulfillment Status Visualization */}

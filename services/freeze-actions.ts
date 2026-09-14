@@ -6,13 +6,20 @@ import { createNotification } from "./notification-actions";
 import { businessToday } from "@/lib/business-date";
 
 // ============================================================
-// FREEZE MR — terkait fitur Planning Supply / Deadline Share Stock
+// FREEZE MR — terkait fitur Barang dalam Pengiriman / Deadline Share Stock
 //
 // MR ter-freeze (lazy, dicek saat server action terkait dipanggil) bila
 // mrs.mr_due_date sudah lewat DAN masih ada item share stock MR ini yang
 // belum ada delivery sama sekali (delivery 'cancelled' tidak dihitung).
 // Freeze berlaku untuk SELURUH MR beserta alurnya. Hanya moderator yang
 // dapat unfreeze/reset (reset = perpanjang mr_due_date).
+//
+// Untuk mr_type='scheduled' (Scheduled MR), freeze dokumen di atas TIDAK
+// berlaku — evaluateMrFreeze langsung return false untuk tipe ini. Freeze
+// dipindah ke level ITEM (mr_items.is_item_frozen), dievaluasi per item
+// dari item_due_date masing-masing, supaya satu item yang telat tidak ikut
+// mengunci item lain yang jadwalnya belum jatuh tempo. Lihat
+// evaluateMrItemFreeze / evaluateMrItemFreezeForMr di bawah.
 // ============================================================
 
 async function fetchRoleNames(
@@ -65,10 +72,11 @@ export async function evaluateMrFreeze(mrId: number): Promise<boolean> {
 
   const { data: mr } = await supabase
     .from("mrs")
-    .select("id, is_frozen, mr_due_date")
+    .select("id, is_frozen, mr_due_date, mr_type")
     .eq("id", mrId)
     .maybeSingle();
   if (!mr) return false;
+  if (mr.mr_type === "scheduled") return false;
   if (mr.is_frozen) return true;
   if (!mr.mr_due_date) return false;
 
@@ -313,4 +321,276 @@ export async function getMrFreezeInfo(mrId: number) {
     reports: reports || [],
     items: Array.from(itemMap.values()),
   };
+}
+
+// ============================================================
+// FREEZE PER-ITEM (Scheduled MR) — mirror persis logika di atas, scoped ke
+// satu mr_items, dipicu oleh item_due_date-nya sendiri alih-alih
+// mrs.mr_due_date.
+// ============================================================
+
+/**
+ * Evaluasi & set status freeze satu item (lazy). Dipakai sebagai guard
+ * sebelum aksi yang menyentuh item spesifik ini (createDelivery,
+ * createPurchaseRequest, dst).
+ */
+export async function evaluateMrItemFreeze(mrItemId: number): Promise<boolean> {
+  if (!mrItemId) return false;
+  const supabase = await createClient();
+
+  const { data: item } = await supabase
+    .from("mr_items")
+    .select("id, mr_id, is_item_frozen, item_due_date, part_number")
+    .eq("id", mrItemId)
+    .maybeSingle();
+  if (!item) return false;
+  if (item.is_item_frozen) return true;
+  if (!item.item_due_date) return false;
+
+  const today = businessToday();
+  if (item.item_due_date >= today) return false;
+
+  const { data: allocs } = await supabase
+    .from("mr_sharestock_allocations")
+    .select("id")
+    .eq("mr_item_id", mrItemId);
+  if (!allocs || allocs.length === 0) return false;
+
+  const { data: delivered } = await supabase
+    .from("delivery_items")
+    .select("id, deliveries!inner(status)")
+    .eq("mr_item_id", mrItemId)
+    .neq("deliveries.status", "cancelled");
+  if (delivered && delivered.length > 0) return false;
+
+  const reason = `Freeze otomatis: item ${item.part_number} melewati due date (${item.item_due_date}) tanpa delivery share stock.`;
+  await supabase
+    .from("mr_items")
+    .update({
+      is_item_frozen: true,
+      item_frozen_at: new Date().toISOString(),
+      item_frozen_reason: reason,
+    })
+    .eq("id", mrItemId);
+
+  revalidatePath("/mr/scheduled");
+  revalidatePath(`/mr/scheduled/${item.mr_id}`);
+  return true;
+}
+
+/**
+ * Evaluasi freeze utk SEMUA item satu scheduled MR sekaligus (dipanggil
+ * saat buka halaman detail) — jauh lebih efisien drpd loop
+ * evaluateMrItemFreeze per item ketika jumlah item bisa sangat banyak.
+ */
+export async function evaluateMrItemFreezeForMr(mrId: number): Promise<void> {
+  if (!mrId) return;
+  const supabase = await createClient();
+  const today = businessToday();
+
+  const { data: items } = await supabase
+    .from("mr_items")
+    .select("id, part_number, item_due_date")
+    .eq("mr_id", mrId)
+    .eq("is_item_frozen", false)
+    .not("item_due_date", "is", null)
+    .lt("item_due_date", today);
+  if (!items || items.length === 0) return;
+
+  const itemIds = items.map((i) => i.id);
+  const { data: allocs } = await supabase
+    .from("mr_sharestock_allocations")
+    .select("mr_item_id")
+    .in("mr_item_id", itemIds);
+  const allocatedIds = new Set((allocs || []).map((a: any) => a.mr_item_id));
+  if (allocatedIds.size === 0) return;
+
+  const { data: delivered } = await supabase
+    .from("delivery_items")
+    .select("mr_item_id, deliveries!inner(status)")
+    .in("mr_item_id", Array.from(allocatedIds))
+    .neq("deliveries.status", "cancelled");
+  const deliveredSet = new Set((delivered || []).map((d: any) => d.mr_item_id));
+
+  const toFreeze = items.filter(
+    (i) => allocatedIds.has(i.id) && !deliveredSet.has(i.id),
+  );
+  if (toFreeze.length === 0) return;
+
+  for (const i of toFreeze) {
+    await supabase
+      .from("mr_items")
+      .update({
+        is_item_frozen: true,
+        item_frozen_at: new Date().toISOString(),
+        item_frozen_reason: `Freeze otomatis: item ${i.part_number} melewati due date (${i.item_due_date}) tanpa delivery share stock.`,
+      })
+      .eq("id", i.id);
+  }
+
+  revalidatePath(`/mr/scheduled/${mrId}`);
+}
+
+/**
+ * Pembuat MR melaporkan kendala atas SATU item yang ter-freeze.
+ */
+export async function reportFrozenMrItem(mrItemId: number, kendala: string) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  const trimmed = kendala?.trim();
+  if (!trimmed) return { error: "Keterangan kendala wajib diisi." };
+
+  const { data: item } = await supabase
+    .from("mr_items")
+    .select("id, mr_id, part_number, is_item_frozen, mrs!inner(mr_kode, mr_pic_id)")
+    .eq("id", mrItemId)
+    .single();
+  if (!item) return { error: "Item tidak ditemukan" };
+  if (!item.is_item_frozen) return { error: "Item ini tidak dalam status freeze." };
+  const mrInfo = (item as any).mrs;
+  if (mrInfo?.mr_pic_id !== user.id) {
+    return { error: "Hanya pembuat MR yang dapat melaporkan kendala." };
+  }
+
+  const { data: existing } = await supabase
+    .from("mr_freeze_reports")
+    .select("id")
+    .eq("mr_item_id", mrItemId)
+    .eq("status", "open")
+    .maybeSingle();
+  if (existing) {
+    return {
+      error: "Sudah ada laporan kendala yang menunggu tindakan moderator.",
+    };
+  }
+
+  const { error } = await supabase.from("mr_freeze_reports").insert({
+    mr_id: item.mr_id,
+    mr_item_id: mrItemId,
+    reporter_id: user.id,
+    kendala: trimmed,
+    status: "open",
+  });
+  if (error) return { error: error.message };
+
+  await notifyModerators({
+    title: `Laporan Item MR Freeze: ${mrInfo?.mr_kode} - ${item.part_number}`,
+    message: `Item ${item.part_number} pada MR ${mrInfo?.mr_kode} ter-freeze. Kendala: ${trimmed}`,
+    documentId: item.mr_id,
+    documentUrl: `/mr/scheduled/${item.mr_id}`,
+  });
+
+  revalidatePath(`/mr/scheduled/${item.mr_id}`);
+  return { success: true };
+}
+
+/**
+ * Moderator membuka freeze SATU item.
+ *   - action 'unfreeze' : lanjut dari posisi terakhir.
+ *   - action 'reset'    : perpanjang item_due_date lalu unfreeze.
+ */
+export async function resolveMrItemFreeze(params: {
+  mrItemId: number;
+  action: "unfreeze" | "reset";
+  resolution?: string;
+  newDueDate?: string;
+}) {
+  const { mrItemId, action, resolution, newDueDate } = params;
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  const roleNames = await fetchRoleNames(supabase, user.id);
+  if (!roleNames.includes("moderator")) {
+    return { error: "Hanya moderator yang dapat membuka freeze item." };
+  }
+
+  const { data: item } = await supabase
+    .from("mr_items")
+    .select("id, mr_id, part_number, is_item_frozen, mrs!inner(mr_kode, mr_pic_id)")
+    .eq("id", mrItemId)
+    .single();
+  if (!item) return { error: "Item tidak ditemukan" };
+  if (!item.is_item_frozen) return { error: "Item ini tidak dalam status freeze." };
+
+  if (action === "reset") {
+    const today = businessToday();
+    if (!newDueDate || newDueDate < today) {
+      return {
+        error: "Due date baru harus diisi dan tidak boleh tanggal lampau.",
+      };
+    }
+    const { error: dErr } = await supabase
+      .from("mr_items")
+      .update({ item_due_date: newDueDate })
+      .eq("id", mrItemId);
+    if (dErr) return { error: dErr.message };
+  }
+
+  const { error: unfreezeError } = await supabase
+    .from("mr_items")
+    .update({ is_item_frozen: false, item_frozen_at: null, item_frozen_reason: null })
+    .eq("id", mrItemId);
+  if (unfreezeError) return { error: unfreezeError.message };
+
+  await supabase
+    .from("mr_freeze_reports")
+    .update({
+      status: "resolved",
+      resolution_action: action,
+      resolution: resolution?.trim() || null,
+      resolved_by: user.id,
+      resolved_at: new Date().toISOString(),
+    })
+    .eq("mr_item_id", mrItemId)
+    .eq("status", "open");
+
+  const mrInfo = (item as any).mrs;
+  if (mrInfo?.mr_pic_id) {
+    await createNotification({
+      userId: mrInfo.mr_pic_id,
+      type: "general",
+      title: `Item ${item.part_number} (MR ${mrInfo.mr_kode}) di-${action === "reset" ? "reset" : "unfreeze"}`,
+      message:
+        action === "reset"
+          ? `Moderator memperpanjang due date item ${item.part_number} pada MR ${mrInfo.mr_kode}. Alur dapat dilanjutkan.`
+          : `Moderator membuka freeze item ${item.part_number} pada MR ${mrInfo.mr_kode}. Alur dapat dilanjutkan.`,
+      documentType: "MR",
+      documentId: item.mr_id,
+      documentUrl: `/mr/scheduled/${item.mr_id}`,
+    });
+  }
+
+  revalidatePath(`/mr/scheduled/${item.mr_id}`);
+  return { success: true };
+}
+
+/**
+ * Info freeze satu item untuk UI Scheduled MR detail.
+ */
+export async function getMrItemFreezeInfo(mrItemId: number) {
+  await evaluateMrItemFreeze(mrItemId);
+  const supabase = await createClient();
+
+  const { data: item } = await supabase
+    .from("mr_items")
+    .select(
+      "id, mr_id, part_number, part_name, item_due_date, is_item_frozen, item_frozen_at, item_frozen_reason, mrs!inner(mr_kode, mr_pic_id)",
+    )
+    .eq("id", mrItemId)
+    .single();
+
+  const { data: reports } = await supabase
+    .from("mr_freeze_reports")
+    .select("*, reporter:profiles!reporter_id(nama)")
+    .eq("mr_item_id", mrItemId)
+    .order("created_at", { ascending: false });
+
+  return { item, reports: reports || [] };
 }

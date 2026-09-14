@@ -531,7 +531,7 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
   // Validasi tanda tangan milik user
   const { data: sig } = await supabase
     .from("user_signatures")
-    .select("id")
+    .select("id, image_url, printed_name, label")
     .eq("id", signatureId)
     .eq("user_id", user.id)
     .eq("is_hidden", false)
@@ -582,6 +582,9 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
       tracking_status: "completed",
       signature_receiver_id: signatureId,
       signed_by_receiver_at: new Date().toISOString(),
+      signature_receiver_image_url: sig.image_url,
+      signature_receiver_printed_name: sig.printed_name,
+      signature_receiver_label: sig.label,
       uid_receiver: user.id,
       updated_at: new Date().toISOString(),
     })

@@ -192,7 +192,10 @@ export default function CreateDeliveryPage() {
       .eq("mrs.mr_status", "approved")
       // Sembunyikan item dari MR yang sedang di-freeze (tetap diblok juga di
       // createDelivery sebagai jaring pengaman untuk freeze yang belum terflag).
-      .eq("mrs.is_frozen", false);
+      // is_item_frozen (Scheduled MR, per-item) selalu false utk MR biasa,
+      // jadi filter ini aman dipakai utk kedua tipe sekaligus.
+      .eq("mrs.is_frozen", false)
+      .eq("is_item_frozen", false);
     setShareStocks(ssData || []);
 
     setInitialLoading(false);

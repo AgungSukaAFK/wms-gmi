@@ -10,6 +10,13 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Search,
   Plus,
   Trash2,
@@ -54,6 +61,7 @@ export interface MRItem {
   part_name: string;
   satuan: string;
   qty: number;
+  item_priority: string;
   remarks?: string;
 }
 
@@ -77,13 +85,23 @@ interface MRItemSelectorProps {
   cabangId?: number | null;
   /** Dipanggil jika user memilih membatalkan seluruh pembuatan MR dari modal duplikat. */
   onCancelMR?: () => void;
+  /** Prioritas default utk item baru — tiap item tetap bisa diubah sendiri. */
+  defaultPriority?: string;
 }
+
+const PRIORITY_COLOR: Record<string, string> = {
+  P1: "text-destructive bg-destructive/10 border-destructive/30",
+  P2: "text-warning bg-warning/10 border-warning/30",
+  P3: "text-primary bg-primary/10 border-primary/30",
+  P4: "text-muted-foreground bg-muted border-border",
+};
 
 export function MRItemSelector({
   items,
   onItemsChange,
   cabangId,
   onCancelMR,
+  defaultPriority,
 }: MRItemSelectorProps) {
   const supabase = createClient();
   const [open, setOpen] = useState(false);
@@ -146,6 +164,7 @@ export function MRItemSelector({
       part_name: barang.part_name,
       satuan: barang.part_satuan,
       qty: initialQty,
+      item_priority: defaultPriority || "P3",
     };
 
     setStockCaps((prev) => ({ ...prev, [barang.id]: cap }));
@@ -374,6 +393,9 @@ export function MRItemSelector({
               <TableHead className="w-35 font-semibold text-slate-500 text-xs text-center">
                 Quantity
               </TableHead>
+              <TableHead className="w-32 font-semibold text-slate-500 text-xs text-center">
+                Prioritas
+              </TableHead>
               <TableHead className="font-semibold text-slate-500 text-xs">
                 Catatan (opsional)
               </TableHead>
@@ -434,6 +456,26 @@ export function MRItemSelector({
                       </div>
                     </TableCell>
                     <TableCell className="py-2">
+                      <Select
+                        value={item.item_priority}
+                        onValueChange={(v) =>
+                          updateItem(item.part_id, { item_priority: v })
+                        }
+                      >
+                        <SelectTrigger
+                          className={`h-8 text-xs font-semibold ${PRIORITY_COLOR[item.item_priority] || ""}`}
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="P1">P1 - Emergency</SelectItem>
+                          <SelectItem value="P2">P2 - High</SelectItem>
+                          <SelectItem value="P3">P3 - Normal</SelectItem>
+                          <SelectItem value="P4">P4 - Low</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </TableCell>
+                    <TableCell className="py-2">
                       <Input
                         placeholder="Catatan untuk item ini..."
                         value={item.remarks || ""}
@@ -458,7 +500,7 @@ export function MRItemSelector({
               })
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
-                <TableCell colSpan={6} className="text-center">
+                <TableCell colSpan={7} className="text-center">
                   <span className="text-xs font-medium text-slate-400 italic">
                     No items added yet.
                   </span>

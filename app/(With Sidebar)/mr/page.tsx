@@ -68,7 +68,6 @@ import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 const MR_SORT_COLUMNS: Record<string, string> = {
   mr_kode: "mr_kode",
-  mr_priority: "mr_priority",
   mr_tanggal: "mr_tanggal",
   mr_status: "mr_status",
 };
@@ -159,8 +158,17 @@ export default function MaterialRequestPage() {
   // Query dasar dengan seluruh filter aktif diterapkan (tanpa order/range),
   // dipakai bersama oleh fetchData (list berpaginasi) dan exportExcel (semua baris).
   const buildFilteredQuery = () => {
+    // Prioritas sekarang per-item (mr_items.item_priority). Kalau filter
+    // prioritas aktif, embed mr_items pakai !inner supaya MR yang tidak
+    // punya item dengan prioritas itu ikut tersaring keluar (bukan cuma
+    // menyaring nested array-nya) — mengikuti pola yang sudah dipakai
+    // share-stock/page.tsx.
+    const mrItemsEmbed =
+      priorityFilters.length > 0
+        ? "mr_items!inner(item_priority)"
+        : "mr_items(item_priority)";
     let query = supabase.from("mrs").select(
-      "*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama)",
+      `*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama), ${mrItemsEmbed}`,
       { count: "exact" },
     );
 
@@ -179,7 +187,7 @@ export default function MaterialRequestPage() {
     }
 
     if (priorityFilters.length > 0) {
-      query = query.in("mr_priority", priorityFilters);
+      query = query.in("mr_items.item_priority", priorityFilters);
     }
 
     if (accurateFilter !== "all") {
@@ -400,7 +408,7 @@ export default function MaterialRequestPage() {
         return {
           NO: index + 1,
           "KODE MR": mr?.mr_kode || "-",
-          PRIORITAS: mr?.mr_priority || "-",
+          PRIORITAS: item?.item_priority || "-",
           PIC: mr?.mr_pic || "-",
           LOKASI: mr?.cabang?.nama_cabang || "-",
           "TANGGAL REQUEST": mr?.mr_tanggal ? formatDate(mr.mr_tanggal) : "-",
@@ -783,14 +791,9 @@ export default function MaterialRequestPage() {
                 <TableHead className="w-12.5 text-center font-bold text-[10px] uppercase text-muted-foreground">
                   No
                 </TableHead>
-                <SortableTableHead
-                  sortKey="mr_priority"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-15 justify-center text-center font-bold text-[10px] uppercase text-muted-foreground"
-                >
+                <TableHead className="w-24 text-center font-bold text-[10px] uppercase text-muted-foreground">
                   Urgency
-                </SortableTableHead>
+                </TableHead>
                 <SortableTableHead
                   sortKey="mr_kode"
                   currentSort={sortOrder}
@@ -872,7 +875,19 @@ export default function MaterialRequestPage() {
                         {(page - 1) * limit + index + 1}
                       </TableCell>
                       <TableCell className="text-center">
-                        {getPriorityBadge(mr.mr_priority)}
+                        <div className="flex flex-wrap items-center justify-center gap-0.5">
+                          {Array.from(
+                            new Set(
+                              (mr.mr_items || [])
+                                .map((i: any) => i.item_priority)
+                                .filter(Boolean),
+                            ),
+                          ).map((p: any) => (
+                            <React.Fragment key={p}>
+                              {getPriorityBadge(p)}
+                            </React.Fragment>
+                          ))}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <span className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">

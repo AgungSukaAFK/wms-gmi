@@ -30,12 +30,18 @@ type DashboardRow = {
   no_po: string | null;
   site: string | null;
   customer_name: string | null;
-  code_item_customer: string | null;
   part_number: string | null;
   part_name: string | null;
   qty: number | null;
   satuan: string | null;
   part_number_customer: string | null;
+  total_qty_ik: number | null;
+  no_ik_terakhir: string | null;
+  tgl_ik_terakhir: string | null;
+  no_awb_terakhir: string | null;
+  gudang_terakhir: string | null;
+  partial_full: string | null;
+  durasi_kirim_ik_so: number | null;
 };
 
 type Column = {
@@ -87,17 +93,23 @@ const COLUMNS: Column[] = [
     render: (r) => r.customer_name || <DASH />,
   },
   {
-    key: "code_item_customer",
-    label: "Code Item Customer",
-    render: (r) => r.code_item_customer || <DASH />,
-  },
-  {
     key: "part_number",
-    label: "Part Number",
+    label: "PN GMI / Deskripsi",
     sortKey: "part_number",
-    render: (r) => r.part_number || <DASH />,
+    render: (r) =>
+      r.part_number ? (
+        <div className="max-w-48">
+          <span className="block text-xs font-bold">{r.part_number}</span>
+          {r.part_name && (
+            <span className="block text-[10px] text-muted-foreground truncate">
+              {r.part_name}
+            </span>
+          )}
+        </div>
+      ) : (
+        <DASH />
+      ),
   },
-  { key: "part_name", label: "Deskripsi Barang", render: (r) => r.part_name || <DASH /> },
   { key: "qty", label: "Qty", render: (r) => r.qty ?? <DASH /> },
   { key: "satuan", label: "UOM", render: (r) => r.satuan || <DASH /> },
   { key: "site", label: "Site", render: (r) => r.site || <DASH /> },
@@ -117,13 +129,40 @@ const COLUMNS: Column[] = [
   { key: "no_it", label: "No IT", render: DASH },
   { key: "tgl_kirim_ho_bpn", label: "Tgl Kirim HO → BPN", render: DASH },
   { key: "ekspedisi", label: "Ekspedisi", render: DASH },
-  { key: "no_awb", label: "No AWB", render: DASH },
   { key: "tgl_kirim_cust", label: "Tgl Kirim ke Cust", render: DASH },
-  { key: "no_ik", label: "No. IK", render: DASH },
-  { key: "qty_kirim_ik", label: "Qty Kirim IK", render: DASH },
+
+  // --- Instruksi Kerja (IK) — otomatis dari fitur Instruksi Kerja ---
+  {
+    key: "no_ik_terakhir",
+    label: "No. IK",
+    render: (r) => r.no_ik_terakhir || <DASH />,
+  },
+  {
+    key: "tgl_ik_terakhir",
+    label: "Tgl IK",
+    render: (r) => (r.tgl_ik_terakhir ? formatDate(r.tgl_ik_terakhir) : <DASH />),
+  },
+  {
+    key: "no_awb_terakhir",
+    label: "No AWB",
+    render: (r) => r.no_awb_terakhir || <DASH />,
+  },
+  {
+    key: "total_qty_ik",
+    label: "Qty Kirim IK",
+    render: (r) => r.total_qty_ik ?? <DASH />,
+  },
   { key: "pic_tarik_ik", label: "PIC Tarik IK", render: DASH },
-  { key: "gudang", label: "Gudang", render: DASH },
-  { key: "partial_full", label: "Partial/Full", render: DASH },
+  {
+    key: "gudang_terakhir",
+    label: "Gudang",
+    render: (r) => r.gudang_terakhir || <DASH />,
+  },
+  {
+    key: "partial_full",
+    label: "Partial/Full",
+    render: (r) => r.partial_full || <DASH />,
+  },
 
   // --- Procurement / PR-PO GMI (menyusul) ---
   { key: "tgl_pr", label: "Tgl PR", render: DASH },
@@ -146,7 +185,14 @@ const COLUMNS: Column[] = [
 
   // --- Metrik lead time (menyusul) ---
   { key: "durasi_pr_po_out", label: "Tgl PR - Tgl PO Out", render: DASH },
-  { key: "durasi_kirim_ik_so", label: "Tgl Kirim IK - Tgl SO", render: DASH },
+  {
+    key: "durasi_kirim_ik_so",
+    label: "Tgl Kirim IK - Tgl SO",
+    render: (r) =>
+      r.durasi_kirim_ik_so !== null && r.durasi_kirim_ik_so !== undefined
+        ? `${r.durasi_kirim_ik_so} hari`
+        : <DASH />,
+  },
   { key: "durasi_kirim_gmi_do", label: "Tgl Kirim GMI - Tgl DO PO Out", render: DASH },
 ];
 

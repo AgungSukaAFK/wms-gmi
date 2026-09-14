@@ -185,7 +185,7 @@ export default function PlanningSupplyPage() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-                Planning Supply
+                Barang dalam Pengiriman
               </h1>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
                 {isModerator
@@ -305,7 +305,7 @@ export default function PlanningSupplyPage() {
                     colSpan={6}
                     className="h-32 text-center text-xs font-semibold text-muted-foreground"
                   >
-                    Tidak ada data planning supply.
+                    Tidak ada data barang dalam pengiriman.
                   </TableCell>
                 </TableRow>
               ) : (

@@ -307,7 +307,7 @@ export function DeliveryDetailSheet({
   );
 
   // Delivery yang belum diterima (barang masih in-transit / belum sampai) bisa
-  // dibatalkan. Qty dikembalikan ke stok sumber & saldo planning supply di-void.
+  // dibatalkan. Qty dikembalikan ke stok sumber & saldo barang dalam pengiriman di-void.
   const canCancelDelivery =
     Boolean(delivery) &&
     isModeratorOrAdmin &&
@@ -839,9 +839,13 @@ export function DeliveryDetailSheet({
                       </p>
                     )}
                   </div>
-                  {delivery?.signature_sender?.image_url && (
+                  {(delivery?.signature_sender_image_url ||
+                    delivery?.signature_sender?.image_url) && (
                     <img
-                      src={delivery.signature_sender.image_url}
+                      src={
+                        delivery.signature_sender_image_url ||
+                        delivery.signature_sender.image_url
+                      }
                       alt="Sender Signature"
                       className="h-16 object-contain border border-purple-200 rounded-lg p-2 bg-white"
                     />
@@ -899,9 +903,13 @@ export function DeliveryDetailSheet({
                       )}
                     </div>
                   )}
-                  {delivery?.signature_receiver?.image_url && (
+                  {(delivery?.signature_receiver_image_url ||
+                    delivery?.signature_receiver?.image_url) && (
                     <img
-                      src={delivery.signature_receiver.image_url}
+                      src={
+                        delivery.signature_receiver_image_url ||
+                        delivery.signature_receiver.image_url
+                      }
                       alt="Receiver Signature"
                       className="h-16 object-contain border border-green-200 rounded-lg p-2 bg-white"
                     />

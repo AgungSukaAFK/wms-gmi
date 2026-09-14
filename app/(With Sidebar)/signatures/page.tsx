@@ -23,6 +23,7 @@ import {
   Loader2,
   Upload,
   AlertCircle,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -30,6 +31,8 @@ import {
   getMySignatures,
   updateSignatureLabel,
   toggleSignatureVisibility,
+  deleteSignature,
+  verifySignaturePassword,
 } from "@/services/signature-actions";
 import { SignatureEditor } from "@/components/signature/signature-editor";
 import {
@@ -64,6 +67,11 @@ export default function SignatureManagerPage() {
   const [signaturePassword, setSignaturePassword] = useState("");
   const [confirmSignaturePassword, setConfirmSignaturePassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Delete Modal State
+  const [deleteTarget, setDeleteTarget] = useState<UserSignature | null>(null);
+  const [deletePassword, setDeletePassword] = useState("");
+  const [isDeleting, setIsDeleting] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -175,6 +183,43 @@ export default function SignatureManagerPage() {
           : "Tanda tangan disembunyikan",
       );
       loadData();
+    }
+  };
+
+  const handleDeleteClick = (sig: UserSignature) => {
+    setDeleteTarget(sig);
+    setDeletePassword("");
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget) return;
+    if (!deletePassword) {
+      toast.error("Masukkan password tanda tangan untuk konfirmasi.");
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      const verifyResult = await verifySignaturePassword(
+        deleteTarget.id,
+        deletePassword,
+      );
+      if (!verifyResult.success) {
+        toast.error(verifyResult.error || "Password tanda tangan salah.");
+        return;
+      }
+
+      const result = await deleteSignature(deleteTarget.id);
+      if (result.success) {
+        toast.success("Tanda tangan berhasil dihapus.");
+        setDeleteTarget(null);
+        setDeletePassword("");
+        loadData();
+      } else {
+        toast.error(result.error || "Gagal menghapus tanda tangan.");
+      }
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -326,6 +371,14 @@ export default function SignatureManagerPage() {
                         <EyeOff className="h-4 w-4" />
                       )}
                     </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                      onClick={() => handleDeleteClick(sig)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
                   </div>
                 </CardFooter>
               </Card>
@@ -349,7 +402,12 @@ export default function SignatureManagerPage() {
               </strong>
               . Hal ini untuk menjaga legalitas dokumen yang pernah
               ditandatangani sebelumnya. Jika Anda ingin menggantinya, silakan
-              sembunyikan tanda tangan lama dan buat yang baru.
+              sembunyikan tanda tangan lama dan buat yang baru. Tanda tangan
+              juga bisa dihapus permanen — dokumen yang sudah pernah
+              ditandatangani sebelumnya tetap aman karena gambar tanda tangan
+              sudah dibekukan di dokumen tersebut, hanya saja tanda tangan
+              yang dihapus tidak bisa dipakai lagi untuk menandatangani
+              dokumen baru.
             </p>
           </div>
         </div>
@@ -476,6 +534,66 @@ export default function SignatureManagerPage() {
                 <ShieldCheck className="mr-2 h-4 w-4" />
               )}
               Verifikasi &amp; Simpan
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation Modal */}
+      <Dialog
+        open={!!deleteTarget}
+        onOpenChange={(v) => !v && setDeleteTarget(null)}
+      >
+        <DialogContent className="sm:max-w-125">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Trash2 className="h-5 w-5 text-destructive" />
+              Hapus Tanda Tangan
+            </DialogTitle>
+            <DialogDescription>
+              Tanda tangan &quot;{deleteTarget?.label}&quot; akan dihapus
+              permanen dan tidak bisa dipakai lagi untuk menandatangani
+              dokumen baru. Dokumen yang sudah pernah ditandatangani
+              sebelumnya tidak akan terpengaruh. Masukkan password tanda
+              tangan ini untuk konfirmasi.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 py-2">
+            <Label htmlFor="del-pass" className="flex items-center gap-1.5">
+              <Lock className="h-3.5 w-3.5" /> Password Tanda Tangan
+            </Label>
+            <Input
+              id="del-pass"
+              type="password"
+              placeholder="Password khusus tanda tangan ini"
+              value={deletePassword}
+              onChange={(e) => setDeletePassword(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleConfirmDelete();
+              }}
+            />
+          </div>
+
+          <DialogFooter className="gap-2 sm:gap-0">
+            <Button
+              variant="ghost"
+              onClick={() => setDeleteTarget(null)}
+              disabled={isDeleting}
+            >
+              Batal
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleConfirmDelete}
+              disabled={isDeleting}
+            >
+              {isDeleting ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Trash2 className="mr-2 h-4 w-4" />
+              )}
+              Hapus Permanen
             </Button>
           </DialogFooter>
         </DialogContent>

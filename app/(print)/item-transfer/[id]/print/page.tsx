@@ -48,7 +48,8 @@ export default function ItemTransferPrintPage() {
         `id, it_kode, it_tanggal, status, tracking_status, shipment_type,
          ekspedisi, sender_name, eksternal_id, jumlah_koli, estimasi_hari,
          no_resi, pic, remarks, approvals, signature_receiver_id,
-         signed_by_receiver_at,
+         signed_by_receiver_at, signature_receiver_image_url,
+         signature_receiver_printed_name, signature_receiver_label,
          dari:cabang!dari_cabang_id(nama_cabang),
          tujuan:cabang!ke_cabang_id(nama_cabang)`,
       )
@@ -64,7 +65,10 @@ export default function ItemTransferPrintPage() {
       .order("created_at");
     setItems(itemsData || []);
 
-    if (itData?.signature_receiver_id) {
+    // Fallback live-lookup hanya untuk data lama yang belum ter-backfill
+    // snapshot-nya (mis. transisi deploy) — begitu snapshot terisi, kolom
+    // di item_transfers sendiri sudah cukup meski signature aslinya dihapus.
+    if (itData?.signature_receiver_id && !itData?.signature_receiver_image_url) {
       const { data: sig } = await supabase
         .from("user_signatures")
         .select("image_url, printed_name, label")
@@ -117,9 +121,15 @@ export default function ItemTransferPrintPage() {
       ? [
           {
             role: "Penerima",
-            nama: receiverSig?.printed_name || receiverSig?.label || "-",
+            nama:
+              it.signature_receiver_printed_name ||
+              it.signature_receiver_label ||
+              receiverSig?.printed_name ||
+              receiverSig?.label ||
+              "-",
             status: "approved",
-            signature_url: receiverSig?.image_url,
+            signature_url:
+              it.signature_receiver_image_url || receiverSig?.image_url,
             processed_at: it.signed_by_receiver_at,
           },
         ]

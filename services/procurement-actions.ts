@@ -10,7 +10,7 @@ import {
   notifyDocumentOwner,
   createNotification,
 } from "@/services/notification-actions";
-import { evaluateMrFreeze } from "@/services/freeze-actions";
+import { evaluateMrFreeze, evaluateMrItemFreeze } from "@/services/freeze-actions";
 
 // ============================================================
 // PRIVATE HELPERS (server-side, uses authenticated server client)
@@ -134,7 +134,6 @@ export async function createMaterialRequest(data: {
   mr_pic_id: string;
   mr_tanggal: string;
   mr_due_date?: string;
-  mr_priority?: string;
   accurate?: boolean;
   approvals?: any[];
   items: {
@@ -143,7 +142,7 @@ export async function createMaterialRequest(data: {
     part_name: string;
     satuan: string;
     qty_request: number;
-    prioritas?: string;
+    item_priority?: string;
     remarks?: string;
   }[];
 }) {
@@ -234,7 +233,6 @@ export async function createMaterialRequest(data: {
         mr_pic_id: data.mr_pic_id,
         mr_tanggal: data.mr_tanggal,
         mr_due_date: data.mr_due_date ?? null,
-        mr_priority: data.mr_priority ?? null,
         accurate: data.accurate ?? false,
         mr_status:
           mrApprovals.length === 0 ||
@@ -369,8 +367,10 @@ export async function approveMR(
 
     status = "approved";
 
-    // Process allocations if provided
-    if (allocations && allocations.length > 0) {
+    // Scheduled MR: alokasi PR vs Share Stock sudah diputuskan requester saat
+    // create (lihat services/scheduled-mr-actions.ts), jadi tidak ada lagi
+    // alokasi yang perlu diproses di sini walau caller mengirim allocations.
+    if (mr.mr_type !== "scheduled" && allocations && allocations.length > 0) {
       // ---------- VALIDATE ALL FIRST (belum ada mutasi DB) ----------
       const allocItemIds = allocations
         .map((a: any) => a.mr_item_id)
@@ -477,6 +477,8 @@ export async function approveMR(
 
   if (updateError) return { error: updateError.message };
 
+  const mrUrl = mr.mr_type === "scheduled" ? `/mr/scheduled/${mrId}` : `/mr/${mrId}`;
+
   // Notify owner about approval progress
   notifyDocumentOwner(
     mr.mr_pic_id,
@@ -484,19 +486,19 @@ export async function approveMR(
     "MR",
     mrId,
     mr.mr_kode,
-    `/mr/${mrId}`,
+    mrUrl,
     approvals[currentStepIndex].nama,
   ).catch(console.error);
 
   // If more steps remain, notify the next pending approver
   if (!isLastStep) {
     const remaining = approvals.filter((a: any) => a.status === "pending");
-    notifyApprovers(remaining, "MR", mrId, mr.mr_kode, `/mr/${mrId}`).catch(
+    notifyApprovers(remaining, "MR", mrId, mr.mr_kode, mrUrl).catch(
       console.error,
     );
   }
 
-  revalidatePath("/mr");
+  revalidatePath(mr.mr_type === "scheduled" ? "/mr/scheduled" : "/mr");
   return { success: true };
 }
 
@@ -512,7 +514,7 @@ export async function rejectMR(mrId: number, reason: string) {
 
   const { data: mr } = await supabase
     .from("mrs")
-    .select("mr_kode, mr_pic_id, approvals")
+    .select("mr_kode, mr_pic_id, approvals, mr_type")
     .eq("id", mrId)
     .single();
   if (!mr) return { error: "MR not found" };
@@ -544,19 +546,23 @@ export async function rejectMR(mrId: number, reason: string) {
     "MR",
     mrId,
     mr.mr_kode,
-    `/mr/${mrId}`,
+    mr.mr_type === "scheduled" ? `/mr/scheduled/${mrId}` : `/mr/${mrId}`,
     rejecter?.nama,
     reason,
   ).catch(console.error);
 
-  revalidatePath("/mr");
+  revalidatePath(mr.mr_type === "scheduled" ? "/mr/scheduled" : "/mr");
   return { success: true };
 }
 
 type MrEditPayload = {
   mr_tanggal?: string;
-  mr_priority?: string;
-  updatedItems?: { id: number; qty_request: number; remarks?: string }[];
+  updatedItems?: {
+    id: number;
+    qty_request: number;
+    remarks?: string;
+    item_priority?: string;
+  }[];
   newItems?: {
     part_id: number;
     part_number: string;
@@ -564,6 +570,7 @@ type MrEditPayload = {
     satuan: string;
     qty_request: number;
     remarks?: string;
+    item_priority?: string;
   }[];
   deletedItemIds?: number[];
 };
@@ -613,8 +620,6 @@ export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
   const headerPatch: Record<string, any> = {};
   if (payload.mr_tanggal !== undefined)
     headerPatch.mr_tanggal = payload.mr_tanggal;
-  if (payload.mr_priority !== undefined)
-    headerPatch.mr_priority = payload.mr_priority;
 
   if (Object.keys(headerPatch).length > 0) {
     const { error: headerErr } = await supabase
@@ -642,6 +647,8 @@ export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
         qty_request: item.qty_request,
       };
       if (item.remarks !== undefined) itemPatch.remarks = item.remarks || null;
+      if (item.item_priority !== undefined)
+        itemPatch.item_priority = item.item_priority;
       const { error: itemErr } = await supabase
         .from("mr_items")
         .update(itemPatch)
@@ -809,6 +816,26 @@ export async function createPurchaseRequest(data: {
         error:
           "Salah satu MR referensi sedang di-FREEZE (lewat deadline share stock). Hubungi moderator untuk unfreeze/reset.",
       };
+    }
+  }
+
+  // Scheduled MR: freeze dievaluasi per-item, bukan per dokumen.
+  if (sourceMrIds.length > 0) {
+    const { data: scheduledMrRows } = await supabase
+      .from("mrs")
+      .select("id")
+      .in("id", sourceMrIds)
+      .eq("mr_type", "scheduled");
+    const scheduledMrIdSet = new Set((scheduledMrRows || []).map((r) => r.id));
+    if (scheduledMrIdSet.size > 0) {
+      for (const item of data.items) {
+        if (!scheduledMrIdSet.has(item.mr_id)) continue;
+        if (await evaluateMrItemFreeze(item.mr_item_id)) {
+          return {
+            error: `Item ${item.part_number} sedang di-FREEZE (lewat due date item tanpa delivery). Hubungi moderator untuk unfreeze/reset.`,
+          };
+        }
+      }
     }
   }
 
