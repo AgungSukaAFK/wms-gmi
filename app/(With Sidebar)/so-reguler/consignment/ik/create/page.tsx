@@ -43,6 +43,7 @@ import { toYmdLocal } from "@/lib/utils";
 import {
   createConsignmentIk,
   getConsignmentSoRemainingToShip,
+  getStockByCabang,
 } from "@/services/consignment-ik-actions";
 
 interface ShipItemRow {
@@ -82,6 +83,7 @@ export default function CreateConsignmentIkPage() {
 
   const [items, setItems] = useState<ShipItemRow[]>([]);
   const [itemsLoading, setItemsLoading] = useState(false);
+  const [stockAsalMap, setStockAsalMap] = useState<Map<number, number>>(new Map());
 
   useEffect(() => {
     supabase
@@ -137,13 +139,37 @@ export default function CreateConsignmentIkPage() {
     setItemsLoading(false);
   };
 
+  const partIdsKey = items.map((i) => i.part_id).join(",");
+
+  useEffect(() => {
+    if (!dariCabangId || items.length === 0) {
+      setStockAsalMap(new Map());
+      return;
+    }
+    let cancelled = false;
+    getStockByCabang(
+      Number(dariCabangId),
+      items.map((i) => i.part_id),
+    ).then((res) => {
+      if (cancelled) return;
+      const map = new Map<number, number>();
+      for (const row of res.data || []) map.set(row.part_id, row.qty);
+      setStockAsalMap(map);
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dariCabangId, partIdsKey]);
+
   const updateQtyKirim = (soItemId: number, qty: number) => {
     setItems((prev) =>
-      prev.map((i) =>
-        i.id === soItemId
-          ? { ...i, qty_kirim: Math.max(0, Math.min(qty, i.qty_remaining)) }
-          : i,
-      ),
+      prev.map((i) => {
+        if (i.id !== soItemId) return i;
+        const stokAsal = stockAsalMap.get(i.part_id) ?? 0;
+        const maxQty = Math.min(i.qty_remaining, stokAsal);
+        return { ...i, qty_kirim: Math.max(0, Math.min(qty, maxQty)) };
+      }),
     );
   };
 
@@ -158,6 +184,12 @@ export default function CreateConsignmentIkPage() {
     const toShip = items.filter((i) => i.qty_kirim > 0);
     if (toShip.length === 0)
       return toast.error("Isi qty kirim minimal untuk satu item.");
+
+    const zeroStock = toShip.filter((i) => (stockAsalMap.get(i.part_id) ?? 0) <= 0);
+    if (zeroStock.length > 0)
+      return toast.error(
+        `Stok gudang asal 0 untuk: ${zeroStock.map((i) => i.part_number).join(", ")}.`,
+      );
 
     setLoading(true);
     try {
@@ -353,12 +385,16 @@ export default function CreateConsignmentIkPage() {
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Qty SO</TableHead>
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Sudah Dikirim</TableHead>
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Sisa</TableHead>
+                  <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Stok Gudang Asal</TableHead>
                   <TableHead className="w-32 text-center text-[10px] font-black uppercase text-muted-foreground">Qty Kirim</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {items.length > 0 ? (
-                  items.map((item) => (
+                  items.map((item) => {
+                    const stokAsal = stockAsalMap.get(item.part_id) ?? 0;
+                    const maxQty = Math.min(item.qty_remaining, stokAsal);
+                    return (
                     <TableRow key={item.id} className="h-14">
                       <TableCell>
                         <code className="block text-sm font-bold">{item.part_number}</code>
@@ -376,13 +412,20 @@ export default function CreateConsignmentIkPage() {
                       <TableCell className="text-center text-xs font-bold">
                         {item.qty_remaining}
                       </TableCell>
+                      <TableCell
+                        className={`text-center text-xs font-bold ${
+                          dariCabangId && stokAsal === 0 ? "text-destructive" : ""
+                        }`}
+                      >
+                        {!dariCabangId ? "-" : stokAsal}
+                      </TableCell>
                       <TableCell>
                         <Input
                           type="number"
                           min={0}
-                          max={item.qty_remaining}
+                          max={maxQty}
                           value={item.qty_kirim}
-                          disabled={item.qty_remaining === 0}
+                          disabled={!dariCabangId || maxQty === 0}
                           onChange={(e) =>
                             updateQtyKirim(item.id, parseInt(e.target.value) || 0)
                           }
@@ -390,10 +433,11 @@ export default function CreateConsignmentIkPage() {
                         />
                       </TableCell>
                     </TableRow>
-                  ))
+                    );
+                  })
                 ) : (
                   <TableRow className="h-24 hover:bg-transparent">
-                    <TableCell colSpan={6} className="text-center text-xs italic text-muted-foreground">
+                    <TableCell colSpan={7} className="text-center text-xs italic text-muted-foreground">
                       {selectedSo ? "SO ini tidak punya item." : "Pilih SO Consignment untuk melihat itemnya."}
                     </TableCell>
                   </TableRow>

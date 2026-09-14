@@ -75,6 +75,24 @@ export async function getConsignmentSoRemainingToShip(soId: number) {
   return { data, error: null as string | null };
 }
 
+/**
+ * Stok fisik tiap part di gudang asal — dipakai form create IK utk
+ * menampilkan & membatasi qty kirim sesuai stok yang benar-benar ada
+ * (bukan cuma sisa qty SO).
+ */
+export async function getStockByCabang(cabangId: number, partIds: number[]) {
+  const supabase = await createClient();
+  if (!partIds || partIds.length === 0) return { data: [], error: null as string | null };
+
+  const { data, error } = await supabase
+    .from("stock")
+    .select("part_id, qty")
+    .eq("cabang_id", cabangId)
+    .in("part_id", partIds);
+  if (error) return { data: [], error: error.message };
+  return { data: data || [], error: null as string | null };
+}
+
 export async function createConsignmentIk(data: {
   ik_kode: string;
   ik_tanggal: string;
