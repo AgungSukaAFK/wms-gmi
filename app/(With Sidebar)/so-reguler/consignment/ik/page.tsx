@@ -126,7 +126,7 @@ export default function ConsignmentIkPage() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-                Instruksi Kerja
+                Invoice Konsinyasi
               </h1>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
                 Pengiriman fisik barang Consignment antar gudang
@@ -135,7 +135,7 @@ export default function ConsignmentIkPage() {
           </div>
           <Link href="/so-reguler/consignment/ik/create">
             <Button className="h-9 gap-2 text-xs font-bold uppercase">
-              <Plus className="h-4 w-4" /> Buat Instruksi Kerja
+              <Plus className="h-4 w-4" /> Buat Invoice Konsinyasi
             </Button>
           </Link>
         </div>
@@ -180,7 +180,7 @@ export default function ConsignmentIkPage() {
                     colSpan={7}
                     className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
                   >
-                    Belum ada Instruksi Kerja
+                    Belum ada Invoice Konsinyasi
                   </TableCell>
                 </TableRow>
               ) : (
@@ -272,7 +272,7 @@ export default function ConsignmentIkPage() {
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Instruksi Kerja {deleteTarget?.ik_kode}?</AlertDialogTitle>
+            <AlertDialogTitle>Hapus Invoice Konsinyasi {deleteTarget?.ik_kode}?</AlertDialogTitle>
             <AlertDialogDescription>
               Stok akan dikembalikan ke gudang asal dan dikurangi dari gudang
               tujuan (membalikkan pergerakan stok IK ini). Tindakan ini tidak

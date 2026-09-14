@@ -131,7 +131,7 @@ const COLUMNS: Column[] = [
   { key: "ekspedisi", label: "Ekspedisi", render: DASH },
   { key: "tgl_kirim_cust", label: "Tgl Kirim ke Cust", render: DASH },
 
-  // --- Instruksi Kerja (IK) — otomatis dari fitur Instruksi Kerja ---
+  // --- Invoice Konsinyasi (IK) — otomatis dari fitur Invoice Konsinyasi ---
   {
     key: "no_ik_terakhir",
     label: "No. IK",

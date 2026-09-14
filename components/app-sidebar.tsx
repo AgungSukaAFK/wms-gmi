@@ -145,7 +145,7 @@ const data = {
       icon: Handshake,
     },
     {
-      title: "Instruksi Kerja",
+      title: "Invoice Konsinyasi",
       url: "/so-reguler/consignment/ik",
       icon: ClipboardList,
     },

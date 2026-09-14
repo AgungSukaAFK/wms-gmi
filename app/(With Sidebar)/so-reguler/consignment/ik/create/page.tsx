@@ -182,7 +182,7 @@ export default function CreateConsignmentIkPage() {
       });
 
       if (result.error) throw new Error(result.error);
-      toast.success("Instruksi Kerja berhasil dibuat, stok sudah dipindahkan.");
+      toast.success("Invoice Konsinyasi berhasil dibuat, stok sudah dipindahkan.");
       router.push("/so-reguler/consignment/ik");
     } catch (e: any) {
       toast.error(e.message);
@@ -208,7 +208,7 @@ export default function CreateConsignmentIkPage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-              Buat Instruksi Kerja
+              Buat Invoice Konsinyasi
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
               Pengiriman Fisik Barang Consignment — Memindahkan Stok
@@ -426,7 +426,7 @@ export default function CreateConsignmentIkPage() {
             onClick={handleSubmit}
             disabled={loading}
           >
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Buat Instruksi Kerja"}
+            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : "Buat Invoice Konsinyasi"}
           </Button>
         </div>
       </Content>

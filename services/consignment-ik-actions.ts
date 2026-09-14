@@ -4,7 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
 // ============================================================
-// INSTRUKSI KERJA (IK) — dokumen pengiriman fisik barang Consignment dari
+// INVOICE KONSINYASI (IK) — dokumen pengiriman fisik barang Consignment dari
 // satu gudang ke gudang lain (Gd Asal -> Gd Tujuan) dengan No AWB.
 //
 // BEDA dari SO Consignment induknya (murni pencatatan, tanpa gerak stok &

@@ -1,4 +1,4 @@
--- Migration: Instruksi Kerja (IK) untuk Consignment
+-- Migration: Invoice Konsinyasi (IK) untuk Consignment
 -- Date: 2026-09-14
 -- Description:
 --   IK = dokumen pengiriman fisik barang Consignment dari satu gudang ke
