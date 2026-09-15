@@ -418,7 +418,7 @@ export default function SpbPage() {
 
       <Content className="overflow-hidden">
         <div className="rounded-lg border border-border">
-          <Table>
+          <Table containerClassName="max-h-[65vh] overflow-y-auto">
             <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
               <TableRow>
                 <SortableTableHead

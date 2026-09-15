@@ -411,7 +411,7 @@ export default function SpbInvoicePage() {
           </div>
 
           <div className="rounded-lg border">
-            <Table>
+            <Table containerClassName="max-h-[65vh] overflow-y-auto">
               <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
                 <TableRow>
                   <TableHead>No SPB</TableHead>
@@ -682,8 +682,11 @@ export default function SpbInvoicePage() {
             </div>
 
             {selectedDoId && (
-              <div className="rounded-md border max-h-[45vh] overflow-auto">
-                <Table className="table-fixed">
+              <div className="rounded-md border">
+                <Table
+                  className="table-fixed"
+                  containerClassName="max-h-[45vh] overflow-y-auto"
+                >
                   <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-background">
                     <TableRow>
                       <TableHead className="w-10">Pilih</TableHead>
