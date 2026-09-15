@@ -223,7 +223,7 @@ export default function ReturnSpbPage() {
       <Content className="overflow-hidden">
         <div className="rounded-lg border border-border">
           <Table>
-            <TableHeader className="sticky top-0 z-10 bg-card">
+            <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
               <TableRow>
                 <SortableTableHead
                   sortKey="rtn_kode"
