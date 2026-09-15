@@ -47,6 +47,13 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { canCreateMR } from "@/lib/mr-permissions";
 
+const MR_KATEGORI_OPTIONS = [
+  "New Item",
+  "Replace Item",
+  "Fix & Repair",
+  "Upgrade",
+];
+
 export default function CreateMRPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -62,6 +69,7 @@ export default function CreateMRPage() {
   const [mrTanggal, setMrTanggal] = useState(toYmdLocal());
   const [mrDueDate, setMrDueDate] = useState("");
   const [mrPriority, setMrPriority] = useState("P3");
+  const [mrKategori, setMrKategori] = useState("");
   const [mrAccurate, setMrAccurate] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
   const [items, setItems] = useState<MRItem[]>([]);
@@ -125,6 +133,7 @@ export default function CreateMRPage() {
     if (!mrKode.trim()) return "Nomor Dokumen harus diisi";
     if (!mrTanggal) return "Tanggal MR harus diisi";
     if (!mrDueDate) return "Due Date harus diisi";
+    if (!mrKategori) return "Kategori MR harus dipilih";
     if (!selectedTemplateId) return "Pilih Alur Approval";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
     return null;
@@ -188,6 +197,7 @@ export default function CreateMRPage() {
         mr_pic_id: userProfile.id,
         mr_tanggal: mrTanggal,
         mr_due_date: mrDueDate,
+        kategori: mrKategori,
         accurate: mrAccurate,
         approvals: approvalData,
         items: items.map((item) => ({
@@ -338,6 +348,23 @@ export default function CreateMRPage() {
                 Prioritas sekarang per barang — ini cuma nilai awal tiap item
                 baru, bisa diubah sendiri-sendiri di tabel Daftar Barang.
               </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                Kategori
+              </Label>
+              <Select value={mrKategori} onValueChange={setMrKategori}>
+                <SelectTrigger className="h-9 w-full rounded-md border-input bg-background text-xs font-semibold">
+                  <SelectValue placeholder="Pilih kategori..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {MR_KATEGORI_OPTIONS.map((k) => (
+                    <SelectItem key={k} value={k}>
+                      {k}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

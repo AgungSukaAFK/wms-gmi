@@ -23,7 +23,7 @@ export async function signIn(formData: FormData) {
     const { createClient: createBasicClient } =
       await import("@supabase/supabase-js");
     const anonSupabase = createBasicClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL!,
       process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_OR_ANON_KEY!,
     );
 

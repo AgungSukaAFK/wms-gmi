@@ -5,6 +5,7 @@ import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog,
   DialogContent,
@@ -52,12 +53,14 @@ import {
 type CabangFormState = {
   nama_cabang: string;
   kode_cabang: string;
+  alamat: string;
   is_active: boolean;
 };
 
 const emptyForm: CabangFormState = {
   nama_cabang: "",
   kode_cabang: "",
+  alamat: "",
   is_active: true,
 };
 
@@ -170,6 +173,7 @@ export default function CabangManagementClient() {
     setForm({
       nama_cabang: row.nama_cabang || "",
       kode_cabang: row.kode_cabang || "",
+      alamat: row.alamat || "",
       is_active: Boolean(row.is_active),
     });
     setDialogOpen(true);
@@ -344,6 +348,9 @@ export default function CabangManagementClient() {
                 >
                   Kode
                 </SortableTableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Alamat
+                </TableHead>
                 <SortableTableHead
                   sortKey="is_active"
                   currentSort={sortOrder}
@@ -360,7 +367,7 @@ export default function CabangManagementClient() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-30 text-center">
+                  <TableCell colSpan={6} className="h-30 text-center">
                     <div className="flex items-center justify-center gap-2 text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" /> Memuat...
                     </div>
@@ -369,7 +376,7 @@ export default function CabangManagementClient() {
               ) : paginatedRows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={5}
+                    colSpan={6}
                     className="h-30 text-center text-muted-foreground"
                   >
                     Tidak ada data cabang.
@@ -386,6 +393,12 @@ export default function CabangManagementClient() {
                     </TableCell>
                     <TableCell className="text-xs font-semibold text-muted-foreground uppercase">
                       {row.kode_cabang}
+                    </TableCell>
+                    <TableCell
+                      className="max-w-60 truncate text-xs text-muted-foreground"
+                      title={row.alamat || ""}
+                    >
+                      {row.alamat || "-"}
                     </TableCell>
                     <TableCell>
                       <Badge
@@ -468,6 +481,17 @@ export default function CabangManagementClient() {
                   setForm((prev) => ({ ...prev, kode_cabang: e.target.value }))
                 }
                 placeholder="Contoh: BPN"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Alamat</Label>
+              <Textarea
+                value={form.alamat}
+                onChange={(e) =>
+                  setForm((prev) => ({ ...prev, alamat: e.target.value }))
+                }
+                placeholder="Alamat lengkap cabang"
+                rows={3}
               />
             </div>
             <div className="space-y-1.5">

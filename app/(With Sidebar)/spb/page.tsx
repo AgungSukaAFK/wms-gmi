@@ -419,7 +419,7 @@ export default function SpbPage() {
       <Content className="overflow-hidden">
         <div className="rounded-lg border border-border">
           <Table>
-            <TableHeader>
+            <TableHeader className="sticky top-0 z-10 bg-card">
               <TableRow>
                 <SortableTableHead
                   sortKey="spb_no"

@@ -319,7 +319,7 @@ export default function SpbDoPage() {
 
           <div className="rounded-lg border">
             <Table>
-              <TableHeader>
+              <TableHeader className="sticky top-0 z-10 bg-card">
                 <TableRow>
                   <TableHead>No SPB</TableHead>
                   <TableHead>No PO</TableHead>
@@ -540,7 +540,7 @@ export default function SpbDoPage() {
             {selectedPoId && (
               <div className="rounded-md border max-h-[45vh] overflow-auto">
                 <Table className="table-fixed">
-                  <TableHeader>
+                  <TableHeader className="sticky top-0 z-10 bg-background">
                     <TableRow>
                       <TableHead className="w-10">Pilih</TableHead>
                       <TableHead className="w-32">Part Number</TableHead>

@@ -127,6 +127,13 @@ function _processStep(
 /**
  * MATERIAL REQUEST (MR) SERVICES
  */
+const MR_KATEGORI_VALUES = [
+  "New Item",
+  "Replace Item",
+  "Fix & Repair",
+  "Upgrade",
+] as const;
+
 export async function createMaterialRequest(data: {
   mr_kode: string;
   cabang_id: number;
@@ -134,6 +141,7 @@ export async function createMaterialRequest(data: {
   mr_pic_id: string;
   mr_tanggal: string;
   mr_due_date?: string;
+  kategori: string;
   accurate?: boolean;
   approvals?: any[];
   items: {
@@ -168,6 +176,10 @@ export async function createMaterialRequest(data: {
   const mrKode = data.mr_kode?.trim();
   if (!mrKode) {
     return { error: "Kode MR wajib diisi manual." };
+  }
+
+  if (!MR_KATEGORI_VALUES.includes(data.kategori as any)) {
+    return { error: "Kategori MR wajib dipilih." };
   }
 
   const { data: existingMr } = await supabase
@@ -233,6 +245,7 @@ export async function createMaterialRequest(data: {
         mr_pic_id: data.mr_pic_id,
         mr_tanggal: data.mr_tanggal,
         mr_due_date: data.mr_due_date ?? null,
+        kategori: data.kategori,
         accurate: data.accurate ?? false,
         mr_status:
           mrApprovals.length === 0 ||

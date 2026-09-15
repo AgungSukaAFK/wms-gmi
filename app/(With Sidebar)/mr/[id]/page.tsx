@@ -1176,6 +1176,15 @@ export default function MRDetailPage({
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                  Kategori
+                </Label>
+                <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
+                  {mr?.kategori || "-"}
+                </div>
+              </div>
+
             </div>
           </Content>
 

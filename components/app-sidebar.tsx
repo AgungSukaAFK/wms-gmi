@@ -57,6 +57,7 @@ import {
   SlidersHorizontal,
   ScrollText,
   CalendarRange,
+  Warehouse,
 } from "lucide-react";
 
 // Update the menu data
@@ -148,6 +149,16 @@ const data = {
       title: "Item Konsinyasi",
       url: "/so-reguler/consignment/ik",
       icon: ClipboardList,
+    },
+    {
+      title: "Penerimaan Konsinyasi",
+      url: "/so-reguler/consignment/penerimaan",
+      icon: PackageCheck,
+    },
+    {
+      title: "Stok di Customer",
+      url: "/so-reguler/consignment/customer-stock",
+      icon: Warehouse,
     },
   ],
   navSecondary: [

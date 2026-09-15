@@ -10,6 +10,7 @@ import { revalidatePath } from "next/cache";
 type CabangPayload = {
   nama_cabang: string;
   kode_cabang: string;
+  alamat?: string;
   is_active?: boolean;
 };
 
@@ -85,7 +86,7 @@ export async function getCabangManagementList() {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("cabang")
-    .select("id, nama_cabang, kode_cabang, is_active, created_at")
+    .select("id, nama_cabang, kode_cabang, alamat, is_active, created_at")
     .order("nama_cabang");
 
   if (error) return { data: [], error: error.message };
@@ -110,6 +111,7 @@ export async function createCabang(payload: CabangPayload) {
       {
         nama_cabang,
         kode_cabang,
+        alamat: payload.alamat?.trim() || null,
         is_active: payload.is_active ?? true,
       },
     ])
@@ -172,6 +174,7 @@ export async function updateCabang(id: number, payload: CabangPayload) {
     .update({
       nama_cabang,
       kode_cabang,
+      alamat: payload.alamat?.trim() || null,
       is_active: payload.is_active ?? true,
     })
     .eq("id", id);

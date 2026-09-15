@@ -382,24 +382,61 @@ export default function MaterialRequestPage() {
       }
 
       // Trace: Delivery (share stock) langsung via delivery_items.mr_item_id.
+      // Ikut ambil status delivery-nya buat derive STATUS BARANG di bawah.
       const dlvCodesByMrItem = new Map<number, string[]>();
+      const dlvStatusesByMrItem = new Map<number, string[]>();
       for (let i = 0; i < mrItemIds.length; i += 1000) {
         const chunk = mrItemIds.slice(i, i + 1000);
         const { data } = await supabase
           .from("delivery_items")
-          .select("mr_item_id, deliveries(dlv_kode)")
+          .select("mr_item_id, deliveries(dlv_kode, status)")
           .in("mr_item_id", chunk);
         for (const row of data || []) {
           if (!row.mr_item_id) continue;
-          const kode = Array.isArray(row.deliveries)
-            ? row.deliveries[0]?.dlv_kode
-            : (row.deliveries as any)?.dlv_kode;
-          if (!kode) continue;
-          const list = dlvCodesByMrItem.get(row.mr_item_id) || [];
-          list.push(kode);
-          dlvCodesByMrItem.set(row.mr_item_id, list);
+          const dlv = Array.isArray(row.deliveries)
+            ? row.deliveries[0]
+            : (row.deliveries as any);
+          if (!dlv?.dlv_kode) continue;
+          const codeList = dlvCodesByMrItem.get(row.mr_item_id) || [];
+          codeList.push(dlv.dlv_kode);
+          dlvCodesByMrItem.set(row.mr_item_id, codeList);
+          const statusList = dlvStatusesByMrItem.get(row.mr_item_id) || [];
+          statusList.push(dlv.status);
+          dlvStatusesByMrItem.set(row.mr_item_id, statusList);
         }
       }
+
+      const cabangNameById = new Map(
+        availableCabang.map((c: any) => [c.id, c.nama_cabang]),
+      );
+
+      // Status Barang per item — heuristik dari data yang sudah ada (tanpa
+      // kolom status baru), mengikuti vocabulary referensi sistem GA
+      // (Menunggu/Proses PO/Sudah PO) ditambah "Selesai" karena di sini kita
+      // bisa lacak sampai barang diterima (GA tidak).
+      const deriveStatusBarang = (item: any) => {
+        if (!item.qty_request) return "-";
+        const hasPr = (prCodesByMrItem.get(item.id) || []).length > 0;
+        const hasPo = (poCodesByMrItem.get(item.id) || []).length > 0;
+        const dlvStatuses = dlvStatusesByMrItem.get(item.id) || [];
+        const hasDelivery = dlvStatuses.length > 0;
+
+        const poFullyReceived =
+          (item.qty_pr ?? 0) > 0 && (item.qty_received ?? 0) >= item.qty_pr;
+        const deliveryFullyDone =
+          (item.qty_sharestock_total ?? 0) === 0 ||
+          (hasDelivery &&
+            dlvStatuses.every((s) => s === "done" || s === "closed"));
+
+        const poPortionDone = (item.qty_pr ?? 0) === 0 || poFullyReceived;
+
+        if (poPortionDone && deliveryFullyDone && (hasPr || hasDelivery)) {
+          return "Selesai";
+        }
+        if (hasPo || hasDelivery) return "Dalam Pengiriman";
+        if (hasPr) return "Proses PO";
+        return "Menunggu";
+      };
 
       const uniq = (arr: string[]) => Array.from(new Set(arr));
 
@@ -408,18 +445,26 @@ export default function MaterialRequestPage() {
         return {
           NO: index + 1,
           "KODE MR": mr?.mr_kode || "-",
+          KATEGORI: mr?.kategori || "-",
+          COMPANY: "GMI",
           PRIORITAS: item?.item_priority || "-",
           PIC: mr?.mr_pic || "-",
           LOKASI: mr?.cabang?.nama_cabang || "-",
+          "TUJUAN SITE":
+            cabangNameById.get(item.item_site_cabang_id) ||
+            mr?.cabang?.nama_cabang ||
+            "-",
           "TANGGAL REQUEST": mr?.mr_tanggal ? formatDate(mr.mr_tanggal) : "-",
           "DUE DATE": mr?.mr_due_date ? formatDate(mr.mr_due_date) : "-",
           STATUS: mr?.mr_status || "-",
           FROZEN: mr?.is_frozen ? "YA" : "-",
           "PART NUMBER": item.part_number || "-",
           "NAMA BARANG": item.part_name || "-",
+          SATUAN: item.satuan || "-",
           "QTY REQUEST": item.qty_request ?? 0,
           "QTY PR": item.qty_pr ?? 0,
           "QTY SHARE STOCK": item.qty_sharestock_total ?? 0,
+          "STATUS BARANG": deriveStatusBarang(item),
           CATATAN: item.remarks || "-",
           "KODE PR": uniq(prCodesByMrItem.get(item.id) || []).join(", ") || "-",
           "KODE PO": uniq(poCodesByMrItem.get(item.id) || []).join(", ") || "-",
