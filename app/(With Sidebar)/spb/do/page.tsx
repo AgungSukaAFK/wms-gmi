@@ -318,8 +318,8 @@ export default function SpbDoPage() {
           </div>
 
           <div className="rounded-lg border">
-            <Table containerClassName="max-h-[65vh] overflow-y-auto">
-              <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
+            <Table containerClassName="max-h-[75vh] overflow-y-auto">
+              <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                 <TableRow>
                   <TableHead>No SPB</TableHead>
                   <TableHead>No PO</TableHead>
@@ -541,9 +541,9 @@ export default function SpbDoPage() {
               <div className="rounded-md border">
                 <Table
                   className="table-fixed"
-                  containerClassName="max-h-[45vh] overflow-y-auto"
+                  containerClassName="max-h-[55vh] overflow-y-auto"
                 >
-                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-background">
+                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-background [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                     <TableRow>
                       <TableHead className="w-10">Pilih</TableHead>
                       <TableHead className="w-32">Part Number</TableHead>
