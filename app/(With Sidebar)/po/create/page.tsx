@@ -126,16 +126,16 @@ export default function CreatePOPage() {
 
   // Pajak, diskon & ongkir
   const [hargaTermasukPajak, setHargaTermasukPajak] = useState(false);
-  const [ppnMode, setPpnMode] = useState<"percent" | "amount">("percent");
+  const [ppnMode, setPpnMode] = useState<"percent" | "amount">("amount");
   const [ppnRate, setPpnRate] = useState(0);
   const [ppnAmountManual, setPpnAmountManual] = useState(0);
   const [diskonMode, setDiskonMode] = useState<"percent" | "amount">(
-    "percent",
+    "amount",
   );
   const [diskonValue, setDiskonValue] = useState(0);
   const [ongkir, setOngkir] = useState(0);
   const [pphType, setPphType] = useState("");
-  const [pphMode, setPphMode] = useState<"percent" | "amount">("percent");
+  const [pphMode, setPphMode] = useState<"percent" | "amount">("amount");
   const [pphRate, setPphRate] = useState(0);
   const [pphAmountManual, setPphAmountManual] = useState(0);
 
