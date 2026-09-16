@@ -60,6 +60,7 @@ import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log
 import { cn, formatDate } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
+import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
 
 interface PODetailSheetProps {
   poId: number | null;
@@ -142,6 +143,8 @@ export function PODetailSheet({
           `
           id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
+          po_harga_termasuk_pajak, po_ppn_rate, po_diskon_mode, po_diskon_value,
+          po_ongkir, po_pph_type, po_pph_rate,
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -361,6 +364,22 @@ export function PODetailSheet({
     }
     return Object.entries(map);
   }, [poItems]);
+
+  const poSubtotal = poItems.reduce(
+    (sum, it) => sum + it.qty * it.harga,
+    0,
+  );
+  const poTax = po
+    ? computePoTotals({
+        subtotal: poSubtotal,
+        diskonMode: po.po_diskon_mode || "percent",
+        diskonValue: po.po_diskon_value || 0,
+        hargaTermasukPajak: po.po_harga_termasuk_pajak || false,
+        ppnRate: po.po_ppn_rate || 0,
+        ongkir: po.po_ongkir || 0,
+        pphRate: po.po_pph_type ? po.po_pph_rate || 0 : 0,
+      })
+    : null;
 
   const formatCurrency = (n: number) =>
     new Intl.NumberFormat("id-ID", {
@@ -802,6 +821,108 @@ export function PODetailSheet({
                           Tolak
                         </Button>
                       </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Ringkasan Pajak, Diskon & Ongkir */}
+                {poTax && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="h-4 w-1 bg-foreground rounded-full" />
+                      <h3 className="text-[11px] font-bold text-foreground uppercase tracking-tight">
+                        Ringkasan Pajak, Diskon & Ongkir
+                      </h3>
+                    </div>
+                    <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                        <span>Subtotal</span>
+                        <span className="text-foreground">
+                          {maskedPriceText(
+                            canViewPrice,
+                            formatCurrency(poTax.subtotal),
+                          )}
+                        </span>
+                      </div>
+                      {poTax.diskonAmount > 0 && (
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                          <span>
+                            Diskon
+                            {po.po_diskon_mode === "percent"
+                              ? ` (${po.po_diskon_value}%)`
+                              : ""}
+                          </span>
+                          <span className="text-destructive">
+                            -{" "}
+                            {maskedPriceText(
+                              canViewPrice,
+                              formatCurrency(poTax.diskonAmount),
+                            )}
+                          </span>
+                        </div>
+                      )}
+                      {po.po_ppn_rate > 0 && (
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                          <span>
+                            PPN ({po.po_ppn_rate}%)
+                            {po.po_harga_termasuk_pajak
+                              ? " — sudah termasuk harga"
+                              : ""}
+                          </span>
+                          <span className="text-foreground">
+                            {po.po_harga_termasuk_pajak
+                              ? "-"
+                              : `+ ${maskedPriceText(canViewPrice, formatCurrency(poTax.ppnAmount))}`}
+                          </span>
+                        </div>
+                      )}
+                      {po.po_ongkir > 0 && (
+                        <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                          <span>Ongkos Kirim</span>
+                          <span className="text-foreground">
+                            +{" "}
+                            {maskedPriceText(
+                              canViewPrice,
+                              formatCurrency(po.po_ongkir),
+                            )}
+                          </span>
+                        </div>
+                      )}
+                      <div className="flex items-center justify-between text-sm font-black uppercase pt-2 border-t border-border">
+                        <span>Total PO</span>
+                        <span className="text-primary">
+                          {maskedPriceText(
+                            canViewPrice,
+                            formatCurrency(poTax.totalPo),
+                          )}
+                        </span>
+                      </div>
+                      {po.po_pph_type && (
+                        <>
+                          <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1">
+                            <span>
+                              PPh {getPphTypeLabel(po.po_pph_type)} (
+                              {po.po_pph_rate}%)
+                            </span>
+                            <span className="text-destructive">
+                              -{" "}
+                              {maskedPriceText(
+                                canViewPrice,
+                                formatCurrency(poTax.pphAmount),
+                              )}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-xs font-black uppercase pt-1.5 border-t border-dashed border-border">
+                            <span>Dibayar ke Vendor</span>
+                            <span className="text-foreground">
+                              {maskedPriceText(
+                                canViewPrice,
+                                formatCurrency(poTax.dibayarKeVendor),
+                              )}
+                            </span>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </div>
                 )}

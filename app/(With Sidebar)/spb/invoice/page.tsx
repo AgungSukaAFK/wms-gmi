@@ -575,7 +575,7 @@ export default function SpbInvoicePage() {
 
           <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <Label>Pilih SPB-DO</Label>
                 <Popover open={openDoCombobox} onOpenChange={setOpenDoCombobox}>
                   <PopoverTrigger asChild>
@@ -587,7 +587,7 @@ export default function SpbInvoicePage() {
                     >
                       <span className="truncate">
                         {selectedDo
-                          ? `${selectedDo.do_no} - ${selectedDo.po?.spb?.spb_no || "-"}`
+                          ? `${selectedDo.do_no} · No SPB: ${selectedDo.po?.spb?.spb_no || "-"}`
                           : selectedDoLabel || "Pilih DO..."}
                       </span>
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -619,11 +619,19 @@ export default function SpbInvoicePage() {
                                   setSelectedDoLabel(label);
                                   setOpenDoCombobox(false);
                                 }}
+                                className="items-start gap-2"
                               >
-                                <span className="truncate">{label}</span>
+                                <div className="flex min-w-0 flex-1 flex-col">
+                                  <span className="font-semibold truncate">
+                                    {item.do_no}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground truncate">
+                                    No SPB: {item.po?.spb?.spb_no || "-"}
+                                  </span>
+                                </div>
                                 <Check
                                   className={cn(
-                                    "ml-auto",
+                                    "mt-0.5 shrink-0",
                                     selectedDoId === value
                                       ? "opacity-100"
                                       : "opacity-0",

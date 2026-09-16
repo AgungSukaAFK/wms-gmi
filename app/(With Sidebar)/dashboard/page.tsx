@@ -18,11 +18,13 @@ import {
   ClipboardList,
   Clock,
   FileText,
+  FileWarning,
   PackageOpen,
   ShoppingCart,
   Truck,
 } from "lucide-react";
 import { formatDate, toYmdLocal } from "@/lib/utils";
+import { PrConvertStatusBadge } from "@/components/pr/pr-convert-status-badge";
 
 type TrendData = {
   bulan: string;
@@ -153,6 +155,8 @@ export default async function DashboardPage() {
     recentMrsResult,
     recentDeliveriesResult,
     mrByCabangResult,
+    prNeedsPoCountResult,
+    prNeedsPoListResult,
   ] = await Promise.all([
     user?.id
       ? supabase
@@ -215,6 +219,20 @@ export default async function DashboardPage() {
       .from("mrs")
       .select("cabang(nama_cabang)")
       .gte("created_at", startOfMonth),
+    supabase
+      .from("prs")
+      .select("*", { count: "exact", head: true })
+      .eq("pr_status", "approved")
+      .in("pr_convert_status", ["pending", "partial"]),
+    supabase
+      .from("prs")
+      .select(
+        "id, pr_kode, pr_tanggal, pr_convert_status, cabang(nama_cabang), profiles(nama)",
+      )
+      .eq("pr_status", "approved")
+      .in("pr_convert_status", ["pending", "partial"])
+      .order("pr_tanggal", { ascending: true })
+      .limit(5),
   ]);
 
   const profile = profileResult.data;
@@ -413,6 +431,25 @@ export default async function DashboardPage() {
         <div className="flex items-center justify-between">
           <div>
             <p className="text-[10px] font-bold uppercase text-muted-foreground">
+              PR Belum/Partial PO
+            </p>
+            <p className="text-2xl font-bold text-foreground">
+              {prNeedsPoCountResult.count ?? 0}
+            </p>
+            <p className="text-[10px] text-muted-foreground">
+              PR approved, belum full PO
+            </p>
+          </div>
+          <div className="flex h-10 w-10 items-center justify-center rounded-md bg-amber-500/10">
+            <FileWarning className="h-5 w-5 text-amber-600" />
+          </div>
+        </div>
+      </Content>
+
+      <Content size="xs">
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase text-muted-foreground">
               SPB
             </p>
             <p className="text-2xl font-bold text-foreground">
@@ -596,6 +633,73 @@ export default async function DashboardPage() {
                     </TableCell>
                     <TableCell className="text-xs font-medium text-foreground">
                       {renderStatusBadge(mr.mr_status)}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </div>
+      </Content>
+
+      <Content size="md">
+        <div className="space-y-3">
+          <div>
+            <h2 className="text-sm font-bold text-foreground">
+              PR Perlu Follow-up PO
+            </h2>
+            <p className="text-[10px] font-bold uppercase text-muted-foreground">
+              PR approved yang belum atau baru sebagian dibuat PO-nya
+            </p>
+          </div>
+
+          <Table>
+            <TableHeader className="bg-muted/30">
+              <TableRow>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Kode PR
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  PIC
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Cabang
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Tanggal
+                </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
+                  Status PO
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {(prNeedsPoListResult.data || []).length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="text-center text-xs font-medium text-muted-foreground"
+                  >
+                    Semua PR approved sudah full PO.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                (prNeedsPoListResult.data || []).map((pr: any) => (
+                  <TableRow key={pr.id}>
+                    <TableCell className="text-xs font-medium text-foreground">
+                      {pr.pr_kode || "-"}
+                    </TableCell>
+                    <TableCell className="text-xs font-medium text-foreground">
+                      {pr.profiles?.nama || "-"}
+                    </TableCell>
+                    <TableCell className="text-xs font-medium text-foreground">
+                      {pr.cabang?.nama_cabang || "-"}
+                    </TableCell>
+                    <TableCell className="text-xs font-medium text-foreground">
+                      {formatDate(pr.pr_tanggal)}
+                    </TableCell>
+                    <TableCell className="text-xs font-medium text-foreground">
+                      <PrConvertStatusBadge status={pr.pr_convert_status} />
                     </TableCell>
                   </TableRow>
                 ))

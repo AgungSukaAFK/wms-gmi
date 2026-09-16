@@ -50,6 +50,10 @@ import { completedFilterStatuses } from "@/lib/document-status";
 import { summarizeApprovals } from "@/lib/approval-progress";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import {
+  PrConvertStatusBadge,
+  PR_CONVERT_STATUS_LABEL,
+} from "@/components/pr/pr-convert-status-badge";
 
 const PR_SORT_COLUMNS: Record<string, string> = {
   pr_kode: "pr_kode",
@@ -71,6 +75,9 @@ export default function PRListPage() {
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
+  const [convertStatusFilters, setConvertStatusFilters] = useState<string[]>(
+    [],
+  );
   const [accurateFilter, setAccurateFilter] = useState<string>("all");
   const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [dateFrom, setDateFrom] = useState<string>("");
@@ -129,6 +136,10 @@ export default function PRListPage() {
         s === "completed" ? completedFilterStatuses() : [s],
       );
       query = query.in("pr_status", Array.from(new Set(expanded)));
+    }
+
+    if (convertStatusFilters.length > 0) {
+      query = query.in("pr_convert_status", convertStatusFilters);
     }
 
     if (accurateFilter !== "all") {
@@ -257,6 +268,7 @@ export default function PRListPage() {
   }, [
     debouncedSearch,
     statusFilters,
+    convertStatusFilters,
     accurateFilter,
     locationFilters,
     dateFrom,
@@ -274,6 +286,7 @@ export default function PRListPage() {
   const resetFilters = () => {
     setSearchQuery("");
     setStatusFilters([]);
+    setConvertStatusFilters([]);
     setAccurateFilter("all");
     setLocationFilters([]);
     setDateFrom("");
@@ -296,6 +309,7 @@ export default function PRListPage() {
 
   const hasActiveFilters =
     statusFilters.length > 0 ||
+    convertStatusFilters.length > 0 ||
     accurateFilter !== "all" ||
     locationFilters.length > 0 ||
     dateFrom !== "" ||
@@ -434,6 +448,21 @@ export default function PRListPage() {
               ]}
             />
 
+            <MultiSelect
+              className="w-full sm:w-40"
+              placeholder="Semua Status PO"
+              selected={convertStatusFilters}
+              onChange={(vals) => {
+                setConvertStatusFilters(vals);
+                setPage(1);
+              }}
+              options={[
+                { label: PR_CONVERT_STATUS_LABEL.pending, value: "pending" },
+                { label: PR_CONVERT_STATUS_LABEL.partial, value: "partial" },
+                { label: PR_CONVERT_STATUS_LABEL.complete, value: "complete" },
+              ]}
+            />
+
             <Select
               value={accurateFilter}
               onValueChange={(val) => {
@@ -552,6 +581,9 @@ export default function PRListPage() {
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
                   Progress Approval
                 </TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground text-center">
+                  Status PO
+                </TableHead>
                 <SortableTableHead
                   sortKey="accurate"
                   currentSort={sortOrder}
@@ -575,7 +607,7 @@ export default function PRListPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={7} className="h-40 text-center">
+                  <TableCell colSpan={8} className="h-40 text-center">
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                       <span className="text-[10px] font-bold text-muted-foreground uppercase">
@@ -587,7 +619,7 @@ export default function PRListPage() {
               ) : prs.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={8}
                     className="h-48 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[10px]"
                   >
                     {hasActiveFilters || searchQuery
@@ -644,6 +676,9 @@ export default function PRListPage() {
                           </div>
                         );
                       })()}
+                    </TableCell>
+                    <TableCell className="text-center">
+                      <PrConvertStatusBadge status={pr.pr_convert_status} />
                     </TableCell>
                     <TableCell className="text-center">
                       <Badge

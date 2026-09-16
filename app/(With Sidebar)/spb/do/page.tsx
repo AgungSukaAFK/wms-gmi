@@ -453,7 +453,7 @@ export default function SpbDoPage() {
 
           <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-2">
+              <div className="space-y-2 md:col-span-2">
                 <Label>Pilih SPB-PO</Label>
                 <Popover open={openPoCombobox} onOpenChange={setOpenPoCombobox}>
                   <PopoverTrigger asChild>
@@ -465,7 +465,7 @@ export default function SpbDoPage() {
                     >
                       <span className="truncate">
                         {selectedPo
-                          ? `${selectedPo.po_no} - ${selectedPo.spb?.spb_no || "-"}`
+                          ? `${selectedPo.po_no} · No SPB: ${selectedPo.spb?.spb_no || "-"}`
                           : selectedPoLabel || "Pilih PO..."}
                       </span>
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
@@ -497,11 +497,19 @@ export default function SpbDoPage() {
                                   setSelectedPoLabel(label);
                                   setOpenPoCombobox(false);
                                 }}
+                                className="items-start gap-2"
                               >
-                                <span className="truncate">{label}</span>
+                                <div className="flex min-w-0 flex-1 flex-col">
+                                  <span className="font-semibold truncate">
+                                    {po.po_no}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground truncate">
+                                    No SPB: {po.spb?.spb_no || "-"}
+                                  </span>
+                                </div>
                                 <Check
                                   className={cn(
-                                    "ml-auto",
+                                    "mt-0.5 shrink-0",
                                     selectedPoId === value
                                       ? "opacity-100"
                                       : "opacity-0",

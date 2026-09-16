@@ -33,6 +33,7 @@ import {
   AlertCircle,
   FileText,
   ShieldCheck,
+  Percent,
 } from "lucide-react";
 import {
   Popover,
@@ -61,6 +62,14 @@ import { cn, formatDate, toYmdLocal } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { DatePickerString } from "@/components/date-picker-string";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
+import { PrConvertStatusBadge } from "@/components/pr/pr-convert-status-badge";
+import {
+  computePoTotals,
+  getPphDefaultRate,
+  getPphTypeLabel,
+  PPH_TYPE_OPTIONS,
+  PPN_RATE_OPTIONS,
+} from "@/lib/po-tax";
 
 type Step = 1 | 2 | 3;
 
@@ -98,19 +107,14 @@ export default function CreatePOPage() {
   const [prPopoverOpen, setPrPopoverOpen] = useState(false);
   const [selectedPrs, setSelectedPrs] = useState<any[]>([]);
 
-  // Step 2 — Vendor per item
+  // Step 2 — Item & harga per item, vendor per dokumen (satu vendor untuk
+  // seluruh PO, bukan per item).
   const [poItems, setPoItems] = useState<POItem[]>([]);
-  const [vendorResults, setVendorResults] = useState<Record<number, any[]>>({});
-  const [vendorLoading, setVendorLoading] = useState<Record<number, boolean>>(
-    {},
-  );
-  const [selectedVendorMap, setSelectedVendorMap] = useState<
-    Record<number, any>
-  >({});
-  const [vendorSearch, setVendorSearch] = useState<Record<number, string>>({});
-  const [vendorPopoverOpen, setVendorPopoverOpen] = useState<
-    Record<number, boolean>
-  >({});
+  const [vendorResults, setVendorResults] = useState<any[]>([]);
+  const [vendorLoading, setVendorLoading] = useState(false);
+  const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
+  const [vendorSearch, setVendorSearch] = useState("");
+  const [vendorPopoverOpen, setVendorPopoverOpen] = useState(false);
 
   // Step 3 — PO Header
   const [poKode, setPoKode] = useState("");
@@ -119,6 +123,17 @@ export default function CreatePOPage() {
   const [poPaymentTerm, setPoPaymentTerm] = useState("");
   const [paymentTermCustom, setPaymentTermCustom] = useState(false);
   const [poKeterangan, setPoKeterangan] = useState("");
+
+  // Pajak, diskon & ongkir
+  const [hargaTermasukPajak, setHargaTermasukPajak] = useState(false);
+  const [ppnRate, setPpnRate] = useState(0);
+  const [diskonMode, setDiskonMode] = useState<"percent" | "amount">(
+    "percent",
+  );
+  const [diskonValue, setDiskonValue] = useState(0);
+  const [ongkir, setOngkir] = useState(0);
+  const [pphType, setPphType] = useState("");
+  const [pphRate, setPphRate] = useState(0);
 
   // Approval template
   const [templates, setTemplates] = useState<any[]>([]);
@@ -174,7 +189,7 @@ export default function CreatePOPage() {
     let query = supabase
       .from("prs")
       .select(
-        "id, pr_kode, pr_status, pr_tanggal, cabang(nama_cabang), profiles(nama)",
+        "id, pr_kode, pr_status, pr_convert_status, pr_tanggal, cabang(nama_cabang), profiles(nama)",
       )
       .eq("pr_status", "approved")
       .order("created_at", { ascending: false })
@@ -189,8 +204,8 @@ export default function CreatePOPage() {
     setLoading(false);
   };
 
-  const searchVendors = async (idx: number, query: string) => {
-    setVendorLoading((prev) => ({ ...prev, [idx]: true }));
+  const searchVendors = async (query: string) => {
+    setVendorLoading(true);
     let q = supabase
       .from("vendors")
       .select("id, vendor_name, vendor_no")
@@ -200,8 +215,8 @@ export default function CreatePOPage() {
       q = q.or(`vendor_name.ilike.%${query}%,vendor_no.ilike.%${query}%`);
     }
     const { data } = await q;
-    setVendorResults((prev) => ({ ...prev, [idx]: data || [] }));
-    setVendorLoading((prev) => ({ ...prev, [idx]: false }));
+    setVendorResults(data || []);
+    setVendorLoading(false);
   };
 
   // Hitung qty yang sudah terpakai di PO lain (belum rejected) per pr_item.
@@ -257,7 +272,7 @@ export default function CreatePOPage() {
         selected: remaining > 0,
         qty: remaining,
         harga: 0,
-        vendor_id: null,
+        vendor_id: selectedVendor?.id ?? null,
       };
     });
 
@@ -268,6 +283,14 @@ export default function CreatePOPage() {
     setPoItems((prev) =>
       prev.map((item, i) =>
         i === idx ? { ...item, selected: checked } : item,
+      ),
+    );
+  };
+
+  const toggleAllItems = (checked: boolean) => {
+    setPoItems((prev) =>
+      prev.map((item) =>
+        item.remaining > 0 ? { ...item, selected: checked } : item,
       ),
     );
   };
@@ -288,15 +311,32 @@ export default function CreatePOPage() {
     );
   };
 
-  const handleVendorSelect = (index: number, vendor: any) => {
-    updateItemField(index, "vendor_id", vendor.id);
-    setSelectedVendorMap((prev) => ({ ...prev, [index]: vendor }));
-    setVendorPopoverOpen((prev) => ({ ...prev, [index]: false }));
+  const handleVendorSelect = (vendor: any) => {
+    setSelectedVendor(vendor);
+    setPoItems((prev) => prev.map((item) => ({ ...item, vendor_id: vendor.id })));
+    setVendorPopoverOpen(false);
   };
 
   const totalNilai = poItems
     .filter((it) => it.selected)
     .reduce((sum, it) => sum + it.qty * it.harga, 0);
+
+  const poTax = computePoTotals({
+    subtotal: totalNilai,
+    diskonMode,
+    diskonValue,
+    hargaTermasukPajak,
+    ppnRate,
+    ongkir,
+    pphRate: pphType ? pphRate : 0,
+  });
+
+  const selectableItemCount = poItems.filter((it) => it.remaining > 0).length;
+  const allItemsSelected =
+    selectableItemCount > 0 &&
+    poItems
+      .filter((it) => it.remaining > 0)
+      .every((it) => it.selected);
 
   const handleSubmit = () => {
     const chosen = poItems.filter((i) => i.selected && i.qty > 0);
@@ -312,12 +352,11 @@ export default function CreatePOPage() {
         "Hanya user dengan akses harga yang bisa membuat PO.",
       );
     }
-    const incomplete = chosen.filter(
-      (item) => !item.vendor_id || !(item.harga > 0),
-    );
+    if (!selectedVendor) return toast.error("Pilih vendor untuk PO ini.");
+    const incomplete = chosen.filter((item) => !(item.harga > 0));
     if (incomplete.length > 0) {
       return toast.error(
-        `Vendor dan harga wajib diisi untuk: ${incomplete
+        `Harga wajib diisi untuk: ${incomplete
           .map((i) => i.part_number)
           .join(", ")}`,
       );
@@ -371,6 +410,13 @@ export default function CreatePOPage() {
         po_estimasi: poEstimasi || undefined,
         po_payment_term: poPaymentTerm || undefined,
         po_keterangan: poKeterangan || undefined,
+        po_harga_termasuk_pajak: hargaTermasukPajak,
+        po_ppn_rate: ppnRate,
+        po_diskon_mode: diskonMode,
+        po_diskon_value: diskonValue,
+        po_ongkir: ongkir,
+        po_pph_type: pphType || null,
+        po_pph_rate: pphType ? pphRate : 0,
         approvals: approvalData,
         items: poItems
           .filter((i) => i.selected && i.qty > 0)
@@ -433,7 +479,7 @@ export default function CreatePOPage() {
               {step === 1
                 ? "Langkah 1 dari 3 — Pilih Purchase Request"
                 : step === 2
-                  ? "Langkah 2 dari 3 — Tentukan Vendor per Item"
+                  ? "Langkah 2 dari 3 — Tentukan Vendor & Harga"
                   : "Langkah 3 dari 3 — Isi Informasi PO"}
             </p>
           </div>
@@ -542,9 +588,14 @@ export default function CreatePOPage() {
                               <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             )}
                             <div className="flex-1 min-w-0">
-                              <p className="font-bold text-xs uppercase">
-                                {pr.pr_kode}
-                              </p>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <p className="font-bold text-xs uppercase">
+                                  {pr.pr_kode}
+                                </p>
+                                <PrConvertStatusBadge
+                                  status={pr.pr_convert_status}
+                                />
+                              </div>
                               <p className="text-[9px] text-muted-foreground font-medium uppercase">
                                 {pr.cabang?.nama_cabang} • {pr.profiles?.nama}
                               </p>
@@ -591,7 +642,7 @@ export default function CreatePOPage() {
         </Content>
       )}
 
-      {/* Step 2: Vendor per item + Harga */}
+      {/* Step 2: Vendor per dokumen + Harga per item */}
       {step === 2 && (
         <>
           <Content>
@@ -599,7 +650,7 @@ export default function CreatePOPage() {
               <div className="flex items-center gap-2">
                 <div className="h-4 w-1 bg-primary rounded-full" />
                 <h3 className="text-[11px] font-bold uppercase">
-                  Tentukan Vendor & Harga per Item
+                  Tentukan Vendor & Harga
                 </h3>
               </div>
               <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase flex-wrap justify-end">
@@ -610,17 +661,80 @@ export default function CreatePOPage() {
           </Content>
 
           <Content>
-            <div className="flex items-center gap-2 mb-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
-              <AlertCircle className="h-4 w-4 text-primary shrink-0" />
-              <p className="text-[10px] font-bold text-primary uppercase">
-                Item dengan vendor yang sama akan dikelompokkan sebagai satu
-                Sub-PO saat mencetak dokumen.
+            <div className="mb-4 space-y-1.5">
+              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                <Building2 className="h-3 w-3" /> Vendor
+              </Label>
+              <Popover
+                open={vendorPopoverOpen}
+                onOpenChange={(val) => {
+                  setVendorPopoverOpen(val);
+                  if (val) searchVendors(vendorSearch);
+                }}
+              >
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="h-10 w-full max-w-sm justify-start gap-1.5 font-bold text-sm"
+                  >
+                    <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                    {selectedVendor
+                      ? selectedVendor.vendor_name
+                      : "Pilih Vendor..."}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-72 p-0" align="start">
+                  <Command shouldFilter={false}>
+                    <CommandInput
+                      placeholder="Cari vendor..."
+                      value={vendorSearch}
+                      onValueChange={(val) => {
+                        setVendorSearch(val);
+                        searchVendors(val);
+                      }}
+                    />
+                    <CommandList>
+                      {vendorLoading ? (
+                        <div className="py-6 flex items-center justify-center">
+                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                        </div>
+                      ) : vendorResults.length === 0 ? (
+                        <CommandEmpty>Vendor tidak ditemukan.</CommandEmpty>
+                      ) : (
+                        vendorResults.map((v) => (
+                          <CommandItem
+                            key={v.id}
+                            value={v.id.toString()}
+                            onSelect={() => handleVendorSelect(v)}
+                            className="text-xs font-bold"
+                          >
+                            {v.vendor_name}
+                            {v.vendor_no && (
+                              <span className="ml-2 text-[9px] text-muted-foreground font-mono">
+                                {v.vendor_no}
+                              </span>
+                            )}
+                          </CommandItem>
+                        ))
+                      )}
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+              <p className="text-[9px] text-muted-foreground font-medium">
+                Vendor berlaku untuk semua item di PO ini.
               </p>
             </div>
             <Table containerClassName="max-h-[55vh] overflow-y-auto">
               <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                 <TableRow className="h-10 hover:bg-transparent">
-                  <TableHead className="w-10 pl-4" />
+                  <TableHead className="w-10 pl-4">
+                    <Checkbox
+                      checked={allItemsSelected}
+                      disabled={selectableItemCount === 0}
+                      onCheckedChange={(v) => toggleAllItems(Boolean(v))}
+                    />
+                  </TableHead>
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-24">
                     PR Asal
                   </TableHead>
@@ -636,14 +750,10 @@ export default function CreatePOPage() {
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-36">
                     Harga Satuan
                   </TableHead>
-                  <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-48 pr-4">
-                    Vendor
-                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {poItems.map((item, idx) => {
-                  const selectedVendor = selectedVendorMap[idx];
                   return (
                     <TableRow
                       key={idx}
@@ -697,7 +807,7 @@ export default function CreatePOPage() {
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="py-2 align-middle">
+                      <TableCell className="py-2 pr-4 align-middle">
                         {canViewPrice ? (
                           <div className="flex items-center h-8 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
                             <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
@@ -734,77 +844,6 @@ export default function CreatePOPage() {
                           </div>
                         )}
                       </TableCell>
-                      <TableCell className="py-2 pr-4 align-middle">
-                        <Popover
-                          open={vendorPopoverOpen[idx] || false}
-                          onOpenChange={(val) => {
-                            setVendorPopoverOpen((prev) => ({
-                              ...prev,
-                              [idx]: val,
-                            }));
-                            if (val)
-                              searchVendors(idx, vendorSearch[idx] || "");
-                          }}
-                        >
-                          <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className="w-full justify-start gap-1.5 h-8 font-bold text-[10px] truncate"
-                            >
-                              <Building2 className="h-3 w-3 text-muted-foreground shrink-0" />
-                              <span className="truncate">
-                                {selectedVendor
-                                  ? selectedVendor.vendor_name
-                                  : "Pilih Vendor..."}
-                              </span>
-                            </Button>
-                          </PopoverTrigger>
-                          <PopoverContent className="w-72 p-0" align="start">
-                            <Command shouldFilter={false}>
-                              <CommandInput
-                                placeholder="Cari vendor..."
-                                value={vendorSearch[idx] || ""}
-                                onValueChange={(val) => {
-                                  setVendorSearch((prev) => ({
-                                    ...prev,
-                                    [idx]: val,
-                                  }));
-                                  searchVendors(idx, val);
-                                }}
-                              />
-                              <CommandList>
-                                {vendorLoading[idx] ? (
-                                  <div className="py-6 flex items-center justify-center">
-                                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                                  </div>
-                                ) : (vendorResults[idx] || []).length === 0 ? (
-                                  <CommandEmpty>
-                                    Vendor tidak ditemukan.
-                                  </CommandEmpty>
-                                ) : (
-                                  (vendorResults[idx] || []).map((v) => (
-                                    <CommandItem
-                                      key={v.id}
-                                      value={v.id.toString()}
-                                      onSelect={() =>
-                                        handleVendorSelect(idx, v)
-                                      }
-                                      className="text-xs font-bold"
-                                    >
-                                      {v.vendor_name}
-                                      {v.vendor_no && (
-                                        <span className="ml-2 text-[9px] text-muted-foreground font-mono">
-                                          {v.vendor_no}
-                                        </span>
-                                      )}
-                                    </CommandItem>
-                                  ))
-                                )}
-                              </CommandList>
-                            </Command>
-                          </PopoverContent>
-                        </Popover>
-                      </TableCell>
                     </TableRow>
                   );
                 })}
@@ -813,12 +852,15 @@ export default function CreatePOPage() {
 
             <div className="flex items-center justify-between p-4 border-t border-border bg-muted/30 mt-2">
               <span className="text-[10px] font-bold uppercase text-muted-foreground">
-                Total Estimasi Nilai PO
+                Subtotal Item (Qty × Harga)
               </span>
               <span className="text-sm font-black text-foreground">
                 {maskedPriceText(canViewPrice, formatCurrency(totalNilai))}
               </span>
             </div>
+            <p className="px-4 pb-2 text-[9px] text-muted-foreground font-medium">
+              Pajak, diskon, dan ongkos kirim diisi di langkah berikutnya.
+            </p>
 
             <div className="flex justify-between pt-2">
               <Button
@@ -980,6 +1022,184 @@ export default function CreatePOPage() {
                 />
               </div>
 
+              {/* Pajak, Diskon & Ongkir */}
+              <div className="md:col-span-2 space-y-4 rounded-xl border border-border bg-muted/20 p-4">
+                <div className="flex items-center gap-2">
+                  <Percent className="w-4 h-4 text-muted-foreground" />
+                  <h4 className="text-[11px] font-bold uppercase text-foreground">
+                    Pajak, Diskon & Ongkos Kirim
+                  </h4>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Checkbox
+                    id="harga-termasuk-pajak"
+                    checked={hargaTermasukPajak}
+                    onCheckedChange={(v) => setHargaTermasukPajak(Boolean(v))}
+                  />
+                  <Label
+                    htmlFor="harga-termasuk-pajak"
+                    className="text-xs font-semibold cursor-pointer"
+                  >
+                    Harga sudah termasuk pajak (PPN tidak ditambahkan lagi ke
+                    total)
+                  </Label>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">
+                      PPN
+                    </Label>
+                    <Select
+                      value={String(ppnRate)}
+                      onValueChange={(val) => setPpnRate(Number(val))}
+                    >
+                      <SelectTrigger className="h-10 font-bold text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {PPN_RATE_OPTIONS.map((opt) => (
+                          <SelectItem
+                            key={opt.value}
+                            value={String(opt.value)}
+                          >
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">
+                      Diskon
+                    </Label>
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-10 shrink-0 overflow-hidden rounded-md border border-input">
+                        <button
+                          type="button"
+                          onClick={() => setDiskonMode("percent")}
+                          className={cn(
+                            "px-2.5 text-xs font-bold transition-colors",
+                            diskonMode === "percent"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-background text-muted-foreground hover:bg-muted",
+                          )}
+                        >
+                          %
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDiskonMode("amount")}
+                          className={cn(
+                            "px-2.5 text-xs font-bold border-l border-input transition-colors",
+                            diskonMode === "amount"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-background text-muted-foreground hover:bg-muted",
+                          )}
+                        >
+                          Rp
+                        </button>
+                      </div>
+                      <Input
+                        type="number"
+                        min={0}
+                        value={diskonValue || ""}
+                        onChange={(e) =>
+                          setDiskonValue(
+                            Math.max(0, Number(e.target.value) || 0),
+                          )
+                        }
+                        placeholder="0"
+                        className="h-10 font-bold text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">
+                      Ongkos Kirim
+                    </Label>
+                    <div className="flex items-center h-10 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
+                      <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
+                        Rp
+                      </span>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        className="flex-1 h-full px-2 text-sm font-bold bg-transparent outline-none"
+                        value={
+                          ongkir === 0
+                            ? ""
+                            : new Intl.NumberFormat("id-ID").format(ongkir)
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.replace(/[^0-9]/g, "");
+                          setOngkir(raw ? parseInt(raw, 10) : 0);
+                        }}
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label className="text-[10px] font-bold uppercase text-muted-foreground">
+                      PPh (Potong-Pungut)
+                    </Label>
+                    <Select
+                      value={pphType || "none"}
+                      onValueChange={(val) => {
+                        if (val === "none") {
+                          setPphType("");
+                          setPphRate(0);
+                        } else {
+                          setPphType(val);
+                          setPphRate(getPphDefaultRate(val));
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="h-10 font-bold text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Tanpa PPh</SelectItem>
+                        {PPH_TYPE_OPTIONS.map((opt) => (
+                          <SelectItem key={opt.value} value={opt.value}>
+                            {opt.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {pphType && (
+                    <div className="space-y-2">
+                      <Label className="text-[10px] font-bold uppercase text-muted-foreground">
+                        Rate PPh (%)
+                      </Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={pphRate}
+                        onChange={(e) =>
+                          setPphRate(Math.max(0, Number(e.target.value) || 0))
+                        }
+                        className="h-10 font-bold text-sm"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <p className="text-[9px] text-muted-foreground font-medium">
+                  PPh adalah pajak potong-pungut — dipotong dari pembayaran ke
+                  vendor, tidak mengurangi Total PO di ringkasan bawah.
+                </p>
+              </div>
+
               {/* Approval Template */}
               <div className="md:col-span-2 space-y-2">
                 <Label className="text-[11px] font-bold uppercase text-muted-foreground">
@@ -1129,25 +1349,96 @@ export default function CreatePOPage() {
                 </span>
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-                <span>Jumlah Vendor</span>
+                <span>Vendor</span>
                 <span className="text-foreground">
-                  {
-                    new Set(
-                      poItems
-                        .filter((i) => i.selected)
-                        .map((i) => i.vendor_id)
-                        .filter(Boolean),
-                    ).size
-                  }{" "}
-                  vendor
+                  {selectedVendor?.vendor_name || "-"}
                 </span>
               </div>
+
+              <div className="space-y-1.5 border-t border-border pt-2">
+                <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                  <span>Subtotal</span>
+                  <span className="text-foreground">
+                    {maskedPriceText(
+                      canViewPrice,
+                      formatCurrency(poTax.subtotal),
+                    )}
+                  </span>
+                </div>
+                {poTax.diskonAmount > 0 && (
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                    <span>
+                      Diskon
+                      {diskonMode === "percent" ? ` (${diskonValue}%)` : ""}
+                    </span>
+                    <span className="text-destructive">
+                      -{" "}
+                      {maskedPriceText(
+                        canViewPrice,
+                        formatCurrency(poTax.diskonAmount),
+                      )}
+                    </span>
+                  </div>
+                )}
+                {ppnRate > 0 && (
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                    <span>
+                      PPN ({ppnRate}%)
+                      {hargaTermasukPajak ? " — sudah termasuk harga" : ""}
+                    </span>
+                    <span className="text-foreground">
+                      {hargaTermasukPajak
+                        ? "-"
+                        : `+ ${maskedPriceText(canViewPrice, formatCurrency(poTax.ppnAmount))}`}
+                    </span>
+                  </div>
+                )}
+                {ongkir > 0 && (
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                    <span>Ongkos Kirim</span>
+                    <span className="text-foreground">
+                      +{" "}
+                      {maskedPriceText(
+                        canViewPrice,
+                        formatCurrency(ongkir),
+                      )}
+                    </span>
+                  </div>
+                )}
+              </div>
+
               <div className="flex items-center justify-between text-sm font-black uppercase pt-2 border-t border-border">
-                <span>Total Estimasi Nilai</span>
+                <span>Total PO</span>
                 <span className="text-primary">
-                  {maskedPriceText(canViewPrice, formatCurrency(totalNilai))}
+                  {maskedPriceText(canViewPrice, formatCurrency(poTax.totalPo))}
                 </span>
               </div>
+
+              {pphType && (
+                <>
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1">
+                    <span>
+                      PPh {getPphTypeLabel(pphType)} ({pphRate}%)
+                    </span>
+                    <span className="text-destructive">
+                      -{" "}
+                      {maskedPriceText(
+                        canViewPrice,
+                        formatCurrency(poTax.pphAmount),
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-xs font-black uppercase pt-1.5 border-t border-dashed border-border">
+                    <span>Dibayar ke Vendor</span>
+                    <span className="text-foreground">
+                      {maskedPriceText(
+                        canViewPrice,
+                        formatCurrency(poTax.dibayarKeVendor),
+                      )}
+                    </span>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="flex justify-between pt-2">

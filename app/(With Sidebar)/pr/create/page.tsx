@@ -244,7 +244,7 @@ export default function CreatePRPage() {
     setDraftItems((prev) =>
       prev.map((i) =>
         i.mr_item_id === mrItemId
-          ? { ...i, qty: Math.max(0, Math.min(qty, i.remaining)) }
+          ? { ...i, qty: Math.max(0, qty) }
           : i,
       ),
     );
@@ -752,7 +752,6 @@ export default function CreatePRPage() {
                         <TableCell className="pl-4">
                           <Checkbox
                             checked={item.selected}
-                            disabled={item.remaining <= 0}
                             onCheckedChange={(v) =>
                               toggleDraftItem(item.mr_item_id, Boolean(v))
                             }
@@ -818,7 +817,6 @@ export default function CreatePRPage() {
                             <Input
                               type="number"
                               min={0}
-                              max={item.remaining}
                               disabled={!item.selected}
                               value={item.qty}
                               onChange={(e) =>
@@ -832,6 +830,11 @@ export default function CreatePRPage() {
                             <span className="text-[9px] font-medium text-muted-foreground">
                               Sisa {item.remaining}
                             </span>
+                            {item.selected && item.qty > item.remaining && (
+                              <span className="text-[9px] font-bold text-warning uppercase">
+                                +{item.qty - item.remaining} melebihi MR
+                              </span>
+                            )}
                           </div>
                         </TableCell>
                         <TableCell className="text-right pr-8 font-bold text-muted-foreground text-[10px] uppercase">

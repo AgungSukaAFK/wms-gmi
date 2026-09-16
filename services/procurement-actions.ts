@@ -862,41 +862,14 @@ export async function createPurchaseRequest(data: {
     return { error: "Kode PR sudah digunakan. Gunakan kode lain." };
   }
 
-  // Guard sisa qty: cegah konversi melebihi qty_pr yang belum terpakai
-  // (race-condition guard; client sudah cap tapi tetap divalidasi di server).
-  const mrItemIds = data.items.map((i) => i.mr_item_id).filter(Boolean);
-  if (mrItemIds.length > 0) {
-    const { data: mrItemRows } = await supabase
-      .from("mr_items")
-      .select("id, qty_pr")
-      .in("id", mrItemIds);
-    const { data: existingPrItems } = await supabase
-      .from("pr_items")
-      .select("mr_item_id, qty, prs!inner(pr_status)")
-      .in("mr_item_id", mrItemIds);
-
-    const qtyPrMap = new Map((mrItemRows ?? []).map((r: any) => [r.id, r.qty_pr]));
-    const convertedMap = new Map<number, number>();
-    for (const row of existingPrItems ?? []) {
-      const prStatus = Array.isArray((row as any).prs)
-        ? (row as any).prs[0]?.pr_status
-        : (row as any).prs?.pr_status;
-      if (prStatus === "rejected") continue;
-      convertedMap.set(
-        row.mr_item_id,
-        (convertedMap.get(row.mr_item_id) || 0) + row.qty,
-      );
-    }
-
-    for (const item of data.items) {
-      const qtyPr = qtyPrMap.get(item.mr_item_id) ?? 0;
-      const already = convertedMap.get(item.mr_item_id) || 0;
-      const remaining = Math.max(0, qtyPr - already);
-      if (item.qty > remaining) {
-        return {
-          error: `Qty ${item.part_number} melebihi sisa yang bisa dikonversi ke PR (sisa ${remaining}).`,
-        };
-      }
+  // Qty PR boleh melebihi sisa qty_pr MR (over-request disengaja, mis.
+  // pembulatan MOQ vendor / safety stock) -- tidak lagi di-cap di server,
+  // mengikuti keputusan produk: distribusinya cukup terlihat lewat
+  // mr_convert_status ("complete" begitu qty_pr asli sudah terkonversi,
+  // lihat _applyMrConversionStatus di bawah) tanpa perlu memblokir submit.
+  for (const item of data.items) {
+    if (!item.qty || item.qty <= 0) {
+      return { error: `Qty ${item.part_number} harus lebih dari 0.` };
     }
   }
 
@@ -1835,6 +1808,13 @@ export async function createPurchaseOrder(data: {
   po_estimasi?: string;
   po_payment_term?: string;
   po_keterangan?: string;
+  po_harga_termasuk_pajak?: boolean;
+  po_ppn_rate?: number;
+  po_diskon_mode?: "percent" | "amount";
+  po_diskon_value?: number;
+  po_ongkir?: number;
+  po_pph_type?: string | null;
+  po_pph_rate?: number;
   approvals?: any[];
   items: {
     part_id: number;
@@ -1982,6 +1962,13 @@ export async function createPurchaseOrder(data: {
         po_estimasi: data.po_estimasi ?? null,
         po_payment_term: data.po_payment_term ?? null,
         po_keterangan: data.po_keterangan ?? null,
+        po_harga_termasuk_pajak: data.po_harga_termasuk_pajak ?? false,
+        po_ppn_rate: data.po_ppn_rate ?? 0,
+        po_diskon_mode: data.po_diskon_mode ?? "percent",
+        po_diskon_value: data.po_diskon_value ?? 0,
+        po_ongkir: data.po_ongkir ?? 0,
+        po_pph_type: data.po_pph_type ?? null,
+        po_pph_rate: data.po_pph_rate ?? 0,
         po_status: approvals.length === 0 ? "approved" : "open",
         po_receive_status: "pending",
         approvals: approvals as any,

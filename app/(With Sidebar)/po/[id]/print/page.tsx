@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { formatDateDocument, formatDateTime } from "@/lib/utils";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
+import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
 
 export default function POPrintPage() {
   const { id } = useParams();
@@ -50,6 +51,8 @@ export default function POPrintPage() {
         `
         id, po_kode, po_tanggal, po_estimasi, po_status, po_keterangan,
         po_payment_term, po_pic, approvals,
+        po_harga_termasuk_pajak, po_ppn_rate, po_diskon_mode, po_diskon_value,
+        po_ongkir, po_pph_type, po_pph_rate,
         prs(pr_kode, cabang(nama_cabang))
       `,
       )
@@ -128,6 +131,16 @@ export default function POPrintPage() {
     (sum, item) => sum + Number(item.qty || 0) * Number(item.harga || 0),
     0,
   );
+
+  const poTax = computePoTotals({
+    subtotal: totalNominal,
+    diskonMode: po.po_diskon_mode || "percent",
+    diskonValue: po.po_diskon_value || 0,
+    hargaTermasukPajak: po.po_harga_termasuk_pajak || false,
+    ppnRate: po.po_ppn_rate || 0,
+    ongkir: po.po_ongkir || 0,
+    pphRate: po.po_pph_type ? po.po_pph_rate || 0 : 0,
+  });
 
   const formatCurrency = (value: number) =>
     new Intl.NumberFormat("id-ID", {
@@ -342,15 +355,118 @@ export default function POPrintPage() {
                     className="border border-slate-900 p-2 text-right font-bold"
                     colSpan={5}
                   >
-                    Total
+                    Subtotal
+                  </td>
+                  <td className="border border-slate-900 p-2 text-right font-bold">
+                    {maskedPriceText(
+                      canViewPrice,
+                      formatCurrency(poTax.subtotal),
+                    )}
+                  </td>
+                </tr>
+                {poTax.diskonAmount > 0 && (
+                  <tr>
+                    <td
+                      className="border border-slate-900 p-2 text-right font-bold"
+                      colSpan={5}
+                    >
+                      Diskon
+                      {po.po_diskon_mode === "percent"
+                        ? ` (${po.po_diskon_value}%)`
+                        : ""}
+                    </td>
+                    <td className="border border-slate-900 p-2 text-right font-bold">
+                      -{" "}
+                      {maskedPriceText(
+                        canViewPrice,
+                        formatCurrency(poTax.diskonAmount),
+                      )}
+                    </td>
+                  </tr>
+                )}
+                {po.po_ppn_rate > 0 && (
+                  <tr>
+                    <td
+                      className="border border-slate-900 p-2 text-right font-bold"
+                      colSpan={5}
+                    >
+                      PPN ({po.po_ppn_rate}%)
+                      {po.po_harga_termasuk_pajak
+                        ? " — sudah termasuk harga"
+                        : ""}
+                    </td>
+                    <td className="border border-slate-900 p-2 text-right font-bold">
+                      {po.po_harga_termasuk_pajak
+                        ? "-"
+                        : `+ ${maskedPriceText(canViewPrice, formatCurrency(poTax.ppnAmount))}`}
+                    </td>
+                  </tr>
+                )}
+                {po.po_ongkir > 0 && (
+                  <tr>
+                    <td
+                      className="border border-slate-900 p-2 text-right font-bold"
+                      colSpan={5}
+                    >
+                      Ongkos Kirim
+                    </td>
+                    <td className="border border-slate-900 p-2 text-right font-bold">
+                      +{" "}
+                      {maskedPriceText(
+                        canViewPrice,
+                        formatCurrency(po.po_ongkir),
+                      )}
+                    </td>
+                  </tr>
+                )}
+                <tr className="bg-slate-100">
+                  <td
+                    className="border border-slate-900 p-2 text-right font-black"
+                    colSpan={5}
+                  >
+                    Total PO
                   </td>
                   <td className="border border-slate-900 p-2 text-right font-black text-sm">
                     {maskedPriceText(
                       canViewPrice,
-                      formatCurrency(totalNominal),
+                      formatCurrency(poTax.totalPo),
                     )}
                   </td>
                 </tr>
+                {po.po_pph_type && (
+                  <>
+                    <tr>
+                      <td
+                        className="border border-slate-900 p-2 text-right font-bold"
+                        colSpan={5}
+                      >
+                        PPh {getPphTypeLabel(po.po_pph_type)} (
+                        {po.po_pph_rate}%)
+                      </td>
+                      <td className="border border-slate-900 p-2 text-right font-bold">
+                        -{" "}
+                        {maskedPriceText(
+                          canViewPrice,
+                          formatCurrency(poTax.pphAmount),
+                        )}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td
+                        className="border border-slate-900 p-2 text-right font-black"
+                        colSpan={5}
+                      >
+                        Dibayar ke Vendor
+                      </td>
+                      <td className="border border-slate-900 p-2 text-right font-black text-sm">
+                        {maskedPriceText(
+                          canViewPrice,
+                          formatCurrency(poTax.dibayarKeVendor),
+                        )}
+                      </td>
+                    </tr>
+                  </>
+                )}
               </tfoot>
             </table>
           </div>
