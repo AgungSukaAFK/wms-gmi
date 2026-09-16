@@ -94,7 +94,6 @@ export async function getStockByCabang(cabangId: number, partIds: number[]) {
 }
 
 export async function createConsignmentIk(data: {
-  ik_kode: string;
   ik_tanggal: string;
   so_id: number;
   dari_cabang_id: number;
@@ -110,19 +109,10 @@ export async function createConsignmentIk(data: {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Tidak terautentikasi." };
 
-  const ikKode = data.ik_kode?.trim();
-  if (!ikKode) return { error: "Kode IK wajib diisi." };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar item tidak boleh kosong." };
   if (data.dari_cabang_id === data.ke_cabang_id)
     return { error: "Gudang asal dan tujuan tidak boleh sama." };
-
-  const { data: existing } = await supabase
-    .from("consignment_ik")
-    .select("id")
-    .eq("ik_kode", ikKode)
-    .maybeSingle();
-  if (existing) return { error: "Kode IK sudah digunakan. Gunakan kode lain." };
 
   for (const item of data.items) {
     if (!item.qty || item.qty <= 0)
@@ -183,6 +173,17 @@ export async function createConsignmentIk(data: {
   }
   if (stockViolations.length > 0)
     return { error: "Stok gudang asal tidak mencukupi:\n" + stockViolations.join("\n") };
+
+  // Generate kode IK lewat SEQUENCE Postgres (nextval, atomik) -- dijamin
+  // tidak akan pernah menghasilkan kode yang sama meski dipanggil nyaris
+  // bersamaan dari banyak request sekaligus (race-safe di level DB, beda
+  // dari pola "cek-lalu-insert" di aplikasi yang punya celah race).
+  const { data: generatedKode, error: kodeError } = await supabase.rpc(
+    "generate_consignment_ik_kode",
+  );
+  if (kodeError || !generatedKode)
+    return { error: kodeError?.message || "Gagal membuat kode IK." };
+  const ikKode = generatedKode as string;
 
   // Insert header
   const { data: ik, error: ikError } = await supabase

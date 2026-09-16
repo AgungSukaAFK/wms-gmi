@@ -67,7 +67,6 @@ export default function CreateConsignmentIkPage() {
   const [cabangs, setCabangs] = useState<{ id: number; nama_cabang: string }[]>([]);
 
   // Header
-  const [ikKode, setIkKode] = useState("");
   const [ikTanggal, setIkTanggal] = useState(toYmdLocal());
   const [dariCabangId, setDariCabangId] = useState<string>("");
   const [keCabangId, setKeCabangId] = useState<string>("");
@@ -174,7 +173,6 @@ export default function CreateConsignmentIkPage() {
   };
 
   const handleSubmit = async () => {
-    if (!ikKode.trim()) return toast.error("Kode IK wajib diisi.");
     if (!selectedSo) return toast.error("Pilih SO Consignment terlebih dahulu.");
     if (!dariCabangId || !keCabangId)
       return toast.error("Gudang asal dan tujuan wajib dipilih.");
@@ -194,7 +192,6 @@ export default function CreateConsignmentIkPage() {
     setLoading(true);
     try {
       const result = await createConsignmentIk({
-        ik_kode: ikKode.trim(),
         ik_tanggal: ikTanggal,
         so_id: selectedSo.id,
         dari_cabang_id: Number(dariCabangId),
@@ -214,7 +211,9 @@ export default function CreateConsignmentIkPage() {
       });
 
       if (result.error) throw new Error(result.error);
-      toast.success("Item Konsinyasi berhasil dibuat, stok sudah dipindahkan.");
+      toast.success(
+        `Item Konsinyasi ${result.data?.ik_kode || ""} berhasil dibuat, stok sudah dipindahkan.`,
+      );
       router.push("/so-reguler/consignment/ik");
     } catch (e: any) {
       toast.error(e.message);
@@ -253,12 +252,9 @@ export default function CreateConsignmentIkPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">No. IK</Label>
-            <Input
-              placeholder="Input No. IK..."
-              value={ikKode}
-              onChange={(e) => setIkKode(e.target.value)}
-              className="h-10 text-sm font-semibold uppercase"
-            />
+            <div className="h-10 flex items-center rounded-md border border-dashed border-input bg-muted/40 px-3 text-sm font-semibold text-muted-foreground">
+              Dibuat otomatis saat disimpan
+            </div>
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">Tgl IK</Label>
