@@ -9,6 +9,7 @@ import {
   SheetDescription,
 } from "@/components/ui/sheet";
 import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
 import {
   Table,
   TableBody,
@@ -100,6 +101,9 @@ export function PRDetailSheet({
   const router = useRouter();
   const [pr, setPr] = useState<any>(null);
   const [prItems, setPrItems] = useState<any[]>([]);
+  const [poInfoByPrItem, setPoInfoByPrItem] = useState<
+    Record<number, { convertedQty: number; pos: { id: number; po_kode: string }[] }>
+  >({});
   const [loading, setLoading] = useState(false);
   const [updating, setUpdating] = useState(false);
   const [updatingItem, setUpdatingItem] = useState<number | null>(null);
@@ -190,6 +194,39 @@ export function PRDetailSheet({
         .eq("pr_id", prId)
         .order("created_at");
       setPrItems(pItems || []);
+
+      // 2b. Fetch PO conversion info per item (sudah PO / belum + nomor PO)
+      const prItemIds = (pItems || []).map((i: any) => i.id);
+      if (prItemIds.length > 0) {
+        const { data: poItemRows } = await supabase
+          .from("po_items")
+          .select("pr_item_id, po_id, qty, pos!inner(po_status, po_kode)")
+          .in("pr_item_id", prItemIds);
+
+        const map: Record<
+          number,
+          { convertedQty: number; pos: { id: number; po_kode: string }[] }
+        > = {};
+        for (const row of poItemRows || []) {
+          const poRel = Array.isArray((row as any).pos)
+            ? (row as any).pos[0]
+            : (row as any).pos;
+          if (!poRel || poRel.po_status === "rejected") continue;
+          if (!map[row.pr_item_id]) {
+            map[row.pr_item_id] = { convertedQty: 0, pos: [] };
+          }
+          map[row.pr_item_id].convertedQty += row.qty;
+          if (!map[row.pr_item_id].pos.some((p) => p.id === row.po_id)) {
+            map[row.pr_item_id].pos.push({
+              id: row.po_id,
+              po_kode: poRel.po_kode,
+            });
+          }
+        }
+        setPoInfoByPrItem(map);
+      } else {
+        setPoInfoByPrItem({});
+      }
 
       if (pItems && pItems.length > 0) {
         const mrIds = Array.from(
@@ -913,8 +950,11 @@ export function PRDetailSheet({
                         <TableHead className="text-[9px] font-bold uppercase text-slate-400">
                           Nama Barang
                         </TableHead>
-                        <TableHead className="text-[9px] font-bold uppercase text-slate-400 text-right pr-4 w-27.5">
+                        <TableHead className="text-[9px] font-bold uppercase text-slate-400 text-right w-24">
                           Status Item
+                        </TableHead>
+                        <TableHead className="text-[9px] font-bold uppercase text-slate-400 text-right pr-4 w-32">
+                          Status PO
                         </TableHead>
                       </TableRow>
                     </TableHeader>
@@ -974,7 +1014,7 @@ export function PRDetailSheet({
                               {item.part_name}
                             </span>
                           </TableCell>
-                          <TableCell className="text-right pr-4 py-3 align-top">
+                          <TableCell className="text-right py-3 align-top">
                             <Select
                               value={item.status || "open"}
                               onValueChange={(val) =>
@@ -1027,6 +1067,50 @@ export function PRDetailSheet({
                                 </SelectItem>
                               </SelectContent>
                             </Select>
+                          </TableCell>
+                          <TableCell className="text-right pr-4 py-3 align-top">
+                            {(() => {
+                              const info = poInfoByPrItem[item.id];
+                              const converted = info?.convertedQty || 0;
+                              if (converted <= 0) {
+                                return (
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[9px] font-bold uppercase text-slate-400"
+                                  >
+                                    Belum PO
+                                  </Badge>
+                                );
+                              }
+                              const isFull = converted >= item.qty;
+                              return (
+                                <div className="flex flex-col items-end gap-1">
+                                  <Badge
+                                    variant="outline"
+                                    className={cn(
+                                      "text-[9px] font-bold uppercase",
+                                      isFull
+                                        ? "bg-green-100 text-green-700 border-green-300"
+                                        : "bg-amber-100 text-amber-700 border-amber-300",
+                                    )}
+                                  >
+                                    {isFull ? "Sudah PO" : "Partial PO"}
+                                  </Badge>
+                                  <div className="flex flex-wrap justify-end gap-1">
+                                    {info!.pos.map((po) => (
+                                      <Link
+                                        key={po.id}
+                                        href={`/po/${po.id}`}
+                                        target="_blank"
+                                        className="text-[9px] font-mono font-bold text-blue-600 hover:underline"
+                                      >
+                                        {po.po_kode}
+                                      </Link>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </TableCell>
                         </TableRow>
                       ))}
