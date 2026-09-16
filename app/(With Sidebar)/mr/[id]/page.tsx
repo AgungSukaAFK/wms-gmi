@@ -1189,9 +1189,9 @@ export default function MRDetailPage({
           </Content>
 
           <Content title="Daftar Kebutuhan Material">
-            <div className="rounded-md border border-border overflow-x-auto">
-              <Table>
-                <TableHeader className="bg-muted/50">
+            <div className="rounded-md border border-border">
+              <Table containerClassName="max-h-[75vh] overflow-y-auto">
+                <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                   <TableRow className="h-12">
                     {(editMode || modEditMode) && (
                       <TableHead className="w-10 text-center text-[10px] font-bold uppercase text-muted-foreground" />

@@ -609,7 +609,7 @@ export default function CreatePOPage() {
             </div>
           </Content>
 
-          <Content className="overflow-x-auto">
+          <Content>
             <div className="flex items-center gap-2 mb-4 p-3 bg-primary/5 border border-primary/20 rounded-lg">
               <AlertCircle className="h-4 w-4 text-primary shrink-0" />
               <p className="text-[10px] font-bold text-primary uppercase">
@@ -617,8 +617,8 @@ export default function CreatePOPage() {
                 Sub-PO saat mencetak dokumen.
               </p>
             </div>
-            <Table>
-              <TableHeader className="bg-muted/50">
+            <Table containerClassName="max-h-[55vh] overflow-y-auto">
+              <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                 <TableRow className="h-10 hover:bg-transparent">
                   <TableHead className="w-10 pl-4" />
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-24">

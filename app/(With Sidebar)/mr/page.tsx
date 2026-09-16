@@ -829,9 +829,9 @@ export default function MaterialRequestPage() {
       </Content>
 
       <Content className="overflow-hidden">
-        <div className="flex-1 overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50 border-b border-border">
+        <div className="flex-1">
+          <Table containerClassName="max-h-[75vh] overflow-y-auto">
+            <TableHeader className="bg-muted/50 border-b border-border [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
               <TableRow className="hover:bg-transparent h-10 text-foreground">
                 <TableHead className="w-12.5 text-center font-bold text-[10px] uppercase text-muted-foreground">
                   No

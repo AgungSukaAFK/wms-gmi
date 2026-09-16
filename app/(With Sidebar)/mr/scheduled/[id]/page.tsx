@@ -266,9 +266,9 @@ export default function ScheduledMRDetailPage() {
           )}
 
           <Content title={`Daftar Item (${items.length})`}>
-            <div className="border rounded-lg overflow-x-auto">
-              <Table>
-                <TableHeader className="bg-muted/50">
+            <div className="border rounded-lg">
+              <Table containerClassName="max-h-[75vh] overflow-y-auto">
+                <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                   <TableRow className="h-10 hover:bg-transparent">
                     <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Part</TableHead>
                     <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>

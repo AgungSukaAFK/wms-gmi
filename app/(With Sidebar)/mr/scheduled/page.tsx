@@ -150,9 +150,9 @@ export default function ScheduledMRPage() {
       </Content>
 
       <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border overflow-x-auto">
-          <Table>
-            <TableHeader>
+        <div className="rounded-lg border border-border">
+          <Table containerClassName="max-h-[75vh] overflow-y-auto">
+            <TableHeader className="bg-muted [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
               <TableRow>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
                   Kode MR

@@ -48,6 +48,7 @@ import Link from "next/link";
 import { PODetailSheet } from "@/components/po/po-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
+import { summarizeApprovals } from "@/lib/approval-progress";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
@@ -585,9 +586,9 @@ export default function POListPage() {
 
       {/* Section 3: Table */}
       <Content className="overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50 border-b border-border">
+        <div>
+          <Table containerClassName="max-h-[75vh] overflow-y-auto">
+            <TableHeader className="bg-muted/50 border-b border-border [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
               <TableRow className="hover:bg-transparent h-10">
                 <SortableTableHead
                   sortKey="po_kode"
@@ -609,7 +610,7 @@ export default function POListPage() {
                   onSort={handleSortChange}
                   className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
                 >
-                  Approval
+                  Progress Approval
                 </SortableTableHead>
                 <SortableTableHead
                   sortKey="po_receive_status"
@@ -726,7 +727,26 @@ export default function POListPage() {
                         </div>
                       </TableCell>
                       <TableCell className="text-center">
-                        {getApprovalStatusBadge(po.po_status)}
+                        <div className="flex flex-col items-center gap-1">
+                          {getApprovalStatusBadge(po.po_status)}
+                          {(() => {
+                            const summary = summarizeApprovals(po.approvals);
+                            if (summary.totalCount === 0) return null;
+                            return (
+                              <div className="flex flex-col items-center gap-0.5">
+                                <span className="text-[11px] font-bold text-foreground">
+                                  {summary.approvedCount}/{summary.totalCount}{" "}
+                                  Disetujui
+                                </span>
+                                {summary.pendingApprover && (
+                                  <span className="text-[9px] font-medium text-warning uppercase tracking-tight">
+                                    Menunggu: {summary.pendingApprover.nama}
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
+                        </div>
                       </TableCell>
                       <TableCell className="text-center">
                         {getReceiveStatusBadge(po.po_receive_status)}

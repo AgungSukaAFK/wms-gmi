@@ -869,8 +869,11 @@ export default function PRDetailPage({
 
       <Content title="Item Pembelian (Edit Status Per Item)">
         <div className="border border-border rounded-xl overflow-hidden shadow-sm">
-          <Table className="table-fixed w-full">
-            <TableHeader className="bg-muted/50">
+          <Table
+            className="table-fixed w-full"
+            containerClassName="max-h-[75vh] overflow-y-auto"
+          >
+            <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
               <TableRow className="h-10 hover:bg-transparent border-b border-border">
                 <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4 w-30">
                   Part Info

@@ -496,8 +496,8 @@ export default function CreateReceivePage() {
                 </div>
 
                 <div className="rounded-xl border border-border overflow-hidden">
-                  <Table>
-                    <TableHeader className="bg-muted/50">
+                  <Table containerClassName="max-h-[55vh] overflow-y-auto">
+                    <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                       <TableRow className="h-10 hover:bg-transparent">
                         <TableHead className="text-[9px] font-black uppercase text-muted-foreground pl-4">
                           Part No.

@@ -862,8 +862,11 @@ export default function PODetailPage({
                     )}
                   </div>
                 </div>
-                <Table className="table-fixed w-full">
-                  <TableHeader className="bg-muted/20">
+                <Table
+                  className="table-fixed w-full"
+                  containerClassName="max-h-[55vh] overflow-y-auto"
+                >
+                  <TableHeader className="bg-muted/20 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                     <TableRow className="h-8 hover:bg-transparent border-b border-border/50">
                       <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4 w-28">
                         Part No.

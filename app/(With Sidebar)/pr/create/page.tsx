@@ -691,8 +691,8 @@ export default function CreatePRPage() {
             </h3>
           </div>
           <div className="overflow-hidden rounded-xl border border-border">
-            <Table>
-              <TableHeader className="bg-muted/50">
+            <Table containerClassName="max-h-[55vh] overflow-y-auto">
+              <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
                 <TableRow className="hover:bg-transparent border-b border-border h-12">
                   <TableHead className="w-10 pl-4" />
                   <TableHead className="text-[10px] font-bold uppercase text-muted-foreground">

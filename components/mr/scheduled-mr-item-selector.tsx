@@ -550,9 +550,9 @@ export function ScheduledMRItemSelector({
         </Popover>
       </div>
 
-      <div className="border rounded-lg overflow-x-auto bg-white border-slate-200">
-        <Table>
-          <TableHeader className="bg-slate-50/50">
+      <div className="border rounded-lg bg-white border-slate-200">
+        <Table containerClassName="max-h-[55vh] overflow-y-auto">
+          <TableHeader className="bg-slate-50/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
             <TableRow className="h-10 hover:bg-transparent">
               <TableHead className="w-10 text-center font-semibold text-slate-500 text-xs">
                 No
