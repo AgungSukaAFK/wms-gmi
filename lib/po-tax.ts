@@ -1,4 +1,5 @@
 export type PoDiskonMode = "percent" | "amount";
+export type PoRateMode = "percent" | "amount";
 
 export const PPN_RATE_OPTIONS: { value: number; label: string }[] = [
   { value: 0, label: "Tanpa PPN" },
@@ -33,9 +34,15 @@ export interface PoTaxInput {
   diskonMode: PoDiskonMode;
   diskonValue: number;
   hargaTermasukPajak: boolean;
+  /** 'percent' -> pakai ppnRate (0/11/12). 'amount' -> pakai ppnAmountManual (Rp langsung). */
+  ppnMode: PoRateMode;
   ppnRate: number;
+  ppnAmountManual: number;
   ongkir: number;
+  /** 'percent' -> pakai pphRate (%). 'amount' -> pakai pphAmountManual (Rp langsung). */
+  pphMode: PoRateMode;
   pphRate: number;
+  pphAmountManual: number;
 }
 
 export interface PoTaxResult {
@@ -58,6 +65,9 @@ export interface PoTaxResult {
  * -> Total PO. PPh dihitung dari DPP sebagai potongan TERPISAH (withholding
  * / potong-pungut) -- tidak mengurangi Total PO (nilai kontrak/approval
  * tetap utuh), cuma mengurangi Jumlah Dibayar ke Vendor.
+ *
+ * PPN dan PPh masing-masing bisa dihitung dari rate persen ATAU diisi
+ * nominal Rupiah manual langsung (ppnMode/pphMode) -- sama seperti diskon.
  */
 export function computePoTotals(input: PoTaxInput): PoTaxResult {
   const subtotal = Math.max(0, input.subtotal);
@@ -70,10 +80,15 @@ export function computePoTotals(input: PoTaxInput): PoTaxResult {
   const dpp = Math.max(0, subtotal - diskonAmount);
   const ppnAmount = input.hargaTermasukPajak
     ? 0
-    : dpp * (input.ppnRate / 100);
+    : input.ppnMode === "amount"
+      ? Math.max(0, input.ppnAmountManual)
+      : dpp * (input.ppnRate / 100);
   const ongkir = Math.max(0, input.ongkir);
   const totalPo = dpp + ppnAmount + ongkir;
-  const pphAmount = dpp * (input.pphRate / 100);
+  const pphAmount =
+    input.pphMode === "amount"
+      ? Math.max(0, input.pphAmountManual)
+      : dpp * (input.pphRate / 100);
   const dibayarKeVendor = Math.max(0, totalPo - pphAmount);
 
   return {

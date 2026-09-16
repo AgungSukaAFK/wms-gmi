@@ -143,8 +143,9 @@ export function PODetailSheet({
           `
           id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
-          po_harga_termasuk_pajak, po_ppn_rate, po_diskon_mode, po_diskon_value,
-          po_ongkir, po_pph_type, po_pph_rate,
+          po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
+          po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
+          po_pph_rate, po_pph_amount,
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -375,9 +376,13 @@ export function PODetailSheet({
         diskonMode: po.po_diskon_mode || "percent",
         diskonValue: po.po_diskon_value || 0,
         hargaTermasukPajak: po.po_harga_termasuk_pajak || false,
+        ppnMode: po.po_ppn_mode || "percent",
         ppnRate: po.po_ppn_rate || 0,
+        ppnAmountManual: po.po_ppn_amount || 0,
         ongkir: po.po_ongkir || 0,
+        pphMode: po.po_pph_mode || "percent",
         pphRate: po.po_pph_type ? po.po_pph_rate || 0 : 0,
+        pphAmountManual: po.po_pph_type ? po.po_pph_amount || 0 : 0,
       })
     : null;
 
@@ -861,10 +866,16 @@ export function PODetailSheet({
                           </span>
                         </div>
                       )}
-                      {po.po_ppn_rate > 0 && (
+                      {(po.po_ppn_mode === "amount"
+                        ? po.po_ppn_amount > 0
+                        : po.po_ppn_rate > 0) && (
                         <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                           <span>
-                            PPN ({po.po_ppn_rate}%)
+                            PPN (
+                            {po.po_ppn_mode === "amount"
+                              ? "nominal manual"
+                              : `${po.po_ppn_rate}%`}
+                            )
                             {po.po_harga_termasuk_pajak
                               ? " — sudah termasuk harga"
                               : ""}
@@ -902,7 +913,10 @@ export function PODetailSheet({
                           <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1">
                             <span>
                               PPh {getPphTypeLabel(po.po_pph_type)} (
-                              {po.po_pph_rate}%)
+                              {po.po_pph_mode === "amount"
+                                ? "nominal manual"
+                                : `${po.po_pph_rate}%`}
+                              )
                             </span>
                             <span className="text-destructive">
                               -{" "}

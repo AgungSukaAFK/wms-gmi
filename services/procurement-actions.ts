@@ -1809,12 +1809,16 @@ export async function createPurchaseOrder(data: {
   po_payment_term?: string;
   po_keterangan?: string;
   po_harga_termasuk_pajak?: boolean;
+  po_ppn_mode?: "percent" | "amount";
   po_ppn_rate?: number;
+  po_ppn_amount?: number;
   po_diskon_mode?: "percent" | "amount";
   po_diskon_value?: number;
   po_ongkir?: number;
   po_pph_type?: string | null;
+  po_pph_mode?: "percent" | "amount";
   po_pph_rate?: number;
+  po_pph_amount?: number;
   approvals?: any[];
   items: {
     part_id: number;
@@ -1963,12 +1967,16 @@ export async function createPurchaseOrder(data: {
         po_payment_term: data.po_payment_term ?? null,
         po_keterangan: data.po_keterangan ?? null,
         po_harga_termasuk_pajak: data.po_harga_termasuk_pajak ?? false,
+        po_ppn_mode: data.po_ppn_mode ?? "percent",
         po_ppn_rate: data.po_ppn_rate ?? 0,
+        po_ppn_amount: data.po_ppn_amount ?? 0,
         po_diskon_mode: data.po_diskon_mode ?? "percent",
         po_diskon_value: data.po_diskon_value ?? 0,
         po_ongkir: data.po_ongkir ?? 0,
         po_pph_type: data.po_pph_type ?? null,
+        po_pph_mode: data.po_pph_mode ?? "percent",
         po_pph_rate: data.po_pph_rate ?? 0,
+        po_pph_amount: data.po_pph_amount ?? 0,
         po_status: approvals.length === 0 ? "approved" : "open",
         po_receive_status: "pending",
         approvals: approvals as any,

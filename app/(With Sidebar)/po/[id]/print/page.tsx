@@ -51,8 +51,9 @@ export default function POPrintPage() {
         `
         id, po_kode, po_tanggal, po_estimasi, po_status, po_keterangan,
         po_payment_term, po_pic, approvals,
-        po_harga_termasuk_pajak, po_ppn_rate, po_diskon_mode, po_diskon_value,
-        po_ongkir, po_pph_type, po_pph_rate,
+        po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
+        po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
+        po_pph_rate, po_pph_amount,
         prs(pr_kode, cabang(nama_cabang))
       `,
       )
@@ -137,9 +138,13 @@ export default function POPrintPage() {
     diskonMode: po.po_diskon_mode || "percent",
     diskonValue: po.po_diskon_value || 0,
     hargaTermasukPajak: po.po_harga_termasuk_pajak || false,
+    ppnMode: po.po_ppn_mode || "percent",
     ppnRate: po.po_ppn_rate || 0,
+    ppnAmountManual: po.po_ppn_amount || 0,
     ongkir: po.po_ongkir || 0,
+    pphMode: po.po_pph_mode || "percent",
     pphRate: po.po_pph_type ? po.po_pph_rate || 0 : 0,
+    pphAmountManual: po.po_pph_type ? po.po_pph_amount || 0 : 0,
   });
 
   const formatCurrency = (value: number) =>
@@ -384,13 +389,19 @@ export default function POPrintPage() {
                     </td>
                   </tr>
                 )}
-                {po.po_ppn_rate > 0 && (
+                {(po.po_ppn_mode === "amount"
+                  ? po.po_ppn_amount > 0
+                  : po.po_ppn_rate > 0) && (
                   <tr>
                     <td
                       className="border border-slate-900 p-2 text-right font-bold"
                       colSpan={5}
                     >
-                      PPN ({po.po_ppn_rate}%)
+                      PPN (
+                      {po.po_ppn_mode === "amount"
+                        ? "nominal manual"
+                        : `${po.po_ppn_rate}%`}
+                      )
                       {po.po_harga_termasuk_pajak
                         ? " — sudah termasuk harga"
                         : ""}
@@ -441,7 +452,10 @@ export default function POPrintPage() {
                         colSpan={5}
                       >
                         PPh {getPphTypeLabel(po.po_pph_type)} (
-                        {po.po_pph_rate}%)
+                        {po.po_pph_mode === "amount"
+                          ? "nominal manual"
+                          : `${po.po_pph_rate}%`}
+                        )
                       </td>
                       <td className="border border-slate-900 p-2 text-right font-bold">
                         -{" "}

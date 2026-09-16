@@ -126,14 +126,18 @@ export default function CreatePOPage() {
 
   // Pajak, diskon & ongkir
   const [hargaTermasukPajak, setHargaTermasukPajak] = useState(false);
+  const [ppnMode, setPpnMode] = useState<"percent" | "amount">("percent");
   const [ppnRate, setPpnRate] = useState(0);
+  const [ppnAmountManual, setPpnAmountManual] = useState(0);
   const [diskonMode, setDiskonMode] = useState<"percent" | "amount">(
     "percent",
   );
   const [diskonValue, setDiskonValue] = useState(0);
   const [ongkir, setOngkir] = useState(0);
   const [pphType, setPphType] = useState("");
+  const [pphMode, setPphMode] = useState<"percent" | "amount">("percent");
   const [pphRate, setPphRate] = useState(0);
+  const [pphAmountManual, setPphAmountManual] = useState(0);
 
   // Approval template
   const [templates, setTemplates] = useState<any[]>([]);
@@ -326,9 +330,13 @@ export default function CreatePOPage() {
     diskonMode,
     diskonValue,
     hargaTermasukPajak,
+    ppnMode,
     ppnRate,
+    ppnAmountManual,
     ongkir,
+    pphMode,
     pphRate: pphType ? pphRate : 0,
+    pphAmountManual: pphType ? pphAmountManual : 0,
   });
 
   const selectableItemCount = poItems.filter((it) => it.remaining > 0).length;
@@ -411,12 +419,16 @@ export default function CreatePOPage() {
         po_payment_term: poPaymentTerm || undefined,
         po_keterangan: poKeterangan || undefined,
         po_harga_termasuk_pajak: hargaTermasukPajak,
+        po_ppn_mode: ppnMode,
         po_ppn_rate: ppnRate,
+        po_ppn_amount: ppnAmountManual,
         po_diskon_mode: diskonMode,
         po_diskon_value: diskonValue,
         po_ongkir: ongkir,
         po_pph_type: pphType || null,
+        po_pph_mode: pphMode,
         po_pph_rate: pphType ? pphRate : 0,
+        po_pph_amount: pphType ? pphAmountManual : 0,
         approvals: approvalData,
         items: poItems
           .filter((i) => i.selected && i.qty > 0)
@@ -1051,24 +1063,82 @@ export default function CreatePOPage() {
                     <Label className="text-[10px] font-bold uppercase text-muted-foreground">
                       PPN
                     </Label>
-                    <Select
-                      value={String(ppnRate)}
-                      onValueChange={(val) => setPpnRate(Number(val))}
-                    >
-                      <SelectTrigger className="h-10 font-bold text-sm">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {PPN_RATE_OPTIONS.map((opt) => (
-                          <SelectItem
-                            key={opt.value}
-                            value={String(opt.value)}
-                          >
-                            {opt.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-10 shrink-0 overflow-hidden rounded-md border border-input">
+                        <button
+                          type="button"
+                          onClick={() => setPpnMode("percent")}
+                          className={cn(
+                            "px-2.5 text-xs font-bold transition-colors",
+                            ppnMode === "percent"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-background text-muted-foreground hover:bg-muted",
+                          )}
+                        >
+                          %
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setPpnMode("amount")}
+                          className={cn(
+                            "px-2.5 text-xs font-bold border-l border-input transition-colors",
+                            ppnMode === "amount"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-background text-muted-foreground hover:bg-muted",
+                          )}
+                        >
+                          Rp
+                        </button>
+                      </div>
+                      {ppnMode === "percent" ? (
+                        <Select
+                          value={String(ppnRate)}
+                          onValueChange={(val) => setPpnRate(Number(val))}
+                        >
+                          <SelectTrigger className="h-10 font-bold text-sm">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {PPN_RATE_OPTIONS.map((opt) => (
+                              <SelectItem
+                                key={opt.value}
+                                value={String(opt.value)}
+                              >
+                                {opt.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <div className="flex items-center h-10 flex-1 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
+                          <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
+                            Rp
+                          </span>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            className="flex-1 h-full px-2 text-sm font-bold bg-transparent outline-none"
+                            value={
+                              ppnAmountManual === 0
+                                ? ""
+                                : new Intl.NumberFormat("id-ID").format(
+                                    ppnAmountManual,
+                                  )
+                            }
+                            onChange={(e) => {
+                              const raw = e.target.value.replace(
+                                /[^0-9]/g,
+                                "",
+                              );
+                              setPpnAmountManual(
+                                raw ? parseInt(raw, 10) : 0,
+                              );
+                            }}
+                            placeholder="0"
+                          />
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <div className="space-y-2">
@@ -1178,18 +1248,78 @@ export default function CreatePOPage() {
                   {pphType && (
                     <div className="space-y-2">
                       <Label className="text-[10px] font-bold uppercase text-muted-foreground">
-                        Rate PPh (%)
+                        Nilai PPh
                       </Label>
-                      <Input
-                        type="number"
-                        min={0}
-                        step={0.1}
-                        value={pphRate}
-                        onChange={(e) =>
-                          setPphRate(Math.max(0, Number(e.target.value) || 0))
-                        }
-                        className="h-10 font-bold text-sm"
-                      />
+                      <div className="flex items-center gap-2">
+                        <div className="flex h-10 shrink-0 overflow-hidden rounded-md border border-input">
+                          <button
+                            type="button"
+                            onClick={() => setPphMode("percent")}
+                            className={cn(
+                              "px-2.5 text-xs font-bold transition-colors",
+                              pphMode === "percent"
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-background text-muted-foreground hover:bg-muted",
+                            )}
+                          >
+                            %
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setPphMode("amount")}
+                            className={cn(
+                              "px-2.5 text-xs font-bold border-l border-input transition-colors",
+                              pphMode === "amount"
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-background text-muted-foreground hover:bg-muted",
+                            )}
+                          >
+                            Rp
+                          </button>
+                        </div>
+                        {pphMode === "percent" ? (
+                          <Input
+                            type="number"
+                            min={0}
+                            step={0.1}
+                            value={pphRate}
+                            onChange={(e) =>
+                              setPphRate(
+                                Math.max(0, Number(e.target.value) || 0),
+                              )
+                            }
+                            className="h-10 font-bold text-sm"
+                          />
+                        ) : (
+                          <div className="flex items-center h-10 flex-1 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
+                            <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
+                              Rp
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              className="flex-1 h-full px-2 text-sm font-bold bg-transparent outline-none"
+                              value={
+                                pphAmountManual === 0
+                                  ? ""
+                                  : new Intl.NumberFormat("id-ID").format(
+                                      pphAmountManual,
+                                    )
+                              }
+                              onChange={(e) => {
+                                const raw = e.target.value.replace(
+                                  /[^0-9]/g,
+                                  "",
+                                );
+                                setPphAmountManual(
+                                  raw ? parseInt(raw, 10) : 0,
+                                );
+                              }}
+                              placeholder="0"
+                            />
+                          </div>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1380,10 +1510,16 @@ export default function CreatePOPage() {
                     </span>
                   </div>
                 )}
-                {ppnRate > 0 && (
+                {(ppnMode === "percent"
+                  ? ppnRate > 0
+                  : ppnAmountManual > 0) && (
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                     <span>
-                      PPN ({ppnRate}%)
+                      PPN (
+                      {ppnMode === "percent"
+                        ? `${ppnRate}%`
+                        : "nominal manual"}
+                      )
                       {hargaTermasukPajak ? " — sudah termasuk harga" : ""}
                     </span>
                     <span className="text-foreground">
@@ -1418,7 +1554,9 @@ export default function CreatePOPage() {
                 <>
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1">
                     <span>
-                      PPh {getPphTypeLabel(pphType)} ({pphRate}%)
+                      PPh {getPphTypeLabel(pphType)} (
+                      {pphMode === "percent" ? `${pphRate}%` : "nominal manual"}
+                      )
                     </span>
                     <span className="text-destructive">
                       -{" "}
