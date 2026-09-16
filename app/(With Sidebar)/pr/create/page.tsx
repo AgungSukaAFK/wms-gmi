@@ -118,7 +118,6 @@ export default function CreatePRPage() {
 
     if (profile) {
       setUserProfile(profile);
-      fetchApprovedMRs(profile.cabang_id);
 
       const { data: templateData } = await supabase
         .from("approval_templates")
@@ -136,16 +135,26 @@ export default function CreatePRPage() {
     setInitialLoading(false);
   };
 
-  const fetchApprovedMRs = async (cabangId: number) => {
-    const { data } = await supabase
-      .from("mrs")
-      .select("id, mr_kode, mr_tanggal, mr_pic")
-      .eq("mr_status", "approved")
-      .order("created_at", { ascending: false })
-      .limit(15);
-
-    setMrs(data || []);
-  };
+  // Dipicu tiap popover dibuka & tiap kali ketikan search berubah (debounced)
+  // -- query langsung ke server (bukan cuma filter 15 data yang sudah
+  // ke-fetch), supaya MR approved yang lebih lama tetap bisa dicari lewat
+  // kodenya, dan dibatasi ke cabang user sendiri.
+  useEffect(() => {
+    if (!mrPopoverOpen || !userProfile) return;
+    const run = async () => {
+      let q = supabase
+        .from("mrs")
+        .select("id, mr_kode, mr_tanggal, mr_pic")
+        .eq("mr_status", "approved")
+        .eq("cabang_id", userProfile.cabang_id)
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (debouncedMrSearch) q = q.ilike("mr_kode", `%${debouncedMrSearch}%`);
+      const { data } = await q;
+      setMrs(data || []);
+    };
+    run();
+  }, [debouncedMrSearch, mrPopoverOpen, userProfile]);
 
   // Hitung qty yang sudah terpakai di PR lain (belum rejected) per mr_item.
   const fetchConvertedMap = async (mrItemIds: number[]) => {
@@ -463,42 +472,36 @@ export default function CreatePRPage() {
                   </div>
                   <div className="max-h-62.5 overflow-y-auto p-1.5 text-sm bg-background">
                     {mrs.length > 0 ? (
-                      mrs
-                        .filter((m) =>
-                          m.mr_kode
-                            .toLowerCase()
-                            .includes(mrSearch.toLowerCase()),
-                        )
-                        .map((m) => {
-                          const isChecked = selectedMrs.some(
-                            (sel) => sel.id === m.id,
-                          );
-                          return (
-                            <button
-                              key={m.id}
-                              onClick={() => handleToggleMR(m)}
-                              className={`w-full text-left p-3 rounded-lg transition-all flex items-center justify-between group mb-1 ${
-                                isChecked
-                                  ? "bg-foreground text-background"
-                                  : "hover:bg-muted text-foreground"
-                              }`}
-                            >
-                              <div className="flex flex-col">
-                                <span className="font-bold text-xs uppercase tracking-tight">
-                                  {m.mr_kode}
-                                </span>
-                                <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
-                                  Pemohon: {m.mr_pic}
-                                </span>
-                              </div>
-                              {isChecked ? (
-                                <CheckCircle2 className="h-3.5 w-3.5" />
-                              ) : (
-                                <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-all" />
-                              )}
-                            </button>
-                          );
-                        })
+                      mrs.map((m) => {
+                        const isChecked = selectedMrs.some(
+                          (sel) => sel.id === m.id,
+                        );
+                        return (
+                          <button
+                            key={m.id}
+                            onClick={() => handleToggleMR(m)}
+                            className={`w-full text-left p-3 rounded-lg transition-all flex items-center justify-between group mb-1 ${
+                              isChecked
+                                ? "bg-foreground text-background"
+                                : "hover:bg-muted text-foreground"
+                            }`}
+                          >
+                            <div className="flex flex-col">
+                              <span className="font-bold text-xs uppercase tracking-tight">
+                                {m.mr_kode}
+                              </span>
+                              <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
+                                Pemohon: {m.mr_pic}
+                              </span>
+                            </div>
+                            {isChecked ? (
+                              <CheckCircle2 className="h-3.5 w-3.5" />
+                            ) : (
+                              <ArrowRight className="h-3.5 w-3.5 opacity-0 group-hover:opacity-100 transition-all" />
+                            )}
+                          </button>
+                        );
+                      })
                     ) : (
                       <div className="p-12 text-center text-muted-foreground text-xs italic font-medium">
                         MR Approved Tidak Ditemukan

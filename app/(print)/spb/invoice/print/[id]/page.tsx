@@ -77,7 +77,7 @@ export default function SpbInvoicePrintPage() {
             <p>No PO: {header.do?.po?.po_no || "-"}</p>
             <p>No DO: {header.do?.do_no || "-"}</p>
             <p>Tgl Invoice: {formatDateDocument(header.invoice_date)}</p>
-            <p>Tgl Email: {formatDate(header.invoice_email_date)}</p>
+            <p>Tgl Email ke Site: {formatDate(header.invoice_email_date)}</p>
           </div>
           <table className="w-full mt-6 border text-sm">
             <thead>

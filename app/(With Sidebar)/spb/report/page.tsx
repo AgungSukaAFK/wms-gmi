@@ -178,7 +178,7 @@ export default function SpbReportPage() {
         "DATE INPUT DO": formatDate(row.do_created_at),
         "NO INVOICE": row.invoice_no || "-",
         "TGL INVOICE": formatDate(row.invoice_date),
-        "TGL EMAIL": formatDate(row.invoice_email_date),
+        "TGL EMAIL KE SITE": formatDate(row.invoice_email_date),
       }));
 
       const ws = XLSX.utils.json_to_sheet(data);
@@ -355,7 +355,7 @@ export default function SpbReportPage() {
                   NO INVOICE
                 </SortableTableHead>
                 <TableHead>TGL INVOICE</TableHead>
-                <TableHead>TGL EMAIL</TableHead>
+                <TableHead>TGL EMAIL KE SITE</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>

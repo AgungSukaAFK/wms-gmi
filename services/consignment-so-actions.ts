@@ -8,7 +8,7 @@ type ConsignmentSoItemInput = {
   part_number: string;
   part_name: string;
   satuan: string;
-  part_number_customer?: string;
+  part_number_customer: string;
   qty: number;
 };
 
@@ -72,6 +72,8 @@ export async function createConsignmentSo(data: {
   for (const item of data.items) {
     if (!item.qty || item.qty <= 0)
       return { error: `${item.part_number}: qty harus lebih dari 0.` };
+    if (!item.part_number_customer?.trim())
+      return { error: `${item.part_number}: PN Customer wajib diisi.` };
   }
 
   // No. SO unik

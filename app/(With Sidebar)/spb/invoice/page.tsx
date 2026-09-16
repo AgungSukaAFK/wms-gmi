@@ -438,7 +438,7 @@ export default function SpbInvoicePage() {
                     onSort={handleSortChange}
                     defaultDir="desc"
                   >
-                    Tanggal Email
+                    Tanggal Email ke Site
                   </SortableTableHead>
                   <SortableTableHead
                     sortKey="approval_status"
@@ -656,7 +656,7 @@ export default function SpbInvoicePage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Tanggal Email</Label>
+                <Label>Tanggal Email ke Site</Label>
                 <DatePickerString value={emailDate} onChange={setEmailDate} />
               </div>
 
@@ -786,7 +786,7 @@ export default function SpbInvoicePage() {
             },
             {
               key: "invoice_email_date",
-              label: "Tanggal Email",
+              label: "Tanggal Email ke Site",
               type: "date",
               value: modInvoiceEmailDate,
               onChange: setModInvoiceEmailDate,

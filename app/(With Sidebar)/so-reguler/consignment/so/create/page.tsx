@@ -145,6 +145,9 @@ export default function CreateConsignmentSoPage() {
     if (!soNo.trim()) return "No. SO wajib diisi.";
     if (!customerId) return "Pilih customer.";
     if (items.length === 0) return "Tambahkan minimal satu item.";
+    const missingPnCust = items.find((i) => !i.part_number_customer.trim());
+    if (missingPnCust)
+      return `${missingPnCust.part_number}: PN Customer wajib diisi.`;
     return null;
   };
 
@@ -168,7 +171,7 @@ export default function CreateConsignmentSoPage() {
           part_name: i.part_name,
           satuan: i.satuan,
           qty: i.qty,
-          part_number_customer: i.part_number_customer || undefined,
+          part_number_customer: i.part_number_customer.trim(),
         })),
       });
 
@@ -369,7 +372,9 @@ export default function CreateConsignmentSoPage() {
               <TableRow className="h-10 hover:bg-transparent">
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">PN GMI / Desc</TableHead>
                 <TableHead className="w-16 text-center text-[10px] font-black uppercase text-muted-foreground">Unit</TableHead>
-                <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground">PN Cust</TableHead>
+                <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground">
+                  PN Cust <span className="text-destructive">*</span>
+                </TableHead>
                 <TableHead className="w-28 text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
                 <TableHead className="w-14"></TableHead>
               </TableRow>
@@ -395,8 +400,12 @@ export default function CreateConsignmentSoPage() {
                         onChange={(e) =>
                           updateItem(item.part_id, { part_number_customer: e.target.value })
                         }
-                        placeholder="Opsional"
-                        className="h-8 text-xs"
+                        placeholder="Input PN Customer..."
+                        className={`h-8 text-xs ${
+                          !item.part_number_customer.trim()
+                            ? "border-destructive/50 focus-visible:ring-destructive/30"
+                            : ""
+                        }`}
                       />
                     </TableCell>
                     <TableCell>
