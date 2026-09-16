@@ -138,15 +138,15 @@ export default function CreatePRPage() {
   // Dipicu tiap popover dibuka & tiap kali ketikan search berubah (debounced)
   // -- query langsung ke server (bukan cuma filter 15 data yang sudah
   // ke-fetch), supaya MR approved yang lebih lama tetap bisa dicari lewat
-  // kodenya, dan dibatasi ke cabang user sendiri.
+  // kodenya. Sengaja tidak dibatasi cabang -- PR boleh direferensikan dari
+  // MR lokasi manapun.
   useEffect(() => {
     if (!mrPopoverOpen || !userProfile) return;
     const run = async () => {
       let q = supabase
         .from("mrs")
-        .select("id, mr_kode, mr_tanggal, mr_pic")
+        .select("id, mr_kode, mr_tanggal, mr_pic, cabang(nama_cabang)")
         .eq("mr_status", "approved")
-        .eq("cabang_id", userProfile.cabang_id)
         .order("created_at", { ascending: false })
         .limit(20);
       if (debouncedMrSearch) q = q.ilike("mr_kode", `%${debouncedMrSearch}%`);
@@ -476,6 +476,9 @@ export default function CreatePRPage() {
                         const isChecked = selectedMrs.some(
                           (sel) => sel.id === m.id,
                         );
+                        const mrCabang = Array.isArray(m.cabang)
+                          ? m.cabang[0]
+                          : m.cabang;
                         return (
                           <button
                             key={m.id}
@@ -492,6 +495,9 @@ export default function CreatePRPage() {
                               </span>
                               <span className="text-[9px] uppercase font-medium mt-1 opacity-60">
                                 Pemohon: {m.mr_pic}
+                                {mrCabang?.nama_cabang
+                                  ? ` · ${mrCabang.nama_cabang}`
+                                  : ""}
                               </span>
                             </div>
                             {isChecked ? (
