@@ -60,7 +60,6 @@ interface DOItem {
   part_name: string;
   satuan: string;
   qty: number;
-  avail: number; // stok tersedia di gudang pengirim
 }
 
 export default function CreateDoRegulerPage() {
@@ -69,16 +68,20 @@ export default function CreateDoRegulerPage() {
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
-  const [userProfile, setUserProfile] = useState<any>(null);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [cabangs, setCabangs] = useState<{ id: number; nama_cabang: string }[]>(
+    [],
+  );
 
   // Form
   const [doKode, setDoKode] = useState("");
   const [doTanggal, setDoTanggal] = useState(toYmdLocal());
+  const [dariCabangId, setDariCabangId] = useState<string>("");
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [kodePo, setKodePo] = useState("");
   const [items, setItems] = useState<DOItem[]>([]);
+  const [stockMap, setStockMap] = useState<Map<number, number>>(new Map());
   const [remarks, setRemarks] = useState("");
   const [pic, setPic] = useState("");
 
@@ -115,15 +118,52 @@ export default function CreateDoRegulerPage() {
       }
       const { data: profile } = await supabase
         .from("profiles")
-        .select("*, cabang(id, nama_cabang)")
+        .select("cabang_id")
         .eq("id", user.id)
         .single();
-      setUserProfile(profile);
+      if (profile?.cabang_id) setDariCabangId(String(profile.cabang_id));
+
+      const { data: cabangData } = await supabase
+        .from("cabang")
+        .select("id, nama_cabang")
+        .eq("is_active", true)
+        .order("nama_cabang");
+      setCabangs(cabangData || []);
 
       setInitialLoading(false);
     };
     init();
   }, []);
+
+  // Stok gudang pengirim per item -- reaktif terhadap gudang & daftar item,
+  // supaya kalau gudang pengirim diganti setelah item ditambahkan, qty
+  // tersedia yang ditampilkan/divalidasi selalu yang terbaru (bukan stale).
+  const itemPartIdsKey = items.map((i) => i.part_id).join(",");
+  useEffect(() => {
+    if (!dariCabangId || items.length === 0) {
+      setStockMap(new Map());
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from("stock")
+      .select("part_id, qty")
+      .eq("cabang_id", Number(dariCabangId))
+      .in(
+        "part_id",
+        items.map((i) => i.part_id),
+      )
+      .then(({ data }) => {
+        if (cancelled) return;
+        const map = new Map<number, number>();
+        for (const row of data || []) map.set(row.part_id, Number(row.qty) || 0);
+        setStockMap(map);
+      });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dariCabangId, itemPartIdsKey]);
 
   // Search customer (server-side, dibatasi 20 hasil — tidak get-all)
   useEffect(() => {
@@ -163,21 +203,21 @@ export default function CreateDoRegulerPage() {
 
   const addItem = async (barang: any) => {
     if (items.some((i) => i.part_id === barang.id)) return;
-    if (!userProfile?.cabang_id) {
-      toast.error("Gudang pengirim tidak diketahui.");
+    if (!dariCabangId) {
+      toast.error("Pilih gudang pengirim terlebih dahulu.");
       return;
     }
-    // Ambil stok PN ini di gudang pengirim
+    // Ambil stok PN ini di gudang pengirim terpilih
     const { data: stock } = await supabase
       .from("stock")
       .select("qty")
       .eq("part_id", barang.id)
-      .eq("cabang_id", userProfile.cabang_id)
+      .eq("cabang_id", Number(dariCabangId))
       .maybeSingle();
     const avail = stock?.qty ?? 0;
     if (avail <= 0) {
       toast.error(
-        `Stok ${barang.part_number} di gudang Anda kosong. Tidak bisa dikirim.`,
+        `Stok ${barang.part_number} di gudang pengirim kosong. Tidak bisa dikirim.`,
       );
       return;
     }
@@ -189,7 +229,6 @@ export default function CreateDoRegulerPage() {
         part_name: barang.part_name,
         satuan: barang.part_satuan,
         qty: 1,
-        avail,
       },
     ]);
     setSearchOpen(false);
@@ -197,17 +236,17 @@ export default function CreateDoRegulerPage() {
   };
 
   const updateQty = (partId: number, qty: number) => {
-    const target = items.find((i) => i.part_id === partId);
     const requested = qty || 1;
-    if (target && requested > target.avail) {
+    const avail = stockMap.get(partId) ?? 0;
+    if (requested > avail) {
       toast.warning(
-        `${target.part_number}: maksimal ${target.avail} (tidak boleh lebih dari stok gudang pengirim).`,
+        `Maksimal ${avail} (tidak boleh lebih dari stok gudang pengirim).`,
       );
     }
     setItems((prev) =>
       prev.map((i) =>
         i.part_id === partId
-          ? { ...i, qty: Math.max(1, Math.min(requested, i.avail)) }
+          ? { ...i, qty: Math.max(1, Math.min(requested, avail)) }
           : i,
       ),
     );
@@ -218,7 +257,7 @@ export default function CreateDoRegulerPage() {
 
   const validate = () => {
     if (!doKode.trim()) return "Kode DO Reguler wajib diisi.";
-    if (!userProfile?.cabang_id) return "Gudang pengirim tidak diketahui.";
+    if (!dariCabangId) return "Pilih gudang pengirim.";
     if (!customerId) return "Pilih customer tujuan.";
     if (items.length === 0) return "Tambahkan minimal satu item.";
     if (isEkspedisi(shipmentType) && !ekspedisiCourier.trim())
@@ -236,7 +275,7 @@ export default function CreateDoRegulerPage() {
       const result = await createDoReguler({
         do_kode: doKode.trim(),
         do_tanggal: doTanggal,
-        dari_cabang_id: userProfile.cabang_id,
+        dari_cabang_id: Number(dariCabangId),
         customer_id: customerId!,
         kode_po: kodePo || undefined,
         shipment_type: shipmentType,
@@ -333,9 +372,18 @@ export default function CreateDoRegulerPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <Building2 className="h-3 w-3" /> Gudang Pengirim
             </Label>
-            <div className="h-10 rounded-md border border-input bg-muted/40 px-3 flex items-center text-sm font-bold uppercase">
-              {userProfile?.cabang?.nama_cabang || "-"}
-            </div>
+            <Select value={dariCabangId} onValueChange={setDariCabangId}>
+              <SelectTrigger className="h-10 w-full text-sm font-bold">
+                <SelectValue placeholder="Pilih gudang pengirim..." />
+              </SelectTrigger>
+              <SelectContent>
+                {cabangs.map((c) => (
+                  <SelectItem key={c.id} value={String(c.id)}>
+                    {c.nama_cabang}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
@@ -465,7 +513,9 @@ export default function CreateDoRegulerPage() {
             </TableHeader>
             <TableBody>
               {items.length > 0 ? (
-                items.map((item) => (
+                items.map((item) => {
+                  const avail = stockMap.get(item.part_id) ?? 0;
+                  return (
                   <TableRow key={item.part_id} className="h-12">
                     <TableCell>
                       <span className="font-semibold text-xs">{item.part_name}</span>
@@ -479,13 +529,13 @@ export default function CreateDoRegulerPage() {
                         <Input
                           type="number"
                           min={1}
-                          max={item.avail}
+                          max={avail}
                           value={item.qty}
                           onChange={(e) => updateQty(item.part_id, parseInt(e.target.value))}
                           className="h-8 w-20 text-center text-xs"
                         />
                         <span className="text-[9px] font-medium text-amber-600">
-                          Stok gudang {item.avail}
+                          Stok gudang {avail}
                         </span>
                       </div>
                     </TableCell>
@@ -495,7 +545,8 @@ export default function CreateDoRegulerPage() {
                       </Button>
                     </TableCell>
                   </TableRow>
-                ))
+                  );
+                })
               ) : (
                 <TableRow className="h-24 hover:bg-transparent">
                   <TableCell colSpan={4} className="text-center text-xs italic text-muted-foreground">

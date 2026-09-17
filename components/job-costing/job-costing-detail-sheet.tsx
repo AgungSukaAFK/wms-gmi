@@ -477,7 +477,12 @@ export function JobCostingDetailSheet({
                             <p className="font-medium">{item.description}</p>
                             {item.source_cabang?.nama_cabang && (
                               <p className="text-[10px] text-muted-foreground">
-                                Cabang Asal: {item.source_cabang.nama_cabang}
+                                Gudang Asal: {item.source_cabang.nama_cabang}
+                              </p>
+                            )}
+                            {item.source_customer?.customer_name && (
+                              <p className="text-[10px] text-muted-foreground">
+                                Customer Asal: {item.source_customer.customer_name}
                               </p>
                             )}
                             {item.notes && (
@@ -554,7 +559,7 @@ export function JobCostingDetailSheet({
                           Qty
                         </TableHead>
                         <TableHead className="text-[10px] font-bold uppercase">
-                          Cabang Tujuan
+                          Lokasi Tujuan
                         </TableHead>
                       </TableRow>
                     </TableHeader>
@@ -583,7 +588,9 @@ export function JobCostingDetailSheet({
                               {fp.qty}
                             </TableCell>
                             <TableCell className="text-xs">
-                              {fp.cabang?.nama_cabang ?? "-"}
+                              {fp.cabang?.nama_cabang ??
+                                fp.customer?.customer_name ??
+                                "-"}
                             </TableCell>
                           </TableRow>
                         ))

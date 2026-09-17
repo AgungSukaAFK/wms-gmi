@@ -61,7 +61,7 @@ export async function getJobCostingById(id: number) {
   const { data, error } = await supabase
     .from("job_costing")
     .select(
-      "*, cabang!job_costing_cabang_id_fkey(nama_cabang), finish_part_cabang:cabang!job_costing_finish_part_cabang_id_fkey(nama_cabang), job_costing_items(*, source_cabang:cabang!job_costing_items_source_cabang_id_fkey(nama_cabang), po:po_id(po_kode)), job_costing_finish_parts(*, cabang:cabang!job_costing_finish_parts_cabang_id_fkey(nama_cabang))",
+      "*, cabang!job_costing_cabang_id_fkey(nama_cabang), finish_part_cabang:cabang!job_costing_finish_part_cabang_id_fkey(nama_cabang), job_costing_items(*, source_cabang:cabang!job_costing_items_source_cabang_id_fkey(nama_cabang), source_customer:customers!job_costing_items_source_customer_id_fkey(customer_name), po:po_id(po_kode)), job_costing_finish_parts(*, cabang:cabang!job_costing_finish_parts_cabang_id_fkey(nama_cabang), customer:customers!job_costing_finish_parts_customer_id_fkey(customer_name))",
     )
     .eq("id", id)
     .single();
@@ -167,19 +167,107 @@ function shouldApplyStock(status: string): boolean {
   return STOCK_APPLIED_STATUSES.has(normalizeDocumentStatus(status));
 }
 
+// Lokasi stok Job Costing bisa berupa cabang (gudang GMI/GIS) ATAU customer
+// (stok konsinyasi di lokasi customer, tabel `customer_stock` -- analog cara
+// consignment_penerimaan-actions.ts memindahkan stok ke customer_stock).
+// Tepat satu dari cabangId/customerId harus terisi.
 type StockLine = {
   partId: number;
-  cabangId: number;
+  cabangId?: number | null;
+  customerId?: number | null;
   qty: number;
   label: string;
 };
 
 type StockOpResult = { success: true } | { success: false; error: string };
 
+function locationTable(line: StockLine): "stock" | "customer_stock" {
+  return line.customerId ? "customer_stock" : "stock";
+}
+
+function locationColumn(line: StockLine): "customer_id" | "cabang_id" {
+  return line.customerId ? "customer_id" : "cabang_id";
+}
+
+function locationId(line: StockLine): number {
+  return (line.customerId ?? line.cabangId) as number;
+}
+
+async function readLocationStock(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  line: StockLine,
+): Promise<{ id: number; qty: number } | null> {
+  const { data } = await supabase
+    .from(locationTable(line))
+    .select("id, qty")
+    .eq("part_id", line.partId)
+    .eq(locationColumn(line), locationId(line))
+    .maybeSingle();
+  return data ? { id: Number(data.id), qty: Number(data.qty) || 0 } : null;
+}
+
+async function updateLocationStockQty(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  line: StockLine,
+  stockId: number,
+  newQty: number,
+  expectedOldQty: number,
+) {
+  return supabase
+    .from(locationTable(line))
+    .update({ qty: newQty })
+    .eq("id", stockId)
+    .eq("qty", expectedOldQty)
+    .select("id");
+}
+
+async function insertLocationStock(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  line: StockLine,
+  qty: number,
+) {
+  return supabase
+    .from(locationTable(line))
+    .insert({ part_id: line.partId, [locationColumn(line)]: locationId(line), qty })
+    .select("id")
+    .single();
+}
+
+async function deleteLocationStock(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  line: StockLine,
+  stockId: number,
+) {
+  return supabase.from(locationTable(line)).delete().eq("id", stockId);
+}
+
+// stock_movements adalah ledger khusus cabang (cabang_id NOT NULL) -- untuk
+// lokasi customer, tidak ada ledger tersendiri, mengikuti pola yang sudah
+// dipakai consignment-penerimaan-actions.ts (customer_stock diubah langsung
+// tanpa insert movement).
+async function logLocationStockMovement(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  line: StockLine,
+  params: {
+    qty_change: number;
+    type: string;
+    reference_id: string;
+    notes: string;
+    created_by: string;
+  },
+) {
+  if (line.customerId) return;
+  await supabase.from("stock_movements").insert({
+    part_id: line.partId,
+    cabang_id: line.cabangId,
+    ...params,
+  });
+}
+
 function aggregateStockLines(lines: StockLine[]): StockLine[] {
   const map = new Map<string, StockLine>();
   for (const line of lines) {
-    const key = `${line.partId}:${line.cabangId}`;
+    const key = `${line.partId}:${line.cabangId ?? "-"}:${line.customerId ?? "-"}`;
     const existing = map.get(key);
     if (existing) {
       existing.qty += line.qty;
@@ -213,21 +301,16 @@ async function applyJobCostingStock(
     line: StockLine;
   }> = [];
   for (const line of materialAgg) {
-    const { data: stockRow, error: stockErr } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", line.partId)
-      .eq("cabang_id", line.cabangId)
-      .maybeSingle();
+    const stockRow = await readLocationStock(supabase, line);
 
-    if (stockErr || !stockRow) {
+    if (!stockRow) {
       return {
         success: false,
-        error: `Stok bahan ${line.label} tidak ditemukan pada cabang asal terpilih.`,
+        error: `Stok bahan ${line.label} tidak ditemukan pada lokasi asal terpilih.`,
       };
     }
 
-    const oldQty = Number(stockRow.qty) || 0;
+    const oldQty = stockRow.qty;
     if (oldQty < line.qty) {
       return {
         success: false,
@@ -236,7 +319,7 @@ async function applyJobCostingStock(
     }
 
     materialSnapshots.push({
-      stockId: Number(stockRow.id),
+      stockId: stockRow.id,
       oldQty,
       newQty: oldQty - line.qty,
       line,
@@ -249,54 +332,45 @@ async function applyJobCostingStock(
     line: StockLine;
   }> = [];
   for (const line of finishAgg) {
-    const { data: stockRow } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", line.partId)
-      .eq("cabang_id", line.cabangId)
-      .maybeSingle();
+    const stockRow = await readLocationStock(supabase, line);
 
     finishSnapshots.push({
-      stockId: stockRow ? Number(stockRow.id) : null,
-      oldQty: stockRow ? Number(stockRow.qty) || 0 : 0,
+      stockId: stockRow ? stockRow.id : null,
+      oldQty: stockRow ? stockRow.qty : 0,
       line,
     });
   }
 
   // Phase 2: sequential mutation with manual rollback-on-failure.
-  const appliedMaterial: Array<{ stockId: number; oldQty: number }> = [];
+  const appliedMaterial: Array<{ stockId: number; oldQty: number; line: StockLine }> = [];
   const appliedFinish: Array<{
     stockId: number;
     oldQty: number;
     wasInsert: boolean;
+    line: StockLine;
   }> = [];
 
   async function rollbackAll() {
     for (const a of appliedMaterial) {
-      await supabase
-        .from("stock")
-        .update({ qty: a.oldQty })
-        .eq("id", a.stockId);
+      await updateLocationStockQty(supabase, a.line, a.stockId, a.oldQty, a.oldQty);
     }
     for (const a of appliedFinish) {
       if (a.wasInsert) {
-        await supabase.from("stock").delete().eq("id", a.stockId);
+        await deleteLocationStock(supabase, a.line, a.stockId);
       } else {
-        await supabase
-          .from("stock")
-          .update({ qty: a.oldQty })
-          .eq("id", a.stockId);
+        await updateLocationStockQty(supabase, a.line, a.stockId, a.oldQty, a.oldQty);
       }
     }
   }
 
   for (const snap of materialSnapshots) {
-    const { data: updated, error: updErr } = await supabase
-      .from("stock")
-      .update({ qty: snap.newQty })
-      .eq("id", snap.stockId)
-      .eq("qty", snap.oldQty)
-      .select("id");
+    const { data: updated, error: updErr } = await updateLocationStockQty(
+      supabase,
+      snap.line,
+      snap.stockId,
+      snap.newQty,
+      snap.oldQty,
+    );
 
     if (updErr || !updated || updated.length === 0) {
       await rollbackAll();
@@ -305,11 +379,9 @@ async function applyJobCostingStock(
         error: `Stok bahan ${snap.line.label} berubah sejak awal pemrosesan, silakan coba lagi.`,
       };
     }
-    appliedMaterial.push({ stockId: snap.stockId, oldQty: snap.oldQty });
+    appliedMaterial.push({ stockId: snap.stockId, oldQty: snap.oldQty, line: snap.line });
 
-    await supabase.from("stock_movements").insert({
-      part_id: snap.line.partId,
-      cabang_id: snap.line.cabangId,
+    await logLocationStockMovement(supabase, snap.line, {
       qty_change: -snap.line.qty,
       type: "JC_OUT",
       reference_id: params.jobKode,
@@ -321,12 +393,13 @@ async function applyJobCostingStock(
   for (const snap of finishSnapshots) {
     if (snap.stockId) {
       const newQty = snap.oldQty + snap.line.qty;
-      const { data: updated, error: updErr } = await supabase
-        .from("stock")
-        .update({ qty: newQty })
-        .eq("id", snap.stockId)
-        .eq("qty", snap.oldQty)
-        .select("id");
+      const { data: updated, error: updErr } = await updateLocationStockQty(
+        supabase,
+        snap.line,
+        snap.stockId,
+        newQty,
+        snap.oldQty,
+      );
 
       if (updErr || !updated || updated.length === 0) {
         await rollbackAll();
@@ -339,17 +412,14 @@ async function applyJobCostingStock(
         stockId: snap.stockId,
         oldQty: snap.oldQty,
         wasInsert: false,
+        line: snap.line,
       });
     } else {
-      const { data: inserted, error: insErr } = await supabase
-        .from("stock")
-        .insert({
-          part_id: snap.line.partId,
-          cabang_id: snap.line.cabangId,
-          qty: snap.line.qty,
-        })
-        .select("id")
-        .single();
+      const { data: inserted, error: insErr } = await insertLocationStock(
+        supabase,
+        snap.line,
+        snap.line.qty,
+      );
 
       if (insErr || !inserted) {
         await rollbackAll();
@@ -362,12 +432,11 @@ async function applyJobCostingStock(
         stockId: Number(inserted.id),
         oldQty: 0,
         wasInsert: true,
+        line: snap.line,
       });
     }
 
-    await supabase.from("stock_movements").insert({
-      part_id: snap.line.partId,
-      cabang_id: snap.line.cabangId,
+    await logLocationStockMovement(supabase, snap.line, {
       qty_change: snap.line.qty,
       type: "JC_IN",
       reference_id: params.jobKode,
@@ -403,14 +472,9 @@ async function reverseJobCostingStock(
     line: StockLine;
   }> = [];
   for (const line of finishAgg) {
-    const { data: stockRow } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", line.partId)
-      .eq("cabang_id", line.cabangId)
-      .maybeSingle();
+    const stockRow = await readLocationStock(supabase, line);
 
-    const currentQty = stockRow ? Number(stockRow.qty) || 0 : 0;
+    const currentQty = stockRow ? stockRow.qty : 0;
     if (!stockRow || currentQty < line.qty) {
       return {
         success: false,
@@ -422,7 +486,7 @@ async function reverseJobCostingStock(
     }
 
     finishSnapshots.push({
-      stockId: Number(stockRow.id),
+      stockId: stockRow.id,
       oldQty: currentQty,
       line,
     });
@@ -434,55 +498,46 @@ async function reverseJobCostingStock(
     line: StockLine;
   }> = [];
   for (const line of materialAgg) {
-    const { data: stockRow } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", line.partId)
-      .eq("cabang_id", line.cabangId)
-      .maybeSingle();
+    const stockRow = await readLocationStock(supabase, line);
 
     materialSnapshots.push({
-      stockId: stockRow ? Number(stockRow.id) : null,
-      oldQty: stockRow ? Number(stockRow.qty) || 0 : 0,
+      stockId: stockRow ? stockRow.id : null,
+      oldQty: stockRow ? stockRow.qty : 0,
       line,
     });
   }
 
   // Phase 2: sequential mutation with manual rollback-on-failure.
-  const appliedFinish: Array<{ stockId: number; oldQty: number }> = [];
+  const appliedFinish: Array<{ stockId: number; oldQty: number; line: StockLine }> = [];
   const appliedMaterial: Array<{
     stockId: number;
     oldQty: number;
     wasInsert: boolean;
+    line: StockLine;
   }> = [];
 
   async function rollbackAll() {
     for (const a of appliedFinish) {
-      await supabase
-        .from("stock")
-        .update({ qty: a.oldQty })
-        .eq("id", a.stockId);
+      await updateLocationStockQty(supabase, a.line, a.stockId, a.oldQty, a.oldQty);
     }
     for (const a of appliedMaterial) {
       if (a.wasInsert) {
-        await supabase.from("stock").delete().eq("id", a.stockId);
+        await deleteLocationStock(supabase, a.line, a.stockId);
       } else {
-        await supabase
-          .from("stock")
-          .update({ qty: a.oldQty })
-          .eq("id", a.stockId);
+        await updateLocationStockQty(supabase, a.line, a.stockId, a.oldQty, a.oldQty);
       }
     }
   }
 
   for (const snap of finishSnapshots) {
     const newQty = snap.oldQty - snap.line.qty;
-    const { data: updated, error: updErr } = await supabase
-      .from("stock")
-      .update({ qty: newQty })
-      .eq("id", snap.stockId)
-      .eq("qty", snap.oldQty)
-      .select("id");
+    const { data: updated, error: updErr } = await updateLocationStockQty(
+      supabase,
+      snap.line,
+      snap.stockId,
+      newQty,
+      snap.oldQty,
+    );
 
     if (updErr || !updated || updated.length === 0) {
       await rollbackAll();
@@ -491,11 +546,9 @@ async function reverseJobCostingStock(
         error: `Stok finish part ${snap.line.label} berubah sejak awal pemrosesan, silakan coba lagi.`,
       };
     }
-    appliedFinish.push({ stockId: snap.stockId, oldQty: snap.oldQty });
+    appliedFinish.push({ stockId: snap.stockId, oldQty: snap.oldQty, line: snap.line });
 
-    await supabase.from("stock_movements").insert({
-      part_id: snap.line.partId,
-      cabang_id: snap.line.cabangId,
+    await logLocationStockMovement(supabase, snap.line, {
       qty_change: -snap.line.qty,
       type: "JC_IN_REVERSE",
       reference_id: params.jobKode,
@@ -507,12 +560,13 @@ async function reverseJobCostingStock(
   for (const snap of materialSnapshots) {
     if (snap.stockId) {
       const newQty = snap.oldQty + snap.line.qty;
-      const { data: updated, error: updErr } = await supabase
-        .from("stock")
-        .update({ qty: newQty })
-        .eq("id", snap.stockId)
-        .eq("qty", snap.oldQty)
-        .select("id");
+      const { data: updated, error: updErr } = await updateLocationStockQty(
+        supabase,
+        snap.line,
+        snap.stockId,
+        newQty,
+        snap.oldQty,
+      );
 
       if (updErr || !updated || updated.length === 0) {
         await rollbackAll();
@@ -525,17 +579,14 @@ async function reverseJobCostingStock(
         stockId: snap.stockId,
         oldQty: snap.oldQty,
         wasInsert: false,
+        line: snap.line,
       });
     } else {
-      const { data: inserted, error: insErr } = await supabase
-        .from("stock")
-        .insert({
-          part_id: snap.line.partId,
-          cabang_id: snap.line.cabangId,
-          qty: snap.line.qty,
-        })
-        .select("id")
-        .single();
+      const { data: inserted, error: insErr } = await insertLocationStock(
+        supabase,
+        snap.line,
+        snap.line.qty,
+      );
 
       if (insErr || !inserted) {
         await rollbackAll();
@@ -548,12 +599,11 @@ async function reverseJobCostingStock(
         stockId: Number(inserted.id),
         oldQty: 0,
         wasInsert: true,
+        line: snap.line,
       });
     }
 
-    await supabase.from("stock_movements").insert({
-      part_id: snap.line.partId,
-      cabang_id: snap.line.cabangId,
+    await logLocationStockMovement(supabase, snap.line, {
       qty_change: snap.line.qty,
       type: "JC_OUT_REVERSE",
       reference_id: params.jobKode,
@@ -574,7 +624,8 @@ export async function createJobCosting(data: {
     part_number?: string;
     part_name?: string;
     qty: number;
-    cabang_id: number;
+    cabang_id?: number | null;
+    customer_id?: number | null;
     notes?: string;
   }[];
   job_tanggal?: string;
@@ -589,7 +640,8 @@ export async function createJobCosting(data: {
     unit: string;
     unit_price: number;
     po_id?: number | null;
-    source_cabang_id: number;
+    source_cabang_id?: number | null;
+    source_customer_id?: number | null;
     notes?: string;
   }[];
 }) {
@@ -608,9 +660,16 @@ export async function createJobCosting(data: {
     if (!fp.part_id || fp.part_id <= 0) {
       return { error: "Finish part wajib dipilih." };
     }
-    if (!fp.cabang_id || fp.cabang_id <= 0) {
+    const hasCabang = !!fp.cabang_id && fp.cabang_id > 0;
+    const hasCustomer = !!fp.customer_id && fp.customer_id > 0;
+    if (!hasCabang && !hasCustomer) {
       return {
-        error: `Cabang tujuan finish part ${fp.part_number || "-"} wajib dipilih.`,
+        error: `Lokasi tujuan (gudang atau customer) finish part ${fp.part_number || "-"} wajib dipilih.`,
+      };
+    }
+    if (hasCabang && hasCustomer) {
+      return {
+        error: `Finish part ${fp.part_number || "-"}: pilih salah satu, gudang ATAU customer, tidak boleh keduanya.`,
       };
     }
     if (!Number.isFinite(fp.qty) || fp.qty <= 0) {
@@ -628,9 +687,16 @@ export async function createJobCosting(data: {
     if (!item.part_id || item.part_id <= 0) {
       return { error: "Part item wajib dipilih." };
     }
-    if (!item.source_cabang_id || item.source_cabang_id <= 0) {
+    const hasCabang = !!item.source_cabang_id && item.source_cabang_id > 0;
+    const hasCustomer = !!item.source_customer_id && item.source_customer_id > 0;
+    if (!hasCabang && !hasCustomer) {
       return {
-        error: `Cabang asal part ${item.part_number || "-"} wajib dipilih.`,
+        error: `Lokasi asal (gudang atau customer) part ${item.part_number || "-"} wajib dipilih.`,
+      };
+    }
+    if (hasCabang && hasCustomer) {
+      return {
+        error: `Part ${item.part_number || "-"}: pilih salah satu, gudang ATAU customer, tidak boleh keduanya.`,
       };
     }
     if (!Number.isFinite(item.qty) || item.qty <= 0) {
@@ -667,7 +733,7 @@ export async function createJobCosting(data: {
       cabang_id: data.cabang_id,
       description: data.description,
       finish_part_id: primaryFinishPart.part_id,
-      finish_part_cabang_id: primaryFinishPart.cabang_id,
+      finish_part_cabang_id: primaryFinishPart.cabang_id || null,
       qty_finish_part: primaryFinishPart.qty,
       finish_part: finishPartSummary || null,
       job_tanggal: data.job_tanggal || null,
@@ -692,7 +758,8 @@ export async function createJobCosting(data: {
       unit: item.unit,
       unit_price: item.unit_price,
       po_id: item.po_id || null,
-      source_cabang_id: item.source_cabang_id,
+      source_cabang_id: item.source_cabang_id || null,
+      source_customer_id: item.source_customer_id || null,
       notes: item.notes || null,
     }));
     const { error: itemError } = await supabase
@@ -710,7 +777,8 @@ export async function createJobCosting(data: {
     part_number: fp.part_number || null,
     part_name: fp.part_name || null,
     qty: fp.qty,
-    cabang_id: fp.cabang_id,
+    cabang_id: fp.cabang_id || null,
+    customer_id: fp.customer_id || null,
     notes: fp.notes || null,
   }));
   const { error: fpError } = await supabase
@@ -724,13 +792,15 @@ export async function createJobCosting(data: {
   if (shouldApplyStock(normalizedStatus)) {
     const materialLines: StockLine[] = data.items.map((i) => ({
       partId: i.part_id!,
-      cabangId: i.source_cabang_id,
+      cabangId: i.source_cabang_id || undefined,
+      customerId: i.source_customer_id || undefined,
       qty: i.qty,
       label: i.part_number || i.part_name || "-",
     }));
     const finishPartLines: StockLine[] = data.finish_parts.map((fp) => ({
       partId: fp.part_id,
-      cabangId: fp.cabang_id,
+      cabangId: fp.cabang_id || undefined,
+      customerId: fp.customer_id || undefined,
       qty: fp.qty,
       label: fp.part_number || fp.part_name || "-",
     }));
@@ -780,10 +850,11 @@ function deriveStockLinesFromJob(job: {
   job_costing_finish_parts?: unknown;
 }): { materialLines: StockLine[]; finishPartLines: StockLine[] } {
   const materialLines: StockLine[] = ((job.job_costing_items as any[]) ?? [])
-    .filter((i) => i.part_id && i.source_cabang_id)
+    .filter((i) => i.part_id && (i.source_cabang_id || i.source_customer_id))
     .map((i) => ({
       partId: i.part_id,
-      cabangId: i.source_cabang_id,
+      cabangId: i.source_cabang_id || undefined,
+      customerId: i.source_customer_id || undefined,
       qty: Number(i.qty),
       label: i.part_number || i.part_name || "-",
     }));
@@ -791,10 +862,11 @@ function deriveStockLinesFromJob(job: {
   let finishPartLines: StockLine[] = (
     (job.job_costing_finish_parts as any[]) ?? []
   )
-    .filter((f) => f.part_id && f.cabang_id)
+    .filter((f) => f.part_id && (f.cabang_id || f.customer_id))
     .map((f) => ({
       partId: f.part_id,
-      cabangId: f.cabang_id,
+      cabangId: f.cabang_id || undefined,
+      customerId: f.customer_id || undefined,
       qty: Number(f.qty),
       label: f.part_number || f.part_name || "-",
     }));
@@ -820,7 +892,7 @@ function deriveStockLinesFromJob(job: {
 }
 
 const JOB_COSTING_STOCK_SELECT =
-  "id, job_kode, status, stock_applied_at, finish_part_id, finish_part_cabang_id, qty_finish_part, finish_part, job_costing_items(id, part_id, part_number, part_name, qty, source_cabang_id), job_costing_finish_parts(id, part_id, part_number, part_name, qty, cabang_id)";
+  "id, job_kode, status, stock_applied_at, finish_part_id, finish_part_cabang_id, qty_finish_part, finish_part, job_costing_items(id, part_id, part_number, part_name, qty, source_cabang_id, source_customer_id), job_costing_finish_parts(id, part_id, part_number, part_name, qty, cabang_id, customer_id)";
 
 export async function updateJobCostingStatus(id: number, status: string) {
   const access = await canManageJobCostingStatus();
