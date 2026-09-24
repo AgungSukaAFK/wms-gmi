@@ -1910,6 +1910,43 @@ export async function getSpbReport(params?: {
   return { data: data || [], count: count || 0, error: null as string | null };
 }
 
+export async function updateSpbInvoicePaymentStatus(
+  invoiceId: number,
+  paymentStatus: "paid" | "unpaid",
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Tidak terautentikasi." };
+
+  const { data: roleRows, error: roleError } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  if (roleError) return { error: roleError.message };
+
+  const roleNames = (roleRows || [])
+    .map((r: any) => r.roles?.name)
+    .filter(Boolean) as string[];
+  const allowed = roleNames.some((r) => ["finance", "moderator"].includes(r));
+  if (!allowed) {
+    return {
+      error: "Akses ditolak. Hanya role Finance/Moderator yang bisa mengubah Status Payment.",
+    };
+  }
+
+  const { error } = await supabase
+    .from("spb_invoice")
+    .update({ payment_status: paymentStatus })
+    .eq("id", invoiceId);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/spb/report");
+  return { error: null as string | null };
+}
+
 export async function getSpbOptionsForPo(params?: {
   search?: string;
   limit?: number;

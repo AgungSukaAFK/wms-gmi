@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, use } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
   Table,
@@ -53,6 +54,7 @@ import {
 } from "@/services/moderator-edit-actions";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
+import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { cn, formatDate } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
@@ -66,6 +68,7 @@ export default function PODetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id: poId } = use(params);
+  const router = useRouter();
   const supabase = createClient();
 
   const [po, setPo] = useState<any>(null);
@@ -536,6 +539,15 @@ export default function PODetailPage({
               >
                 <ShieldAlert className="h-4 w-4" /> Moderator Edit
               </Button>
+            )}
+            {isModerator && !modEditMode && po && (
+              <CascadeDeleteDialog
+                docType="po"
+                docId={Number(poId)}
+                docLabel={po.po_kode}
+                triggerLabel="Hapus PO"
+                onDeleted={() => router.push("/po")}
+              />
             )}
             {modEditMode && (
               <>

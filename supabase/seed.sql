@@ -17606,13 +17606,16 @@ FROM public.barang b
 CROSS JOIN public.cabang c
 ON CONFLICT (part_id, cabang_id) DO NOTHING;
 
--- Moderator user
+-- Akun demo — password default SEMUA akun @demo.com (termasuk moderator di
+-- bawah ini) adalah: demo123
 -- Token columns must be '' (empty string), not NULL — GoTrue v2.188+ can't scan NULL into string fields
+-- (email_change sempat kelewat dari daftar ini dan bikin login gagal dengan
+-- error "Database error querying schema" — lihat riwayat percakapan 2026-09-21)
 INSERT INTO auth.users (
   instance_id, id, aud, role, email, encrypted_password,
   email_confirmed_at,
   confirmation_token, recovery_token, email_change_token_new,
-  email_change_token_current, reauthentication_token,
+  email_change_token_current, reauthentication_token, email_change,
   raw_app_meta_data, raw_user_meta_data,
   created_at, updated_at
 ) VALUES (
@@ -17621,11 +17624,262 @@ INSERT INTO auth.users (
   'authenticated',
   'authenticated',
   'moderator@demo.com',
-  '$2b$10$6qNe1lvkAXBsj9HbaQpkiunADoPA84PAB29v3qdIl1qLif.0oJXnS',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
   now(),
-  '', '', '', '', '',
+  '', '', '', '', '', '',
   '{"provider":"email","providers":["email"]}'::jsonb,
   '{"role":"moderator","is_active":true,"nama":"Moderator"}'::jsonb,
   now(),
   now()
 );
+-- 15 akun demo tambahan, satu per role (selain moderator di atas).
+-- Semua password: demo123. cabang_id dibuat bervariasi supaya fitur yang
+-- cabang-scoped (PPIC/PJO/SPV/dll) bisa langsung dites lintas lokasi.
+INSERT INTO auth.users (
+  instance_id, id, aud, role, email, encrypted_password,
+  email_confirmed_at,
+  confirmation_token, recovery_token, email_change_token_new,
+  email_change_token_current, reauthentication_token, email_change,
+  raw_app_meta_data, raw_user_meta_data,
+  created_at, updated_at
+) VALUES
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'admin@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"admin","is_active":true,"nama":"Admin Demo","nrp":"DEMO-ADMIN","cabang_id":1}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'spv@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"spv","is_active":true,"nama":"SPV Demo","nrp":"DEMO-SPV","cabang_id":2}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'gl@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"gl","is_active":true,"nama":"GL Demo","nrp":"DEMO-GL","cabang_id":1}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'pjo@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"pjo","is_active":true,"nama":"PJO Demo","nrp":"DEMO-PJO","cabang_id":4}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'manager@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"manager","is_active":true,"nama":"Manager Demo","nrp":"DEMO-MANAGER","cabang_id":1}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'service@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"service","is_active":true,"nama":"Service Demo","nrp":"DEMO-SERVICE","cabang_id":7}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'manufaktur@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"manufaktur","is_active":true,"nama":"Manufaktur Demo","nrp":"DEMO-MANUFAKTUR","cabang_id":5}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'ppic@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"ppic","is_active":true,"nama":"PPIC Demo","nrp":"DEMO-PPIC","cabang_id":6}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'logistik@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"logistik","is_active":true,"nama":"Logistik Demo","nrp":"DEMO-LOGISTIK","cabang_id":3}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'purchasing@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"purchasing","is_active":true,"nama":"Purchasing Demo","nrp":"DEMO-PURCHASING","cabang_id":1}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'vendor@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"vendor","is_active":true,"nama":"Vendor Demo","nrp":"DEMO-VENDOR"}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'customer@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"customer","is_active":true,"nama":"Customer Demo","nrp":"DEMO-CUSTOMER"}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'marketing@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"marketing","is_active":true,"nama":"Marketing Demo","nrp":"DEMO-MARKETING","cabang_id":1}'::jsonb,
+  now(),
+  now()
+),
+(
+  '00000000-0000-0000-0000-000000000000',
+  gen_random_uuid(),
+  'authenticated',
+  'authenticated',
+  'it@demo.com',
+  '$2b$10$rzaro34xTtfxjL/Sre6OPugCvCb6r1G/1imgeT1aV3hid0ZTrkxWS',
+  now(),
+  '', '', '', '', '', '',
+  '{"provider":"email","providers":["email"]}'::jsonb,
+  '{"role":"it","is_active":true,"nama":"IT Demo","nrp":"DEMO-IT","cabang_id":1}'::jsonb,
+  now(),
+  now()
+);
+-- NB: akun woformula@demo.com (role 'wo_formula_editor') SENGAJA belum di-seed
+-- di sini — role itu baru ada di migration branch working-order-feature
+-- (belum ada di main). Tambahkan lagi setelah branch itu di-merge ke main,
+-- pakai pola row VALUES di atas (role, nama, nrp, cabang_id sudah ditentukan:
+-- "WO Formula Editor Demo" / DEMO-WOFORMULA / cabang_id 1).
+
+-- Default approval template (Requester -> Moderator) untuk semua jenis dokumen.
+-- Global (cabang_id NULL = berlaku semua lokasi). Idempotent lewat existence-check manual
+-- (bukan ON CONFLICT) karena UNIQUE(type, cabang_id) tidak menganggap dua NULL sebagai duplikat.
+DO $$
+DECLARE
+  v_template_id BIGINT;
+  v_moderator_id UUID;
+  v_type TEXT;
+  -- NB: 'Working Order' SENGAJA tidak dimasukkan — tipe itu baru valid di
+  -- migration branch working-order-feature (belum ada di main), jadi bikin
+  -- valid_type CHECK constraint gagal & seed.sql rollback total kalau di-reset
+  -- dari main. Tambahkan lagi ke sini setelah branch itu di-merge ke main.
+  v_types TEXT[] := ARRAY['Material Request', 'Purchase Request', 'Purchase Order', 'Item Transfer', 'Receive Item', 'Stock Out - SPB', 'Stock Out - SPB PO', 'Stock Out - SPB DO', 'Stock Out - SPB Invoice', 'Return SPB'];
+BEGIN
+  SELECT id INTO v_moderator_id FROM public.profiles WHERE email = 'moderator@demo.com';
+  IF v_moderator_id IS NULL THEN
+    RAISE NOTICE 'moderator@demo.com tidak ditemukan, skip seed approval_templates';
+    RETURN;
+  END IF;
+
+  FOREACH v_type IN ARRAY v_types LOOP
+    SELECT id INTO v_template_id FROM public.approval_templates WHERE type = v_type AND cabang_id IS NULL;
+
+    IF v_template_id IS NULL THEN
+      INSERT INTO public.approval_templates (type, cabang_id, name)
+      VALUES (v_type, NULL, 'Default (Requester + Moderator) - ' || v_type)
+      RETURNING id INTO v_template_id;
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM public.approval_template_steps WHERE template_id = v_template_id) THEN
+      INSERT INTO public.approval_template_steps (template_id, step_order, approver_type, user_id, level)
+      VALUES
+        (v_template_id, 1, 'requester', NULL, 'menyetujui'),
+        (v_template_id, 2, 'user', v_moderator_id, 'menyetujui');
+    END IF;
+  END LOOP;
+END $$;
+

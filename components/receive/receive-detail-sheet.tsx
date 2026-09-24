@@ -50,6 +50,7 @@ import {
 } from "@/services/moderator-edit-actions";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
+import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 
 interface ReceiveDetailSheetProps {
@@ -353,6 +354,16 @@ export function ReceiveDetailSheet({
               >
                 <ShieldAlert className="h-3 w-3" /> Moderator Edit
               </Button>
+            )}
+            {isModerator && !modEditMode && receive && (
+              <CascadeDeleteDialog
+                docType="receive"
+                docId={Number(receiveId)}
+                docLabel={receive.ri_kode}
+                triggerLabel="Hapus"
+                triggerClassName="h-7 gap-1.5 text-[10px] font-bold"
+                onDeleted={() => onOpenChange(false)}
+              />
             )}
             {modEditMode && (
               <div className="flex items-center gap-1.5 shrink-0">

@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState, use } from "react";
+import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import {
   Table,
@@ -63,6 +64,7 @@ import {
 } from "@/services/moderator-edit-actions";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
+import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { toast } from "sonner";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
@@ -77,6 +79,7 @@ export default function PRDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id: prId } = use(params);
+  const router = useRouter();
   const supabase = createClient();
 
   const [pr, setPr] = useState<any>(null);
@@ -655,6 +658,15 @@ export default function PRDetailPage({
               >
                 <ShieldAlert className="h-4 w-4" /> Moderator Edit
               </Button>
+            )}
+            {isModerator && !modEditMode && pr && (
+              <CascadeDeleteDialog
+                docType="pr"
+                docId={Number(prId)}
+                docLabel={pr.pr_kode}
+                triggerLabel="Hapus PR"
+                onDeleted={() => router.push("/pr")}
+              />
             )}
             {modEditMode && (
               <>

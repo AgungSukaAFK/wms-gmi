@@ -61,6 +61,7 @@ import {
   List,
   SortAsc,
   CalendarIcon,
+  QrCode,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -78,6 +79,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { formatDate, toYmdLocal } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
+import { BarcodePrintDialog } from "@/components/barang/barcode-print-dialog";
 
 interface Barang {
   id: number;
@@ -135,6 +137,8 @@ export default function BarangClient({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [editingBarang, setEditingBarang] = useState<Barang | null>(null);
+  const [barcodeBarang, setBarcodeBarang] = useState<Barang | null>(null);
+  const [isBarcodeDialogOpen, setIsBarcodeDialogOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Stock Edit Modal (for Drawer use)
@@ -531,6 +535,16 @@ export default function BarangClient({
                               className="text-xs rounded-md"
                             >
                               <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                            </DropdownMenuItem>
+                            <DropdownMenuItem
+                              onClick={() => {
+                                setBarcodeBarang(barang);
+                                setIsBarcodeDialogOpen(true);
+                              }}
+                              className="text-xs rounded-md"
+                            >
+                              <QrCode className="mr-2 h-3.5 w-3.5" /> Cetak
+                              QR Code
                             </DropdownMenuItem>
                             <DropdownMenuSeparator />
                             <DropdownMenuItem
@@ -1070,6 +1084,12 @@ export default function BarangClient({
           </form>
         </DialogContent>
       </Dialog>
+
+      <BarcodePrintDialog
+        open={isBarcodeDialogOpen}
+        onOpenChange={setIsBarcodeDialogOpen}
+        barang={barcodeBarang}
+      />
     </>
   );
 }

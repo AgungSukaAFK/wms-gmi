@@ -47,11 +47,11 @@ import {
   updateDeliveryTrackingModerator,
   finalizeDelivery,
   cancelDelivery,
-  deleteDelivery,
 } from "@/services/inventory-actions";
 import { toast } from "sonner";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { EditDeliveryDialog } from "@/components/delivery/edit-delivery-dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeDocumentStatus } from "@/lib/document-status";
@@ -89,8 +89,6 @@ export function DeliveryDetailSheet({
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [editDeliveryOpen, setEditDeliveryOpen] = useState(false);
-  const [deleteReason, setDeleteReason] = useState("");
-  const [deleting, setDeleting] = useState(false);
   const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
 
   useEffect(() => {
@@ -350,25 +348,6 @@ export function DeliveryDetailSheet({
       onUpdate?.();
     } else {
       toast.error(result?.error || "Gagal membatalkan delivery");
-    }
-  };
-
-  const handleDeleteDelivery = async () => {
-    if (!delivery) return;
-    if (!deleteReason.trim()) {
-      toast.error("Alasan penghapusan wajib diisi.");
-      return;
-    }
-    setDeleting(true);
-    const result = await deleteDelivery(delivery.id, deleteReason.trim());
-    setDeleting(false);
-    if (result?.success) {
-      toast.success("Delivery dihapus permanen.");
-      setDeleteReason("");
-      onOpenChange(false);
-      onUpdate?.();
-    } else {
-      toast.error(result?.error || "Gagal menghapus delivery");
     }
   };
 
@@ -726,7 +705,7 @@ export function DeliveryDetailSheet({
                     </div>
                   )}
 
-                  {canDeleteDelivery && (
+                  {canDeleteDelivery && delivery && (
                     <div className="p-4 bg-red-50/50 border border-red-200 rounded-xl space-y-3">
                       <div className="flex items-center gap-2">
                         <Trash2 className="h-3.5 w-3.5 text-red-700" />
@@ -740,27 +719,17 @@ export function DeliveryDetailSheet({
                         otomatis dikembalikan ke stok cabang sumber dulu
                         sebelum dihapus.
                       </p>
-                      <Textarea
-                        value={deleteReason}
-                        onChange={(event) => setDeleteReason(event.target.value)}
-                        placeholder="Alasan penghapusan (wajib)"
-                        className="min-h-16 bg-white border-red-300 text-xs"
-                        disabled={deleting}
+                      <CascadeDeleteDialog
+                        docType="delivery"
+                        docId={delivery.id}
+                        docLabel={delivery.dlv_kode}
+                        triggerLabel="Hapus Permanen"
+                        triggerClassName="w-full gap-2 text-xs font-bold"
+                        onDeleted={() => {
+                          onOpenChange(false);
+                          onUpdate?.();
+                        }}
                       />
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="w-full gap-2 text-xs font-bold border-red-300 text-red-800 hover:bg-red-100"
-                        onClick={handleDeleteDelivery}
-                        disabled={deleting}
-                      >
-                        {deleting ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Trash2 className="h-3.5 w-3.5" />
-                        )}
-                        Hapus Permanen
-                      </Button>
                     </div>
                   )}
                 </div>

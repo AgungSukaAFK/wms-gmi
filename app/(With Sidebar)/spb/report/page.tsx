@@ -5,6 +5,7 @@ import { FileBox, Download, Search } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -25,9 +26,10 @@ import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toast } from "sonner";
-import { getSpbReport } from "@/services/spb-actions";
+import { getSpbReport, updateSpbInvoicePaymentStatus } from "@/services/spb-actions";
 import * as XLSX from "xlsx";
 import { formatDate } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 
 type SpbReportRow = {
   spb_id?: number | string | null;
@@ -57,13 +59,25 @@ type SpbReportRow = {
   invoice_no?: string | null;
   invoice_date?: string | null;
   invoice_email_date?: string | null;
+  invoice_id?: number | string | null;
+  invoice_payment_status?: "paid" | "unpaid" | null;
+};
+
+const PAYMENT_STATUS_LABEL: Record<string, string> = {
+  paid: "Paid",
+  unpaid: "Unpaid",
 };
 
 export default function SpbReportPage() {
+  const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SpbReportRow[]>([]);
   const [total, setTotal] = useState(0);
   const [exporting, setExporting] = useState(false);
+  const [canEditPayment, setCanEditPayment] = useState(false);
+  const [updatingInvoiceId, setUpdatingInvoiceId] = useState<
+    number | string | null
+  >(null);
 
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 500);
@@ -76,6 +90,50 @@ export default function SpbReportPage() {
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+
+  useEffect(() => {
+    const fetchRole = async () => {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: roleRows } = await supabase
+        .from("user_roles")
+        .select("roles(name)")
+        .eq("user_id", user.id);
+      const roleNames = (roleRows || [])
+        .map((r: any) => r.roles?.name)
+        .filter(Boolean) as string[];
+      setCanEditPayment(
+        roleNames.some((r) => ["finance", "moderator"].includes(r)),
+      );
+    };
+    fetchRole();
+  }, [supabase]);
+
+  const handlePaymentStatusChange = async (
+    invoiceId: number | string,
+    nextStatus: "paid" | "unpaid",
+  ) => {
+    setUpdatingInvoiceId(invoiceId);
+    const res = await updateSpbInvoicePaymentStatus(
+      Number(invoiceId),
+      nextStatus,
+    );
+    if (res.error) {
+      toast.error(res.error);
+    } else {
+      setRows((prev) =>
+        prev.map((row) =>
+          row.invoice_id === invoiceId
+            ? { ...row, invoice_payment_status: nextStatus }
+            : row,
+        ),
+      );
+      toast.success("Status Payment berhasil diperbarui.");
+    }
+    setUpdatingInvoiceId(null);
+  };
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -179,6 +237,9 @@ export default function SpbReportPage() {
         "NO INVOICE": row.invoice_no || "-",
         "TGL INVOICE": formatDate(row.invoice_date),
         "TGL EMAIL KE SITE": formatDate(row.invoice_email_date),
+        "STATUS PAYMENT": row.invoice_no
+          ? PAYMENT_STATUS_LABEL[row.invoice_payment_status || "unpaid"]
+          : "-",
       }));
 
       const ws = XLSX.utils.json_to_sheet(data);
@@ -356,13 +417,14 @@ export default function SpbReportPage() {
                 </SortableTableHead>
                 <TableHead>TGL INVOICE</TableHead>
                 <TableHead>TGL EMAIL KE SITE</TableHead>
+                <TableHead>STATUS PAYMENT</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={25}
+                    colSpan={26}
                     className="text-center text-muted-foreground"
                   >
                     Memuat report...
@@ -371,7 +433,7 @@ export default function SpbReportPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={25}
+                    colSpan={26}
                     className="text-center text-muted-foreground"
                   >
                     Data report kosong.
@@ -408,6 +470,41 @@ export default function SpbReportPage() {
                     <TableCell>{formatDate(row.invoice_date)}</TableCell>
                     <TableCell>
                       {formatDate(row.invoice_email_date)}
+                    </TableCell>
+                    <TableCell>
+                      {!row.invoice_no ? (
+                        "-"
+                      ) : canEditPayment ? (
+                        <Select
+                          value={row.invoice_payment_status || "unpaid"}
+                          disabled={updatingInvoiceId === row.invoice_id}
+                          onValueChange={(v: "paid" | "unpaid") =>
+                            row.invoice_id &&
+                            handlePaymentStatusChange(row.invoice_id, v)
+                          }
+                        >
+                          <SelectTrigger className="h-8 w-28 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="unpaid">Unpaid</SelectItem>
+                            <SelectItem value="paid">Paid</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Badge
+                          variant="outline"
+                          className={
+                            row.invoice_payment_status === "paid"
+                              ? "bg-success/10 text-success border-success/20"
+                              : "bg-warning/10 text-warning border-warning/20"
+                          }
+                        >
+                          {PAYMENT_STATUS_LABEL[
+                            row.invoice_payment_status || "unpaid"
+                          ]}
+                        </Badge>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))

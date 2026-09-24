@@ -42,6 +42,7 @@ import { evaluateMrItemFreezeForMr } from "@/services/freeze-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { MrItemFreezePanel } from "@/components/mr/mr-item-freeze-panel";
 import Link from "next/link";
+import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 
 const PRIORITY_COLOR: Record<string, string> = {
   P1: "text-destructive border-destructive/30 bg-destructive/10",
@@ -60,6 +61,7 @@ export default function ScheduledMRDetailPage() {
   const [items, setItems] = useState<any[]>([]);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [isModerator, setIsModerator] = useState(false);
 
   const [isSignatureDialogOpen, setIsSignatureDialogOpen] = useState(false);
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -97,6 +99,15 @@ export default function ScheduledMRDetailPage() {
         data: { user },
       } = await supabase.auth.getUser();
       setCurrentUser(user);
+      if (user) {
+        const { data: roleRows } = await supabase
+          .from("user_roles")
+          .select("roles(name)")
+          .eq("user_id", user.id);
+        setIsModerator(
+          (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
+        );
+      }
     };
     fetchUser();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -211,11 +222,22 @@ export default function ScheduledMRDetailPage() {
               </p>
             </div>
           </div>
-          <Link href={`/mr/scheduled/print/${mrId}`} target="_blank">
-            <Button variant="outline" size="sm" className="h-9 gap-2 text-xs font-bold">
-              <Printer className="h-3.5 w-3.5" /> Cetak
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2 shrink-0">
+            <Link href={`/mr/scheduled/print/${mrId}`} target="_blank">
+              <Button variant="outline" size="sm" className="h-9 gap-2 text-xs font-bold">
+                <Printer className="h-3.5 w-3.5" /> Cetak
+              </Button>
+            </Link>
+            {isModerator && (
+              <CascadeDeleteDialog
+                docType="mr"
+                docId={Number(mrId)}
+                docLabel={mr.mr_kode}
+                triggerLabel="Hapus MR"
+                onDeleted={() => router.push("/mr/scheduled")}
+              />
+            )}
+          </div>
         </div>
       </Content>
 

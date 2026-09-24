@@ -75,10 +75,12 @@ import {
   ModeratorApprovalStep,
 } from "@/services/moderator-edit-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { MrDecisionPreviewDialog } from "@/components/mr/mr-decision-preview-dialog";
 import { EditShareStockAllocationDialog } from "@/components/mr/edit-sharestock-allocation-dialog";
 import { MrFreezePanel } from "@/components/mr/mr-freeze-panel";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
+import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { evaluateMrFreeze } from "@/services/freeze-actions";
 import { businessToday } from "@/lib/business-date";
 import { useRouter } from "next/navigation";
@@ -128,6 +130,7 @@ export default function MRDetailPage({
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
   const [isSignatureDialogOpen, setIsSignatureDialogOpen] = useState(false);
+  const [isDecisionPreviewOpen, setIsDecisionPreviewOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   // Fulfillment states (allocation)
@@ -729,34 +732,54 @@ export default function MRDetailPage({
     }
   };
 
-  const handleApproveConfirm = async (signature: any) => {
-    if (isLastApprover) {
-      const mrDueDate = mr?.mr_due_date
-        ? String(mr.mr_due_date).slice(0, 10)
-        : "";
-      const missingDeadline = allocations.find(
-        (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
+  // Validasi alokasi Decision Making (Share Stock) sebelum lanjut ke preview
+  // atau ke tanda tangan. Dipakai di dua tempat supaya aturan tetap konsisten:
+  // saat approver terakhir buka preview dokumen, dan sebagai jaring pengaman
+  // terakhir sebelum submit approve yang sebenarnya.
+  const getAllocationValidationError = (): string | null => {
+    const mrDueDate = mr?.mr_due_date
+      ? String(mr.mr_due_date).slice(0, 10)
+      : "";
+    const missingDeadline = allocations.find(
+      (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
+    );
+    if (missingDeadline) {
+      return `Deadline supply wajib diisi untuk item ${missingDeadline.part_number} (ada alokasi share stock).`;
+    }
+
+    if (mrDueDate) {
+      const invalidDeadline = allocations.find(
+        (a) =>
+          Number(a.qty_sharestock_total) > 0 &&
+          a.deadline &&
+          String(a.deadline).slice(0, 10) > mrDueDate,
       );
-      if (missingDeadline) {
-        toast.error(
-          `Deadline supply wajib diisi untuk item ${missingDeadline.part_number} (ada alokasi share stock).`,
-        );
+      if (invalidDeadline) {
+        return `Deadline supply item ${invalidDeadline.part_number} tidak boleh melewati due date MR (${mrDueDate}).`;
+      }
+    }
+    return null;
+  };
+
+  const handleOpenApproveFlow = () => {
+    if (isLastApprover) {
+      const error = getAllocationValidationError();
+      if (error) {
+        toast.error(error);
         return;
       }
+      setIsDecisionPreviewOpen(true);
+    } else {
+      setIsSignatureDialogOpen(true);
+    }
+  };
 
-      if (mrDueDate) {
-        const invalidDeadline = allocations.find(
-          (a) =>
-            Number(a.qty_sharestock_total) > 0 &&
-            a.deadline &&
-            String(a.deadline).slice(0, 10) > mrDueDate,
-        );
-        if (invalidDeadline) {
-          toast.error(
-            `Deadline supply item ${invalidDeadline.part_number} tidak boleh melewati due date MR (${mrDueDate}).`,
-          );
-          return;
-        }
+  const handleApproveConfirm = async (signature: any) => {
+    if (isLastApprover) {
+      const error = getAllocationValidationError();
+      if (error) {
+        toast.error(error);
+        return;
       }
     }
     setSubmitting(true);
@@ -993,6 +1016,15 @@ export default function MRDetailPage({
               >
                 <ShieldAlert className="h-4 w-4" /> Moderator Edit
               </Button>
+            )}
+            {isModerator && !editMode && !modEditMode && mr && (
+              <CascadeDeleteDialog
+                docType="mr"
+                docId={Number(mrId)}
+                docLabel={mr.mr_kode}
+                triggerLabel="Hapus MR"
+                onDeleted={() => router.push("/mr")}
+              />
             )}
             {isModerator && !editMode && !modEditMode && modPreviouslyApprovedLike && (
               <Button
@@ -1793,7 +1825,7 @@ export default function MRDetailPage({
                 <div className="flex flex-col gap-3">
                   <Button
                     className="w-full h-12 gap-2 bg-success hover:bg-success/90 text-success-foreground font-black uppercase text-xs tracking-widest shadow-lg"
-                    onClick={() => setIsSignatureDialogOpen(true)}
+                    onClick={handleOpenApproveFlow}
                     disabled={submitting}
                   >
                     {submitting ? (
@@ -2017,6 +2049,20 @@ export default function MRDetailPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <MrDecisionPreviewDialog
+        open={isDecisionPreviewOpen}
+        onOpenChange={setIsDecisionPreviewOpen}
+        mr={mr}
+        items={items}
+        allocations={allocations}
+        cabangs={cabangs}
+        approverName={nextApprover?.nama}
+        onConfirm={() => {
+          setIsDecisionPreviewOpen(false);
+          setIsSignatureDialogOpen(true);
+        }}
+      />
 
       <MRSignatureDialog
         open={isSignatureDialogOpen}
