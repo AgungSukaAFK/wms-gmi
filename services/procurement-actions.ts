@@ -1012,10 +1012,11 @@ export async function updateMRItemSSStatus(itemId: number, status: string) {
 }
 
 /**
- * PRIVATE HELPER: Adjust Stock for a given MR, Part and Quantity
+ * PRIVATE HELPER: Adjust Stock at an explicit cabang (gudang penerima RI,
+ * BUKAN otomatis cabang MR lagi -- lihat catatan di applyReceiveCompletion).
  */
 async function adjustItemStock(
-  mrId: number,
+  cabangId: number,
   partId: number,
   partNumber: string | null,
   quantity: number,
@@ -1023,21 +1024,17 @@ async function adjustItemStock(
   type: "PR" | "SS" | "RI",
   fromStatus: string,
   toStatus: string,
+  referenceKode: string,
 ) {
   const supabase = await createClient();
 
-  // A. Find the requesting branch from the MR
-  const { data: mr } = await supabase
-    .from("mrs")
-    .select("cabang_id, mr_kode, cabang(nama_cabang)")
-    .eq("id", mrId)
-    .single();
-
-  if (!mr) return { error: "MR tidak ditemukan saat update stok." };
-
-  const branchId = mr.cabang_id;
-  const mrCabang = Array.isArray(mr.cabang) ? mr.cabang[0] : mr.cabang;
-  const mrLocationName = mrCabang?.nama_cabang || "Unknown Site";
+  const branchId = cabangId;
+  const { data: cabangRow } = await supabase
+    .from("cabang")
+    .select("nama_cabang")
+    .eq("id", branchId)
+    .maybeSingle();
+  const mrLocationName = cabangRow?.nama_cabang || "Unknown Site";
 
   // Resolve canonical part_id using part_number when available.
   let canonicalPartId = partId;
@@ -1131,9 +1128,9 @@ async function adjustItemStock(
     `${mode === "add" ? "STOK DITAMBAH" : "STOK DIKURANGI"} via ${type}`,
     `Status: ${fromStatus} -> ${toStatus}`,
     `Part: ${partInfo?.part_number || partNumber || "N/A"} - ${partInfo?.part_name || "Unknown Part"}`,
-    `Lokasi MR: ${mrLocationName}`,
+    `Gudang Penerima: ${mrLocationName}`,
     `Qty: ${qtyBefore} ${partInfo?.part_satuan || ""} -> ${qtyAfter} ${partInfo?.part_satuan || ""}`,
-    `Ref: ${mr.mr_kode}`,
+    `Ref: ${referenceKode}`,
     `By: ${actorLabel}`,
   ].join(" | ");
 
@@ -1144,7 +1141,7 @@ async function adjustItemStock(
       cabang_id: branchId,
       qty_change: qtyChange,
       type: type,
-      reference_id: mr.mr_kode,
+      reference_id: referenceKode,
       created_by: user?.id,
       notes: movementNote,
     });
@@ -1179,6 +1176,7 @@ export async function createReceive(data: {
     po_id: number;
     mr_id: number;
     po_item_id?: number | null;
+    cabang_penerima_id: number;
   }[];
 }) {
   const supabase = await createClient();
@@ -1255,6 +1253,7 @@ export async function createReceive(data: {
     satuan: item.satuan,
     qty: item.qty,
     po_item_id: item.po_item_id ?? null,
+    cabang_penerima_id: item.cabang_penerima_id,
   }));
 
   const { error: itemsError } = await supabase
@@ -1276,7 +1275,7 @@ export async function applyReceiveCompletion(receiveId: number) {
   const supabase = await createClient();
   const { data: ri } = await supabase
     .from("receives")
-    .select("id, po_id")
+    .select("id, po_id, ri_kode")
     .eq("id", receiveId)
     .single();
 
@@ -1286,14 +1285,17 @@ export async function applyReceiveCompletion(receiveId: number) {
 
   const { data: receiveItems } = await supabase
     .from("receive_items")
-    .select("po_id, mr_id, part_id, part_number, qty, po_item_id")
+    .select("po_id, mr_id, part_id, part_number, qty, po_item_id, cabang_penerima_id")
     .eq("ri_id", receiveId);
 
   if (!receiveItems || receiveItems.length === 0) {
     return { error: "Receive items tidak ditemukan" };
   }
 
-  // Per-item: update po_items.qty_received + stock + mr_items.qty_received
+  // Per-item: update po_items.qty_received + stock di gudang penerima.
+  // Distribusi ke MR (mr_items.qty_received / mrs.mr_status) TIDAK lagi
+  // terjadi di sini -- itu baru terjadi saat Item Transfer yang dibuat dari
+  // RI ini di-finalize (lihat finalizeItemTransfer di item-transfer-actions.ts).
   for (const item of receiveItems) {
     if (item.po_item_id) {
       const { data: poItem } = await supabase
@@ -1309,8 +1311,15 @@ export async function applyReceiveCompletion(receiveId: number) {
       }
     }
 
+    if (!item.cabang_penerima_id) {
+      // RI lama (pra-revisi) tanpa gudang penerima -- lewati posting stok di
+      // sini, sudah terlanjur diposting lewat alur lama saat pertama kali
+      // completed.
+      continue;
+    }
+
     await adjustItemStock(
-      item.mr_id,
+      item.cabang_penerima_id,
       item.part_id,
       item.part_number,
       item.qty,
@@ -1318,53 +1327,8 @@ export async function applyReceiveCompletion(receiveId: number) {
       "RI",
       "pending",
       "received",
+      ri.ri_kode,
     );
-
-    const { data: mrItem } = await supabase
-      .from("mr_items")
-      .select("qty_request, qty_received")
-      .eq("mr_id", item.mr_id)
-      .eq("part_id", item.part_id)
-      .maybeSingle();
-    if (mrItem) {
-      const newQtyReceived = Math.min(
-        mrItem.qty_request,
-        mrItem.qty_received + item.qty,
-      );
-      await supabase
-        .from("mr_items")
-        .update({ qty_received: newQtyReceived })
-        .eq("mr_id", item.mr_id)
-        .eq("part_id", item.part_id);
-    }
-  }
-
-  const affectedMrIds = [...new Set(receiveItems.map((i: any) => i.mr_id))];
-  for (const mrId of affectedMrIds) {
-    const { data: mrItems } = await supabase
-      .from("mr_items")
-      .select("qty_request, qty_received")
-      .eq("mr_id", mrId);
-    if (mrItems) {
-      const totalRequest = mrItems.reduce(
-        (s: number, i: any) => s + i.qty_request,
-        0,
-      );
-      const totalReceived = mrItems.reduce(
-        (s: number, i: any) => s + i.qty_received,
-        0,
-      );
-      const mrStatus =
-        totalReceived <= 0
-          ? "open"
-          : totalReceived < totalRequest
-            ? "approved"
-            : "completed";
-      await supabase
-        .from("mrs")
-        .update({ mr_status: mrStatus as any })
-        .eq("id", mrId);
-    }
   }
 
   const { data: allPoItems } = await supabase

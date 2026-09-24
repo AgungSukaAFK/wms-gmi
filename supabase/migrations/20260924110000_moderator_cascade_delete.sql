@@ -1,5 +1,6 @@
--- Moderator "Hapus Dokumen Cascade": MR / PR / PO / RI (Receive) / Delivery
--- (termasuk Scheduled MR, yang memakai tabel mrs/mr_items yang sama).
+-- Moderator "Hapus Dokumen Cascade": MR / PR / PO / RI (Receive) / Delivery /
+-- Item Transfer (termasuk Scheduled MR, yang memakai tabel mrs/mr_items yang
+-- sama).
 --
 -- Kenapa satu fungsi Postgres atomic (bukan sequential JS call seperti delete
 -- lain di codebase ini): blast radius-nya jauh lebih besar (lintas MR->PR->PO
@@ -9,8 +10,9 @@
 -- Aturan cascade (item-level, BUKAN document-level, karena 1 PR bisa
 -- bersumber dari banyak MR dan 1 PO bisa bersumber dari banyak PR):
 --   - Hapus MR  -> hapus semua pr_items/po_items/receive_items/delivery_items
---                  yang lineage-nya balik ke MR ini, lalu hapus header PR/PO
---                  yang jadi kosong. MR sendiri selalu habis total.
+--                  /item_transfer_items yang lineage-nya balik ke MR ini,
+--                  lalu hapus header PR/PO/Delivery/IT yang jadi kosong. MR
+--                  sendiri selalu habis total.
 --   - Hapus PR  -> hapus pr_items PR ini + po_items/receive_items turunannya.
 --                  MR tetap ada, convert_status di-recompute.
 --   - Hapus PO  -> hapus PO + seluruh receive_items turunannya. PR/MR tetap
@@ -20,17 +22,45 @@
 --   - Hapus Delivery -> reverse stok ke cabang sumber (kalau belum
 --                  cancelled), lalu hapus. Delivery yang sudah completed
 --                  (barang diterima di tujuan) tidak boleh dihapus.
+--   - Hapus Item Transfer -> reverse stok ke gudang asal (kalau sudah
+--                  stock_released tapi belum completed), lalu hapus. IT yang
+--                  sudah completed (barang diterima di tujuan -- termasuk
+--                  yang sudah mendistribusikan qty ke MR, lihat
+--                  finalizeItemTransfer di item-transfer-actions.ts) tidak
+--                  boleh dihapus.
+--
+-- CATATAN PENTING soal revisi alur RI->IT->MR (2026-09-24): sejak revisi ini,
+-- stok RI mendarat di receive_items.cabang_penerima_id (gudang penerima
+-- pilihan user), BUKAN otomatis di cabang MR lagi -- dan mr_items.qty_received
+-- /mrs.mr_status HANYA berubah saat Item Transfer yang mereferensikan MR itu
+-- di-finalize (bukan lagi saat RI completed). Makanya reverse stok RI di
+-- bawah pakai COALESCE(receive_items.cabang_penerima_id, mrs.cabang_id) --
+-- fallback ke cabang MR cuma buat RI lama pra-revisi yang cabang_penerima_id
+-- -nya NULL. Dan karena distribusi ke MR sekarang HANYA lewat IT completed
+-- (yang tidak boleh dihapus sama sekali, lihat aturan block di atas), fungsi
+-- ini TIDAK PERNAH perlu recompute mr_items.qty_received/mrs.mr_status --
+-- kalau path-nya sampai ke situ, IT-nya pasti sudah completed dan cascade
+-- delete-nya sudah di-block duluan.
 --
 -- Kalau reverse stok akan membuat stok negatif (karena sudah dipakai lebih
--- lanjut di dokumen lain di luar cascade ini, mis. Item Transfer/SPB/
--- Consignment/Job Costing), seluruh operasi di-block (tidak ada yang
--- ditulis) dan konfliknya dikembalikan supaya bisa ditampilkan ke moderator.
+-- lanjut di dokumen lain di luar cascade ini, mis. SPB/Consignment/Job
+-- Costing), seluruh operasi di-block (tidak ada yang ditulis) dan
+-- konfliknya dikembalikan supaya bisa ditampilkan ke moderator.
 --
 -- Satu implementasi (`_cascade_delete_document_impl`) dipakai dua entry
 -- point publik: plan_cascade_document_delete (read-only, buat dialog
 -- konfirmasi) dan execute_cascade_document_delete (menulis), supaya logic
 -- resolusi scope + deteksi konflik tidak pernah dobel-implementasi/berbeda
 -- antara preview dan eksekusi asli.
+
+-- moderator_edit_logs.doc_type belum mencakup 'item_transfer' (constraint
+-- terakhir di-set di 20260826120000_moderator_edit_logs_delivery.sql, sebelum
+-- Item Transfer ikut jadi bagian sistem delete cascade ini).
+ALTER TABLE public.moderator_edit_logs
+  DROP CONSTRAINT IF EXISTS moderator_edit_logs_doc_type_check;
+ALTER TABLE public.moderator_edit_logs
+  ADD CONSTRAINT moderator_edit_logs_doc_type_check
+  CHECK (doc_type IN ('mr', 'pr', 'po', 'spb', 'spb_po', 'spb_do', 'spb_invoice', 'return_spb', 'receive', 'delivery', 'item_transfer'));
 
 CREATE OR REPLACE FUNCTION public._cascade_delete_document_impl(
   p_doc_type text,
@@ -52,11 +82,13 @@ DECLARE
   v_po_item_ids bigint[] := '{}';
   v_receive_item_ids bigint[] := '{}';
   v_delivery_item_ids bigint[] := '{}';
+  v_it_item_ids bigint[] := '{}';
 
   v_pr_ids_delete bigint[] := '{}';
   v_po_ids_delete bigint[] := '{}';
   v_ri_ids_delete bigint[] := '{}';
   v_dlv_ids_delete bigint[] := '{}';
+  v_it_ids_delete bigint[] := '{}';
 
   v_pr_ids_survive bigint[] := '{}';
   v_po_ids_survive bigint[] := '{}';
@@ -71,13 +103,12 @@ DECLARE
   v_snapshot jsonb := '{}'::jsonb;
   v_can_delete boolean;
   v_row record;
-  v_rowcount int;
 BEGIN
   IF NOT public.is_moderator() THEN
     RAISE EXCEPTION 'Hanya moderator yang dapat menghapus dokumen.';
   END IF;
 
-  IF p_doc_type NOT IN ('mr', 'pr', 'po', 'receive', 'delivery') THEN
+  IF p_doc_type NOT IN ('mr', 'pr', 'po', 'receive', 'delivery', 'item_transfer') THEN
     RAISE EXCEPTION 'Tipe dokumen tidak dikenali: %', p_doc_type;
   END IF;
 
@@ -164,6 +195,19 @@ BEGIN
         WHERE di.id = ANY(v_delivery_item_ids)
         GROUP BY di.dlv_id
         HAVING COUNT(*) = (SELECT COUNT(*) FROM public.delivery_items di2 WHERE di2.dlv_id = di.dlv_id)
+      ) x;
+
+    -- Item Transfer: sama seperti Delivery, IT bisa digabung dari beberapa
+    -- MR sekaligus per item (item_transfer_items.mr_item_id) -- header cuma
+    -- dihapus penuh kalau SEMUA item-nya masuk scope.
+    SELECT COALESCE(array_agg(id), '{}') INTO v_it_item_ids
+      FROM public.item_transfer_items WHERE mr_item_id = ANY(v_mr_item_ids);
+    SELECT COALESCE(array_agg(it_id), '{}') INTO v_it_ids_delete
+      FROM (
+        SELECT iti.it_id FROM public.item_transfer_items iti
+        WHERE iti.id = ANY(v_it_item_ids)
+        GROUP BY iti.it_id
+        HAVING COUNT(*) = (SELECT COUNT(*) FROM public.item_transfer_items iti2 WHERE iti2.it_id = iti.it_id)
       ) x;
 
   ELSIF p_doc_type = 'pr' THEN
@@ -254,14 +298,26 @@ BEGIN
     SELECT COALESCE(array_agg(DISTINCT mr_item_id) FILTER (WHERE mr_item_id IS NOT NULL), '{}')
       INTO v_mr_item_ids_survive
       FROM public.delivery_items WHERE id = ANY(v_delivery_item_ids);
+
+  ELSIF p_doc_type = 'item_transfer' THEN
+    IF NOT EXISTS (SELECT 1 FROM public.item_transfers WHERE id = p_doc_id) THEN
+      RAISE EXCEPTION 'Item Transfer tidak ditemukan.';
+    END IF;
+    v_it_ids_delete := ARRAY[p_doc_id];
+
+    SELECT COALESCE(array_agg(id), '{}') INTO v_it_item_ids
+      FROM public.item_transfer_items WHERE it_id = p_doc_id;
   END IF;
 
   -- ============================================================
-  -- 2. Blocking conditions non-stok: delivery yang sudah completed
+  -- 2. Blocking conditions non-stok: delivery/IT yang sudah completed
   --    (barang sudah diterima) tidak bisa direverse dengan aman — berlaku
-  --    untuk delivery manapun yang ITEM-nya tersentuh di scope ini, bukan
-  --    cuma yang header-nya bakal dihapus penuh (delivery multi-MR yang
-  --    cuma sebagian item-nya kena tetap harus dicek).
+  --    untuk delivery/IT manapun yang ITEM-nya tersentuh di scope ini, bukan
+  --    cuma yang header-nya bakal dihapus penuh (delivery/IT multi-MR yang
+  --    cuma sebagian item-nya kena tetap harus dicek). Ini juga yang bikin
+  --    fungsi ini TIDAK PERNAH perlu reverse distribusi qty ke MR: kalau IT-
+  --    nya sudah completed (satu-satunya titik qty pindah ke MR), delete-nya
+  --    ke-block duluan di sini.
   -- ============================================================
   IF array_length(v_delivery_item_ids, 1) > 0 THEN
     SELECT array_agg(DISTINCT dlv_kode) INTO v_blocked_kodes
@@ -276,9 +332,64 @@ BEGIN
     END IF;
   END IF;
 
+  IF array_length(v_it_item_ids, 1) > 0 THEN
+    SELECT array_agg(DISTINCT it_kode) INTO v_blocked_kodes
+      FROM public.item_transfers it2
+      JOIN public.item_transfer_items iti ON iti.it_id = it2.id
+      WHERE iti.id = ANY(v_it_item_ids) AND it2.status = 'completed';
+    IF v_blocked_kodes IS NOT NULL AND array_length(v_blocked_kodes, 1) > 0 THEN
+      v_blocked_reasons := v_blocked_reasons ||
+        format('Item Transfer %s sudah selesai (barang diterima) dan tidak bisa dihapus.',
+               array_to_string(v_blocked_kodes, ', '));
+    END IF;
+  END IF;
+
   -- ============================================================
-  -- 3. Deteksi konflik stok (reverse RI + reverse Delivery source)
+  -- 3. Hitung NET delta stok per (cabang,part) dari SEMUA sumber reverse
+  --    (RI + Delivery + IT) sekaligus ke satu temp table, supaya nanti di
+  --    langkah 6 stok diterapkan SATU KALI per (cabang,part) pakai net-nya
+  --    -- bukan per baris dokumen sumber secara berurutan. Kalau diterapkan
+  --    berurutan (mis. RI subtract dulu baru IT addback), padahal cabang+
+  --    part-nya SAMA, hasil antara bisa transit lewat negatif semu meski
+  --    net akhirnya aman (skenario nyata: RI mendarat di gudang X lalu IT
+  --    memindahkannya keluar dari gudang X -- reverse keduanya sekaligus
+  --    net-nya nol di gudang X).
   -- ============================================================
+  DROP TABLE IF EXISTS pg_temp.tmp_stock_delta;
+  CREATE TEMP TABLE tmp_stock_delta AS
+  SELECT cabang_id, part_id, SUM(delta) AS delta FROM (
+    -- RI: stok mendarat di cabang_penerima_id (gudang penerima pilihan
+    -- user) sejak revisi 2026-09-24. Fallback ke mrs.cabang_id cuma buat
+    -- RI lama pra-revisi yang cabang_penerima_id-nya NULL.
+    SELECT COALESCE(ri.cabang_penerima_id, mrs.cabang_id) AS cabang_id,
+      ri.part_id AS part_id, -SUM(ri.qty) AS delta
+    FROM public.receive_items ri
+    JOIN public.receives r ON r.id = ri.ri_id
+    JOIN public.mrs ON mrs.id = ri.mr_id
+    WHERE ri.id = ANY(v_receive_item_ids) AND r.ri_status = 'completed'
+    GROUP BY COALESCE(ri.cabang_penerima_id, mrs.cabang_id), ri.part_id
+
+    UNION ALL
+
+    SELECT dl.dari_cabang_id AS cabang_id, di.part_id AS part_id, SUM(di.qty_on_delivery) AS delta
+    FROM public.delivery_items di
+    JOIN public.deliveries dl ON dl.id = di.dlv_id
+    WHERE di.id = ANY(v_delivery_item_ids) AND dl.status::text <> 'cancelled'
+    GROUP BY dl.dari_cabang_id, di.part_id
+
+    UNION ALL
+
+    -- IT: reverse ke gudang asal, cuma kalau stok sudah keluar
+    -- (stock_released) tapi belum completed (yang completed sudah
+    -- di-block di langkah 2, tidak akan pernah sampai sini).
+    SELECT it2.dari_cabang_id AS cabang_id, iti.part_id AS part_id, SUM(iti.qty) AS delta
+    FROM public.item_transfer_items iti
+    JOIN public.item_transfers it2 ON it2.id = iti.it_id
+    WHERE iti.id = ANY(v_it_item_ids) AND it2.stock_released = true AND it2.status <> 'completed'
+    GROUP BY it2.dari_cabang_id, iti.part_id
+  ) parts
+  GROUP BY cabang_id, part_id;
+
   SELECT COALESCE(jsonb_agg(jsonb_build_object(
       'part_id', d.part_id,
       'part_number', b.part_number,
@@ -291,25 +402,7 @@ BEGIN
       'shortfall', ABS(COALESCE(s.qty, 0) + d.delta)
     )), '[]'::jsonb)
     INTO v_conflicts
-  FROM (
-    SELECT cabang_id, part_id, SUM(delta) AS delta FROM (
-      SELECT mrs.cabang_id AS cabang_id, ri.part_id AS part_id, -SUM(ri.qty) AS delta
-      FROM public.receive_items ri
-      JOIN public.receives r ON r.id = ri.ri_id
-      JOIN public.mrs ON mrs.id = ri.mr_id
-      WHERE ri.id = ANY(v_receive_item_ids) AND r.ri_status = 'completed'
-      GROUP BY mrs.cabang_id, ri.part_id
-
-      UNION ALL
-
-      SELECT dl.dari_cabang_id AS cabang_id, di.part_id AS part_id, SUM(di.qty_on_delivery) AS delta
-      FROM public.delivery_items di
-      JOIN public.deliveries dl ON dl.id = di.dlv_id
-      WHERE di.id = ANY(v_delivery_item_ids) AND dl.status::text <> 'cancelled'
-      GROUP BY dl.dari_cabang_id, di.part_id
-    ) parts
-    GROUP BY cabang_id, part_id
-  ) d
+  FROM pg_temp.tmp_stock_delta d
   LEFT JOIN public.stock s ON s.part_id = d.part_id AND s.cabang_id = d.cabang_id
   LEFT JOIN public.barang b ON b.id = d.part_id
   LEFT JOIN public.cabang c ON c.id = d.cabang_id
@@ -339,6 +432,10 @@ BEGIN
 
   SELECT COALESCE(jsonb_agg(jsonb_build_object('doc_type', 'delivery', 'id', id, 'kode', dlv_kode)), '[]'::jsonb)
     INTO v_tmp FROM public.deliveries WHERE id = ANY(v_dlv_ids_delete);
+  v_documents := v_documents || v_tmp;
+
+  SELECT COALESCE(jsonb_agg(jsonb_build_object('doc_type', 'item_transfer', 'id', id, 'kode', it_kode)), '[]'::jsonb)
+    INTO v_tmp FROM public.item_transfers WHERE id = ANY(v_it_ids_delete);
   v_documents := v_documents || v_tmp;
 
   IF p_dry_run THEN
@@ -384,28 +481,50 @@ BEGIN
   SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb) INTO v_tmp
     FROM public.delivery_items t WHERE id = ANY(v_delivery_item_ids);
   v_snapshot := v_snapshot || jsonb_build_object('delivery_items', v_tmp);
+  SELECT COALESCE(jsonb_agg(to_jsonb(t)), '[]'::jsonb) INTO v_tmp
+    FROM public.item_transfer_items t WHERE id = ANY(v_it_item_ids);
+  v_snapshot := v_snapshot || jsonb_build_object('item_transfer_items', v_tmp);
 
   -- ============================================================
-  -- 6. Reverse stok (RI yang sudah completed, lalu Delivery yang
-  --    belum cancelled) — sudah divalidasi tidak akan negatif di
-  --    langkah 3, tapi tetap divalidasi ulang saat UPDATE (optimistic
-  --    concurrency guard) karena tidak pakai row lock eksplisit.
+  -- 6. Terapkan net delta stok dari tmp_stock_delta (langkah 3) -- SATU
+  --    UPDATE teragregasi per (cabang,part), bukan per baris dokumen sumber
+  --    berurutan (lihat alasan lengkap di komentar langkah 3). Sudah
+  --    divalidasi tidak akan negatif di langkah 3, tapi tetap divalidasi
+  --    ulang di sini (optimistic concurrency guard) karena tidak pakai row
+  --    lock eksplisit.
   -- ============================================================
+  UPDATE public.stock s
+    SET qty = s.qty + d.delta, updated_at = NOW()
+    FROM pg_temp.tmp_stock_delta d
+    WHERE s.part_id = d.part_id AND s.cabang_id = d.cabang_id;
+
+  IF EXISTS (
+    SELECT 1 FROM pg_temp.tmp_stock_delta d
+    JOIN public.stock s ON s.part_id = d.part_id AND s.cabang_id = d.cabang_id
+    WHERE s.qty < 0
+  ) THEN
+    RAISE EXCEPTION 'Stok berubah saat proses berlangsung (jadi negatif), batalkan dan coba lagi.';
+  END IF;
+
+  -- (cabang,part) yang delta-nya positif tapi belum pernah punya baris stock
+  -- sama sekali (mis. reverse Delivery/IT ke cabang yang belum pernah
+  -- kedatangan part itu).
+  INSERT INTO public.stock (part_id, cabang_id, qty)
+  SELECT d.part_id, d.cabang_id, d.delta
+  FROM pg_temp.tmp_stock_delta d
+  LEFT JOIN public.stock s ON s.part_id = d.part_id AND s.cabang_id = d.cabang_id
+  WHERE s.id IS NULL AND d.delta > 0;
+
+  -- Riwayat stock_movements per baris dokumen sumber (buat audit trail --
+  -- TIDAK dipakai lagi buat menggerakkan stock.qty, itu sudah selesai di
+  -- atas via tmp_stock_delta).
   FOR v_row IN
-    SELECT ri.part_id, ri.qty, mrs.cabang_id, ri.id AS receive_item_id
+    SELECT ri.part_id, ri.qty, COALESCE(ri.cabang_penerima_id, mrs.cabang_id) AS cabang_id
     FROM public.receive_items ri
     JOIN public.receives r ON r.id = ri.ri_id
     JOIN public.mrs ON mrs.id = ri.mr_id
     WHERE ri.id = ANY(v_receive_item_ids) AND r.ri_status = 'completed'
   LOOP
-    UPDATE public.stock
-      SET qty = qty - v_row.qty
-      WHERE part_id = v_row.part_id AND cabang_id = v_row.cabang_id AND qty >= v_row.qty;
-    GET DIAGNOSTICS v_rowcount = ROW_COUNT;
-    IF v_rowcount = 0 THEN
-      RAISE EXCEPTION 'Stok part_id % di cabang % berubah saat proses berlangsung, batalkan dan coba lagi.',
-        v_row.part_id, v_row.cabang_id;
-    END IF;
     INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, created_by, notes)
     VALUES (v_row.part_id, v_row.cabang_id, -v_row.qty, 'CASCADE_DELETE',
       p_doc_type || ':' || p_doc_id,
@@ -419,9 +538,6 @@ BEGIN
     JOIN public.deliveries dl ON dl.id = di.dlv_id
     WHERE di.id = ANY(v_delivery_item_ids) AND dl.status::text <> 'cancelled'
   LOOP
-    INSERT INTO public.stock (part_id, cabang_id, qty)
-      VALUES (v_row.part_id, v_row.dari_cabang_id, v_row.qty_on_delivery)
-      ON CONFLICT (part_id, cabang_id) DO UPDATE SET qty = public.stock.qty + EXCLUDED.qty;
     INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, created_by, notes)
     VALUES (v_row.part_id, v_row.dari_cabang_id, v_row.qty_on_delivery, 'CASCADE_DELETE',
       p_doc_type || ':' || p_doc_id,
@@ -429,8 +545,23 @@ BEGIN
       format('Cascade delete %s #%s: reverse stok Delivery ke cabang sumber. Alasan: %s', p_doc_type, p_doc_id, p_reason));
   END LOOP;
 
+  FOR v_row IN
+    SELECT iti.part_id, iti.qty, it2.dari_cabang_id
+    FROM public.item_transfer_items iti
+    JOIN public.item_transfers it2 ON it2.id = iti.it_id
+    WHERE iti.id = ANY(v_it_item_ids) AND it2.stock_released = true AND it2.status <> 'completed'
+  LOOP
+    INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, created_by, notes)
+    VALUES (v_row.part_id, v_row.dari_cabang_id, v_row.qty, 'CASCADE_DELETE',
+      p_doc_type || ':' || p_doc_id,
+      v_actor,
+      format('Cascade delete %s #%s: reverse stok Item Transfer ke gudang asal. Alasan: %s', p_doc_type, p_doc_id, p_reason));
+  END LOOP;
+
+  DROP TABLE IF EXISTS pg_temp.tmp_stock_delta;
+
   -- ============================================================
-  -- 7. Hapus baris, urutan bottom-up (RI -> Delivery -> PO -> PR -> MR)
+  -- 7. Hapus baris, urutan bottom-up (RI -> Delivery -> IT -> PO -> PR -> MR)
   --    supaya FK blocking (pr_items.mr_id, po_items.mr_id, dst — tidak
   --    ON DELETE CASCADE) tidak pernah menabrak header yang masih
   --    direferensikan.
@@ -440,6 +571,9 @@ BEGIN
 
   DELETE FROM public.delivery_items WHERE id = ANY(v_delivery_item_ids);
   DELETE FROM public.deliveries WHERE id = ANY(v_dlv_ids_delete);
+
+  DELETE FROM public.item_transfer_items WHERE id = ANY(v_it_item_ids);
+  DELETE FROM public.item_transfers WHERE id = ANY(v_it_ids_delete);
 
   DELETE FROM public.po_items WHERE id = ANY(v_po_item_ids);
   DELETE FROM public.pos WHERE id = ANY(v_po_ids_delete);
@@ -477,22 +611,21 @@ BEGIN
   --    syncShareStockStatuses di services/*.ts.
   -- ============================================================
 
-  -- po_items.qty_received / mr_items.qty_received: live-recompute untuk
-  -- po_item/mr_item yang receive_items-nya berkurang tapi header-nya sendiri
-  -- survive. Aman dijalankan tiap kali array survive-nya terisi (no-op kalau
-  -- memang tidak ada receive_items yang berubah untuk po/mr tsb).
+  -- po_items.qty_received: live-recompute untuk po_item yang receive_items-nya
+  -- berkurang tapi po_item-nya sendiri survive. Aman dijalankan tiap kali
+  -- array survive-nya terisi (no-op kalau memang tidak ada receive_items
+  -- yang berubah untuk po tsb).
+  --
+  -- CATATAN: mr_items.qty_received/mrs.mr_status TIDAK di-recompute di sini
+  -- sama sekali -- sejak revisi RI->IT (2026-09-24), field itu HANYA berubah
+  -- lewat Item Transfer yang completed, dan IT yang completed selalu
+  -- di-block dari cascade delete (langkah 2). Jadi tidak akan pernah ada
+  -- kondisi di titik ini yang butuh reverse qty_received/mr_status MR.
   IF array_length(v_po_ids_survive, 1) > 0 THEN
     UPDATE public.po_items poi
       SET qty_received = COALESCE(
         (SELECT SUM(ri2.qty) FROM public.receive_items ri2 WHERE ri2.po_item_id = poi.id), 0)
       WHERE poi.po_id = ANY(v_po_ids_survive);
-  END IF;
-
-  IF array_length(v_mr_ids_survive, 1) > 0 THEN
-    UPDATE public.mr_items mi
-      SET qty_received = LEAST(mi.qty_request, COALESCE(
-        (SELECT SUM(ri2.qty) FROM public.receive_items ri2 WHERE ri2.mr_id = mi.mr_id AND ri2.part_id = mi.part_id), 0))
-      WHERE mi.mr_id = ANY(v_mr_ids_survive);
   END IF;
 
   -- pos.po_receive_status / po_status: recompute untuk PO yang bertahan
@@ -552,20 +685,6 @@ BEGIN
       ) conv ON conv.mr_item_id = mi.id
       WHERE mi.mr_id = ANY(v_mr_ids_survive) AND mi.qty_pr > 0
       GROUP BY mi.mr_id
-    ) sub
-    WHERE m.id = sub.mr_id;
-
-    -- mrs.mr_status: recompute dari qty_received vs qty_request (mirror
-    -- applyReceiveCompletion) — aman dijalankan tiap kali ada MR survive,
-    -- no-op kalau qty_received-nya memang tidak berubah.
-    UPDATE public.mrs m SET mr_status = sub.status::doc_status
-    FROM (
-      SELECT mr_id,
-        CASE WHEN SUM(qty_received) <= 0 THEN 'open'
-             WHEN SUM(qty_received) < SUM(qty_request) THEN 'approved'
-             ELSE 'completed' END AS status
-      FROM public.mr_items WHERE mr_id = ANY(v_mr_ids_survive)
-      GROUP BY mr_id
     ) sub
     WHERE m.id = sub.mr_id;
   END IF;
@@ -642,4 +761,4 @@ GRANT EXECUTE ON FUNCTION public.plan_cascade_document_delete(text, bigint) TO a
 GRANT EXECUTE ON FUNCTION public.execute_cascade_document_delete(text, bigint, text) TO authenticated;
 
 COMMENT ON FUNCTION public.execute_cascade_document_delete IS
-'Hapus dokumen MR/PR/PO/Receive/Delivery beserta seluruh turunannya (item-level cascade), reverse stok yang sudah terlanjur diposting, dan recompute status dokumen ancestor yang bertahan. Khusus moderator. Block (tanpa menulis apapun) kalau reverse stok akan membuat stok negatif atau ada delivery yang sudah completed dalam scope.';
+'Hapus dokumen MR/PR/PO/Receive/Delivery/Item Transfer beserta seluruh turunannya (item-level cascade), reverse stok yang sudah terlanjur diposting, dan recompute status dokumen ancestor yang bertahan. Khusus moderator. Block (tanpa menulis apapun) kalau reverse stok akan membuat stok negatif atau ada delivery/item transfer yang sudah completed dalam scope.';

@@ -99,6 +99,12 @@ export async function createItemTransfer(data: {
     part_name: string;
     satuan: string;
     qty: number;
+    // Diisi kalau item ini "dari RI" -- lineage ke MR yang direferensikan +
+    // receive_item asalnya. Dipakai buat distribusi qty ke MR saat IT ini
+    // finalize (lihat finalizeItemTransfer) dan buat hitung sisa qty RI yang
+    // belum ditransfer (lihat picker "Cari dari RI" di item-transfer/create).
+    mr_item_id?: number | null;
+    receive_item_id?: number | null;
   }[];
 }) {
   const supabase = await createClient();
@@ -226,6 +232,8 @@ export async function createItemTransfer(data: {
     part_name: item.part_name,
     satuan: item.satuan,
     qty: item.qty,
+    mr_item_id: item.mr_item_id ?? null,
+    receive_item_id: item.receive_item_id ?? null,
   }));
   const { error: itemsError } = await supabase
     .from("item_transfer_items")
@@ -540,7 +548,7 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
 
   const { data: items } = await supabase
     .from("item_transfer_items")
-    .select("part_id, part_number, part_name, qty")
+    .select("part_id, part_number, part_name, qty, mr_item_id")
     .eq("it_id", itId);
   if (!items || items.length === 0) return { error: "Tidak ada item transfer" };
 
@@ -590,6 +598,77 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
     })
     .eq("id", itId);
   if (error) return { error: error.message };
+
+  // Distribusi qty ke MR: item IT yang bawa referensi mr_item_id berarti
+  // ini pemenuhan MR (turunan RI -> IT). Live-recompute (bukan increment)
+  // dari SEMUA item_transfer_items yang sudah completed buat mr_item itu,
+  // mirror pola convert_status yang sudah ada -- supaya kalau nanti ada IT
+  // yang di-reverse/dihapus, cukup panggil ulang recompute ini.
+  const mrItemIds = Array.from(
+    new Set(
+      (items || [])
+        .map((i: any) => i.mr_item_id)
+        .filter((id: unknown): id is number => typeof id === "number"),
+    ),
+  );
+
+  const affectedMrIds = new Set<number>();
+  for (const mrItemId of mrItemIds) {
+    const { data: mrItem } = await supabase
+      .from("mr_items")
+      .select("id, mr_id, qty_request")
+      .eq("id", mrItemId)
+      .maybeSingle();
+    if (!mrItem) continue;
+
+    const { data: completedRows } = await supabase
+      .from("item_transfer_items")
+      .select("qty, item_transfers!inner(status)")
+      .eq("mr_item_id", mrItemId)
+      .eq("item_transfers.status", "completed");
+    const totalCompleted = (completedRows || []).reduce(
+      (s: number, r: any) => s + (r.qty || 0),
+      0,
+    );
+
+    await supabase
+      .from("mr_items")
+      .update({ qty_received: Math.min(mrItem.qty_request, totalCompleted) })
+      .eq("id", mrItemId);
+
+    affectedMrIds.add(mrItem.mr_id);
+  }
+
+  for (const mrId of affectedMrIds) {
+    const { data: mrItems } = await supabase
+      .from("mr_items")
+      .select("qty_request, qty_received")
+      .eq("mr_id", mrId);
+    if (!mrItems) continue;
+    const totalRequest = mrItems.reduce(
+      (s: number, i: any) => s + i.qty_request,
+      0,
+    );
+    const totalReceived = mrItems.reduce(
+      (s: number, i: any) => s + i.qty_received,
+      0,
+    );
+    const mrStatus =
+      totalReceived <= 0
+        ? "open"
+        : totalReceived < totalRequest
+          ? "approved"
+          : "completed";
+    await supabase
+      .from("mrs")
+      .update({ mr_status: mrStatus as any })
+      .eq("id", mrId);
+  }
+
+  if (affectedMrIds.size > 0) {
+    revalidatePath("/mr");
+    revalidatePath("/mr/scheduled");
+  }
 
   revalidatePath("/item-transfer");
   revalidatePath("/stock");

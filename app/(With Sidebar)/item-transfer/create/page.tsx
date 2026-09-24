@@ -21,6 +21,15 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
   Table,
   TableBody,
   TableCell,
@@ -43,6 +52,7 @@ import {
   Package,
   User,
   ArrowRight,
+  PackageCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -65,6 +75,26 @@ interface ITItem {
   avail: number; // stok tersedia di gudang asal
   dest_qty: number; // stok saat ini di gudang tujuan
   dest_max: number; // max_qty di gudang tujuan
+  // Terisi kalau item ini ditambahkan lewat picker "Cari dari RI" --
+  // referensi ke MR yang direferensikan + RI asalnya (lihat komentar di
+  // services/item-transfer-actions.ts createItemTransfer).
+  mr_item_id?: number | null;
+  receive_item_id?: number | null;
+  mr_kode?: string;
+  ri_kode?: string;
+}
+
+interface RiLine {
+  receive_item_id: number;
+  part_id: number;
+  part_number: string;
+  part_name: string;
+  satuan: string;
+  qty_sisa: number; // qty RI - qty yang sudah masuk IT lain (non-rejected)
+  qty_pilih: number;
+  mr_item_id: number | null;
+  mr_kode: string;
+  selected: boolean;
 }
 
 export default function CreateItemTransferPage() {
@@ -111,6 +141,15 @@ export default function CreateItemTransferPage() {
   const [debouncedSearch] = useDebounce(search, 300);
   const [results, setResults] = useState<any[]>([]);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  // Cari dari RI
+  const [riDialogOpen, setRiDialogOpen] = useState(false);
+  const [riSearch, setRiSearch] = useState("");
+  const [debouncedRiSearch] = useDebounce(riSearch, 300);
+  const [riResults, setRiResults] = useState<any[]>([]);
+  const [selectedRi, setSelectedRi] = useState<any>(null);
+  const [riLines, setRiLines] = useState<RiLine[]>([]);
+  const [riLinesLoading, setRiLinesLoading] = useState(false);
 
   // Signature
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
@@ -175,6 +214,183 @@ export default function CreateItemTransferPage() {
     };
     run();
   }, [debouncedSearch, searchOpen]);
+
+  // Search RI completed yang gudang penerima salah satu item-nya = gudang
+  // asal (cabang) user ini -- cuma RI yang barangnya "mendarat" di cabang
+  // kita yang bisa jadi sumber IT.
+  useEffect(() => {
+    if (!riDialogOpen || !userProfile?.cabang_id) return;
+    const run = async () => {
+      let q = supabase
+        .from("receives")
+        .select("id, ri_kode, ri_tanggal, receive_items!inner(cabang_penerima_id)")
+        .eq("ri_status", "completed")
+        .eq("receive_items.cabang_penerima_id", userProfile.cabang_id)
+        .order("ri_tanggal", { ascending: false })
+        .limit(20);
+      if (debouncedRiSearch) q = q.ilike("ri_kode", `%${debouncedRiSearch}%`);
+      const { data } = await q;
+      // Dedup (join bisa gandakan header kalau lebih dari 1 item match)
+      const seen = new Set<number>();
+      const uniq = (data || []).filter((r: any) => {
+        if (seen.has(r.id)) return false;
+        seen.add(r.id);
+        return true;
+      });
+      setRiResults(uniq);
+    };
+    run();
+  }, [debouncedRiSearch, riDialogOpen, userProfile?.cabang_id]);
+
+  const selectRi = async (ri: any) => {
+    setSelectedRi(ri);
+    setRiLinesLoading(true);
+    setRiLines([]);
+
+    const { data: lines } = await supabase
+      .from("receive_items")
+      .select(
+        "id, part_id, part_number, part_name, satuan, qty, mr_id, mrs(mr_kode)",
+      )
+      .eq("ri_id", ri.id)
+      .eq("cabang_penerima_id", userProfile.cabang_id);
+
+    const receiveItemIds = (lines || []).map((l: any) => l.id);
+    const { data: usedRows } =
+      receiveItemIds.length > 0
+        ? await supabase
+            .from("item_transfer_items")
+            .select("receive_item_id, qty, item_transfers!inner(status)")
+            .in("receive_item_id", receiveItemIds)
+            .neq("item_transfers.status", "rejected")
+        : { data: [] as any[] };
+    const usedMap = new Map<number, number>();
+    for (const row of usedRows || []) {
+      usedMap.set(
+        row.receive_item_id,
+        (usedMap.get(row.receive_item_id) || 0) + row.qty,
+      );
+    }
+
+    // Resolve mr_item_id per baris via mr_id+part_id (pola yang sama dipakai
+    // applyReceiveCompletion sebelum revisi ini).
+    const mrIds = Array.from(new Set((lines || []).map((l: any) => l.mr_id)));
+    const { data: mrItemRows } =
+      mrIds.length > 0
+        ? await supabase
+            .from("mr_items")
+            .select("id, mr_id, part_id")
+            .in("mr_id", mrIds)
+        : { data: [] as any[] };
+    const mrItemMap = new Map<string, number>();
+    for (const mi of mrItemRows || []) {
+      mrItemMap.set(`${mi.mr_id}:${mi.part_id}`, mi.id);
+    }
+
+    const draft: RiLine[] = (lines || [])
+      .map((l: any) => {
+        const sisa = l.qty - (usedMap.get(l.id) || 0);
+        return {
+          receive_item_id: l.id,
+          part_id: l.part_id,
+          part_number: l.part_number,
+          part_name: l.part_name,
+          satuan: l.satuan,
+          qty_sisa: sisa,
+          qty_pilih: sisa,
+          mr_item_id: mrItemMap.get(`${l.mr_id}:${l.part_id}`) ?? null,
+          mr_kode: l.mrs?.mr_kode || "-",
+          selected: sisa > 0,
+        };
+      })
+      .filter((l: RiLine) => l.qty_sisa > 0);
+
+    setRiLines(draft);
+    setRiLinesLoading(false);
+  };
+
+  const toggleRiLine = (receiveItemId: number) => {
+    setRiLines((prev) =>
+      prev.map((l) =>
+        l.receive_item_id === receiveItemId
+          ? { ...l, selected: !l.selected }
+          : l,
+      ),
+    );
+  };
+
+  const updateRiLineQty = (receiveItemId: number, qty: number) => {
+    setRiLines((prev) =>
+      prev.map((l) =>
+        l.receive_item_id === receiveItemId
+          ? { ...l, qty_pilih: Math.max(0, Math.min(l.qty_sisa, qty)) }
+          : l,
+      ),
+    );
+  };
+
+  const addSelectedRiItems = async () => {
+    const chosen = riLines.filter((l) => l.selected && l.qty_pilih > 0);
+    if (chosen.length === 0) {
+      toast.error("Pilih minimal satu item.");
+      return;
+    }
+    if (!keCabang) {
+      toast.error("Pilih gudang tujuan terlebih dahulu.");
+      return;
+    }
+
+    const skipped: string[] = [];
+    const toAdd: ITItem[] = [];
+    for (const line of chosen) {
+      if (items.some((i) => i.part_id === line.part_id)) {
+        skipped.push(`${line.part_number} (sudah ada di daftar)`);
+        continue;
+      }
+      const { data: destStock } = await supabase
+        .from("stock")
+        .select("qty, max_qty")
+        .eq("part_id", line.part_id)
+        .eq("cabang_id", keCabang)
+        .maybeSingle();
+      const destQty = destStock?.qty ?? 0;
+      const destMax = destStock?.max_qty ?? 0;
+      if (destMax <= 0) {
+        skipped.push(`${line.part_number} (belum ada batas max di tujuan)`);
+        continue;
+      }
+      const headroom = Math.max(0, destMax - destQty);
+      if (headroom <= 0) {
+        skipped.push(`${line.part_number} (stok tujuan penuh)`);
+        continue;
+      }
+      toAdd.push({
+        part_id: line.part_id,
+        part_number: line.part_number,
+        part_name: line.part_name,
+        satuan: line.satuan,
+        qty: Math.min(line.qty_pilih, line.qty_sisa, headroom),
+        avail: line.qty_sisa,
+        dest_qty: destQty,
+        dest_max: destMax,
+        mr_item_id: line.mr_item_id,
+        receive_item_id: line.receive_item_id,
+        mr_kode: line.mr_kode,
+        ri_kode: selectedRi?.ri_kode,
+      });
+    }
+
+    if (toAdd.length > 0) setItems((prev) => [...prev, ...toAdd]);
+    if (skipped.length > 0)
+      toast.warning(`Dilewati: ${skipped.join(", ")}`);
+    if (toAdd.length > 0) {
+      toast.success(`${toAdd.length} item ditambahkan dari ${selectedRi?.ri_kode}.`);
+      setRiDialogOpen(false);
+      setSelectedRi(null);
+      setRiLines([]);
+      setRiSearch("");
+    }
+  };
 
   const addItem = async (barang: any) => {
     if (items.some((i) => i.part_id === barang.id)) return;
@@ -342,6 +558,8 @@ export default function CreateItemTransferPage() {
           part_name: i.part_name,
           satuan: i.satuan,
           qty: i.qty,
+          mr_item_id: i.mr_item_id ?? undefined,
+          receive_item_id: i.receive_item_id ?? undefined,
         })),
       });
 
@@ -454,6 +672,17 @@ export default function CreateItemTransferPage() {
             <Package className="h-4 w-4 text-muted-foreground" />
             <h3 className="font-semibold text-sm">Daftar Item</h3>
           </div>
+          <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 gap-2"
+            disabled={!keCabang}
+            title={!keCabang ? "Pilih gudang tujuan terlebih dahulu" : undefined}
+            onClick={() => setRiDialogOpen(true)}
+          >
+            <PackageCheck className="h-3.5 w-3.5" /> Cari dari RI
+          </Button>
           <Popover open={searchOpen} onOpenChange={setSearchOpen}>
             <PopoverTrigger asChild>
               <Button
@@ -504,6 +733,7 @@ export default function CreateItemTransferPage() {
               </div>
             </PopoverContent>
           </Popover>
+          </div>
         </div>
         <div className="border rounded-lg overflow-hidden">
           <Table>
@@ -523,6 +753,12 @@ export default function CreateItemTransferPage() {
                     <TableCell>
                       <span className="font-semibold text-xs">{item.part_name}</span>
                       <code className="block text-[10px] text-muted-foreground">{item.part_number}</code>
+                      {item.receive_item_id && (
+                        <Badge variant="outline" className="mt-1 text-[9px] font-bold gap-1">
+                          <PackageCheck className="h-2.5 w-2.5" />
+                          {item.ri_kode} &rarr; {item.mr_kode}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-center text-[10px] font-medium text-muted-foreground uppercase">
                       {item.satuan}
@@ -832,6 +1068,163 @@ export default function CreateItemTransferPage() {
         onOpenChange={setIsSignatureOpen}
         onConfirm={handleConfirmSignature}
       />
+
+      <Dialog
+        open={riDialogOpen}
+        onOpenChange={(open) => {
+          setRiDialogOpen(open);
+          if (!open) {
+            setSelectedRi(null);
+            setRiLines([]);
+            setRiSearch("");
+          }
+        }}
+      >
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PackageCheck className="h-4 w-4" /> Cari dari RI
+            </DialogTitle>
+            <DialogDescription>
+              Pilih RI yang sudah selesai dan gudang penerimanya cabang Anda
+              (
+              {userProfile?.cabang?.nama_cabang}
+              ). Item yang dipilih otomatis bawa referensi MR asalnya.
+            </DialogDescription>
+          </DialogHeader>
+
+          {!selectedRi ? (
+            <div className="space-y-2">
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  placeholder="Cari kode RI..."
+                  className="pl-8 h-9 text-xs"
+                  value={riSearch}
+                  onChange={(e) => setRiSearch(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="max-h-80 overflow-y-auto space-y-1">
+                {riResults.length > 0 ? (
+                  riResults.map((r) => (
+                    <button
+                      key={r.id}
+                      onClick={() => selectRi(r)}
+                      className="w-full text-left p-3 hover:bg-muted rounded-lg border border-transparent hover:border-border"
+                    >
+                      <span className="font-bold text-xs uppercase font-mono">
+                        {r.ri_kode}
+                      </span>
+                      <span className="block text-[10px] text-muted-foreground">
+                        {r.ri_tanggal}
+                      </span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="p-8 text-center text-xs text-muted-foreground italic">
+                    Tidak ada RI completed dengan gudang penerima cabang Anda.
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Badge variant="outline" className="font-mono text-xs">
+                  {selectedRi.ri_kode}
+                </Badge>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-[10px]"
+                  onClick={() => {
+                    setSelectedRi(null);
+                    setRiLines([]);
+                  }}
+                >
+                  &larr; Pilih RI lain
+                </Button>
+              </div>
+
+              {riLinesLoading ? (
+                <div className="py-8 flex justify-center">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : riLines.length === 0 ? (
+                <div className="p-8 text-center text-xs text-muted-foreground italic">
+                  Tidak ada item RI ini yang gudang penerimanya cabang Anda
+                  dan masih ada sisa belum ditransfer.
+                </div>
+              ) : (
+                <div className="border rounded-lg overflow-hidden max-h-80 overflow-y-auto">
+                  <Table>
+                    <TableHeader className="bg-muted/50 sticky top-0">
+                      <TableRow className="h-9">
+                        <TableHead className="w-8"></TableHead>
+                        <TableHead className="text-[10px] font-black uppercase">Part / MR</TableHead>
+                        <TableHead className="w-28 text-center text-[10px] font-black uppercase">Sisa</TableHead>
+                        <TableHead className="w-28 text-center text-[10px] font-black uppercase">Qty</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {riLines.map((l) => (
+                        <TableRow key={l.receive_item_id} className="h-12">
+                          <TableCell>
+                            <Checkbox
+                              checked={l.selected}
+                              onCheckedChange={() => toggleRiLine(l.receive_item_id)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <span className="font-semibold text-xs">{l.part_name}</span>
+                            <code className="block text-[10px] text-muted-foreground">
+                              {l.part_number}
+                            </code>
+                            <Badge variant="outline" className="mt-1 text-[9px] font-bold">
+                              MR {l.mr_kode}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-center text-xs font-bold">
+                            {l.qty_sisa} {l.satuan}
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              min={0}
+                              max={l.qty_sisa}
+                              value={l.qty_pilih}
+                              disabled={!l.selected}
+                              onChange={(e) =>
+                                updateRiLineQty(
+                                  l.receive_item_id,
+                                  parseInt(e.target.value) || 0,
+                                )
+                              }
+                              className="h-8 text-center text-xs"
+                            />
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {selectedRi && (
+            <DialogFooter>
+              <Button variant="ghost" onClick={() => setRiDialogOpen(false)}>
+                Batal
+              </Button>
+              <Button onClick={addSelectedRiItems}>
+                Tambahkan Item Terpilih
+              </Button>
+            </DialogFooter>
+          )}
+        </DialogContent>
+      </Dialog>
     </>
   );
 }

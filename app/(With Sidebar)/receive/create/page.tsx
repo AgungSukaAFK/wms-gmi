@@ -68,6 +68,7 @@ interface ReceiveItem {
   mr_id: number;
   vendor_name: string | null;
   qty_receive: number; // how many to receive in this RI
+  cabang_penerima_id: number | null; // gudang tujuan fisik barang ini mendarat
 }
 
 export default function CreateReceivePage() {
@@ -90,6 +91,7 @@ export default function CreateReceivePage() {
 
   // Items
   const [items, setItems] = useState<ReceiveItem[]>([]);
+  const [cabangs, setCabangs] = useState<{ id: number; nama_cabang: string }[]>([]);
 
   // RI Header
   const [riKode, setRiKode] = useState("");
@@ -98,7 +100,16 @@ export default function CreateReceivePage() {
 
   useEffect(() => {
     fetchUser();
+    fetchCabangs();
   }, []);
+
+  const fetchCabangs = async () => {
+    const { data } = await supabase
+      .from("cabang")
+      .select("id, nama_cabang")
+      .order("nama_cabang", { ascending: true });
+    setCabangs(data || []);
+  };
 
   useEffect(() => {
     fetchApprovedPOs();
@@ -183,6 +194,7 @@ export default function CreateReceivePage() {
         mr_id: item.mr_id,
         vendor_name: item.vendors?.vendor_name ?? null,
         qty_receive: item.qty - (item.qty_received ?? 0), // default to full remaining
+        cabang_penerima_id: po.prs?.cabang_id ?? null, // default: cabang PR, bisa diganti per baris
       }))
       .filter((i: ReceiveItem) => i.qty_sisa > 0);
 
@@ -202,6 +214,14 @@ export default function CreateReceivePage() {
     );
   };
 
+  const updateCabangPenerima = (idx: number, cabangId: number) => {
+    setItems((prev) =>
+      prev.map((item, i) =>
+        i === idx ? { ...item, cabang_penerima_id: cabangId } : item,
+      ),
+    );
+  };
+
   const handleSubmit = async () => {
     if (!riKode.trim()) return toast.error("Kode RI wajib diisi");
     if (!selectedPo) return toast.error("Pilih Purchase Order");
@@ -210,6 +230,8 @@ export default function CreateReceivePage() {
     const activeItems = items.filter((i) => i.qty_receive > 0);
     if (activeItems.length === 0)
       return toast.error("Tidak ada item yang akan diterima (qty = 0 semua)");
+    if (activeItems.some((i) => !i.cabang_penerima_id))
+      return toast.error("Gudang penerima wajib dipilih untuk setiap item.");
 
     setSubmitting(true);
     try {
@@ -231,6 +253,7 @@ export default function CreateReceivePage() {
           po_id: selectedPo.id,
           mr_id: item.mr_id,
           po_item_id: item.po_item_id,
+          cabang_penerima_id: item.cabang_penerima_id as number,
         })),
       });
 
@@ -514,8 +537,11 @@ export default function CreateReceivePage() {
                         <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-center w-20">
                           Sisa
                         </TableHead>
-                        <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-32 pr-4">
+                        <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-32">
                           Qty Diterima
+                        </TableHead>
+                        <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-44 pr-4">
+                          Gudang Penerima
                         </TableHead>
                       </TableRow>
                     </TableHeader>
@@ -583,6 +609,29 @@ export default function CreateReceivePage() {
                                 placeholder="0"
                               />
                             </div>
+                          </TableCell>
+                          <TableCell className="py-2 pr-4 align-middle">
+                            <Select
+                              value={
+                                item.cabang_penerima_id
+                                  ? String(item.cabang_penerima_id)
+                                  : undefined
+                              }
+                              onValueChange={(val) =>
+                                updateCabangPenerima(idx, Number(val))
+                              }
+                            >
+                              <SelectTrigger className="h-8 text-xs font-bold">
+                                <SelectValue placeholder="Pilih gudang..." />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {cabangs.map((c) => (
+                                  <SelectItem key={c.id} value={String(c.id)}>
+                                    {c.nama_cabang}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
                           </TableCell>
                         </TableRow>
                       ))}
