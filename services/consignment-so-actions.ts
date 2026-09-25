@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { toYmdLocal } from "@/lib/utils";
 
 type ConsignmentSoItemInput = {
   part_id: number;
@@ -229,4 +230,119 @@ export async function getConsignmentDashboardReport(params?: {
   if (error) return { data: [], count: 0, error: error.message };
 
   return { data: data || [], count: count || 0, error: null as string | null };
+}
+
+/**
+ * PERFORMANCE REPORT CONSIGNMENT
+ *
+ * Ringkasan buat laporan internal: volume SO & IK per bulan (6 bulan
+ * terakhir) + KPI bulan ini vs bulan lalu. Beda dari
+ * getConsignmentDashboardReport (itu tabel tracking per-item SO) -- ini
+ * murni angka agregat.
+ */
+export async function getConsignmentPerformanceReport() {
+  const supabase = await createClient();
+
+  const now = new Date();
+  const months: { label: string; start: string; end: string }[] = [];
+  for (let i = 5; i >= 0; i -= 1) {
+    const monthDate = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const nextMonthDate = new Date(
+      monthDate.getFullYear(),
+      monthDate.getMonth() + 1,
+      1,
+    );
+    months.push({
+      label: monthDate.toLocaleDateString("id-ID", {
+        month: "short",
+        year: "2-digit",
+      }),
+      start: toYmdLocal(monthDate),
+      end: toYmdLocal(nextMonthDate),
+    });
+  }
+
+  const trend = await Promise.all(
+    months.map(async (month) => {
+      const [soResult, ikResult] = await Promise.all([
+        supabase
+          .from("consignment_so")
+          .select("*", { count: "exact", head: true })
+          .gte("so_tanggal_input", month.start)
+          .lt("so_tanggal_input", month.end),
+        supabase
+          .from("consignment_ik")
+          .select("*", { count: "exact", head: true })
+          .gte("ik_tanggal", month.start)
+          .lt("ik_tanggal", month.end),
+      ]);
+      return {
+        bulan: month.label,
+        so: soResult.count ?? 0,
+        ik: ikResult.count ?? 0,
+      };
+    }),
+  );
+
+  const currentMonth = months[months.length - 1];
+  const previousMonth = months[months.length - 2];
+
+  const [soThis, soPrev, ikThis, ikPrev, qtyThisRows, qtyPrevRows] =
+    await Promise.all([
+      supabase
+        .from("consignment_so")
+        .select("*", { count: "exact", head: true })
+        .gte("so_tanggal_input", currentMonth.start)
+        .lt("so_tanggal_input", currentMonth.end),
+      supabase
+        .from("consignment_so")
+        .select("*", { count: "exact", head: true })
+        .gte("so_tanggal_input", previousMonth.start)
+        .lt("so_tanggal_input", previousMonth.end),
+      supabase
+        .from("consignment_ik")
+        .select("*", { count: "exact", head: true })
+        .gte("ik_tanggal", currentMonth.start)
+        .lt("ik_tanggal", currentMonth.end),
+      supabase
+        .from("consignment_ik")
+        .select("*", { count: "exact", head: true })
+        .gte("ik_tanggal", previousMonth.start)
+        .lt("ik_tanggal", previousMonth.end),
+      supabase
+        .from("consignment_ik")
+        .select("id, ik_tanggal, consignment_ik_items(qty)")
+        .gte("ik_tanggal", currentMonth.start)
+        .lt("ik_tanggal", currentMonth.end),
+      supabase
+        .from("consignment_ik")
+        .select("id, ik_tanggal, consignment_ik_items(qty)")
+        .gte("ik_tanggal", previousMonth.start)
+        .lt("ik_tanggal", previousMonth.end),
+    ]);
+
+  type IkWithItems = { consignment_ik_items: { qty: number }[] | null };
+  const sumQty = (rows: IkWithItems[] | null) =>
+    (rows || []).reduce(
+      (sum, ik) =>
+        sum +
+        (ik.consignment_ik_items || []).reduce(
+          (s, item) => s + (Number(item.qty) || 0),
+          0,
+        ),
+      0,
+    );
+
+  return {
+    trend,
+    kpi: {
+      so_this_month: soThis.count ?? 0,
+      so_last_month: soPrev.count ?? 0,
+      ik_this_month: ikThis.count ?? 0,
+      ik_last_month: ikPrev.count ?? 0,
+      qty_this_month: sumQty(qtyThisRows.data),
+      qty_last_month: sumQty(qtyPrevRows.data),
+    },
+    error: null as string | null,
+  };
 }

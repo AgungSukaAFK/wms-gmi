@@ -16,9 +16,9 @@ import {
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "./nav-user";
 import { Button } from "@/components/ui/button";
-import { getUnreadNotificationsCount } from "@/services/notification-actions";
 import { getHasUnreadUpdateLogs } from "@/services/update-logs-actions";
 import { useAuthStore } from "@/stores/auth-store";
+import { useNotification } from "@/components/providers/NotificationProvider";
 import {
   GalleryVerticalEnd,
   Bot,
@@ -58,6 +58,7 @@ import {
   ScrollText,
   CalendarRange,
   Warehouse,
+  Factory,
 } from "lucide-react";
 
 // Update the menu data
@@ -122,6 +123,7 @@ const data = {
     { title: "Purchase Request", url: "/pr", icon: FileSpreadsheet },
     { title: "Purchase Order", url: "/po", icon: ShoppingCart },
     { title: "Receive Item", url: "/receive", icon: PackageCheck },
+    { title: "Working Order", url: "/working-order", icon: Factory },
   ],
   navStockOut: [
     { title: "Report SPB", url: "/spb/report", icon: FileBox },
@@ -186,7 +188,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   const [user, setUser] = React.useState<any>(null);
   const [profile, setProfile] = React.useState<any>(null);
-  const [unreadCount, setUnreadCount] = React.useState(0);
+  const { unreadCount } = useNotification();
   const [hasUnreadUpdateLogs, setHasUnreadUpdateLogs] = React.useState(false);
   type CollapsedGroups = {
     admin: boolean;
@@ -288,11 +290,6 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             setHasUnreadUpdateLogs(unread);
           }
         }
-
-        // Fetch unread notifications count
-        const { count } = await getUnreadNotificationsCount();
-        if (!isMounted) return;
-        setUnreadCount(count);
       }
     };
 

@@ -1,6 +1,6 @@
 "use server";
 
-import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 
 // ============================================================
@@ -17,6 +17,7 @@ export type NotificationType =
 export interface Notification {
   id: number;
   user_id: string;
+  actor_id: string | null;
   type: NotificationType;
   title: string;
   message: string | null;
@@ -54,17 +55,20 @@ export async function createNotification(payload: {
   metadata?: Record<string, unknown>;
 }) {
   try {
-    const adminClient = createAdminClient();
-    const { error } = await adminClient.from("notifications").insert({
-      user_id: payload.userId,
-      type: payload.type,
-      title: payload.title,
-      message: payload.message ?? null,
-      document_type: payload.documentType ?? null,
-      document_id: payload.documentId ?? null,
-      document_url: payload.documentUrl ?? null,
-      metadata: payload.metadata ?? null,
-      is_read: false,
+    const supabase = await createClient();
+    const { error } = await supabase.rpc("create_notifications", {
+      p_notifications: [
+        {
+          user_id: payload.userId,
+          type: payload.type,
+          title: payload.title,
+          message: payload.message ?? null,
+          document_type: payload.documentType ?? null,
+          document_id: payload.documentId ?? null,
+          document_url: payload.documentUrl ?? null,
+          metadata: payload.metadata ?? null,
+        },
+      ],
     });
 
     if (error) {
@@ -92,7 +96,7 @@ export async function notifyApprovers(
   documentNumber: string,
   documentUrl: string,
 ) {
-  const adminClient = createAdminClient();
+  const supabase = await createClient();
 
   const pending = approvals.filter((a) => a.status === "pending");
 
@@ -107,14 +111,15 @@ export async function notifyApprovers(
       document_type: documentType,
       document_id: documentId,
       document_url: documentUrl,
-      is_read: false,
       metadata: { document_number: documentNumber, level: a.level },
     }))
     .filter((r) => !!r.user_id);
 
   if (rows.length === 0) return;
 
-  const { error } = await adminClient.from("notifications").insert(rows);
+  const { error } = await supabase.rpc("create_notifications", {
+    p_notifications: rows,
+  });
   if (error) {
     console.error("[notifyApprovers] error:", error.message);
   }
@@ -228,32 +233,6 @@ export async function getPendingApprovals() {
     return { success: true, data: (data ?? []) as PendingApproval[] };
   } catch (err) {
     return { error: "Unexpected error fetching pending approvals" };
-  }
-}
-
-// ============================================================
-// GET UNREAD COUNT (for sidebar badge)
-// ============================================================
-
-export async function getUnreadNotificationsCount() {
-  try {
-    const supabase = await createClient();
-
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { count: 0 };
-
-    const { data, error } = await supabase.rpc(
-      "get_unread_notifications_count",
-      { user_uuid: user.id },
-    );
-
-    if (error) return { count: 0 };
-
-    return { count: (data as number) ?? 0 };
-  } catch {
-    return { count: 0 };
   }
 }
 
