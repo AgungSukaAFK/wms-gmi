@@ -27,6 +27,7 @@ import {
   type PendingApproval,
 } from "@/services/notification-actions";
 import { formatDate } from "@/lib/utils";
+import { useNotification } from "@/components/providers/NotificationProvider";
 
 // ============================================================
 // Helpers
@@ -232,6 +233,7 @@ export default function NotificationsPage() {
   const [notifTotal, setNotifTotal] = useState(0);
   const [notifFilter, setNotifFilter] = useState<"all" | "unread">("all");
   const [markingAllRead, setMarkingAllRead] = useState(false);
+  const { refreshNotifications } = useNotification();
 
   const LIMIT = 20;
 
@@ -277,12 +279,14 @@ export default function NotificationsPage() {
       ),
     );
     await markNotificationRead(id, isRead);
+    refreshNotifications();
   };
 
   const handleMarkAllRead = async () => {
     setMarkingAllRead(true);
     await markAllNotificationsRead();
     await loadNotifications();
+    refreshNotifications();
     setMarkingAllRead(false);
   };
 

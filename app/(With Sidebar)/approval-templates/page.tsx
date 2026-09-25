@@ -235,6 +235,7 @@ export default function ApprovalTemplatesPage() {
                   value: "Stock Out - SPB Invoice",
                 },
                 { label: "Return SPB", value: "Return SPB" },
+                { label: "Working Order", value: "Working Order" },
               ]}
             />
 

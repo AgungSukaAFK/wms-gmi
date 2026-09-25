@@ -38,6 +38,7 @@ import {
   Search,
   Plus,
   ShieldAlert,
+  Factory,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import {
@@ -1839,6 +1840,16 @@ export default function MRDetailPage({
                       Transaction Closed for Editing
                     </p>
                   </div>
+                  {mr?.mr_status === "approved" && (
+                    <Link href={`/working-order/create?mr_id=${mr.id}`}>
+                      <Button
+                        variant="outline"
+                        className="gap-2 font-bold text-xs uppercase"
+                      >
+                        <Factory className="h-4 w-4" /> Buat WO dari MR ini
+                      </Button>
+                    </Link>
+                  )}
                 </div>
               )}
             </div>

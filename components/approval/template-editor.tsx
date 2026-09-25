@@ -458,6 +458,7 @@ export function TemplateEditor({
                     Stock Out - SPB Invoice
                   </SelectItem>
                   <SelectItem value="Return SPB">Return SPB</SelectItem>
+                  <SelectItem value="Working Order">Working Order</SelectItem>
                 </SelectContent>
               </Select>
             </div>

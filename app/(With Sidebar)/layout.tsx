@@ -22,6 +22,7 @@ import { Fragment, ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { DailyResetGuard } from "@/components/daily-reset-guard";
 import { useAuthStore } from "@/stores/auth-store";
+import { NotificationProvider } from "@/components/providers/NotificationProvider";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -101,7 +102,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }, [router]);
 
   return (
-    <>
+    <NotificationProvider>
       <Toaster richColors position="top-right" />
       <SidebarProvider>
         <AppSidebar className="shadow-lg" />
@@ -139,6 +140,6 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
           </div>
         </SidebarInset>
       </SidebarProvider>
-    </>
+    </NotificationProvider>
   );
 }

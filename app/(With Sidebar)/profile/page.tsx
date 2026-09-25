@@ -18,6 +18,15 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
+import { Slider } from "@/components/ui/slider";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import {
   User,
@@ -29,11 +38,18 @@ import {
   Loader2,
   Save,
   Lock,
+  Bell,
+  Volume2,
+  PlayCircle,
 } from "lucide-react";
+import { useNotifSettings } from "@/hooks/use-notif-settings";
+import { SOUND_PRESETS, playSound, unlockAudio } from "@/lib/notifications/sound";
 
 export default function ProfilePage() {
   const router = useRouter();
   const storeProfile = useAuthStore((s) => s.profile);
+  const { settings: notifSettings, updateSettings: updateNotifSettings } =
+    useNotifSettings();
 
   const [nomorWhatsapp, setNomorWhatsapp] = useState("");
   const [waLoading, setWaLoading] = useState(true);
@@ -378,6 +394,154 @@ export default function ProfilePage() {
                   )}
                   {changingPassword ? "Memproses..." : "Ubah Password"}
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/60 mt-6">
+            <CardHeader>
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <Bell className="h-4 w-4 text-primary" />
+                Pengaturan Notifikasi
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Preferensi ini disimpan di perangkat ini saja.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-5">
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                    Aktifkan Notifikasi
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Matikan untuk menonaktifkan toast, suara, dan notifikasi
+                    browser.
+                  </p>
+                </div>
+                <Switch
+                  checked={notifSettings.enabled}
+                  onCheckedChange={(checked) =>
+                    updateNotifSettings({ enabled: checked })
+                  }
+                />
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between gap-4">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                  Suara Notifikasi
+                </Label>
+                <Switch
+                  checked={notifSettings.sound}
+                  disabled={!notifSettings.enabled}
+                  onCheckedChange={(checked) =>
+                    updateNotifSettings({ sound: checked })
+                  }
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                  Jenis Suara
+                </Label>
+                <div className="flex items-center gap-2">
+                  <Select
+                    value={notifSettings.soundType}
+                    disabled={!notifSettings.enabled || !notifSettings.sound}
+                    onValueChange={(value) =>
+                      updateNotifSettings({
+                        soundType: value as (typeof SOUND_PRESETS)[number]["id"],
+                      })
+                    }
+                  >
+                    <SelectTrigger className="h-10 flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {SOUND_PRESETS.map((preset) => (
+                        <SelectItem key={preset.id} value={preset.id}>
+                          {preset.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 gap-2 font-bold shrink-0"
+                    disabled={!notifSettings.enabled || !notifSettings.sound}
+                    onClick={() => {
+                      unlockAudio();
+                      playSound(notifSettings.soundType, notifSettings.volume);
+                    }}
+                  >
+                    <PlayCircle className="h-4 w-4" />
+                    Uji Suara
+                  </Button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                  <Volume2 className="h-3 w-3" />
+                  Volume
+                </Label>
+                <Slider
+                  value={[notifSettings.volume]}
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  disabled={!notifSettings.enabled || !notifSettings.sound}
+                  onValueChange={(value) =>
+                    updateNotifSettings({ volume: value[0] })
+                  }
+                />
+              </div>
+
+              <Separator />
+
+              <div className="flex items-center justify-between gap-4">
+                <div className="space-y-0.5">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                    Notifikasi Browser
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Tampilkan notifikasi sistem operasi saat tab ini terbuka.
+                  </p>
+                </div>
+                <Switch
+                  checked={notifSettings.browser}
+                  disabled={!notifSettings.enabled}
+                  onCheckedChange={async (checked) => {
+                    if (!checked) {
+                      updateNotifSettings({ browser: false });
+                      return;
+                    }
+                    if (
+                      typeof window === "undefined" ||
+                      !("Notification" in window)
+                    ) {
+                      toast.error(
+                        "Browser ini tidak mendukung notifikasi sistem.",
+                      );
+                      return;
+                    }
+                    if (window.Notification.permission === "denied") {
+                      toast.error(
+                        "Izin notifikasi diblokir. Aktifkan dari pengaturan browser.",
+                      );
+                      return;
+                    }
+                    const permission = await window.Notification.requestPermission();
+                    if (permission === "granted") {
+                      updateNotifSettings({ browser: true });
+                    } else {
+                      toast.error("Izin notifikasi tidak diberikan.");
+                    }
+                  }}
+                />
               </div>
             </CardContent>
           </Card>

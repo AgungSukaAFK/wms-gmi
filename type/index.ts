@@ -31,7 +31,8 @@ export type ApprovalType =
   | "Stock Out - SPB PO"
   | "Stock Out - SPB DO"
   | "Stock Out - SPB Invoice"
-  | "Return SPB";
+  | "Return SPB"
+  | "Working Order";
 
 export interface ApprovalTemplate {
   id: number;
@@ -403,27 +404,6 @@ export interface ItemRequest {
     email: string;
     department: string;
   } | null;
-}
-
-export type NotificationType =
-  | "mention"
-  | "approval_mr"
-  | "approval_po"
-  | "info";
-export interface Notification {
-  id: string;
-  created_at: string;
-  user_id: string;
-  actor_id?: string;
-  actor_name?: string;
-  actor_avatar?: string;
-  type: NotificationType;
-  title: string;
-  message: string;
-  resource_id?: string;
-  resource_type?: "material_request" | "purchase_order";
-  link: string;
-  is_read: boolean;
 }
 
 export type MrItemStatus =
