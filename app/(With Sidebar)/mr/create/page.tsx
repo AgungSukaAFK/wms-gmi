@@ -136,6 +136,11 @@ export default function CreateMRPage() {
     if (!mrKategori) return "Kategori MR harus dipilih";
     if (!selectedTemplateId) return "Pilih Alur Approval";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
+    const zeroQtyItems = items.filter((item) => !item.qty || item.qty <= 0);
+    if (zeroQtyItems.length > 0) {
+      const names = zeroQtyItems.map((item) => item.part_number).join(", ");
+      return `Semua qty barang tidak boleh 0. Periksa: ${names}`;
+    }
     return null;
   };
 

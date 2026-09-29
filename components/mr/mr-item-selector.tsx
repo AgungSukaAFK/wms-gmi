@@ -445,8 +445,17 @@ export function MRItemSelector({
                               qty: parseInt(e.target.value) || 0,
                             })
                           }
-                          className="h-8 w-20 text-center font-medium text-xs rounded-md bg-white border-slate-200"
+                          className={`h-8 w-20 text-center font-medium text-xs rounded-md bg-white ${
+                            item.qty <= 0
+                              ? "border-red-500 ring-1 ring-red-500"
+                              : "border-slate-200"
+                          }`}
                         />
+                        {item.qty <= 0 && (
+                          <span className="text-[9px] font-medium text-red-600">
+                            Qty tidak boleh 0
+                          </span>
+                        )}
                         {hasCap && (
                           <span className="text-[9px] font-medium text-amber-600">
                             Maks {cap.allowedMax} (stok {cap.currentQty}/

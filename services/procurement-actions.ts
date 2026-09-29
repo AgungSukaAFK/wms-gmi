@@ -182,6 +182,13 @@ export async function createMaterialRequest(data: {
     return { error: "Kategori MR wajib dipilih." };
   }
 
+  if (!data.items?.length) {
+    return { error: "Daftar barang tidak boleh kosong." };
+  }
+  if (data.items.some((i) => !i.qty_request || i.qty_request <= 0)) {
+    return { error: "Semua qty barang tidak boleh 0." };
+  }
+
   const { data: existingMr } = await supabase
     .from("mrs")
     .select("id")
