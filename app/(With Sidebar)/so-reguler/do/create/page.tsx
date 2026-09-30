@@ -49,12 +49,12 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import {
   type ShipmentType,
-  type KoliRow,
+  type KoliFormState,
   isEkspedisi,
   defaultEstimasiHari,
-  emptyKoliRow,
-  summarizeKoli,
-  validateKoliRows,
+  initialKoliForm,
+  koliFormPayload,
+  validateKoliForm,
 } from "@/lib/shipment";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { createDoReguler } from "@/services/do-reguler-actions";
@@ -101,7 +101,7 @@ export default function CreateDoRegulerPage() {
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
-  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [koli, setKoli] = useState<KoliFormState>(initialKoliForm);
   const [layananKurir, setLayananKurir] = useState("");
   const [ratePerKg, setRatePerKg] = useState(0);
   const [noResi, setNoResi] = useState("");
@@ -275,7 +275,7 @@ export default function CreateDoRegulerPage() {
       return "Isi rate per kg kurir.";
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider.trim())
       return "Pilih penyedia handcarry eksternal.";
-    return validateKoliRows(koliRows, {
+    return validateKoliForm(koli, {
       requireBerat: isEkspedisi(shipmentType),
     });
   };
@@ -310,8 +310,7 @@ export default function CreateDoRegulerPage() {
           shipmentType === "handcarry_eksternal"
             ? eksternalId || undefined
             : undefined,
-        jumlah_koli: summarizeKoli(koliRows).totalKoli,
-        koli_detail: koliRows,
+        ...koliFormPayload(koli),
         layanan_kurir: isEkspedisi(shipmentType) ? layananKurir.trim() : undefined,
         rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg : undefined,
         no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
@@ -687,9 +686,9 @@ export default function CreateDoRegulerPage() {
 
           <div className="md:col-span-2 xl:col-span-3">
             <KoliDetailEditor
-              rows={koliRows}
-              onRowsChange={setKoliRows}
-              showKurirFields={isEkspedisi(shipmentType)}
+              koli={koli}
+              onKoliChange={setKoli}
+              shipmentType={shipmentType}
               layananKurir={layananKurir}
               onLayananKurirChange={setLayananKurir}
               ratePerKg={ratePerKg}

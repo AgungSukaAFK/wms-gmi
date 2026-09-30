@@ -324,6 +324,7 @@ export function ItemTransferDetailSheet({
                   koliDetail={it.koli_detail}
                   layananKurir={it.layanan_kurir}
                   ratePerKg={it.rate_per_kg}
+                  shipmentType={it.shipment_type}
                 />
               </div>
 

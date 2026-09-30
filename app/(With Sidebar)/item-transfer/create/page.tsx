@@ -60,12 +60,12 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import {
   type ShipmentType,
-  type KoliRow,
+  type KoliFormState,
   isEkspedisi,
   defaultEstimasiHari,
-  emptyKoliRow,
-  summarizeKoli,
-  validateKoliRows,
+  initialKoliForm,
+  koliFormPayload,
+  validateKoliForm,
 } from "@/lib/shipment";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
@@ -137,7 +137,7 @@ export default function CreateItemTransferPage() {
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
-  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [koli, setKoli] = useState<KoliFormState>(initialKoliForm);
   const [layananKurir, setLayananKurir] = useState("");
   const [ratePerKg, setRatePerKg] = useState(0);
   const [noResi, setNoResi] = useState("");
@@ -494,7 +494,7 @@ export default function CreateItemTransferPage() {
       return "Isi rate per kg kurir.";
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider.trim())
       return "Pilih penyedia handcarry eksternal.";
-    const koliErr = validateKoliRows(koliRows, {
+    const koliErr = validateKoliForm(koli, {
       requireBerat: isEkspedisi(shipmentType),
     });
     if (koliErr) return koliErr;
@@ -558,8 +558,7 @@ export default function CreateItemTransferPage() {
           shipmentType === "handcarry_eksternal" ? eksternalProvider || undefined : undefined,
         eksternal_id:
           shipmentType === "handcarry_eksternal" ? eksternalId || undefined : undefined,
-        jumlah_koli: summarizeKoli(koliRows).totalKoli,
-        koli_detail: koliRows,
+        ...koliFormPayload(koli),
         layanan_kurir: isEkspedisi(shipmentType) ? layananKurir.trim() : undefined,
         rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg : undefined,
         no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
@@ -932,9 +931,9 @@ export default function CreateItemTransferPage() {
 
           <div className="md:col-span-2 xl:col-span-3">
             <KoliDetailEditor
-              rows={koliRows}
-              onRowsChange={setKoliRows}
-              showKurirFields={isEkspedisi(shipmentType)}
+              koli={koli}
+              onKoliChange={setKoli}
+              shipmentType={shipmentType}
               layananKurir={layananKurir}
               onLayananKurirChange={setLayananKurir}
               ratePerKg={ratePerKg}

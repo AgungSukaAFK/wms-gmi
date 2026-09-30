@@ -50,10 +50,10 @@ import {
   isEkspedisi,
   defaultEstimasiHari,
   SHIPMENT_LABEL,
-  type KoliRow,
-  emptyKoliRow,
-  summarizeKoli,
-  validateKoliRows,
+  type KoliFormState,
+  initialKoliForm,
+  koliFormPayload,
+  validateKoliForm,
 } from "@/lib/shipment";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import {
@@ -102,7 +102,7 @@ export default function CreateDeliveryPage() {
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
   // Estimasi pengiriman (hari) — default sesuai jenis pengiriman (laut 14, udara 5, handcarry 1)
   const [estimasiHari, setEstimasiHari] = useState(14);
-  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [koli, setKoli] = useState<KoliFormState>(initialKoliForm);
   const [layananKurir, setLayananKurir] = useState("");
   const [ratePerKg, setRatePerKg] = useState(0);
   const [picUid, setPicUid] = useState<string>("");
@@ -426,7 +426,7 @@ export default function CreateDeliveryPage() {
       return toast.error("Isi rate per kg kurir");
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider)
       return toast.error("Pilih layanan handcarry eksternal");
-    const koliErr = validateKoliRows(koliRows, {
+    const koliErr = validateKoliForm(koli, {
       requireBerat: isEkspedisi(shipmentType),
     });
     if (koliErr) return toast.error(koliErr);
@@ -475,8 +475,7 @@ export default function CreateDeliveryPage() {
             : undefined,
         no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
         estimasi_hari: estimasiHari,
-        jumlah_koli: summarizeKoli(koliRows).totalKoli,
-        koli_detail: koliRows,
+        ...koliFormPayload(koli),
         layanan_kurir: isEkspedisi(shipmentType) ? layananKurir.trim() : undefined,
         rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg : undefined,
         uid_pic: picUid,
@@ -1073,9 +1072,9 @@ export default function CreateDeliveryPage() {
           {/* Detail Koli + layanan/rate kurir */}
           <div className="md:col-span-2 lg:col-span-3">
             <KoliDetailEditor
-              rows={koliRows}
-              onRowsChange={setKoliRows}
-              showKurirFields={isEkspedisi(shipmentType)}
+              koli={koli}
+              onKoliChange={setKoli}
+              shipmentType={shipmentType}
               layananKurir={layananKurir}
               onLayananKurirChange={setLayananKurir}
               ratePerKg={ratePerKg}

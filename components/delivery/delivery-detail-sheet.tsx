@@ -493,6 +493,7 @@ export function DeliveryDetailSheet({
                   koliDetail={delivery?.koli_detail}
                   layananKurir={delivery?.layanan_kurir}
                   ratePerKg={delivery?.rate_per_kg}
+                  shipmentType={delivery?.shipment_type}
                 />
               </div>
 

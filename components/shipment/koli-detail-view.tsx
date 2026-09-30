@@ -16,19 +16,21 @@ export function KoliDetailView({
   koliDetail,
   layananKurir,
   ratePerKg,
+  shipmentType,
   className,
 }: {
   koliDetail: unknown; // nilai mentah kolom JSONB koli_detail
   layananKurir?: string | null;
   ratePerKg?: number | string | null;
+  shipmentType?: string | null; // menentukan pembagi berat volume
   className?: string;
 }) {
   const rows = parseKoliDetail(koliDetail);
   const rate = Number(ratePerKg) || 0;
   if (rows.length === 0 && !layananKurir && !rate) return null;
 
-  const summary = summarizeKoli(rows);
-  const biaya = estimasiBiayaKirim(rows, rate);
+  const summary = summarizeKoli(rows, shipmentType);
+  const biaya = estimasiBiayaKirim(rows, rate, shipmentType);
 
   return (
     <div className={`space-y-2 text-xs ${className ?? ""}`}>
@@ -69,7 +71,7 @@ export function KoliDetailView({
                       : "-"}
                   </td>
                   <td className="px-2 py-1 text-right">
-                    {hasDimensi(r) ? `${fmtNum(beratVolumeKoli(r))} kg` : "-"}
+                    {hasDimensi(r) ? `${fmtNum(beratVolumeKoli(r, shipmentType))} kg` : "-"}
                   </td>
                 </tr>
               ))}

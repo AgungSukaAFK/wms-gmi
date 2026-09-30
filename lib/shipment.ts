@@ -42,8 +42,21 @@ export interface KoliRow {
   tinggi_cm: number;
 }
 
-/** Pembagi berat volume standar ekspedisi: P x L x T (cm) / 6000. */
-export const VOLUMETRIC_DIVISOR = 6000;
+/**
+ * Pembagi berat volume per jenis pengiriman: P x L x T (cm) / pembagi.
+ *   - Udara 6000 (standar IATA, 1 m3 ~ 167 kg; dipakai kurir paket umumnya)
+ *   - Laut 4000 (umum dipakai cargo laut/darat)
+ * Nilai lain (legacy 'ekspedisi', handcarry) pakai 6000; handcarry tidak
+ * menampilkan estimasi biaya, jadi pembagi hanya memengaruhi berat volume.
+ */
+export const VOLUMETRIC_DIVISOR: Record<string, number> = {
+  ekspedisi_udara: 6000,
+  ekspedisi_laut: 4000,
+};
+export const DEFAULT_VOLUMETRIC_DIVISOR = 6000;
+
+export const volumetricDivisor = (t?: string | null) =>
+  (t && VOLUMETRIC_DIVISOR[t]) || DEFAULT_VOLUMETRIC_DIVISOR;
 
 export const emptyKoliRow = (): KoliRow => ({
   qty: 1,
@@ -70,22 +83,9 @@ export const parseKoliDetail = (raw: unknown): KoliRow[] =>
       }))
     : [];
 
-/**
- * Baris koli awal untuk form edit. Dokumen lama (sebelum ada koli_detail)
- * dikonversi jadi 1 baris berisi jumlah_koli tanpa berat/dimensi.
- */
-export const koliRowsFromDoc = (doc: {
-  koli_detail?: unknown;
-  jumlah_koli?: number | null;
-}): KoliRow[] => {
-  const rows = parseKoliDetail(doc.koli_detail);
-  if (rows.length > 0) return rows;
-  return [{ ...emptyKoliRow(), qty: Math.max(1, doc.jumlah_koli || 1) }];
-};
-
 /** Berat volume 1 koli (kg); 0 kalau dimensi tidak lengkap. */
-export const beratVolumeKoli = (r: KoliRow) =>
-  (r.panjang_cm * r.lebar_cm * r.tinggi_cm) / VOLUMETRIC_DIVISOR;
+export const beratVolumeKoli = (r: KoliRow, shipmentType?: string | null) =>
+  (r.panjang_cm * r.lebar_cm * r.tinggi_cm) / volumetricDivisor(shipmentType);
 
 export const hasDimensi = (r: KoliRow) =>
   r.panjang_cm > 0 && r.lebar_cm > 0 && r.tinggi_cm > 0;
@@ -97,10 +97,13 @@ export interface KoliSummary {
   beratTagih: number; // kg, per koli diambil max(aktual, volume) lalu dijumlah
 }
 
-export const summarizeKoli = (rows: KoliRow[]): KoliSummary =>
+export const summarizeKoli = (
+  rows: KoliRow[],
+  shipmentType?: string | null,
+): KoliSummary =>
   rows.reduce<KoliSummary>(
     (acc, r) => {
-      const vol = beratVolumeKoli(r);
+      const vol = beratVolumeKoli(r, shipmentType);
       acc.totalKoli += r.qty;
       acc.beratAktual += r.qty * r.berat_kg;
       acc.beratVolume += r.qty * vol;
@@ -113,10 +116,11 @@ export const summarizeKoli = (rows: KoliRow[]): KoliSummary =>
 /** Estimasi biaya kirim = rate/kg x berat tagih. null kalau rate kosong. */
 export const estimasiBiayaKirim = (
   rows: KoliRow[],
-  ratePerKg?: number | null,
+  ratePerKg: number | null | undefined,
+  shipmentType?: string | null,
 ) =>
-  ratePerKg && ratePerKg > 0
-    ? Math.round(summarizeKoli(rows).beratTagih * ratePerKg)
+  ratePerKg && ratePerKg > 0 && rows.length > 0
+    ? Math.round(summarizeKoli(rows, shipmentType).beratTagih * ratePerKg)
     : null;
 
 /**
@@ -143,3 +147,52 @@ export const validateKoliRows = (
 /** Format angka kg/cm tanpa trailing ,00 (locale id-ID). */
 export const fmtNum = (n: number, maxFrac = 2) =>
   n.toLocaleString("id-ID", { maximumFractionDigits: maxFrac });
+
+// ---------------------------------------------------------------------------
+// State form koli. Checkbox "Dengan detail koli" (default on); kalau off,
+// user cukup isi jumlah koli dan koli_detail disimpan kosong ([]).
+// Tidak ada kolom DB untuk toggle-nya: koli_detail kosong = tanpa detail.
+// ---------------------------------------------------------------------------
+
+export interface KoliFormState {
+  withDetail: boolean;
+  jumlahKoli: number; // dipakai saat withDetail = false
+  rows: KoliRow[]; // dipakai saat withDetail = true
+}
+
+export const initialKoliForm = (): KoliFormState => ({
+  withDetail: true,
+  jumlahKoli: 1,
+  rows: [emptyKoliRow()],
+});
+
+/** State form dari dokumen tersimpan (dokumen lama = tanpa detail). */
+export const koliFormFromDoc = (doc: {
+  koli_detail?: unknown;
+  jumlah_koli?: number | null;
+}): KoliFormState => {
+  const rows = parseKoliDetail(doc.koli_detail);
+  return rows.length > 0
+    ? { withDetail: true, jumlahKoli: summarizeKoli(rows).totalKoli, rows }
+    : {
+        withDetail: false,
+        jumlahKoli: Math.max(1, doc.jumlah_koli || 1),
+        rows: [emptyKoliRow()],
+      };
+};
+
+/** Kolom yang disimpan: jumlah_koli selalu terisi (backward-compat). */
+export const koliFormPayload = (f: KoliFormState) =>
+  f.withDetail
+    ? { jumlah_koli: summarizeKoli(f.rows).totalKoli, koli_detail: f.rows }
+    : { jumlah_koli: f.jumlahKoli, koli_detail: [] as KoliRow[] };
+
+export const validateKoliForm = (
+  f: KoliFormState,
+  opts: { requireBerat: boolean },
+): string | null =>
+  f.withDetail
+    ? validateKoliRows(f.rows, opts)
+    : f.jumlahKoli < 1
+      ? "Jumlah koli minimal 1."
+      : null;

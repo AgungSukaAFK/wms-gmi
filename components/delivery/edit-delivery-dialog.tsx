@@ -44,11 +44,11 @@ import {
   isEkspedisi,
   SHIPMENT_LABEL,
   type ShipmentType,
-  type KoliRow,
-  emptyKoliRow,
-  koliRowsFromDoc,
-  summarizeKoli,
-  validateKoliRows,
+  type KoliFormState,
+  initialKoliForm,
+  koliFormFromDoc,
+  koliFormPayload,
+  validateKoliForm,
 } from "@/lib/shipment";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 
@@ -104,7 +104,7 @@ export function EditDeliveryDialog({
   const [eksternalId, setEksternalId] = useState("");
   const [noResi, setNoResi] = useState("");
   const [estimasiHari, setEstimasiHari] = useState(1);
-  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [koli, setKoli] = useState<KoliFormState>(initialKoliForm);
   const [originalKoliKey, setOriginalKoliKey] = useState("");
   const [layananKurir, setLayananKurir] = useState("");
   const [ratePerKg, setRatePerKg] = useState(0);
@@ -148,9 +148,9 @@ export function EditDeliveryDialog({
         setEksternalId(dlvData.eksternal_id || "");
         setNoResi(dlvData.no_resi || "");
         setEstimasiHari(dlvData.estimasi_hari || 1);
-        const initialKoli = koliRowsFromDoc(dlvData);
-        setKoliRows(initialKoli);
-        setOriginalKoliKey(JSON.stringify(initialKoli));
+        const initialKoli = koliFormFromDoc(dlvData);
+        setKoli(initialKoli);
+        setOriginalKoliKey(JSON.stringify(koliFormPayload(initialKoli)));
         setLayananKurir(dlvData.layanan_kurir || "");
         setRatePerKg(Number(dlvData.rate_per_kg) || 0);
         setPicUid(dlvData.uid_pic || "");
@@ -305,7 +305,7 @@ export function EditDeliveryDialog({
 
     // Berat tidak diwajibkan di sini: delivery lama belum punya detail koli,
     // moderator harus tetap bisa edit info lain tanpa melengkapinya.
-    const koliErr = validateKoliRows(koliRows, { requireBerat: false });
+    const koliErr = validateKoliForm(koli, { requireBerat: false });
     if (koliErr) {
       toast.error(koliErr);
       return;
@@ -320,7 +320,7 @@ export function EditDeliveryDialog({
       eksternalId !== (delivery.eksternal_id || "") ||
       noResi !== (delivery.no_resi || "") ||
       estimasiHari !== (delivery.estimasi_hari || 1) ||
-      JSON.stringify(koliRows) !== originalKoliKey ||
+      JSON.stringify(koliFormPayload(koli)) !== originalKoliKey ||
       layananKurir !== (delivery.layanan_kurir || "") ||
       ratePerKg !== (Number(delivery.rate_per_kg) || 0) ||
       picUid !== (delivery.uid_pic || "") ||
@@ -354,8 +354,7 @@ export function EditDeliveryDialog({
                   : null,
               no_resi: isEkspedisi(shipmentType) ? noResi || null : null,
               estimasi_hari: estimasiHari,
-              jumlah_koli: summarizeKoli(koliRows).totalKoli,
-              koli_detail: koliRows,
+              ...koliFormPayload(koli),
               layanan_kurir: isEkspedisi(shipmentType) ? layananKurir || null : null,
               rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg || null : null,
               uid_pic: picUid || null,
@@ -553,9 +552,9 @@ export function EditDeliveryDialog({
 
                   <div className="col-span-full">
                     <KoliDetailEditor
-                      rows={koliRows}
-                      onRowsChange={setKoliRows}
-                      showKurirFields={isEkspedisi(shipmentType)}
+                      koli={koli}
+                      onKoliChange={setKoli}
+                      shipmentType={shipmentType}
                       layananKurir={layananKurir}
                       onLayananKurirChange={setLayananKurir}
                       ratePerKg={ratePerKg}

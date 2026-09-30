@@ -52,11 +52,12 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
   SHIPMENT_LABEL,
-  type KoliRow,
+  type KoliFormState,
   isEkspedisi,
-  koliRowsFromDoc,
-  summarizeKoli,
-  validateKoliRows,
+  initialKoliForm,
+  koliFormFromDoc,
+  koliFormPayload,
+  validateKoliForm,
 } from "@/lib/shipment";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
@@ -131,7 +132,7 @@ export function DoRegulerDetailSheet({
     pic: "",
     remarks: "",
   });
-  const [editKoliRows, setEditKoliRows] = useState<KoliRow[]>([]);
+  const [editKoli, setEditKoli] = useState<KoliFormState>(initialKoliForm);
   const [editLayananKurir, setEditLayananKurir] = useState("");
   const [editRatePerKg, setEditRatePerKg] = useState(0);
 
@@ -213,7 +214,7 @@ export function DoRegulerDetailSheet({
       pic: doRow.pic || "",
       remarks: doRow.remarks || "",
     });
-    setEditKoliRows(koliRowsFromDoc(doRow));
+    setEditKoli(koliFormFromDoc(doRow));
     setEditLayananKurir(doRow.layanan_kurir || "");
     setEditRatePerKg(Number(doRow.rate_per_kg) || 0);
     setEditOpen(true);
@@ -222,7 +223,7 @@ export function DoRegulerDetailSheet({
   const handleEditSave = async () => {
     if (!doId) return;
     // Berat tidak diwajibkan: DO lama belum punya detail koli.
-    const koliErr = validateKoliRows(editKoliRows, { requireBerat: false });
+    const koliErr = validateKoliForm(editKoli, { requireBerat: false });
     if (koliErr) return toast.error(koliErr);
     const ekspedisi = isEkspedisi(editForm.shipment_type);
     setEditSaving(true);
@@ -234,8 +235,7 @@ export function DoRegulerDetailSheet({
       sender_name: editForm.sender_name || undefined,
       eksternal_provider: editForm.eksternal_provider || undefined,
       eksternal_id: editForm.eksternal_id || undefined,
-      jumlah_koli: summarizeKoli(editKoliRows).totalKoli,
-      koli_detail: editKoliRows,
+      ...koliFormPayload(editKoli),
       layanan_kurir: ekspedisi ? editLayananKurir : undefined,
       rate_per_kg: ekspedisi ? editRatePerKg : undefined,
       no_resi: editForm.no_resi || undefined,
@@ -439,6 +439,7 @@ export function DoRegulerDetailSheet({
                   koliDetail={doRow.koli_detail}
                   layananKurir={doRow.layanan_kurir}
                   ratePerKg={doRow.rate_per_kg}
+                  shipmentType={doRow.shipment_type}
                 />
               </div>
 
@@ -766,9 +767,9 @@ export function DoRegulerDetailSheet({
             </div>
             <div className="md:col-span-2">
               <KoliDetailEditor
-                rows={editKoliRows}
-                onRowsChange={setEditKoliRows}
-                showKurirFields={isEkspedisi(editForm.shipment_type)}
+                koli={editKoli}
+                onKoliChange={setEditKoli}
+                shipmentType={editForm.shipment_type}
                 layananKurir={editLayananKurir}
                 onLayananKurirChange={setEditLayananKurir}
                 ratePerKg={editRatePerKg}
