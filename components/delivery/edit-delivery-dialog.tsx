@@ -44,7 +44,13 @@ import {
   isEkspedisi,
   SHIPMENT_LABEL,
   type ShipmentType,
+  type KoliRow,
+  emptyKoliRow,
+  koliRowsFromDoc,
+  summarizeKoli,
+  validateKoliRows,
 } from "@/lib/shipment";
+import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 
 interface DeliveryItemRow {
   mr_item_id?: number;
@@ -98,7 +104,10 @@ export function EditDeliveryDialog({
   const [eksternalId, setEksternalId] = useState("");
   const [noResi, setNoResi] = useState("");
   const [estimasiHari, setEstimasiHari] = useState(1);
-  const [jumlahKoli, setJumlahKoli] = useState(1);
+  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [originalKoliKey, setOriginalKoliKey] = useState("");
+  const [layananKurir, setLayananKurir] = useState("");
+  const [ratePerKg, setRatePerKg] = useState(0);
   const [picUid, setPicUid] = useState("");
   const [receiverUid, setReceiverUid] = useState("");
 
@@ -139,7 +148,11 @@ export function EditDeliveryDialog({
         setEksternalId(dlvData.eksternal_id || "");
         setNoResi(dlvData.no_resi || "");
         setEstimasiHari(dlvData.estimasi_hari || 1);
-        setJumlahKoli(dlvData.jumlah_koli || 1);
+        const initialKoli = koliRowsFromDoc(dlvData);
+        setKoliRows(initialKoli);
+        setOriginalKoliKey(JSON.stringify(initialKoli));
+        setLayananKurir(dlvData.layanan_kurir || "");
+        setRatePerKg(Number(dlvData.rate_per_kg) || 0);
         setPicUid(dlvData.uid_pic || "");
         setReceiverUid(dlvData.uid_receiver || "");
       }
@@ -290,6 +303,14 @@ export function EditDeliveryDialog({
       return;
     }
 
+    // Berat tidak diwajibkan di sini: delivery lama belum punya detail koli,
+    // moderator harus tetap bisa edit info lain tanpa melengkapinya.
+    const koliErr = validateKoliRows(koliRows, { requireBerat: false });
+    if (koliErr) {
+      toast.error(koliErr);
+      return;
+    }
+
     const headerChanged =
       dlvKode.trim() !== (delivery.dlv_kode || "") ||
       ekspedisi !== (delivery.ekspedisi || "") ||
@@ -299,7 +320,9 @@ export function EditDeliveryDialog({
       eksternalId !== (delivery.eksternal_id || "") ||
       noResi !== (delivery.no_resi || "") ||
       estimasiHari !== (delivery.estimasi_hari || 1) ||
-      jumlahKoli !== (delivery.jumlah_koli || 1) ||
+      JSON.stringify(koliRows) !== originalKoliKey ||
+      layananKurir !== (delivery.layanan_kurir || "") ||
+      ratePerKg !== (Number(delivery.rate_per_kg) || 0) ||
       picUid !== (delivery.uid_pic || "") ||
       receiverUid !== (delivery.uid_receiver || "");
 
@@ -331,7 +354,10 @@ export function EditDeliveryDialog({
                   : null,
               no_resi: isEkspedisi(shipmentType) ? noResi || null : null,
               estimasi_hari: estimasiHari,
-              jumlah_koli: jumlahKoli,
+              jumlah_koli: summarizeKoli(koliRows).totalKoli,
+              koli_detail: koliRows,
+              layanan_kurir: isEkspedisi(shipmentType) ? layananKurir || null : null,
+              rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg || null : null,
               uid_pic: picUid || null,
               uid_receiver: receiverUid || null,
             }
@@ -525,18 +551,15 @@ export function EditDeliveryDialog({
                     </>
                   )}
 
-                  <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase">
-                      Jumlah Koli
-                    </Label>
-                    <Input
-                      type="number"
-                      min={1}
-                      value={jumlahKoli}
-                      onChange={(e) =>
-                        setJumlahKoli(Math.max(1, parseInt(e.target.value) || 1))
-                      }
-                      className="h-9 font-bold text-xs"
+                  <div className="col-span-full">
+                    <KoliDetailEditor
+                      rows={koliRows}
+                      onRowsChange={setKoliRows}
+                      showKurirFields={isEkspedisi(shipmentType)}
+                      layananKurir={layananKurir}
+                      onLayananKurirChange={setLayananKurir}
+                      ratePerKg={ratePerKg}
+                      onRatePerKgChange={setRatePerKg}
                     />
                   </div>
 

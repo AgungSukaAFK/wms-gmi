@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDateDocument, formatDateTime } from "@/lib/utils";
+import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 
 const TRACKING_LABEL: Record<string, string> = {
   created: "Item Transfer Dibuat",
@@ -48,6 +49,7 @@ export default function ItemTransferPrintPage() {
         `id, it_kode, it_tanggal, status, tracking_status, shipment_type,
          ekspedisi, sender_name, eksternal_id, jumlah_koli, estimasi_hari,
          no_resi, pic, remarks, approvals, signature_receiver_id,
+         koli_detail, layanan_kurir, rate_per_kg,
          signed_by_receiver_at, signature_receiver_image_url,
          signature_receiver_printed_name, signature_receiver_label,
          dari:cabang!dari_cabang_id(nama_cabang),
@@ -221,6 +223,13 @@ export default function ItemTransferPrintPage() {
           />
           {it.no_resi && <InfoRow label="No. Resi" value={it.no_resi} />}
         </div>
+
+        <KoliDetailView
+          className="mb-8"
+          koliDetail={it.koli_detail}
+          layananKurir={it.layanan_kurir}
+          ratePerKg={it.rate_per_kg}
+        />
 
         {/* Items */}
         <table className="w-full text-xs mb-8">

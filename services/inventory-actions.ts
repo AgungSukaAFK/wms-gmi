@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { evaluateMrFreeze, evaluateMrItemFreeze } from "./freeze-actions";
 import { revalidatePath } from "next/cache";
 import { toCompletedIfLegacy } from "@/lib/document-status";
+import type { KoliRow } from "@/lib/shipment";
 
 const DELIVERY_ACTIVE_STATUSES = [
   "open",
@@ -643,6 +644,9 @@ export async function createDelivery(data: {
   eksternal_id?: string; // handcarry_eksternal: order/booking ID
   estimasi_hari?: number; // estimasi lama pengiriman dalam hari
   jumlah_koli: number;
+  koli_detail?: KoliRow[];
+  layanan_kurir?: string; // ekspedisi: jenis layanan, input manual
+  rate_per_kg?: number; // ekspedisi: rate per kg (Rp), input manual
   pic?: string;
   uid_pic?: string;
   uid_receiver?: string;
@@ -748,6 +752,9 @@ export async function createDelivery(data: {
             ke_cabang_id: data.ke_cabang_id,
             ekspedisi: data.ekspedisi,
             jumlah_koli: data.jumlah_koli,
+            koli_detail: data.koli_detail ?? [],
+            layanan_kurir: data.layanan_kurir || null,
+            rate_per_kg: data.rate_per_kg || null,
             pic: data.pic || "",
             uid_pic: data.uid_pic || null,
             uid_sender: user?.id || null,
@@ -1262,6 +1269,9 @@ export type ModeratorEditDeliveryPayload = {
     no_resi?: string | null;
     estimasi_hari?: number;
     jumlah_koli?: number;
+    koli_detail?: KoliRow[];
+    layanan_kurir?: string | null;
+    rate_per_kg?: number | null;
     uid_pic?: string | null;
     uid_receiver?: string | null;
   };
@@ -1466,7 +1476,7 @@ export async function moderatorEditDelivery(
 
   if (payload.header) {
     const h = payload.header;
-    const headerPatch: Record<string, string | number | null> = {
+    const headerPatch: Record<string, string | number | null | KoliRow[]> = {
       updated_at: new Date().toISOString(),
     };
     if (newDlvKode !== undefined) headerPatch.dlv_kode = newDlvKode;
@@ -1479,6 +1489,10 @@ export async function moderatorEditDelivery(
     if (h.no_resi !== undefined) headerPatch.no_resi = h.no_resi?.trim() || null;
     if (typeof h.estimasi_hari === "number") headerPatch.estimasi_hari = h.estimasi_hari;
     if (typeof h.jumlah_koli === "number") headerPatch.jumlah_koli = h.jumlah_koli;
+    if (h.koli_detail !== undefined) headerPatch.koli_detail = h.koli_detail;
+    if (h.layanan_kurir !== undefined)
+      headerPatch.layanan_kurir = h.layanan_kurir?.trim() || null;
+    if (h.rate_per_kg !== undefined) headerPatch.rate_per_kg = h.rate_per_kg || null;
     if (h.uid_pic !== undefined) headerPatch.uid_pic = h.uid_pic || null;
     if (h.uid_receiver !== undefined) headerPatch.uid_receiver = h.uid_receiver || null;
 

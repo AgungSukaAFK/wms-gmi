@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import type { KoliRow } from "@/lib/shipment";
 import {
   notifyApprovers,
   notifyDocumentOwner,
@@ -85,6 +86,9 @@ export async function createItemTransfer(data: {
   eksternal_provider?: string;
   eksternal_id?: string;
   jumlah_koli?: number;
+  koli_detail?: KoliRow[];
+  layanan_kurir?: string;
+  rate_per_kg?: number;
   no_resi?: string;
   estimasi_hari?: number;
   pic?: string;
@@ -202,6 +206,9 @@ export async function createItemTransfer(data: {
         eksternal_provider: data.eksternal_provider || null,
         eksternal_id: data.eksternal_id || null,
         jumlah_koli: data.jumlah_koli ?? 1,
+        koli_detail: data.koli_detail ?? [],
+        layanan_kurir: data.layanan_kurir || null,
+        rate_per_kg: data.rate_per_kg || null,
         no_resi: data.no_resi || null,
         estimasi_hari: data.estimasi_hari ?? 1,
         pic: data.pic || null,

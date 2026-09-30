@@ -33,6 +33,7 @@ import {
 import { toast } from "sonner";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
+import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import {
   approveItemTransfer,
@@ -559,6 +560,12 @@ export default function ItemTransferDetailPage({
             </div>
           </div>
         </div>
+        <KoliDetailView
+          className="mt-3"
+          koliDetail={it?.koli_detail}
+          layananKurir={it?.layanan_kurir}
+          ratePerKg={it?.rate_per_kg}
+        />
       </Content>
 
       <Content title="Status Pengiriman">

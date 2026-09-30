@@ -50,7 +50,16 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { SHIPMENT_LABEL } from "@/lib/shipment";
+import {
+  SHIPMENT_LABEL,
+  type KoliRow,
+  isEkspedisi,
+  koliRowsFromDoc,
+  summarizeKoli,
+  validateKoliRows,
+} from "@/lib/shipment";
+import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
+import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import {
   deleteDoReguler,
   updateDoReguler,
@@ -117,12 +126,14 @@ export function DoRegulerDetailSheet({
     sender_name: "",
     eksternal_provider: "",
     eksternal_id: "",
-    jumlah_koli: "1",
     no_resi: "",
     estimasi_hari: "1",
     pic: "",
     remarks: "",
   });
+  const [editKoliRows, setEditKoliRows] = useState<KoliRow[]>([]);
+  const [editLayananKurir, setEditLayananKurir] = useState("");
+  const [editRatePerKg, setEditRatePerKg] = useState(0);
 
   const fetchData = async () => {
     if (!doId) return;
@@ -197,17 +208,23 @@ export function DoRegulerDetailSheet({
       sender_name: doRow.sender_name || "",
       eksternal_provider: doRow.eksternal_provider || "",
       eksternal_id: doRow.eksternal_id || "",
-      jumlah_koli: String(doRow.jumlah_koli ?? 1),
       no_resi: doRow.no_resi || "",
       estimasi_hari: String(doRow.estimasi_hari ?? 1),
       pic: doRow.pic || "",
       remarks: doRow.remarks || "",
     });
+    setEditKoliRows(koliRowsFromDoc(doRow));
+    setEditLayananKurir(doRow.layanan_kurir || "");
+    setEditRatePerKg(Number(doRow.rate_per_kg) || 0);
     setEditOpen(true);
   };
 
   const handleEditSave = async () => {
     if (!doId) return;
+    // Berat tidak diwajibkan: DO lama belum punya detail koli.
+    const koliErr = validateKoliRows(editKoliRows, { requireBerat: false });
+    if (koliErr) return toast.error(koliErr);
+    const ekspedisi = isEkspedisi(editForm.shipment_type);
     setEditSaving(true);
     const res = await updateDoReguler(doId, {
       do_tanggal: editForm.do_tanggal || undefined,
@@ -217,7 +234,10 @@ export function DoRegulerDetailSheet({
       sender_name: editForm.sender_name || undefined,
       eksternal_provider: editForm.eksternal_provider || undefined,
       eksternal_id: editForm.eksternal_id || undefined,
-      jumlah_koli: Number(editForm.jumlah_koli) || 1,
+      jumlah_koli: summarizeKoli(editKoliRows).totalKoli,
+      koli_detail: editKoliRows,
+      layanan_kurir: ekspedisi ? editLayananKurir : undefined,
+      rate_per_kg: ekspedisi ? editRatePerKg : undefined,
       no_resi: editForm.no_resi || undefined,
       estimasi_hari: Number(editForm.estimasi_hari) || 1,
       pic: editForm.pic || undefined,
@@ -414,6 +434,12 @@ export function DoRegulerDetailSheet({
                     <span className="font-semibold">{doRow.no_resi}</span>
                   </div>
                 )}
+                <KoliDetailView
+                  className="pt-1"
+                  koliDetail={doRow.koli_detail}
+                  layananKurir={doRow.layanan_kurir}
+                  ratePerKg={doRow.rate_per_kg}
+                />
               </div>
 
               {/* Tracking Timeline */}
@@ -606,7 +632,7 @@ export function DoRegulerDetailSheet({
       </SheetContent>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Edit DO Reguler</DialogTitle>
             <DialogDescription>
@@ -689,20 +715,6 @@ export function DoRegulerDetailSheet({
               />
             </div>
             <div className="space-y-2">
-              <Label htmlFor="jumlah_koli">Jumlah Koli</Label>
-              <Input
-                id="jumlah_koli"
-                type="number"
-                value={editForm.jumlah_koli}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    jumlah_koli: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
               <Label htmlFor="estimasi_hari">Estimasi Hari</Label>
               <Input
                 id="estimasi_hari"
@@ -750,6 +762,17 @@ export function DoRegulerDetailSheet({
                 onChange={(e) =>
                   setEditForm((prev) => ({ ...prev, no_resi: e.target.value }))
                 }
+              />
+            </div>
+            <div className="md:col-span-2">
+              <KoliDetailEditor
+                rows={editKoliRows}
+                onRowsChange={setEditKoliRows}
+                showKurirFields={isEkspedisi(editForm.shipment_type)}
+                layananKurir={editLayananKurir}
+                onLayananKurirChange={setEditLayananKurir}
+                ratePerKg={editRatePerKg}
+                onRatePerKgChange={setEditRatePerKg}
               />
             </div>
             <div className="space-y-2 md:col-span-2">

@@ -19,7 +19,6 @@ import {
   ArrowRight,
   Truck,
   Info,
-  Package,
   AlertCircle,
   Plus,
   Trash2,
@@ -51,7 +50,12 @@ import {
   isEkspedisi,
   defaultEstimasiHari,
   SHIPMENT_LABEL,
+  type KoliRow,
+  emptyKoliRow,
+  summarizeKoli,
+  validateKoliRows,
 } from "@/lib/shipment";
+import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import {
   Select,
   SelectContent,
@@ -98,7 +102,9 @@ export default function CreateDeliveryPage() {
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
   // Estimasi pengiriman (hari) — default sesuai jenis pengiriman (laut 14, udara 5, handcarry 1)
   const [estimasiHari, setEstimasiHari] = useState(14);
-  const [jumlahKoli, setJumlahKoli] = useState(1);
+  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [layananKurir, setLayananKurir] = useState("");
+  const [ratePerKg, setRatePerKg] = useState(0);
   const [picUid, setPicUid] = useState<string>("");
   const [receiverUid, setReceiverUid] = useState<string>("");
   const [senderSignatureId, setSenderSignatureId] = useState<string>("");
@@ -414,8 +420,16 @@ export default function CreateDeliveryPage() {
       return toast.error("Cabang asal dan tujuan tidak boleh sama");
     if (isEkspedisi(shipmentType) && !ekspedisiCourier)
       return toast.error("Pilih kurir ekspedisi");
+    if (isEkspedisi(shipmentType) && !layananKurir.trim())
+      return toast.error("Isi jenis layanan kurir");
+    if (isEkspedisi(shipmentType) && ratePerKg <= 0)
+      return toast.error("Isi rate per kg kurir");
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider)
       return toast.error("Pilih layanan handcarry eksternal");
+    const koliErr = validateKoliRows(koliRows, {
+      requireBerat: isEkspedisi(shipmentType),
+    });
+    if (koliErr) return toast.error(koliErr);
     if (!picUid) return toast.error("PIC harus dipilih");
     if (!receiverUid) return toast.error("Penerima harus dipilih");
     if (!senderSignatureId)
@@ -461,7 +475,10 @@ export default function CreateDeliveryPage() {
             : undefined,
         no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
         estimasi_hari: estimasiHari,
-        jumlah_koli: jumlahKoli,
+        jumlah_koli: summarizeKoli(koliRows).totalKoli,
+        koli_detail: koliRows,
+        layanan_kurir: isEkspedisi(shipmentType) ? layananKurir.trim() : undefined,
+        rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg : undefined,
         uid_pic: picUid,
         uid_receiver: receiverUid,
         signature_sender_id: senderSignatureId,
@@ -1053,19 +1070,16 @@ export default function CreateDeliveryPage() {
             </>
           )}
 
-          {/* Jumlah Koli */}
-          <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5 px-0.5">
-              <Package className="h-3 w-3" /> Jumlah Koli
-            </Label>
-            <Input
-              type="number"
-              min="1"
-              className="h-10 font-bold text-sm border-input bg-muted/40 rounded-lg"
-              value={jumlahKoli}
-              onChange={(e) =>
-                setJumlahKoli(Math.max(1, parseInt(e.target.value)))
-              }
+          {/* Detail Koli + layanan/rate kurir */}
+          <div className="md:col-span-2 lg:col-span-3">
+            <KoliDetailEditor
+              rows={koliRows}
+              onRowsChange={setKoliRows}
+              showKurirFields={isEkspedisi(shipmentType)}
+              layananKurir={layananKurir}
+              onLayananKurirChange={setLayananKurir}
+              ratePerKg={ratePerKg}
+              onRatePerKgChange={setRatePerKg}
             />
           </div>
         </div>

@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import type { KoliRow } from "@/lib/shipment";
 
 const TRACKING_ORDER = [
   "created",
@@ -67,6 +68,9 @@ export async function createDoReguler(data: {
   eksternal_provider?: string;
   eksternal_id?: string;
   jumlah_koli?: number;
+  koli_detail?: KoliRow[];
+  layanan_kurir?: string;
+  rate_per_kg?: number;
   no_resi?: string;
   estimasi_hari?: number;
   pic?: string;
@@ -134,6 +138,9 @@ export async function createDoReguler(data: {
         eksternal_provider: data.eksternal_provider || null,
         eksternal_id: data.eksternal_id || null,
         jumlah_koli: data.jumlah_koli ?? 1,
+        koli_detail: data.koli_detail ?? [],
+        layanan_kurir: data.layanan_kurir || null,
+        rate_per_kg: data.rate_per_kg || null,
         no_resi: data.no_resi || null,
         estimasi_hari: data.estimasi_hari ?? 1,
         pic: data.pic || null,
@@ -333,6 +340,9 @@ export async function updateDoReguler(
     eksternal_provider: string;
     eksternal_id: string;
     jumlah_koli: number;
+    koli_detail: KoliRow[];
+    layanan_kurir: string;
+    rate_per_kg: number;
     no_resi: string;
     estimasi_hari: number;
     pic: string;
@@ -351,6 +361,8 @@ export async function updateDoReguler(
     eksternal_provider: payload.eksternal_provider?.trim() || null,
     eksternal_id: payload.eksternal_id?.trim() || null,
     no_resi: payload.no_resi?.trim() || null,
+    layanan_kurir: payload.layanan_kurir?.trim() || null,
+    rate_per_kg: payload.rate_per_kg || null,
     pic: payload.pic?.trim() || null,
     remarks: payload.remarks?.trim() || null,
     updated_at: new Date().toISOString(),

@@ -53,6 +53,7 @@ import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { EditDeliveryDialog } from "@/components/delivery/edit-delivery-dialog";
+import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeDocumentStatus } from "@/lib/document-status";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
@@ -487,6 +488,12 @@ export function DeliveryDetailSheet({
                     <p className="font-bold text-slate-900">{items.length}</p>
                   </div>
                 </div>
+                <KoliDetailView
+                  className="mt-3"
+                  koliDetail={delivery?.koli_detail}
+                  layananKurir={delivery?.layanan_kurir}
+                  ratePerKg={delivery?.rate_per_kg}
+                />
               </div>
 
               {/* Tracking Timeline */}

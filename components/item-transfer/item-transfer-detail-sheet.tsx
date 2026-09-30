@@ -44,6 +44,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
+import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import {
   approveItemTransfer,
@@ -318,6 +319,12 @@ export function ItemTransferDetailSheet({
                 <div className="flex justify-between"><span className="text-muted-foreground">Koli</span><span className="font-semibold">{it.jumlah_koli}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Estimasi</span><span className="font-semibold">{it.estimasi_hari} hari</span></div>
                 {it.no_resi && <div className="flex justify-between"><span className="text-muted-foreground">No. Resi</span><span className="font-semibold">{it.no_resi}</span></div>}
+                <KoliDetailView
+                  className="pt-1"
+                  koliDetail={it.koli_detail}
+                  layananKurir={it.layanan_kurir}
+                  ratePerKg={it.rate_per_kg}
+                />
               </div>
 
               {/* Tracking Timeline (mirip Delivery) */}

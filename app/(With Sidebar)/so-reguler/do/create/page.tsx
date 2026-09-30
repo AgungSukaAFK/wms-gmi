@@ -49,9 +49,14 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import {
   type ShipmentType,
+  type KoliRow,
   isEkspedisi,
   defaultEstimasiHari,
+  emptyKoliRow,
+  summarizeKoli,
+  validateKoliRows,
 } from "@/lib/shipment";
+import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { createDoReguler } from "@/services/do-reguler-actions";
 
 interface DOItem {
@@ -96,7 +101,9 @@ export default function CreateDoRegulerPage() {
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
   const [ekspedisiCourier, setEkspedisiCourier] = useState("");
-  const [jumlahKoli, setJumlahKoli] = useState(1);
+  const [koliRows, setKoliRows] = useState<KoliRow[]>([emptyKoliRow()]);
+  const [layananKurir, setLayananKurir] = useState("");
+  const [ratePerKg, setRatePerKg] = useState(0);
   const [noResi, setNoResi] = useState("");
   const [estimasiHari, setEstimasiHari] = useState(14);
 
@@ -262,9 +269,15 @@ export default function CreateDoRegulerPage() {
     if (items.length === 0) return "Tambahkan minimal satu item.";
     if (isEkspedisi(shipmentType) && !ekspedisiCourier.trim())
       return "Isi nama ekspedisi/kurir.";
+    if (isEkspedisi(shipmentType) && !layananKurir.trim())
+      return "Isi jenis layanan kurir.";
+    if (isEkspedisi(shipmentType) && ratePerKg <= 0)
+      return "Isi rate per kg kurir.";
     if (shipmentType === "handcarry_eksternal" && !eksternalProvider.trim())
       return "Pilih penyedia handcarry eksternal.";
-    return null;
+    return validateKoliRows(koliRows, {
+      requireBerat: isEkspedisi(shipmentType),
+    });
   };
 
   const handleSubmit = async () => {
@@ -297,7 +310,10 @@ export default function CreateDoRegulerPage() {
           shipmentType === "handcarry_eksternal"
             ? eksternalId || undefined
             : undefined,
-        jumlah_koli: jumlahKoli,
+        jumlah_koli: summarizeKoli(koliRows).totalKoli,
+        koli_detail: koliRows,
+        layanan_kurir: isEkspedisi(shipmentType) ? layananKurir.trim() : undefined,
+        rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg : undefined,
         no_resi: isEkspedisi(shipmentType) ? noResi || undefined : undefined,
         estimasi_hari: estimasiHari,
         pic: pic || undefined,
@@ -656,11 +672,6 @@ export default function CreateDoRegulerPage() {
           )}
 
           <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Jumlah Koli</Label>
-            <Input type="number" min={1} value={jumlahKoli} onChange={(e) => setJumlahKoli(Math.max(1, parseInt(e.target.value) || 1))} className="h-10 text-sm" />
-          </div>
-
-          <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <CalendarIcon className="h-3 w-3" /> Estimasi (Hari)
             </Label>
@@ -672,6 +683,18 @@ export default function CreateDoRegulerPage() {
               <User className="h-3 w-3" /> PIC
             </Label>
             <Input value={pic} onChange={(e) => setPic(e.target.value)} placeholder="Penanggung jawab (opsional)" className="h-10 text-sm" />
+          </div>
+
+          <div className="md:col-span-2 xl:col-span-3">
+            <KoliDetailEditor
+              rows={koliRows}
+              onRowsChange={setKoliRows}
+              showKurirFields={isEkspedisi(shipmentType)}
+              layananKurir={layananKurir}
+              onLayananKurirChange={setLayananKurir}
+              ratePerKg={ratePerKg}
+              onRatePerKgChange={setRatePerKg}
+            />
           </div>
 
           <div className="space-y-1.5 md:col-span-2 xl:col-span-3">
