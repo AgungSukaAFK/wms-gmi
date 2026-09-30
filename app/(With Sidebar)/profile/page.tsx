@@ -67,6 +67,12 @@ const FONT_SIZE_OPTIONS: {
     description: "Teks sedikit lebih besar, layout tetap sama.",
     previewClass: "text-lg",
   },
+  {
+    value: "xlarge",
+    label: "Extra Large",
+    description: "Teks lebih besar lagi, layout tetap sama.",
+    previewClass: "text-xl",
+  },
 ];
 
 export default function ProfilePage() {
@@ -469,7 +475,7 @@ export default function ProfilePage() {
               <div
                 role="radiogroup"
                 aria-label="Ukuran font"
-                className="grid gap-3 sm:grid-cols-2"
+                className="grid gap-3 md:grid-cols-3"
               >
                 {FONT_SIZE_OPTIONS.map((option) => {
                   const selected = option.value === fontSize;

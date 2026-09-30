@@ -121,7 +121,7 @@ export interface Profile {
   email?: string | null;
   nomor_whatsapp?: string | null;
   /** Preferensi ukuran font UI, lihat lib/font-size.ts. */
-  ui_font_size?: "medium" | "large" | null;
+  ui_font_size?: "medium" | "large" | "xlarge" | null;
 }
 
 export type User = Profile;
