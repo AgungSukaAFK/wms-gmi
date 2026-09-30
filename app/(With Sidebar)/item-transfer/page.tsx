@@ -26,10 +26,18 @@ import {
   ArrowRight,
   Calendar as CalendarIcon,
   ChevronRight,
+  Download,
 } from "lucide-react";
+import { toast } from "sonner";
 import { ItemTransferDetailSheet } from "@/components/item-transfer/item-transfer-detail-sheet";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { formatDate } from "@/lib/utils";
+import {
+  IT_STATUS_LABEL,
+  buildItemTransferWorkbook,
+  downloadWorkbook,
+  type ItExportItem,
+} from "@/lib/item-transfer-export";
 
 const IT_SORT_COLUMNS: Record<string, string> = {
   it_kode: "it_kode",
@@ -55,6 +63,7 @@ export default function ItemTransferPage() {
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
 
   useEffect(() => {
     supabase
@@ -65,13 +74,13 @@ export default function ItemTransferPage() {
       .then(({ data }) => setAvailableCabang(data || []));
   }, []);
 
-  const fetchData = async () => {
-    setLoading(true);
+  // Dipakai bersama oleh list & export supaya hasil export = filter di layar.
+  const buildFilteredQuery = (withCount = false) => {
     let query = supabase
       .from("item_transfers")
       .select(
         "*, dari:cabang!dari_cabang_id(nama_cabang), tujuan:cabang!ke_cabang_id(nama_cabang)",
-        { count: "exact" },
+        withCount ? { count: "exact" } : undefined,
       );
 
     if (debouncedSearch) {
@@ -84,15 +93,25 @@ export default function ItemTransferPage() {
       query = query.or(
         `dari_cabang_id.in.(${locationFilters.join(",")}),ke_cabang_id.in.(${locationFilters.join(",")})`,
       );
+    return query;
+  };
 
+  const getSort = () => {
     const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
     const sortColumn = IT_SORT_COLUMNS[sortKeyRaw];
-    const sortField = sortColumn || "created_at";
-    const ascending = sortColumn ? sortDirRaw === "asc" : false;
+    return {
+      field: sortColumn || "created_at",
+      ascending: sortColumn ? sortDirRaw === "asc" : false,
+    };
+  };
 
+  const fetchData = async () => {
+    setLoading(true);
+    const query = buildFilteredQuery(true);
+    const { field, ascending } = getSort();
     const from = (page - 1) * limit;
     const { data, count, error } = await query
-      .order(sortField, { ascending })
+      .order(field, { ascending })
       .range(from, from + limit - 1);
 
     if (!error) {
@@ -100,6 +119,126 @@ export default function ItemTransferPage() {
       setTotalCount(count || 0);
     }
     setLoading(false);
+  };
+
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const pageSize = 1000;
+      const { field, ascending } = getSort();
+      const transfers: any[] = [];
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        const from = pageIndex * pageSize;
+        const { data, error } = await buildFilteredQuery()
+          .order(field, { ascending })
+          .order("id", { ascending })
+          .range(from, from + pageSize - 1);
+        if (error) {
+          toast.error(error.message || "Gagal mengambil data untuk export.");
+          return;
+        }
+        transfers.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      if (transfers.length === 0) {
+        toast.error("Tidak ada data untuk diekspor.");
+        return;
+      }
+
+      // Item per IT + referensi MR/RI (kalau IT dibuat dari RI). Di-chunk per
+      // 200 IT dan di-paginate karena 1 chunk bisa > 1000 baris item.
+      const itIds = transfers.map((t) => t.id);
+      const items: ItExportItem[] = [];
+      for (let i = 0; i < itIds.length; i += 200) {
+        const chunk = itIds.slice(i, i + 200);
+        for (let pageIndex = 0; ; pageIndex += 1) {
+          const from = pageIndex * pageSize;
+          const { data, error } = await supabase
+            .from("item_transfer_items")
+            .select(
+              "it_id, part_number, part_name, satuan, qty, mr_items(mrs(mr_kode)), receive_items(receives(ri_kode))",
+            )
+            .in("it_id", chunk)
+            .order("it_id")
+            .order("id")
+            .range(from, from + pageSize - 1);
+          if (error) {
+            toast.error(error.message || "Gagal mengambil item transfer.");
+            return;
+          }
+          for (const row of (data || []) as any[]) {
+            const mrItem = Array.isArray(row.mr_items)
+              ? row.mr_items[0]
+              : row.mr_items;
+            const riItem = Array.isArray(row.receive_items)
+              ? row.receive_items[0]
+              : row.receive_items;
+            items.push({
+              it_id: row.it_id,
+              part_number: row.part_number,
+              part_name: row.part_name,
+              satuan: row.satuan,
+              qty: row.qty,
+              mr_kode: mrItem?.mrs?.mr_kode ?? null,
+              ri_kode: riItem?.receives?.ri_kode ?? null,
+            });
+          }
+          if (!data || data.length < pageSize) break;
+        }
+      }
+
+      const uids = Array.from(
+        new Set(
+          transfers
+            .flatMap((t) => [t.uid_requester, t.uid_receiver])
+            .filter(Boolean),
+        ),
+      ) as string[];
+      const profilesMap: Record<string, string> = {};
+      for (let i = 0; i < uids.length; i += 200) {
+        const { data } = await supabase
+          .from("profiles")
+          .select("id, nama")
+          .in("id", uids.slice(i, i + 200));
+        (data || []).forEach((p: any) => (profilesMap[p.id] = p.nama));
+      }
+
+      const filterParts: string[] = [];
+      if (debouncedSearch) filterParts.push(`Cari "${debouncedSearch}"`);
+      if (statusFilters.length > 0)
+        filterParts.push(
+          `Status: ${statusFilters.map((s) => IT_STATUS_LABEL[s] || s).join(", ")}`,
+        );
+      if (locationFilters.length > 0)
+        filterParts.push(
+          `Lokasi: ${locationFilters
+            .map(
+              (id) =>
+                availableCabang.find((c) => c.id.toString() === id)
+                  ?.nama_cabang || id,
+            )
+            .join(", ")}`,
+        );
+
+      const wb = await buildItemTransferWorkbook({
+        transfers,
+        items,
+        profilesMap,
+        filterDescription: filterParts.join("; ") || "Semua data",
+      });
+      await downloadWorkbook(
+        wb,
+        `ITEM_TRANSFER_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(
+        `Export Excel berhasil (${transfers.length} dokumen, ${items.length} item).`,
+      );
+    } catch (err: any) {
+      toast.error(err?.message || "Gagal membuat file Excel.");
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -164,12 +303,23 @@ export default function ItemTransferPage() {
               </p>
             </div>
           </div>
-          <Button
-            onClick={() => router.push("/item-transfer/create")}
-            className="shrink-0 gap-2 font-bold text-xs h-9 uppercase"
-          >
-            <Plus className="h-4 w-4" /> Buat Item Transfer
-          </Button>
+          <div className="flex items-center gap-2 shrink-0">
+            <Button
+              variant="outline"
+              onClick={exportExcel}
+              disabled={loading || exporting}
+              className="gap-2 font-bold text-xs h-9 uppercase"
+            >
+              <Download className="h-4 w-4" />
+              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
+            </Button>
+            <Button
+              onClick={() => router.push("/item-transfer/create")}
+              className="shrink-0 gap-2 font-bold text-xs h-9 uppercase"
+            >
+              <Plus className="h-4 w-4" /> Buat Item Transfer
+            </Button>
+          </div>
         </div>
       </Content>
 
