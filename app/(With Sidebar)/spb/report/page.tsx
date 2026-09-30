@@ -28,6 +28,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toast } from "sonner";
 import { getSpbReport, updateSpbInvoicePaymentStatus } from "@/services/spb-actions";
 import * as XLSX from "xlsx";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { formatDate } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
@@ -212,7 +213,7 @@ export default function SpbReportPage() {
       }
 
       const data = allRows.map((row) => ({
-        "TGL SPB": formatDate(row.spb_tanggal),
+        "TGL SPB": toExcelDate(row.spb_tanggal),
         "NO SPB": row.spb_no || "-",
         "PART NUMBER": row.dtl_spb_part_number || "-",
         "PART NAME": row.dtl_spb_part_name || "-",
@@ -227,22 +228,29 @@ export default function SpbReportPage() {
         "PIC GMI": row.spb_pic_gmi || "-",
         "PIC PPA": row.spb_pic_ppa || "-",
         "NO WO": row.spb_no_wo || "-",
-        "DATE INPUT SPB": formatDate(row.spb_created_at),
+        "DATE INPUT SPB": toExcelDate(row.spb_created_at),
         STATUS: row.spb_status || "-",
         "NO PO": row.po_no || "-",
         "NO SO": row.so_no || "-",
-        "DATE INPUT PO": formatDate(row.po_created_at),
+        "DATE INPUT PO": toExcelDate(row.po_created_at),
         "NO DO": row.do_no || "-",
-        "DATE INPUT DO": formatDate(row.do_created_at),
+        "DATE INPUT DO": toExcelDate(row.do_created_at),
         "NO INVOICE": row.invoice_no || "-",
-        "TGL INVOICE": formatDate(row.invoice_date),
-        "TGL EMAIL KE SITE": formatDate(row.invoice_email_date),
+        "TGL INVOICE": toExcelDate(row.invoice_date),
+        "TGL EMAIL KE SITE": toExcelDate(row.invoice_email_date),
         "STATUS PAYMENT": row.invoice_no
           ? PAYMENT_STATUS_LABEL[row.invoice_payment_status || "unpaid"]
           : "-",
       }));
 
-      const ws = XLSX.utils.json_to_sheet(data);
+      const ws = jsonToSheetWithDates(data, [
+        "TGL SPB",
+        "DATE INPUT SPB",
+        "DATE INPUT PO",
+        "DATE INPUT DO",
+        "TGL INVOICE",
+        "TGL EMAIL KE SITE",
+      ]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Report SPB");
       XLSX.writeFile(

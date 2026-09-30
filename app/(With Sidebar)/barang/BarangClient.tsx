@@ -67,6 +67,7 @@ import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
 import { useRouter, useSearchParams } from "next/navigation";
 import * as XLSX from "xlsx";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import {
   createBarang,
   updateBarang,
@@ -76,7 +77,7 @@ import {
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
 import { DatePickerString } from "@/components/date-picker-string";
-import { formatDate, toYmdLocal } from "@/lib/utils";
+import { toYmdLocal } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
 import { BarcodePrintDialog } from "@/components/barang/barcode-print-dialog";
@@ -308,14 +309,15 @@ export default function BarangClient({
 
   const handleExport = () => {
     toast.info("Mengekspor halaman saat ini...");
-    const ws = XLSX.utils.json_to_sheet(
+    const ws = jsonToSheetWithDates(
       initialData.map((b, i) => ({
         No: (currentPage - 1) * pageSize + i + 1,
         "Part Number": b.part_number,
         "Nama Part": b.part_name,
         Satuan: b.part_satuan,
-        "Tanggal Input": formatDate(b.created_at),
+        "Tanggal Input": toExcelDate(b.created_at),
       })),
+      ["Tanggal Input"],
     );
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Master Barang");

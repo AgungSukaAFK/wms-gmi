@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { DailyResetGuard } from "@/components/daily-reset-guard";
 import { useAuthStore } from "@/stores/auth-store";
 import { NotificationProvider } from "@/components/providers/NotificationProvider";
+import { FontSizeSync } from "@/components/font-size-sync";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -104,6 +105,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   return (
     <NotificationProvider>
       <Toaster richColors position="top-right" />
+      <FontSizeSync />
       <SidebarProvider>
         <AppSidebar className="shadow-lg" />
         <SidebarInset>

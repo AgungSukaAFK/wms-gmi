@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
@@ -238,7 +239,7 @@ export default function PRListPage() {
             Array.from(new Set(mrCodesByPr.get(pr.id) || [])).join(", ") || "-",
           PIC: pr.profiles?.nama || "-",
           LOKASI: pr.cabang?.nama_cabang || "-",
-          TANGGAL: formatDate(pr.pr_tanggal),
+          TANGGAL: toExcelDate(pr.pr_tanggal),
           STATUS: pr.pr_status || "-",
           "PROGRES APPROVAL": `${summary.approvedCount}/${summary.totalCount}`,
           "CONVERT STATUS": pr.pr_convert_status || "-",
@@ -246,7 +247,7 @@ export default function PRListPage() {
         };
       });
 
-      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const ws = jsonToSheetWithDates(sheetData, ["TANGGAL"]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Purchase Request");
       XLSX.writeFile(

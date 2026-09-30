@@ -332,3 +332,54 @@
 }
 
 /* ... (sisa style Anda) ... */
+
+/* ====================================================== */
+/* UKURAN FONT UI: "large" (preferensi di halaman Profil)  */
+/* ====================================================== */
+/*
+ * Atribut dipasang oleh components/font-size-sync.tsx (lib/font-size.ts).
+ * Hanya TEKS yang dibesarkan (±1px per step, rasio line-height tetap);
+ * spacing, tinggi komponen & lebar sidebar tidak ikut, jadi tetap rapi di
+ * laptop 14" 1080p. Dibatasi ke `screen` supaya hasil cetak/PDF selalu
+ * ukuran medium (default).
+ */
+@media screen {
+  html[data-font-size="large"] {
+    --text-xs: 0.8125rem; /* 12 → 13px */
+    --text-sm: 0.9375rem; /* 14 → 15px */
+    --text-base: 1.0625rem; /* 16 → 17px */
+    --text-lg: 1.1875rem; /* 18 → 19px */
+    --text-xl: 1.3125rem; /* 20 → 21px */
+    --text-2xl: 1.5625rem; /* 24 → 25px */
+    --text-3xl: 1.9375rem; /* 30 → 31px */
+    --text-4xl: 2.3125rem; /* 36 → 37px */
+  }
+
+  /* Teks tanpa kelas ukuran (mewarisi dari body). */
+  html[data-font-size="large"] body {
+    font-size: 1.0625rem;
+  }
+
+  /* Ukuran arbitrary (text-[10px] dst.) banyak dipakai di badge/tabel. */
+  html[data-font-size="large"] .text-\[8px\] {
+    font-size: 9px;
+  }
+  html[data-font-size="large"] .text-\[9px\] {
+    font-size: 10px;
+  }
+  html[data-font-size="large"] .text-\[10px\] {
+    font-size: 11px;
+  }
+  html[data-font-size="large"] .text-\[11px\] {
+    font-size: 12px;
+  }
+  html[data-font-size="large"] .text-\[12px\] {
+    font-size: 13px;
+  }
+  html[data-font-size="large"] .text-\[13px\] {
+    font-size: 14px;
+  }
+  html[data-font-size="large"] .text-\[0\.8rem\] {
+    font-size: 0.8625rem;
+  }
+}

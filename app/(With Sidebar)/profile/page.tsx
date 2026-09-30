@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
-import { updateOwnProfile } from "@/services/user-actions";
+import { updateOwnFontSize, updateOwnProfile } from "@/services/user-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -41,9 +41,33 @@ import {
   Bell,
   Volume2,
   PlayCircle,
+  Type,
+  Check,
 } from "lucide-react";
 import { useNotifSettings } from "@/hooks/use-notif-settings";
 import { SOUND_PRESETS, playSound, unlockAudio } from "@/lib/notifications/sound";
+import { cn } from "@/lib/utils";
+import { type FontSize, normalizeFontSize } from "@/lib/font-size";
+
+const FONT_SIZE_OPTIONS: {
+  value: FontSize;
+  label: string;
+  description: string;
+  previewClass: string;
+}[] = [
+  {
+    value: "medium",
+    label: "Medium",
+    description: "Ukuran standar (default).",
+    previewClass: "text-base",
+  },
+  {
+    value: "large",
+    label: "Large",
+    description: "Teks sedikit lebih besar, layout tetap sama.",
+    previewClass: "text-lg",
+  },
+];
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -61,6 +85,8 @@ export default function ProfilePage() {
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmNewPassword, setConfirmNewPassword] = useState("");
+  const [savingFontSize, setSavingFontSize] = useState(false);
+  const fontSize = normalizeFontSize(storeProfile?.ui_font_size);
 
   useEffect(() => {
     if (storeProfile) {
@@ -106,6 +132,30 @@ export default function ProfilePage() {
       toast.error(result.error);
     } else {
       toast.success("Profil berhasil diperbarui.");
+    }
+  }
+
+  async function handleFontSizeChange(next: FontSize) {
+    if (next === fontSize || savingFontSize) return;
+    const previous = fontSize;
+    const setStoreFontSize = (value: FontSize) =>
+      useAuthStore.setState((state) =>
+        state.profile
+          ? { profile: { ...state.profile, ui_font_size: value } }
+          : state,
+      );
+
+    // Optimistic: langsung terlihat, rollback kalau gagal simpan.
+    setStoreFontSize(next);
+    setSavingFontSize(true);
+    const result = await updateOwnFontSize(next);
+    setSavingFontSize(false);
+
+    if (result.error) {
+      setStoreFontSize(previous);
+      toast.error(result.error);
+    } else {
+      toast.success("Ukuran font disimpan.");
     }
   }
 
@@ -394,6 +444,73 @@ export default function ProfilePage() {
                   )}
                   {changingPassword ? "Memproses..." : "Ubah Password"}
                 </Button>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-border/60 mt-6">
+            <CardHeader>
+              <CardTitle className="text-sm font-bold flex items-center gap-2">
+                <Type className="h-4 w-4 text-primary" />
+                Tampilan
+              </CardTitle>
+              <CardDescription className="text-xs">
+                Ukuran font tersimpan di akun Anda. Hasil cetak / PDF selalu
+                memakai ukuran Medium.
+              </CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-1.5">
+              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                Ukuran Font
+                {savingFontSize && (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                )}
+              </Label>
+              <div
+                role="radiogroup"
+                aria-label="Ukuran font"
+                className="grid gap-3 sm:grid-cols-2"
+              >
+                {FONT_SIZE_OPTIONS.map((option) => {
+                  const selected = option.value === fontSize;
+                  return (
+                    <button
+                      key={option.value}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      disabled={savingFontSize}
+                      onClick={() => handleFontSizeChange(option.value)}
+                      className={cn(
+                        "flex items-center gap-3 rounded-lg border p-3 text-left transition-colors",
+                        "hover:bg-muted/50 disabled:cursor-wait disabled:opacity-70",
+                        selected
+                          ? "border-primary bg-primary/5 ring-1 ring-primary"
+                          : "border-border",
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          "flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted font-bold",
+                          option.previewClass,
+                        )}
+                      >
+                        Aa
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-sm font-bold">
+                          {option.label}
+                        </span>
+                        <span className="block text-xs text-muted-foreground">
+                          {option.description}
+                        </span>
+                      </span>
+                      {selected && (
+                        <Check className="h-4 w-4 shrink-0 text-primary" />
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>

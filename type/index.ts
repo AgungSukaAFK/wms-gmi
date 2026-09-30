@@ -120,6 +120,8 @@ export interface Profile {
   company?: string | null;
   email?: string | null;
   nomor_whatsapp?: string | null;
+  /** Preferensi ukuran font UI, lihat lib/font-size.ts. */
+  ui_font_size?: "medium" | "large" | null;
 }
 
 export type User = Profile;

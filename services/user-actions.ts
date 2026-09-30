@@ -2,6 +2,7 @@
 
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { FONT_SIZES, type FontSize } from "@/lib/font-size";
 
 /**
  * Update own profile (NRP, nama, nomor_whatsapp) — authenticated user only
@@ -50,6 +51,37 @@ export async function updateOwnProfile(data: {
   }
 
   revalidatePath("/profile");
+  return { success: true };
+}
+
+/**
+ * Simpan preferensi ukuran font UI milik user yang sedang login.
+ */
+export async function updateOwnFontSize(size: FontSize) {
+  if (!FONT_SIZES.includes(size)) {
+    return { error: "Ukuran font tidak valid." };
+  }
+
+  const supabase = await createClient();
+
+  const {
+    data: { user },
+    error: authError,
+  } = await supabase.auth.getUser();
+
+  if (authError || !user) {
+    return { error: "Tidak terautentikasi." };
+  }
+
+  const { error } = await supabase
+    .from("profiles")
+    .update({ ui_font_size: size })
+    .eq("id", user.id);
+
+  if (error) {
+    return { error: error.message };
+  }
+
   return { success: true };
 }
 

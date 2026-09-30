@@ -4,6 +4,7 @@ import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { MultiSelect } from "@/components/ui/multi-select";
 import {
@@ -454,8 +455,8 @@ export default function MaterialRequestPage() {
             cabangNameById.get(item.item_site_cabang_id) ||
             mr?.cabang?.nama_cabang ||
             "-",
-          "TANGGAL REQUEST": mr?.mr_tanggal ? formatDate(mr.mr_tanggal) : "-",
-          "DUE DATE": mr?.mr_due_date ? formatDate(mr.mr_due_date) : "-",
+          "TANGGAL REQUEST": toExcelDate(mr?.mr_tanggal),
+          "DUE DATE": toExcelDate(mr?.mr_due_date),
           STATUS: mr?.mr_status || "-",
           FROZEN: mr?.is_frozen ? "YA" : "-",
           "PART NUMBER": item.part_number || "-",
@@ -473,7 +474,10 @@ export default function MaterialRequestPage() {
         };
       });
 
-      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const ws = jsonToSheetWithDates(sheetData, [
+        "TANGGAL REQUEST",
+        "DUE DATE",
+      ]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Material Request");
       XLSX.writeFile(

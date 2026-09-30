@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
@@ -250,14 +251,14 @@ export default function POListPage() {
             "-",
           VENDOR: vendorNames.join(", ") || "-",
           PIC: po.po_pic || "-",
-          TANGGAL: formatDate(po.po_tanggal),
-          ESTIMASI: formatDate(po.po_estimasi),
+          TANGGAL: toExcelDate(po.po_tanggal),
+          ESTIMASI: toExcelDate(po.po_estimasi),
           STATUS: po.po_status || "-",
           "RECEIVE STATUS": po.po_receive_status || "-",
         };
       });
 
-      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const ws = jsonToSheetWithDates(sheetData, ["TANGGAL", "ESTIMASI"]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Purchase Order");
       XLSX.writeFile(

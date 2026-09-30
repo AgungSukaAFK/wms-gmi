@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
 import {
@@ -180,11 +181,11 @@ export default function ReceiveItemPage() {
         "PO ASAL": ri.pos?.po_kode || "-",
         PIC: ri.ri_pic || "-",
         LOKASI: ri.cabang?.nama_cabang || "-",
-        TANGGAL: formatDate(ri.ri_tanggal),
+        TANGGAL: toExcelDate(ri.ri_tanggal),
         STATUS: ri.ri_status || "-",
       }));
 
-      const ws = XLSX.utils.json_to_sheet(sheetData);
+      const ws = jsonToSheetWithDates(sheetData, ["TANGGAL"]);
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Receive Item");
       XLSX.writeFile(
