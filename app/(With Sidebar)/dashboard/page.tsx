@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { formatDate, toYmdLocal } from "@/lib/utils";
 import { PrConvertStatusBadge } from "@/components/pr/pr-convert-status-badge";
+import { UpdateWebDashboardBanner } from "@/components/update-web/UpdateWebDashboardBanner";
 
 type TrendData = {
   bulan: string;
@@ -375,6 +376,8 @@ export default async function DashboardPage() {
           </Badge>
         </div>
       </Content>
+
+      <UpdateWebDashboardBanner userId={user?.id ?? null} />
 
       <Content size="xs">
         <div className="flex items-center justify-between">
