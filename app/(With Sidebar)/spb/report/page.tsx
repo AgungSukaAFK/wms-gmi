@@ -1,7 +1,16 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { FileBox, Download, Search } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  ChevronDown,
+  ChevronUp,
+  Download,
+  FileBox,
+  MapPin,
+  Search,
+  SlidersHorizontal,
+  X,
+} from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -25,11 +34,17 @@ import {
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { toast } from "sonner";
-import { getSpbReport, updateSpbInvoicePaymentStatus } from "@/services/spb-actions";
+import {
+  getSpbReport,
+  updateSpbInvoicePaymentStatus,
+  type SpbReportFilters,
+} from "@/services/spb-actions";
+import { getCabangList } from "@/services/master-actions";
 import * as XLSX from "xlsx";
 import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
-import { formatDate } from "@/lib/utils";
+import { formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 
 type SpbReportRow = {
@@ -52,6 +67,7 @@ type SpbReportRow = {
   spb_no_wo?: string | null;
   spb_created_at?: string | null;
   spb_status?: string | null;
+  spb_gudang?: string | null;
   po_no?: string | null;
   so_no?: string | null;
   po_created_at?: string | null;
@@ -69,6 +85,157 @@ const PAYMENT_STATUS_LABEL: Record<string, string> = {
   unpaid: "Unpaid",
 };
 
+type CabangOption = { id: number; nama_cabang: string };
+
+type TextFilterColumn = keyof NonNullable<SpbReportFilters["text"]>;
+type DateFilterColumn = keyof NonNullable<SpbReportFilters["dates"]>;
+type NumberFilterColumn = keyof NonNullable<SpbReportFilters["numbers"]>;
+
+type FilterField =
+  | { kind: "text"; column: TextFilterColumn; label: string }
+  | { kind: "date"; column: DateFilterColumn; label: string }
+  | { kind: "number"; column: NumberFilterColumn; label: string }
+  | { kind: "payment"; label: string };
+
+// Urutan grup mengikuti urutan kolom tabel (SPB → PO → DO → Invoice).
+const FILTER_GROUPS: { title: string; fields: FilterField[] }[] = [
+  {
+    title: "SPB",
+    fields: [
+      { kind: "date", column: "spb_tanggal", label: "TGL SPB" },
+      { kind: "text", column: "spb_no", label: "NO SPB" },
+      { kind: "text", column: "spb_status", label: "STATUS" },
+      { kind: "date", column: "spb_created_at", label: "DATE INPUT SPB" },
+      { kind: "text", column: "spb_no_wo", label: "NO WO" },
+      { kind: "text", column: "spb_section", label: "SECTION" },
+      { kind: "text", column: "spb_pic_gmi", label: "PIC GMI" },
+      { kind: "text", column: "spb_pic_ppa", label: "PIC PPA" },
+    ],
+  },
+  {
+    title: "Part & Unit",
+    fields: [
+      { kind: "text", column: "dtl_spb_part_number", label: "PART NUMBER" },
+      { kind: "text", column: "dtl_spb_part_name", label: "PART NAME" },
+      { kind: "number", column: "dtl_spb_qty", label: "QTY" },
+      { kind: "text", column: "dtl_spb_part_satuan", label: "UOM" },
+      { kind: "text", column: "spb_kode_unit", label: "KODE UNIT" },
+      { kind: "text", column: "spb_tipe_unit", label: "TYPE UNIT" },
+      { kind: "text", column: "spb_brand", label: "BRAND" },
+      { kind: "number", column: "spb_hm", label: "HM" },
+      { kind: "text", column: "spb_problem_remark", label: "REMARK" },
+    ],
+  },
+  {
+    title: "PO",
+    fields: [
+      { kind: "text", column: "po_no", label: "NO PO" },
+      { kind: "text", column: "so_no", label: "NO SO" },
+      { kind: "date", column: "po_created_at", label: "DATE INPUT PO" },
+    ],
+  },
+  {
+    title: "DO",
+    fields: [
+      { kind: "text", column: "do_no", label: "NO DO" },
+      { kind: "date", column: "do_created_at", label: "DATE INPUT DO" },
+    ],
+  },
+  {
+    title: "Invoice",
+    fields: [
+      { kind: "text", column: "invoice_no", label: "NO INVOICE" },
+      { kind: "date", column: "invoice_date", label: "TGL INVOICE" },
+      { kind: "date", column: "invoice_email_date", label: "TGL EMAIL KE SITE" },
+      { kind: "payment", label: "STATUS PAYMENT" },
+    ],
+  },
+];
+
+// State filter disimpan flat: `<kolom>` untuk teks, `<kolom>__from/__to`
+// untuk tanggal (YYYY-MM-DD), `<kolom>__min/__max` untuk angka, dan
+// `payment_status` untuk status payment.
+type FilterValues = Record<string, string>;
+
+const FILTER_PANEL_STORAGE_KEY = "spb-report:show-filters";
+
+function nextYmd(ymd: string) {
+  const [year, month, day] = ymd.split("-").map(Number);
+  const date = new Date(year, month - 1, day + 1);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function toNumber(value?: string) {
+  if (!value?.trim()) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function buildFilterPayload(values: FilterValues): SpbReportFilters {
+  const text: NonNullable<SpbReportFilters["text"]> = {};
+  const dates: NonNullable<SpbReportFilters["dates"]> = {};
+  const numbers: NonNullable<SpbReportFilters["numbers"]> = {};
+  let paymentStatus: SpbReportFilters["paymentStatus"];
+  for (const group of FILTER_GROUPS) {
+    for (const field of group.fields) {
+      if (field.kind === "text") {
+        const v = values[field.column]?.trim();
+        if (v) text[field.column] = v;
+      } else if (field.kind === "date") {
+        const from = values[`${field.column}__from`];
+        const to = values[`${field.column}__to`];
+        // Tanggal disimpan sebagai awal hari waktu lokal, jadi batasnya juga
+        // dihitung di waktu lokal: [from 00:00, to+1 00:00).
+        if (from || to) {
+          dates[field.column] = {
+            from: from ? ymdToLocalStartIso(from) : undefined,
+            to: to ? ymdToLocalStartIso(nextYmd(to)) : undefined,
+          };
+        }
+      } else if (field.kind === "number") {
+        const min = toNumber(values[`${field.column}__min`]);
+        const max = toNumber(values[`${field.column}__max`]);
+        if (min !== undefined || max !== undefined) {
+          numbers[field.column] = { min, max };
+        }
+      } else if (field.kind === "payment") {
+        const v = values.payment_status;
+        if (v === "paid" || v === "unpaid") paymentStatus = v;
+      }
+    }
+  }
+  return { text, dates, numbers, paymentStatus };
+}
+
+function countActiveFilters(values: FilterValues) {
+  let count = 0;
+  for (const group of FILTER_GROUPS) {
+    for (const field of group.fields) {
+      if (field.kind === "text") {
+        if (values[field.column]?.trim()) count += 1;
+      } else if (field.kind === "date") {
+        if (values[`${field.column}__from`] || values[`${field.column}__to`]) {
+          count += 1;
+        }
+      } else if (field.kind === "number") {
+        if (
+          toNumber(values[`${field.column}__min`]) !== undefined ||
+          toNumber(values[`${field.column}__max`]) !== undefined
+        ) {
+          count += 1;
+        }
+      } else if (
+        values.payment_status === "paid" ||
+        values.payment_status === "unpaid"
+      ) {
+        count += 1;
+      }
+    }
+  }
+  return count;
+}
+
 export default function SpbReportPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -85,12 +252,67 @@ export default function SpbReportPage() {
   const [status, setStatus] = useState<
     "all" | "no_po" | "no_do" | "no_invoice"
   >("all");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
+  const [locationFilters, setLocationFilters] = useState<string[]>([]);
+  const [availableCabang, setAvailableCabang] = useState<CabangOption[]>([]);
+  const [filterValues, setFilterValues] = useState<FilterValues>({});
+  const [debouncedFilterValues] = useDebounce(filterValues, 500);
+  const [showFilters, setShowFilters] = useState(false);
   const [sort, setSort] = useState("spb_tanggal_desc");
 
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
+
+  const cabangIds = useMemo(
+    () =>
+      locationFilters.length > 0 ? locationFilters.map(Number) : undefined,
+    [locationFilters],
+  );
+  const filterPayload = useMemo(
+    () => buildFilterPayload(debouncedFilterValues),
+    [debouncedFilterValues],
+  );
+  const activeFilterCount = countActiveFilters(filterValues);
+
+  useEffect(() => {
+    getCabangList().then((data) =>
+      setAvailableCabang((data || []) as CabangOption[]),
+    );
+  }, []);
+
+  useEffect(() => {
+    try {
+      setShowFilters(
+        window.localStorage.getItem(FILTER_PANEL_STORAGE_KEY) === "1",
+      );
+    } catch {
+      // localStorage bisa diblokir browser; panel tetap default tertutup.
+    }
+  }, []);
+
+  const toggleFilters = () => {
+    setShowFilters((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(FILTER_PANEL_STORAGE_KEY, next ? "1" : "0");
+      } catch {
+        // abaikan
+      }
+      return next;
+    });
+  };
+
+  const setFilterValue = (key: string, value: string) => {
+    setFilterValues((prev) => ({ ...prev, [key]: value }));
+    setPage(1);
+  };
+
+  const resetFilters = () => {
+    setFilterValues({});
+    setLocationFilters([]);
+    setSearch("");
+    setStatus("all");
+    setPage(1);
+  };
 
   useEffect(() => {
     const fetchRole = async () => {
@@ -141,8 +363,8 @@ export default function SpbReportPage() {
     const res = await getSpbReport({
       search: debouncedSearch || undefined,
       status,
-      startDate: startDate || undefined,
-      endDate: endDate || undefined,
+      cabangIds,
+      filters: filterPayload,
       sort,
       page,
       limit,
@@ -157,7 +379,7 @@ export default function SpbReportPage() {
       setTotal(res.count || 0);
     }
     setLoading(false);
-  }, [debouncedSearch, status, startDate, endDate, sort, page, limit]);
+  }, [debouncedSearch, status, cabangIds, filterPayload, sort, page, limit]);
 
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
@@ -170,8 +392,8 @@ export default function SpbReportPage() {
       const first = await getSpbReport({
         search: debouncedSearch || undefined,
         status,
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
+        cabangIds,
+      filters: filterPayload,
         page: 1,
         limit: 1,
       });
@@ -197,8 +419,8 @@ export default function SpbReportPage() {
         const res = await getSpbReport({
           search: debouncedSearch || undefined,
           status,
-          startDate: startDate || undefined,
-          endDate: endDate || undefined,
+          cabangIds,
+      filters: filterPayload,
           page: pageIndex,
           limit: pageSize,
         });
@@ -215,6 +437,7 @@ export default function SpbReportPage() {
       const data = allRows.map((row) => ({
         "TGL SPB": toExcelDate(row.spb_tanggal),
         "NO SPB": row.spb_no || "-",
+        LOKASI: row.spb_gudang || "-",
         "PART NUMBER": row.dtl_spb_part_number || "-",
         "PART NAME": row.dtl_spb_part_name || "-",
         QTY: row.dtl_spb_qty ?? "-",
@@ -328,33 +551,84 @@ export default function SpbReportPage() {
                 <SelectItem value="no_invoice">Belum Invoice</SelectItem>
               </SelectContent>
             </Select>
+
+            <MultiSelect
+              className="h-9 w-full sm:w-45"
+              placeholder="Semua Lokasi"
+              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+              searchable
+              selected={locationFilters}
+              onChange={(vals) => {
+                setLocationFilters(vals);
+                setPage(1);
+              }}
+              options={availableCabang.map((c) => ({
+                label: c.nama_cabang,
+                value: c.id.toString(),
+              }))}
+            />
+
+            <Button
+              type="button"
+              variant={showFilters ? "secondary" : "outline"}
+              onClick={toggleFilters}
+              aria-expanded={showFilters}
+              className="h-9 gap-2 rounded-md px-3 text-xs font-semibold"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              Filter Kolom
+              {activeFilterCount > 0 && (
+                <Badge className="h-5 min-w-5 justify-center rounded-full px-1.5 text-[10px]">
+                  {activeFilterCount}
+                </Badge>
+              )}
+              {showFilters ? (
+                <ChevronUp className="h-3.5 w-3.5" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" />
+              )}
+            </Button>
+
+            {(activeFilterCount > 0 ||
+              locationFilters.length > 0 ||
+              search ||
+              status !== "all") && (
+              <Button
+                type="button"
+                variant="ghost"
+                onClick={resetFilters}
+                className="h-9 gap-1.5 rounded-md px-3 text-xs font-semibold text-muted-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+                Reset
+              </Button>
+            )}
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <DatePickerString
-                value={startDate}
-                onChange={(value) => {
-                  setStartDate(value);
-                  setPage(1);
-                }}
-                placeholder="Tanggal dari"
-                className="h-9 w-full border-input bg-background text-xs text-foreground sm:w-44"
-              />
+          {showFilters && (
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {FILTER_GROUPS.map((group) => (
+                <div
+                  key={group.title}
+                  className="space-y-2 rounded-lg border border-border bg-muted/20 p-3"
+                >
+                  <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                    {group.title}
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {group.fields.map((field) => (
+                      <FilterFieldInput
+                        key={field.kind === "payment" ? "payment" : field.column}
+                        field={field}
+                        values={filterValues}
+                        onChange={setFilterValue}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
-
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <DatePickerString
-                value={endDate}
-                onChange={(value) => {
-                  setEndDate(value);
-                  setPage(1);
-                }}
-                placeholder="Tanggal sampai"
-                className="h-9 w-full border-input bg-background text-xs text-foreground sm:w-44"
-              />
-            </div>
-          </div>
+          )}
         </div>
       </Content>
 
@@ -378,6 +652,7 @@ export default function SpbReportPage() {
                 >
                   NO SPB
                 </SortableTableHead>
+                <TableHead>LOKASI</TableHead>
                 <TableHead>PART NUMBER</TableHead>
                 <TableHead>PART NAME</TableHead>
                 <TableHead>QTY</TableHead>
@@ -432,7 +707,7 @@ export default function SpbReportPage() {
               {loading ? (
                 <TableRow>
                   <TableCell
-                    colSpan={26}
+                    colSpan={27}
                     className="text-center text-muted-foreground"
                   >
                     Memuat report...
@@ -441,7 +716,7 @@ export default function SpbReportPage() {
               ) : rows.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={26}
+                    colSpan={27}
                     className="text-center text-muted-foreground"
                   >
                     Data report kosong.
@@ -452,6 +727,7 @@ export default function SpbReportPage() {
                   <TableRow key={`${row.spb_id}-${row.spb_dtl_id}-${idx}`}>
                     <TableCell>{formatDate(row.spb_tanggal)}</TableCell>
                     <TableCell>{row.spb_no}</TableCell>
+                    <TableCell>{row.spb_gudang || "-"}</TableCell>
                     <TableCell>{row.dtl_spb_part_number}</TableCell>
                     <TableCell>{row.dtl_spb_part_name}</TableCell>
                     <TableCell>{row.dtl_spb_qty}</TableCell>
@@ -534,5 +810,111 @@ export default function SpbReportPage() {
         />
       </Content>
     </>
+  );
+}
+
+function FilterFieldInput({
+  field,
+  values,
+  onChange,
+}: {
+  field: FilterField;
+  values: FilterValues;
+  onChange: (key: string, value: string) => void;
+}) {
+  const inputClass =
+    "h-8 border-input bg-background text-xs text-foreground";
+
+  if (field.kind === "text") {
+    return (
+      <label className="space-y-1">
+        <span className="text-[10px] font-semibold text-muted-foreground">
+          {field.label}
+        </span>
+        <Input
+          value={values[field.column] || ""}
+          onChange={(e) => onChange(field.column, e.target.value)}
+          placeholder={`Cari ${field.label.toLowerCase()}`}
+          className={inputClass}
+        />
+      </label>
+    );
+  }
+
+  if (field.kind === "number") {
+    return (
+      <div className="space-y-1">
+        <span className="text-[10px] font-semibold text-muted-foreground">
+          {field.label}
+        </span>
+        <div className="flex items-center gap-1">
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={values[`${field.column}__min`] || ""}
+            onChange={(e) => onChange(`${field.column}__min`, e.target.value)}
+            placeholder="Min"
+            aria-label={`${field.label} minimum`}
+            className={inputClass}
+          />
+          <span className="text-xs text-muted-foreground">–</span>
+          <Input
+            type="number"
+            inputMode="decimal"
+            value={values[`${field.column}__max`] || ""}
+            onChange={(e) => onChange(`${field.column}__max`, e.target.value)}
+            placeholder="Max"
+            aria-label={`${field.label} maksimum`}
+            className={inputClass}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  if (field.kind === "date") {
+    return (
+      <div className="space-y-1 sm:col-span-2">
+        <span className="text-[10px] font-semibold text-muted-foreground">
+          {field.label}
+        </span>
+        <div className="flex items-center gap-1">
+          <DatePickerString
+            value={values[`${field.column}__from`] || ""}
+            onChange={(value) => onChange(`${field.column}__from`, value)}
+            placeholder="Dari"
+            className={`${inputClass} w-full`}
+          />
+          <span className="text-xs text-muted-foreground">–</span>
+          <DatePickerString
+            value={values[`${field.column}__to`] || ""}
+            onChange={(value) => onChange(`${field.column}__to`, value)}
+            placeholder="Sampai"
+            className={`${inputClass} w-full`}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-1">
+      <span className="text-[10px] font-semibold text-muted-foreground">
+        {field.label}
+      </span>
+      <Select
+        value={values.payment_status || "all"}
+        onValueChange={(v) => onChange("payment_status", v === "all" ? "" : v)}
+      >
+        <SelectTrigger className={`${inputClass} w-full`}>
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value="all">Semua</SelectItem>
+          <SelectItem value="paid">Paid</SelectItem>
+          <SelectItem value="unpaid">Unpaid</SelectItem>
+        </SelectContent>
+      </Select>
+    </div>
   );
 }

@@ -1857,11 +1857,69 @@ const SPB_REPORT_SORT_COLUMNS: Record<string, string> = {
   invoice_no: "invoice_no",
 };
 
+// Whitelist kolom v_spb_report yang boleh difilter per kolom dari halaman
+// Report SPB. Nama kolom dari client tidak pernah dipakai langsung tanpa
+// lolos daftar ini.
+const SPB_REPORT_TEXT_FILTER_COLUMNS = [
+  "spb_no",
+  "dtl_spb_part_number",
+  "dtl_spb_part_name",
+  "dtl_spb_part_satuan",
+  "spb_kode_unit",
+  "spb_tipe_unit",
+  "spb_brand",
+  "spb_problem_remark",
+  "spb_section",
+  "spb_pic_gmi",
+  "spb_pic_ppa",
+  "spb_no_wo",
+  "spb_status",
+  "po_no",
+  "so_no",
+  "do_no",
+  "invoice_no",
+] as const;
+
+const SPB_REPORT_DATE_FILTER_COLUMNS = [
+  "spb_tanggal",
+  "spb_created_at",
+  "po_created_at",
+  "do_created_at",
+  "invoice_date",
+  "invoice_email_date",
+] as const;
+
+const SPB_REPORT_NUMBER_FILTER_COLUMNS = ["dtl_spb_qty", "spb_hm"] as const;
+
+export type SpbReportFilters = {
+  text?: Partial<Record<(typeof SPB_REPORT_TEXT_FILTER_COLUMNS)[number], string>>;
+  /** `from` inklusif, `to` eksklusif — keduanya ISO timestamp dari client. */
+  dates?: Partial<
+    Record<
+      (typeof SPB_REPORT_DATE_FILTER_COLUMNS)[number],
+      { from?: string; to?: string }
+    >
+  >;
+  numbers?: Partial<
+    Record<
+      (typeof SPB_REPORT_NUMBER_FILTER_COLUMNS)[number],
+      { min?: number; max?: number }
+    >
+  >;
+  paymentStatus?: "all" | "paid" | "unpaid";
+};
+
+function escapeIlike(value: string) {
+  return value.replace(/[\\%_]/g, (ch) => `\\${ch}`);
+}
+
 export async function getSpbReport(params?: {
   search?: string;
   status?: "all" | "no_po" | "no_do" | "no_invoice";
   startDate?: string;
   endDate?: string;
+  cabangIds?: number[];
+  filters?: SpbReportFilters;
   page?: number;
   limit?: number;
   sort?: string;
@@ -1902,6 +1960,41 @@ export async function getSpbReport(params?: {
   }
   if (params?.status === "no_invoice") {
     query = query.not("do_no", "is", null).is("invoice_no", null);
+  }
+
+  // Kolom spb_cabang_id datang dari migration 20261001100000; filter ini cuma
+  // dipasang kalau user memilih lokasi, jadi report tetap jalan sebelum
+  // migration-nya dijalankan.
+  if (params?.cabangIds?.length) {
+    query = query.in("spb_cabang_id", params.cabangIds);
+  }
+
+  const filters = params?.filters;
+  if (filters) {
+    for (const column of SPB_REPORT_TEXT_FILTER_COLUMNS) {
+      const value = filters.text?.[column]?.trim();
+      if (value) query = query.ilike(column, `%${escapeIlike(value)}%`);
+    }
+    for (const column of SPB_REPORT_DATE_FILTER_COLUMNS) {
+      const range = filters.dates?.[column];
+      if (range?.from) query = query.gte(column, range.from);
+      if (range?.to) query = query.lt(column, range.to);
+    }
+    for (const column of SPB_REPORT_NUMBER_FILTER_COLUMNS) {
+      const range = filters.numbers?.[column];
+      if (typeof range?.min === "number" && Number.isFinite(range.min)) {
+        query = query.gte(column, range.min);
+      }
+      if (typeof range?.max === "number" && Number.isFinite(range.max)) {
+        query = query.lte(column, range.max);
+      }
+    }
+    // Status payment cuma bermakna untuk baris yang sudah punya invoice.
+    if (filters.paymentStatus === "paid" || filters.paymentStatus === "unpaid") {
+      query = query
+        .not("invoice_no", "is", null)
+        .eq("invoice_payment_status", filters.paymentStatus);
+    }
   }
 
   const { data, error, count } = await query.range(from, from + limit - 1);
