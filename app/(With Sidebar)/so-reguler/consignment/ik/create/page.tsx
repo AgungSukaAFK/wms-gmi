@@ -45,6 +45,9 @@ import {
   getConsignmentSoRemainingToShip,
   getStockByCabang,
 } from "@/services/consignment-ik-actions";
+import { getCustomerSites } from "@/services/master-actions";
+
+type CabangOption = { id: number; nama_cabang: string };
 
 interface ShipItemRow {
   id: number; // so_item_id
@@ -64,7 +67,12 @@ export default function CreateConsignmentIkPage() {
   const router = useRouter();
 
   const [loading, setLoading] = useState(false);
-  const [cabangs, setCabangs] = useState<{ id: number; nama_cabang: string }[]>([]);
+  const [cabangs, setCabangs] = useState<CabangOption[]>([]);
+  // Gudang yang terhubung ke site customer SO terpilih (customer_sites.cabang_id).
+  const [siteCabangs, setSiteCabangs] = useState<
+    (CabangOption & { site_names: string[] })[]
+  >([]);
+  const [siteCabangsLoading, setSiteCabangsLoading] = useState(false);
 
   // Header
   const [ikTanggal, setIkTanggal] = useState(toYmdLocal());
@@ -99,7 +107,9 @@ export default function CreateConsignmentIkPage() {
     const run = async () => {
       let q = supabase
         .from("consignment_so")
-        .select("id, so_no, no_po, customer:customers!customer_id(customer_name)")
+        .select(
+          "id, so_no, no_po, customer_id, site_id, site, customer:customers!customer_id(customer_name)",
+        )
         .order("created_at", { ascending: false })
         .limit(20);
       if (debouncedSoSearch)
@@ -110,10 +120,33 @@ export default function CreateConsignmentIkPage() {
     run();
   }, [debouncedSoSearch, soPopoverOpen]);
 
+  const loadSiteCabangs = async (so: any) => {
+    setSiteCabangsLoading(true);
+    setKeCabangId("");
+    const res = await getCustomerSites(so.customer_id, { activeOnly: true });
+    const byCabang = new Map<number, CabangOption & { site_names: string[] }>();
+    for (const site of res.data as any[]) {
+      if (!site.cabang) continue;
+      const entry = byCabang.get(site.cabang.id) || {
+        id: site.cabang.id,
+        nama_cabang: site.cabang.nama_cabang,
+        site_names: [] as string[],
+      };
+      entry.site_names.push(site.site_name);
+      byCabang.set(site.cabang.id, entry);
+    }
+    setSiteCabangs(Array.from(byCabang.values()));
+    // Default ke gudang milik site SO, kalau ada
+    const soSite = (res.data as any[]).find((s) => s.id === so.site_id);
+    if (soSite?.cabang_id) setKeCabangId(String(soSite.cabang_id));
+    setSiteCabangsLoading(false);
+  };
+
   const selectSo = async (so: any) => {
     setSelectedSo(so);
     setSoPopoverOpen(false);
     setSoSearch("");
+    loadSiteCabangs(so);
     setItemsLoading(true);
     const res = await getConsignmentSoRemainingToShip(so.id);
     if (res.error) {
@@ -331,18 +364,46 @@ export default function CreateConsignmentIkPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <Truck className="h-3 w-3" /> Gudang Tujuan
             </Label>
-            <Select value={keCabangId} onValueChange={setKeCabangId}>
+            <Select
+              value={keCabangId}
+              onValueChange={setKeCabangId}
+              disabled={!selectedSo || siteCabangsLoading}
+            >
               <SelectTrigger className="h-10 w-full text-sm font-semibold">
-                <SelectValue placeholder="Pilih gudang tujuan..." />
+                <SelectValue
+                  placeholder={
+                    !selectedSo
+                      ? "Pilih SO dulu..."
+                      : siteCabangsLoading
+                        ? "Memuat site customer..."
+                        : "Pilih gudang tujuan..."
+                  }
+                />
               </SelectTrigger>
               <SelectContent>
-                {cabangs.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
+                {siteCabangs.length > 0
+                  ? siteCabangs.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.nama_cabang}
+                        <span className="text-muted-foreground text-xs">
+                          {" "}
+                          · {c.site_names.join(", ")}
+                        </span>
+                      </SelectItem>
+                    ))
+                  : cabangs.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.nama_cabang}
+                      </SelectItem>
+                    ))}
               </SelectContent>
             </Select>
+            {selectedSo && !siteCabangsLoading && siteCabangs.length === 0 && (
+              <p className="text-[10px] text-warning font-semibold">
+                Customer ini belum punya site dengan gudang terhubung — semua
+                gudang ditampilkan. Atur di Master Customer → Kelola Site.
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">No. AWB</Label>

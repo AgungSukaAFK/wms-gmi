@@ -70,7 +70,7 @@ export function MrDecisionPreviewDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl p-0 rounded-xl overflow-hidden">
+      <DialogContent className="sm:max-w-3xl p-0 rounded-xl overflow-hidden">
         <DialogHeader className="p-5 bg-slate-50 border-b border-slate-100">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 bg-slate-900 rounded-xl flex items-center justify-center shadow-lg shrink-0">

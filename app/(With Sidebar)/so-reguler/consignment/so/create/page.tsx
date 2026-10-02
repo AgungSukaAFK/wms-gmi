@@ -13,6 +13,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -39,6 +46,7 @@ import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { createConsignmentSo } from "@/services/consignment-so-actions";
+import { getCustomerSites } from "@/services/master-actions";
 
 interface ConsignmentItem {
   part_id: number;
@@ -65,7 +73,9 @@ export default function CreateConsignmentSoPage() {
   const [noPo, setNoPo] = useState("");
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState("");
-  const [site, setSite] = useState("");
+  const [siteId, setSiteId] = useState("");
+  const [sites, setSites] = useState<{ id: number; site_name: string }[]>([]);
+  const [sitesLoading, setSitesLoading] = useState(false);
   const [items, setItems] = useState<ConsignmentItem[]>([]);
 
   // Customer picker
@@ -99,6 +109,23 @@ export default function CreateConsignmentSoPage() {
     };
     run();
   }, [debouncedCustomerSearch, customerPopoverOpen]);
+
+  // Dropdown site hanya berisi site milik customer terpilih
+  useEffect(() => {
+    setSiteId("");
+    setSites([]);
+    if (!customerId) return;
+    let cancelled = false;
+    setSitesLoading(true);
+    getCustomerSites(customerId, { activeOnly: true }).then((res) => {
+      if (cancelled) return;
+      setSites(res.data);
+      setSitesLoading(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [customerId]);
 
   // Search barang (PN GMI)
   useEffect(() => {
@@ -164,7 +191,7 @@ export default function CreateConsignmentSoPage() {
         due_date: dueDate || undefined,
         no_po: noPo || undefined,
         customer_id: customerId!,
-        site: site || undefined,
+        site_id: siteId && siteId !== "none" ? Number(siteId) : null,
         items: items.map((i) => ({
           part_id: i.part_id,
           part_number: i.part_number,
@@ -306,12 +333,33 @@ export default function CreateConsignmentSoPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <MapPin className="h-3 w-3" /> Site
             </Label>
-            <Input
-              placeholder="Lokasi project customer (opsional)..."
-              value={site}
-              onChange={(e) => setSite(e.target.value)}
-              className="h-10 text-sm font-semibold uppercase"
-            />
+            <Select
+              value={siteId}
+              onValueChange={setSiteId}
+              disabled={!customerId || sitesLoading || sites.length === 0}
+            >
+              <SelectTrigger className="h-10 w-full text-sm font-semibold">
+                <SelectValue
+                  placeholder={
+                    !customerId
+                      ? "Pilih customer dulu..."
+                      : sitesLoading
+                        ? "Memuat site..."
+                        : sites.length === 0
+                          ? "Customer belum punya site"
+                          : "Pilih site (opsional)..."
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— Tanpa site —</SelectItem>
+                {sites.map((s) => (
+                  <SelectItem key={s.id} value={String(s.id)}>
+                    {s.site_name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </Content>

@@ -399,7 +399,7 @@ export default function WoFormulaPage() {
 
       {/* Formula editor dialog */}
       <Dialog open={editorOpen} onOpenChange={setEditorOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>
               {editingFormulaId ? "Edit Formula" : "Tambah Formula"}

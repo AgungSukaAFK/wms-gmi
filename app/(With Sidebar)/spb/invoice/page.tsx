@@ -565,7 +565,7 @@ export default function SpbInvoicePage() {
       </Content>
 
       <Dialog open={openCreateModal} onOpenChange={handleOpenCreateModal}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Buat Invoice SPB</DialogTitle>
             <DialogDescription>

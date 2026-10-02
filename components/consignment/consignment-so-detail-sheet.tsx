@@ -21,6 +21,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Table,
   TableBody,
   TableCell,
@@ -42,6 +49,9 @@ import {
   deleteConsignmentSo,
   updateConsignmentSo,
 } from "@/services/consignment-so-actions";
+import { getCustomerSites } from "@/services/master-actions";
+
+const NO_SITE = "none";
 
 interface Props {
   soId: number | null;
@@ -70,8 +80,9 @@ export function ConsignmentSoDetailSheet({
     tgl_po_customer: "",
     due_date: "",
     no_po: "",
-    site: "",
+    site_id: NO_SITE,
   });
+  const [siteOptions, setSiteOptions] = useState<{ id: number; site_name: string }[]>([]);
 
   const fetchData = async () => {
     if (!soId) return;
@@ -132,13 +143,18 @@ export function ConsignmentSoDetailSheet({
         : "",
       due_date: soRow.due_date ? String(soRow.due_date).slice(0, 10) : "",
       no_po: soRow.no_po || "",
-      site: soRow.site || "",
+      site_id: soRow.site_id ? String(soRow.site_id) : NO_SITE,
     });
+    setSiteOptions([]);
+    getCustomerSites(soRow.customer_id, { activeOnly: true }).then((res) =>
+      setSiteOptions(res.data),
+    );
     setEditOpen(true);
   };
 
   const handleEditSave = async () => {
     if (!soId) return;
+    const initialSiteId = soRow?.site_id ? String(soRow.site_id) : NO_SITE;
     setEditSaving(true);
     const res = await updateConsignmentSo(soId, {
       so_tanggal_input: editForm.so_tanggal_input || undefined,
@@ -146,7 +162,11 @@ export function ConsignmentSoDetailSheet({
       tgl_po_customer: editForm.tgl_po_customer || undefined,
       due_date: editForm.due_date || undefined,
       no_po: editForm.no_po || undefined,
-      site: editForm.site || undefined,
+      // Hanya kirim site kalau diubah -- SO lama bisa punya site teks
+      // tanpa site_id, jangan sampai terhapus saat edit field lain.
+      ...(editForm.site_id !== initialSiteId && {
+        site_id: editForm.site_id === NO_SITE ? null : Number(editForm.site_id),
+      }),
     });
     setEditSaving(false);
     if ((res as any).error) return toast.error((res as any).error);
@@ -312,7 +332,7 @@ export function ConsignmentSoDetailSheet({
       </SheetContent>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit SO Consignment</DialogTitle>
             <DialogDescription>
@@ -386,13 +406,35 @@ export function ConsignmentSoDetailSheet({
             </div>
             <div className="space-y-2">
               <Label htmlFor="site">Site</Label>
-              <Input
-                id="site"
-                value={editForm.site}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, site: e.target.value }))
+              <Select
+                value={editForm.site_id}
+                onValueChange={(val) =>
+                  setEditForm((prev) => ({ ...prev, site_id: val }))
                 }
-              />
+              >
+                <SelectTrigger id="site" className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_SITE}>
+                    {!soRow?.site_id && soRow?.site
+                      ? `${soRow.site} (lama)`
+                      : "— Tanpa site —"}
+                  </SelectItem>
+                  {siteOptions.map((s) => (
+                    <SelectItem key={s.id} value={String(s.id)}>
+                      {s.site_name}
+                    </SelectItem>
+                  ))}
+                  {/* Site terpilih yg sudah dinonaktifkan tetap tampil */}
+                  {soRow?.site_id &&
+                    !siteOptions.some((s) => s.id === soRow.site_id) && (
+                      <SelectItem value={String(soRow.site_id)}>
+                        {soRow.site}
+                      </SelectItem>
+                    )}
+                </SelectContent>
+              </Select>
             </div>
           </div>
 

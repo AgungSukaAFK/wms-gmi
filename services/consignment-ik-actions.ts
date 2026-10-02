@@ -119,6 +119,25 @@ export async function createConsignmentIk(data: {
       return { error: `${item.part_number}: qty harus lebih dari 0.` };
   }
 
+  // Gudang tujuan wajib salah satu gudang yang terhubung ke site customer SO.
+  // Customer yang belum punya site bergudang tidak dibatasi (data master
+  // site masih diisi bertahap).
+  const { data: soHeader } = await supabase
+    .from("consignment_so")
+    .select("customer_id")
+    .eq("id", data.so_id)
+    .maybeSingle();
+  if (!soHeader) return { error: "SO Consignment tidak ditemukan." };
+  const { data: siteRows } = await supabase
+    .from("customer_sites")
+    .select("cabang_id")
+    .eq("customer_id", soHeader.customer_id)
+    .eq("is_active", true)
+    .not("cabang_id", "is", null);
+  const allowedTujuan = new Set((siteRows || []).map((r: any) => r.cabang_id));
+  if (allowedTujuan.size > 0 && !allowedTujuan.has(data.ke_cabang_id))
+    return { error: "Gudang tujuan bukan gudang site milik customer SO ini." };
+
   // Guard sisa qty (race-safe — ambil ulang dari DB, bukan percaya payload client).
   const soItemIds = data.items.map((i) => i.so_item_id);
   const { data: soItemRows } = await supabase

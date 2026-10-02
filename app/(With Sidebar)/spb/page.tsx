@@ -601,7 +601,7 @@ export default function SpbPage() {
       </Content>
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit SPB</DialogTitle>
             <DialogDescription>

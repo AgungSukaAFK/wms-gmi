@@ -834,3 +834,92 @@ export async function upsertCustomer(formData: FormData) {
 
   return createCustomer(payload);
 }
+
+/**
+ * CUSTOMER SITES
+ *
+ * Master site per customer. Dipakai Consignment: dropdown Site di SO dan
+ * Gudang Tujuan di IK (via cabang_id) hanya menampilkan site milik customer
+ * yang dipilih.
+ */
+type CustomerSitePayload = {
+  site_name: string;
+  alamat?: string;
+  cabang_id?: number | null;
+  is_active?: boolean;
+};
+
+export async function getCustomerSites(
+  customerId: number,
+  opts: { activeOnly?: boolean } = {},
+) {
+  const supabase = await createClient();
+  let query = supabase
+    .from("customer_sites")
+    .select("*, cabang:cabang!cabang_id(id, nama_cabang)")
+    .eq("customer_id", customerId)
+    .order("site_name");
+  if (opts.activeOnly) query = query.eq("is_active", true);
+
+  const { data, error } = await query;
+  if (error) return { data: [], error: error.message };
+  return { data: data || [], error: null };
+}
+
+function normalizeSitePayload(payload: CustomerSitePayload) {
+  return {
+    site_name: payload.site_name?.trim().toUpperCase() || "",
+    alamat: payload.alamat?.trim() || null,
+    cabang_id: payload.cabang_id || null,
+    is_active: payload.is_active ?? true,
+  };
+}
+
+function mapSiteError(message: string) {
+  return message.includes("uq_customer_sites_customer_name")
+    ? "Nama site sudah ada untuk customer ini."
+    : message;
+}
+
+export async function createCustomerSite(
+  customerId: number,
+  payload: CustomerSitePayload,
+) {
+  const access = await hasCustomerWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const row = normalizeSitePayload(payload);
+  if (!row.site_name) return { error: "Nama site wajib diisi" };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("customer_sites")
+    .insert([{ ...row, customer_id: customerId }])
+    .select()
+    .single();
+  if (error) return { error: mapSiteError(error.message) };
+
+  revalidatePath("/customers");
+  return { success: true, data };
+}
+
+export async function updateCustomerSite(
+  id: number,
+  payload: CustomerSitePayload,
+) {
+  const access = await hasCustomerWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const row = normalizeSitePayload(payload);
+  if (!row.site_name) return { error: "Nama site wajib diisi" };
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("customer_sites")
+    .update(row)
+    .eq("id", id);
+  if (error) return { error: mapSiteError(error.message) };
+
+  revalidatePath("/customers");
+  return { success: true };
+}

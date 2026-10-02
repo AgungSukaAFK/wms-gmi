@@ -398,7 +398,7 @@ export default function WorkingOrderDetailPage({
       <MRSignatureDialog open={signatureOpen} onOpenChange={setSignatureOpen} onConfirm={handleSignature} />
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="max-w-xl">
+        <DialogContent className="sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit Working Order</DialogTitle>
           </DialogHeader>

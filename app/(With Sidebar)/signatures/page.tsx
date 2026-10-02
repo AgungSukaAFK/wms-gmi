@@ -415,7 +415,7 @@ export default function SignatureManagerPage() {
 
       {/* Editor Modal */}
       <Dialog open={isEditorOpen} onOpenChange={setIsEditorOpen}>
-        <DialogContent className="max-w-2xl sm:max-h-200 p-0 overflow-hidden">
+        <DialogContent className="sm:max-w-2xl sm:max-h-200 p-0 overflow-hidden">
           <div className="p-6 pb-0">
             <DialogTitle>Sesuaikan Tanda Tangan</DialogTitle>
             <DialogDescription>

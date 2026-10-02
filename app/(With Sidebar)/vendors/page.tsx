@@ -492,7 +492,7 @@ export default function VendorsPage() {
       </Content>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-140">
+        <DialogContent className="sm:max-w-140">
           <DialogHeader>
             <DialogTitle>
               {editingVendorId ? "Edit Vendor" : "Tambah Vendor Baru"}

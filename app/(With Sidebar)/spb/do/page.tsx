@@ -443,7 +443,7 @@ export default function SpbDoPage() {
       </Content>
 
       <Dialog open={openCreateModal} onOpenChange={handleOpenCreateModal}>
-        <DialogContent className="max-w-5xl">
+        <DialogContent className="sm:max-w-5xl">
           <DialogHeader>
             <DialogTitle>Buat SPB-DO</DialogTitle>
             <DialogDescription>

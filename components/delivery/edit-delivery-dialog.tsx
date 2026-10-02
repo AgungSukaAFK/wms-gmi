@@ -392,7 +392,7 @@ export function EditDeliveryDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl p-0 rounded-xl border-border shadow-2xl overflow-hidden">
+      <DialogContent className="sm:max-w-2xl p-0 rounded-xl border-border shadow-2xl overflow-hidden">
         <DialogHeader className="p-5 bg-warning/5 border-b border-warning/20">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 bg-warning rounded-xl flex items-center justify-center shadow-sm shrink-0">

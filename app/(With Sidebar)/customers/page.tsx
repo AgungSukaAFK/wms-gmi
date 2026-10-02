@@ -26,6 +26,7 @@ import {
   Building2,
   FilterX,
   Loader2,
+  MapPin,
   Pencil,
   Plus,
   Search,
@@ -49,6 +50,7 @@ import {
   updateCustomer,
 } from "@/services/master-actions";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { CustomerSitesDialog } from "@/components/customers/customer-sites-dialog";
 
 const CUSTOMER_SORT_COLUMNS: Record<string, string> = {
   customer_name: "customer_name",
@@ -109,6 +111,7 @@ export default function CustomersPage() {
   const [form, setForm] = useState<CustomerFormState>(emptyCustomerForm);
 
   const [canWrite, setCanWrite] = useState(false);
+  const [sitesCustomer, setSitesCustomer] = useState<any | null>(null);
 
   const fetchRBAC = async () => {
     const {
@@ -403,7 +406,7 @@ export default function CustomersPage() {
                 >
                   Status
                 </SortableTableHead>
-                <TableHead className="w-30 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
+                <TableHead className="w-36 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
                   Aksi
                 </TableHead>
               </TableRow>
@@ -496,6 +499,15 @@ export default function CustomersPage() {
                           variant="ghost"
                           size="icon"
                           className="h-8 w-8"
+                          onClick={() => setSitesCustomer(customer)}
+                          title="Kelola site"
+                        >
+                          <MapPin className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8"
                           onClick={() => openEditDialog(customer)}
                           disabled={!canWrite}
                           title="Edit customer"
@@ -536,8 +548,17 @@ export default function CustomersPage() {
         </div>
       </Content>
 
+      <CustomerSitesDialog
+        customer={sitesCustomer}
+        open={!!sitesCustomer}
+        onOpenChange={(open) => {
+          if (!open) setSitesCustomer(null);
+        }}
+        canWrite={canWrite}
+      />
+
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-140">
+        <DialogContent className="sm:max-w-140">
           <DialogHeader>
             <DialogTitle>
               {editingCustomerId ? "Edit Customer" : "Tambah Customer Baru"}

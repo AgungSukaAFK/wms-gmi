@@ -23,6 +23,26 @@ async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
     .filter((name: string | undefined): name is string => Boolean(name));
 }
 
+/**
+ * Site SO wajib milik customer SO. Nama site disalin ke kolom teks `site`
+ * (dibaca v_consignment_dashboard & code lama).
+ */
+async function resolveCustomerSite(
+  supabase: any,
+  customerId: number,
+  siteId: number | null | undefined,
+) {
+  if (!siteId) return { site_id: null, site: null } as const;
+  const { data } = await supabase
+    .from("customer_sites")
+    .select("id, site_name")
+    .eq("id", siteId)
+    .eq("customer_id", customerId)
+    .maybeSingle();
+  if (!data) return { error: "Site tidak ditemukan untuk customer ini." } as const;
+  return { site_id: data.id as number, site: data.site_name as string } as const;
+}
+
 async function requireModeratorOrAdmin() {
   const supabase = await createClient();
   const {
@@ -56,7 +76,7 @@ export async function createConsignmentSo(data: {
   due_date?: string;
   no_po?: string;
   customer_id: number;
-  site?: string;
+  site_id?: number | null;
   items: ConsignmentSoItemInput[];
 }) {
   const supabase = await createClient();
@@ -76,6 +96,9 @@ export async function createConsignmentSo(data: {
     if (!item.part_number_customer?.trim())
       return { error: `${item.part_number}: PN Customer wajib diisi.` };
   }
+
+  const siteRes = await resolveCustomerSite(supabase, data.customer_id, data.site_id);
+  if ("error" in siteRes) return { error: siteRes.error };
 
   // No. SO unik
   const { data: existing } = await supabase
@@ -97,7 +120,8 @@ export async function createConsignmentSo(data: {
         due_date: data.due_date || null,
         no_po: data.no_po?.trim() || null,
         customer_id: data.customer_id,
-        site: data.site?.trim() || null,
+        site_id: siteRes.site_id,
+        site: siteRes.site,
         created_by: user.id,
       },
     ])
@@ -137,20 +161,35 @@ export async function updateConsignmentSo(
     tgl_po_customer: string;
     due_date: string;
     no_po: string;
-    site: string;
+    site_id: number | null;
   }>,
 ) {
   const auth = await requireModeratorOrAdmin();
   if ("error" in auth) return { error: auth.error };
 
   const { supabase } = auth;
+  const { site_id: siteId, ...rest } = payload;
+  // site_id tidak dikirim = site tidak diubah (null = kosongkan site).
+  let siteFields = {};
+  if (siteId !== undefined) {
+    const { data: soRow } = await supabase
+      .from("consignment_so")
+      .select("customer_id")
+      .eq("id", soId)
+      .maybeSingle();
+    if (!soRow) return { error: "SO Consignment tidak ditemukan." };
+    const siteRes = await resolveCustomerSite(supabase, soRow.customer_id, siteId);
+    if ("error" in siteRes) return { error: siteRes.error };
+    siteFields = { site_id: siteRes.site_id, site: siteRes.site };
+  }
+
   const safePayload = {
-    ...payload,
+    ...rest,
     tgl_po_email_marketing: payload.tgl_po_email_marketing || null,
     tgl_po_customer: payload.tgl_po_customer || null,
     due_date: payload.due_date || null,
     no_po: payload.no_po?.trim() || null,
-    site: payload.site?.trim() || null,
+    ...siteFields,
     updated_at: new Date().toISOString(),
   };
 
