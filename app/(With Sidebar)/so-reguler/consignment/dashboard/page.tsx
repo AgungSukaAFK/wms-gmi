@@ -3,12 +3,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   BarChart3,
-  FileSpreadsheet,
   LayoutDashboard,
   ListChecks,
-  PackageCheck,
+  RefreshCw,
   Search,
-  Truck,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
@@ -22,29 +20,24 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { toast } from "sonner";
 import {
   getConsignmentDashboardReport,
   getConsignmentPerformanceReport,
+  type ConsignmentPerformanceData,
 } from "@/services/consignment-so-actions";
 import { formatDate } from "@/lib/utils";
-import { ConsignmentTrendChart } from "@/components/dashboard/consignment-trend-chart";
-import { KpiDeltaTile } from "@/components/dashboard/kpi-delta-tile";
-
-type PerformanceData = {
-  trend: { bulan: string; so: number; ik: number }[];
-  kpi: {
-    so_this_month: number;
-    so_last_month: number;
-    ik_this_month: number;
-    ik_last_month: number;
-    qty_this_month: number;
-    qty_last_month: number;
-  };
-  error: string | null;
-};
+import { ConsignmentPerformanceTab } from "@/components/consignment/consignment-performance-tab";
 
 type DashboardRow = {
   so_id: number;
@@ -235,20 +228,29 @@ export default function DashboardConsignmentPage() {
   const [limit, setLimit] = useState(25);
 
   const [activeTab, setActiveTab] = useState("tracking");
+  const [perfMonths, setPerfMonths] = useState(6);
   const [perfLoading, setPerfLoading] = useState(false);
-  const [perfData, setPerfData] = useState<PerformanceData | null>(null);
+  const [perfData, setPerfData] = useState<ConsignmentPerformanceData | null>(
+    null,
+  );
+  // Key data yang sudah dimuat ("6") -- null = perlu dimuat ulang.
+  const [perfLoadedKey, setPerfLoadedKey] = useState<string | null>(null);
+
+  const loadPerformance = useCallback(async (months: number) => {
+    setPerfLoading(true);
+    const res = await getConsignmentPerformanceReport({ months });
+    if (res.error) toast.error(res.error);
+    else setPerfData(res);
+    setPerfLoadedKey(String(months));
+    setPerfLoading(false);
+  }, []);
 
   useEffect(() => {
-    if (activeTab !== "performance" || perfData || perfLoading) return;
+    if (activeTab !== "performance" || perfLoading) return;
+    if (perfLoadedKey === String(perfMonths)) return;
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPerfLoading(true);
-    getConsignmentPerformanceReport()
-      .then((res) => {
-        if (res.error) toast.error(res.error);
-        setPerfData(res);
-      })
-      .finally(() => setPerfLoading(false));
-  }, [activeTab, perfData, perfLoading]);
+    loadPerformance(perfMonths);
+  }, [activeTab, perfMonths, perfLoadedKey, perfLoading, loadPerformance]);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -299,62 +301,62 @@ export default function DashboardConsignmentPage() {
         </div>
       </Content>
 
-      <Content size="xs">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="h-9">
-            <TabsTrigger
-              value="tracking"
-              className="gap-1.5 text-xs font-bold uppercase"
-            >
-              <ListChecks className="h-3.5 w-3.5" /> Tracking
-            </TabsTrigger>
-            <TabsTrigger
-              value="performance"
-              className="gap-1.5 text-xs font-bold uppercase"
-            >
-              <BarChart3 className="h-3.5 w-3.5" /> Performance
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
+      <Content>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="h-9">
+              <TabsTrigger
+                value="tracking"
+                className="gap-1.5 text-xs font-bold uppercase"
+              >
+                <ListChecks className="h-3.5 w-3.5" /> Tracking
+              </TabsTrigger>
+              <TabsTrigger
+                value="performance"
+                className="gap-1.5 text-xs font-bold uppercase"
+              >
+                <BarChart3 className="h-3.5 w-3.5" /> Performance
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+
+          {activeTab === "performance" && (
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-bold uppercase text-muted-foreground">
+                Periode
+              </span>
+              <Select
+                value={String(perfMonths)}
+                onValueChange={(v) => setPerfMonths(Number(v))}
+              >
+                <SelectTrigger className="h-9 w-36 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="3">3 bulan terakhir</SelectItem>
+                  <SelectItem value="6">6 bulan terakhir</SelectItem>
+                  <SelectItem value="12">12 bulan terakhir</SelectItem>
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="icon"
+                className="h-9 w-9"
+                disabled={perfLoading}
+                onClick={() => loadPerformance(perfMonths)}
+                title="Muat ulang data"
+              >
+                <RefreshCw
+                  className={perfLoading ? "h-4 w-4 animate-spin" : "h-4 w-4"}
+                />
+              </Button>
+            </div>
+          )}
+        </div>
       </Content>
 
       {activeTab === "performance" ? (
-        <>
-          <KpiDeltaTile
-            label="SO Consignment"
-            value={perfData?.kpi.so_this_month ?? 0}
-            previous={perfData?.kpi.so_last_month ?? 0}
-            icon={FileSpreadsheet}
-            iconClassName="bg-primary/10 text-primary"
-          />
-          <KpiDeltaTile
-            label="Item Konsinyasi Terkirim"
-            value={perfData?.kpi.ik_this_month ?? 0}
-            previous={perfData?.kpi.ik_last_month ?? 0}
-            icon={Truck}
-            iconClassName="bg-sky-500/10 text-sky-600"
-          />
-          <KpiDeltaTile
-            label="Total Qty Dikirim (IK)"
-            value={perfData?.kpi.qty_this_month ?? 0}
-            previous={perfData?.kpi.qty_last_month ?? 0}
-            icon={PackageCheck}
-            iconClassName="bg-emerald-500/10 text-emerald-600"
-          />
-
-          <Content
-            title="Tren Volume SO & IK"
-            description="Jumlah dokumen per bulan, 6 bulan terakhir"
-          >
-            {perfLoading ? (
-              <div className="flex h-70 items-center justify-center text-xs text-muted-foreground">
-                Memuat data performance...
-              </div>
-            ) : (
-              <ConsignmentTrendChart data={perfData?.trend ?? []} />
-            )}
-          </Content>
-        </>
+        <ConsignmentPerformanceTab data={perfData} loading={perfLoading} />
       ) : (
         <>
           <Content>
