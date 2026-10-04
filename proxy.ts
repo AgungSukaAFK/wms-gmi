@@ -78,10 +78,13 @@ export async function proxy(request: NextRequest) {
     return NextResponse.redirect(redirectUrl);
   }
 
-  // 4. Unauthenticated user → redirect to login
+  // 4. Unauthenticated user → redirect to login, bawa path asal di ?next=
+  //    supaya setelah login kembali ke halaman yang tadi dibuka.
   if (!user && !isAuthRoute) {
     const redirectUrl = request.nextUrl.clone();
     redirectUrl.pathname = "/auth/login";
+    redirectUrl.search = "";
+    redirectUrl.searchParams.set("next", pathname + request.nextUrl.search);
     return NextResponse.redirect(redirectUrl);
   }
 
@@ -128,5 +131,5 @@ export async function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|.*\\.[^.]+$).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|opengraph-image|.*\\.[^.]+$).*)"],
 };

@@ -1,7 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import Script from "next/script";
 import { FONT_SIZE_BOOT_SCRIPT } from "@/lib/font-size";
+import { SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,8 +15,40 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "WMS GMI - 2026",
-  description: "Warehouse Management System - PT. Garuda Mart Indonesia",
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: SITE_TITLE,
+    template: `%s | ${SITE_NAME}`,
+  },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  keywords: [
+    "WMS",
+    "Warehouse Management System",
+    "Garuda Mart Indonesia",
+    "GMI",
+    "manajemen gudang",
+    "material request",
+    "purchase order",
+    "stok gudang",
+  ],
+  authors: [{ name: "PT. Garuda Mart Indonesia" }],
+  creator: "PT. Garuda Mart Indonesia",
+  publisher: "PT. Garuda Mart Indonesia",
+  openGraph: {
+    type: "website",
+    locale: "id_ID",
+    siteName: SITE_NAME,
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+  },
+  twitter: {
+    card: "summary_large_image",
+    title: SITE_TITLE,
+    description: SITE_DESCRIPTION,
+  },
+  robots: { index: true, follow: true },
+  formatDetection: { telephone: false },
 };
 
 export default function RootLayout({
@@ -26,14 +58,16 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      lang="id"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
       // data-font-size dipasang FONT_SIZE_BOOT_SCRIPT sebelum hydration.
       suppressHydrationWarning
     >
-      <Script id="font-size-boot" strategy="beforeInteractive">
-        {FONT_SIZE_BOOT_SCRIPT}
-      </Script>
+      <head>
+        {/* Inline (bukan next/script) & di dalam <head>: React 19 menolak
+            <script> sebagai anak langsung <html>. Jalan sinkron sebelum paint. */}
+        <script dangerouslySetInnerHTML={{ __html: FONT_SIZE_BOOT_SCRIPT }} />
+      </head>
       <body className="min-h-full flex flex-col">{children}</body>
     </html>
   );
