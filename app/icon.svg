@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <rect width="64" height="64" rx="14" fill="#020617"/>
+  <g fill="#ffffff">
+    <!-- sayap kiri: 3 bulu bertingkat -->
+    <path d="M27 25 L4 15 L7 21 L27 30 Z"/>
+    <path d="M27 32 L8 24 L11 29 L27 36 Z"/>
+    <path d="M27 38 L13 32 L17 37 L27 41 Z"/>
+    <!-- sayap kanan (mirror) -->
+    <path d="M37 25 L60 15 L57 21 L37 30 Z"/>
+    <path d="M37 32 L56 24 L53 29 L37 36 Z"/>
+    <path d="M37 38 L51 32 L47 37 L37 41 Z"/>
+    <!-- kepala menoleh ke kiri + badan + ekor -->
+    <path d="M34 8 L39 12 L38 20 L37 23 L37 43 L32 56 L27 43 L27 24 L26 22 L21 20 L26 16 L28 11 Z"/>
+  </g>
+</svg>

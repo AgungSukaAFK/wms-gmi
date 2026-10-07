@@ -2,12 +2,14 @@
 // daftar card, detail (modal), reaction, dan komentar. Publisher (moderator +
 // it) dapat tombol "Buat Update" serta Edit/Hapus di modal detail.
 // Membuka halaman ini = "sudah dilihat" (badge sidebar & banner dashboard padam).
+// Deep link /update-web?post=<id> (link notifikasi balasan komentar) langsung
+// membuka modal detail post tsb.
 
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Suspense, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Megaphone, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { Content } from "@/components/content";
@@ -30,8 +32,22 @@ import {
   UpdateWebReactionEmoji,
 } from "@/type/update-web";
 
+// useSearchParams butuh Suspense boundary supaya route tetap bisa diprerender.
 export default function UpdateWebPage() {
+  return (
+    <Suspense fallback={null}>
+      <UpdateWebPageContent />
+    </Suspense>
+  );
+}
+
+function UpdateWebPageContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const deepLinkPostParam = searchParams.get("post");
+  // Param ?post yang sudah diproses, supaya modal tidak terbuka ulang tiap
+  // `posts` berubah (reaction/komentar). Di-reset saat modal ditutup.
+  const handledDeepLink = useRef<string | null>(null);
   const [viewer, setViewer] = useState<UpdateWebViewer | null>(null);
   // Fetch reaction HARUS menunggu viewer selesai dicek, kalau tidak
   // `reactedByMe` dihitung dengan userId null (semua false).
@@ -150,6 +166,30 @@ export default function UpdateWebPage() {
     }
   };
 
+  useEffect(() => {
+    if (loading || !deepLinkPostParam) return;
+    if (handledDeepLink.current === deepLinkPostParam) return;
+    handledDeepLink.current = deepLinkPostParam;
+
+    const postId = Number(deepLinkPostParam);
+    if (Number.isInteger(postId) && posts.some((p) => p.id === postId)) {
+      setSelectedPostId(postId);
+      setDetailOpen(true);
+    } else {
+      toast.error("Postingan tidak ditemukan atau sudah dihapus.");
+    }
+  }, [loading, deepLinkPostParam, posts]);
+
+  const handleDetailOpenChange = (open: boolean) => {
+    setDetailOpen(open);
+    // Bersihkan ?post supaya refresh tidak membuka modal lagi, dan klik
+    // notifikasi yang sama berikutnya tetap membuka modal.
+    if (!open && deepLinkPostParam) {
+      handledDeepLink.current = null;
+      router.replace("/update-web", { scroll: false });
+    }
+  };
+
   const selectedPost = posts.find((p) => p.id === selectedPostId) ?? null;
 
   return (
@@ -198,7 +238,7 @@ export default function UpdateWebPage() {
       <UpdatePostDetailDialog
         post={selectedPost}
         open={detailOpen}
-        onOpenChange={setDetailOpen}
+        onOpenChange={handleDetailOpenChange}
         reactions={
           selectedPost ? (reactionsByPost.get(selectedPost.id) ?? []) : []
         }

@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { MessageSquare } from "lucide-react";
 import { UpdatePostReactions } from "./UpdatePostReactions";
 import {
+  UPDATE_WEB_THUMBNAIL_ENABLED,
   UpdateWebPost,
   UpdateWebPostReactionSummary,
   UpdateWebReactionEmoji,
@@ -45,7 +46,7 @@ export function UpdatePostCard({
         }
       }}
     >
-      {post.thumbnail_url ? (
+      {!UPDATE_WEB_THUMBNAIL_ENABLED ? null : post.thumbnail_url ? (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={post.thumbnail_url}

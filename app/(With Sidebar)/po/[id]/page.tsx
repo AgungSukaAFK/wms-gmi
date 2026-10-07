@@ -61,6 +61,8 @@ import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 import Link from "next/link";
 import { Content } from "@/components/content";
 import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
+import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
+import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 
 export default function PODetailPage({
   params,
@@ -139,7 +141,8 @@ export default function PODetailPage({
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount,
+          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, po_currency,
+          cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -386,11 +389,7 @@ export default function PODetailPage({
     : null;
 
   const formatCurrency = (n: number) =>
-    new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-      minimumFractionDigits: 0,
-    }).format(n);
+    formatPoMoney(n, po?.po_currency);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -525,7 +524,7 @@ export default function PODetailPage({
                 <User className="h-3 w-3" /> {po?.po_pic || "-"}
                 <span className="mx-1">·</span>
                 <Building2 className="h-3 w-3" />{" "}
-                {po?.prs?.cabang?.nama_cabang || "-"}
+                {po?.prs?.cabang?.nama_cabang || po?.cabang?.nama_cabang || "-"}
               </p>
             </div>
           </div>
@@ -683,14 +682,17 @@ export default function PODetailPage({
                 {formatDate(po?.po_estimasi)}
               </div>
             </div>
-            {po?.po_payment_term && (
+            {po && (
               <div className="sm:col-span-2 bg-muted/40 border border-border rounded-lg p-3">
                 <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
-                  Syarat Pembayaran
+                  Syarat Pembayaran & Mata Uang
                 </p>
                 <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
                   <CreditCard className="h-3 w-3 text-muted-foreground" />
-                  {po.po_payment_term}
+                  {po.po_payment_term || "-"}
+                  <Badge variant="outline" className="ml-1 text-[9px] font-bold">
+                    {normalizePoCurrency(po.po_currency)}
+                  </Badge>
                 </div>
               </div>
             )}
@@ -708,6 +710,20 @@ export default function PODetailPage({
         )}
       </Content>
 
+      {po?.po_jenis === "non_pr" && (
+        <Content title="PO Non-PR — Job Costing & Link PR">
+          <PoNonPrPanel
+            poId={Number(poId)}
+            poStatus={po.po_status}
+            prReferensi={po.po_pr_referensi}
+            items={poItems}
+            canLink={canViewPrice || isModerator}
+            isModerator={isModerator}
+          />
+        </Content>
+      )}
+
+      {po?.po_jenis !== "non_pr" && (
       <Content title="Referensi Purchase Request">
         <div className="flex flex-wrap items-center gap-2">
           {linkedPrs.length > 0 ? (
@@ -728,6 +744,7 @@ export default function PODetailPage({
           )}
         </div>
       </Content>
+      )}
 
       {((po?.approvals && po.approvals.length > 0) || modEditMode) && (
         <Content title="Alur Approval">

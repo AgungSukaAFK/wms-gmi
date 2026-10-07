@@ -1,11 +1,21 @@
 // Type fitur "Update Web" (changelog/pengumuman aplikasi) - lihat
 // supabase/migrations/20260930110000_update_web.sql & services/update-web-client.ts.
 
+// Snapshot komentar yang dibalas - dibangun server dari komentar asli
+// (lihat migration 20261005110000_update_web_comment_reply.sql).
+export interface UpdateWebCommentReplyRef {
+  user_id: string;
+  user_name: string;
+  timestamp: string;
+  excerpt: string;
+}
+
 export interface UpdateWebComment {
   user_id: string;
   user_name: string;
   message: string;
   timestamp: string;
+  reply_to?: UpdateWebCommentReplyRef;
 }
 
 export interface UpdateWebPost {
@@ -53,6 +63,10 @@ export interface UpdateWebPostReactionSummary {
 }
 
 export type UpdateWebVersion = { major: number; minor: number; patch: number };
+
+// Thumbnail sementara disembunyikan (form, card, detail). Kolom
+// thumbnail_url & bucket tetap ada; set true untuk menampilkan lagi.
+export const UPDATE_WEB_THUMBNAIL_ENABLED = false;
 
 // Samakan dengan file_size_limit bucket "update-web" di migration.
 export const UPDATE_WEB_MAX_UPLOAD_BYTES = 50 * 1024 * 1024;

@@ -7,6 +7,8 @@ import {
   normalizeDocumentStatus,
   toCompletedIfLegacy,
 } from "@/lib/document-status";
+import { fetchPoItemJcUsage } from "@/lib/po-non-pr";
+import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
 
 /**
  * JOB COSTING SERVICES
@@ -61,7 +63,7 @@ export async function getJobCostingById(id: number) {
   const { data, error } = await supabase
     .from("job_costing")
     .select(
-      "*, cabang!job_costing_cabang_id_fkey(nama_cabang), finish_part_cabang:cabang!job_costing_finish_part_cabang_id_fkey(nama_cabang), job_costing_items(*, source_cabang:cabang!job_costing_items_source_cabang_id_fkey(nama_cabang), source_customer:customers!job_costing_items_source_customer_id_fkey(customer_name), po:po_id(po_kode)), job_costing_finish_parts(*, cabang:cabang!job_costing_finish_parts_cabang_id_fkey(nama_cabang), customer:customers!job_costing_finish_parts_customer_id_fkey(customer_name))",
+      "*, cabang!job_costing_cabang_id_fkey(nama_cabang), finish_part_cabang:cabang!job_costing_finish_part_cabang_id_fkey(nama_cabang), job_costing_items(*, source_cabang:cabang!job_costing_items_source_cabang_id_fkey(nama_cabang), source_customer:customers!job_costing_items_source_customer_id_fkey(customer_name), po:po_id(po_kode)), job_costing_finish_parts(*, cabang:cabang!job_costing_finish_parts_cabang_id_fkey(nama_cabang), customer:customers!job_costing_finish_parts_customer_id_fkey(customer_name), mr_item:mr_items(mrs(mr_kode)))",
     )
     .eq("id", id)
     .single();
@@ -615,6 +617,139 @@ async function reverseJobCostingStock(
   return { success: true };
 }
 
+// Bahan yang diambil dari item PO Non-PR (job_costing_items.po_item_id):
+// part harus sama dengan item PO, dan total pemakaian (semua Job Costing
+// non-rejected + baris baru ini) tidak boleh melebihi qty yang sudah diterima
+// lewat RI. Mengembalikan po_id per po_item_id untuk diisi ke baris bahan.
+async function validatePoItemMaterials(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  lines: { po_item_id: number; part_id: number; qty: number }[],
+  excludeJobId?: number,
+): Promise<{ error: string } | { poIdByPoItem: Map<number, number> }> {
+  const poIdByPoItem = new Map<number, number>();
+  if (lines.length === 0) return { poIdByPoItem };
+
+  const ids = Array.from(new Set(lines.map((l) => l.po_item_id)));
+  const { data: poItems } = await supabase
+    .from("po_items")
+    .select("id, po_id, part_id, part_number, qty_received, pos!inner(po_kode, po_jenis)")
+    .in("id", ids);
+  const byId = new Map((poItems || []).map((r: any) => [r.id, r]));
+
+  const usage = await fetchPoItemJcUsage(supabase, ids);
+  if (excludeJobId) {
+    const { data: ownRows } = await supabase
+      .from("job_costing_items")
+      .select("po_item_id, qty")
+      .eq("job_id", excludeJobId)
+      .in("po_item_id", ids);
+    for (const r of ownRows || []) {
+      const u = usage.get(r.po_item_id);
+      if (u) u.qtyUsed -= Number(r.qty) || 0;
+    }
+  }
+
+  const requested = new Map<number, number>();
+  for (const line of lines) {
+    const poItem: any = byId.get(line.po_item_id);
+    if (!poItem) return { error: "Item PO referensi bahan tidak ditemukan." };
+    const po = Array.isArray(poItem.pos) ? poItem.pos[0] : poItem.pos;
+    if (po?.po_jenis !== "non_pr") {
+      return { error: `PO ${po?.po_kode || ""} bukan PO Non-PR.` };
+    }
+    if (poItem.part_id !== line.part_id) {
+      return {
+        error: `Bahan ${poItem.part_number} harus sama dengan part di item PO ${po?.po_kode}.`,
+      };
+    }
+    requested.set(line.po_item_id, (requested.get(line.po_item_id) || 0) + line.qty);
+    poIdByPoItem.set(line.po_item_id, poItem.po_id);
+  }
+
+  for (const [poItemId, qty] of requested) {
+    const poItem: any = byId.get(poItemId);
+    const po = Array.isArray(poItem.pos) ? poItem.pos[0] : poItem.pos;
+    const sisa = (poItem.qty_received || 0) - (usage.get(poItemId)?.qtyUsed || 0);
+    if (qty > sisa) {
+      return {
+        error: `Qty bahan ${poItem.part_number} (PO ${po?.po_kode}) melebihi sisa yang sudah diterima & belum di-Job Costing (sisa ${Math.max(0, sisa)}).`,
+      };
+    }
+  }
+
+  return { poIdByPoItem };
+}
+
+// Finish part yang "dikirim ke MR" (job_costing_finish_parts.mr_item_id):
+// part harus sama dengan item MR, tujuannya gudang MR itu, MR sudah approved,
+// dan qty tidak melebihi sisa kebutuhan MR (dikurangi yang sudah diterima +
+// finish part Job Costing lain yang belum diterapkan & tidak rejected).
+async function validateFinishPartsToMr(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  lines: { mr_item_id: number; part_id: number; qty: number; cabang_id?: number | null }[],
+  excludeJobId?: number,
+): Promise<{ error: string } | { ok: true }> {
+  if (lines.length === 0) return { ok: true };
+  const ids = Array.from(new Set(lines.map((l) => l.mr_item_id)));
+
+  const [{ data: mrItems }, { data: pendingRows }] = await Promise.all([
+    supabase
+      .from("mr_items")
+      .select("id, part_id, part_number, qty_request, qty_received, mrs!inner(mr_kode, mr_status, cabang_id)")
+      .in("id", ids),
+    supabase
+      .from("job_costing_finish_parts")
+      .select("mr_item_id, qty, job_id, job_costing!inner(status, stock_applied_at)")
+      .in("mr_item_id", ids)
+      .is("job_costing.stock_applied_at", null)
+      .neq("job_costing.status", "rejected"),
+  ]);
+  const byId = new Map((mrItems || []).map((r: any) => [r.id, r]));
+  const pending = new Map<number, number>();
+  for (const r of pendingRows || []) {
+    if (excludeJobId && r.job_id === excludeJobId) continue;
+    pending.set(r.mr_item_id, (pending.get(r.mr_item_id) || 0) + Number(r.qty || 0));
+  }
+
+  const requested = new Map<number, number>();
+  for (const line of lines) {
+    const mrItem: any = byId.get(line.mr_item_id);
+    if (!mrItem) return { error: "Item MR tujuan finish part tidak ditemukan." };
+    const mr = Array.isArray(mrItem.mrs) ? mrItem.mrs[0] : mrItem.mrs;
+    if (mr?.mr_status !== "approved") {
+      return { error: `MR ${mr?.mr_kode} tidak berstatus approved (status: ${mr?.mr_status}).` };
+    }
+    if (mrItem.part_id !== line.part_id) {
+      return { error: `Finish part untuk MR ${mr?.mr_kode} harus part ${mrItem.part_number}.` };
+    }
+    if (!line.cabang_id || line.cabang_id !== mr.cabang_id) {
+      return {
+        error: `Finish part ${mrItem.part_number} untuk MR ${mr?.mr_kode} wajib dikirim ke gudang MR tersebut.`,
+      };
+    }
+    requested.set(line.mr_item_id, (requested.get(line.mr_item_id) || 0) + line.qty);
+  }
+
+  for (const [mrItemId, qty] of requested) {
+    const mrItem: any = byId.get(mrItemId);
+    const mr = Array.isArray(mrItem.mrs) ? mrItem.mrs[0] : mrItem.mrs;
+    const sisa =
+      mrItem.qty_request - (mrItem.qty_received || 0) - (pending.get(mrItemId) || 0);
+    if (qty > sisa) {
+      return {
+        error: `Qty finish part ${mrItem.part_number} melebihi sisa kebutuhan MR ${mr?.mr_kode} (sisa ${Math.max(0, sisa)}).`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+function finishPartMrItemIds(job: { job_costing_finish_parts?: unknown }): number[] {
+  return ((job.job_costing_finish_parts as any[]) ?? [])
+    .map((f) => f.mr_item_id)
+    .filter((id: unknown): id is number => typeof id === "number");
+}
+
 export async function createJobCosting(data: {
   job_kode: string;
   cabang_id: number;
@@ -626,6 +761,9 @@ export async function createJobCosting(data: {
     qty: number;
     cabang_id?: number | null;
     customer_id?: number | null;
+    // Finish part ini dikirim untuk memenuhi item MR tsb (lihat
+    // validateFinishPartsToMr / lib/mr-fulfillment.ts).
+    mr_item_id?: number | null;
     notes?: string;
   }[];
   job_tanggal?: string;
@@ -640,6 +778,8 @@ export async function createJobCosting(data: {
     unit: string;
     unit_price: number;
     po_id?: number | null;
+    // Bahan dari item PO Non-PR (lihat validatePoItemMaterials).
+    po_item_id?: number | null;
     source_cabang_id?: number | null;
     source_customer_id?: number | null;
     notes?: string;
@@ -714,6 +854,32 @@ export async function createJobCosting(data: {
     .maybeSingle();
   if (existing) return { error: "Kode Job sudah digunakan." };
 
+  const normalizedCreateStatus = toCompletedIfLegacy(data.status || "open");
+  let poIdByPoItem = new Map<number, number>();
+  if (normalizedCreateStatus !== "rejected") {
+    const poCheck = await validatePoItemMaterials(
+      supabase,
+      data.items
+        .filter((i) => i.po_item_id)
+        .map((i) => ({ po_item_id: i.po_item_id!, part_id: i.part_id!, qty: i.qty })),
+    );
+    if ("error" in poCheck) return { error: poCheck.error };
+    poIdByPoItem = poCheck.poIdByPoItem;
+
+    const mrCheck = await validateFinishPartsToMr(
+      supabase,
+      data.finish_parts
+        .filter((fp) => fp.mr_item_id)
+        .map((fp) => ({
+          mr_item_id: fp.mr_item_id!,
+          part_id: fp.part_id,
+          qty: fp.qty,
+          cabang_id: fp.customer_id ? null : fp.cabang_id,
+        })),
+    );
+    if ("error" in mrCheck) return { error: mrCheck.error };
+  }
+
   const total_cost = data.items.reduce(
     (sum, item) => sum + item.qty * item.unit_price,
     0,
@@ -757,7 +923,11 @@ export async function createJobCosting(data: {
       qty: item.qty,
       unit: item.unit,
       unit_price: item.unit_price,
-      po_id: item.po_id || null,
+      po_id:
+        (item.po_item_id ? poIdByPoItem.get(item.po_item_id) : null) ||
+        item.po_id ||
+        null,
+      po_item_id: item.po_item_id || null,
       source_cabang_id: item.source_cabang_id || null,
       source_customer_id: item.source_customer_id || null,
       notes: item.notes || null,
@@ -779,6 +949,7 @@ export async function createJobCosting(data: {
     qty: fp.qty,
     cabang_id: fp.cabang_id || null,
     customer_id: fp.customer_id || null,
+    mr_item_id: fp.mr_item_id || null,
     notes: fp.notes || null,
   }));
   const { error: fpError } = await supabase
@@ -830,10 +1001,19 @@ export async function createJobCosting(data: {
       await supabase.from("job_costing").delete().eq("id", job.id);
       return { error: `Gagal menandai status stok: ${markErr.message}` };
     }
+
+    const mrItemIds = data.finish_parts
+      .map((fp) => fp.mr_item_id)
+      .filter((id): id is number => Boolean(id));
+    if (mrItemIds.length > 0) {
+      await recomputeMrItemsFulfillment(supabase, mrItemIds);
+      revalidatePath("/mr");
+    }
   }
 
   revalidatePath("/job-costing");
   revalidatePath("/stock");
+  revalidatePath("/po");
   return { success: true, data: job };
 }
 
@@ -892,7 +1072,7 @@ function deriveStockLinesFromJob(job: {
 }
 
 const JOB_COSTING_STOCK_SELECT =
-  "id, job_kode, status, stock_applied_at, finish_part_id, finish_part_cabang_id, qty_finish_part, finish_part, job_costing_items(id, part_id, part_number, part_name, qty, source_cabang_id, source_customer_id), job_costing_finish_parts(id, part_id, part_number, part_name, qty, cabang_id, customer_id)";
+  "id, job_kode, status, stock_applied_at, finish_part_id, finish_part_cabang_id, qty_finish_part, finish_part, job_costing_items(id, part_id, part_number, part_name, qty, source_cabang_id, source_customer_id, po_item_id), job_costing_finish_parts(id, part_id, part_number, part_name, qty, cabang_id, customer_id, mr_item_id)";
 
 export async function updateJobCostingStatus(id: number, status: string) {
   const access = await canManageJobCostingStatus();
@@ -931,6 +1111,32 @@ export async function updateJobCostingStatus(id: number, status: string) {
   const willApply = shouldApplyStock(normalizedNewStatus);
 
   const { materialLines, finishPartLines } = deriveStockLinesFromJob(job);
+
+  // Job rejected tidak ikut dihitung di kuota item PO / sisa kebutuhan MR --
+  // kalau diaktifkan lagi, cek ulang kuotanya (bisa sudah dipakai job lain).
+  if (currentStatus === "rejected" && normalizedNewStatus !== "rejected") {
+    const poCheck = await validatePoItemMaterials(
+      supabase,
+      ((job.job_costing_items as any[]) ?? [])
+        .filter((i) => i.po_item_id)
+        .map((i) => ({ po_item_id: i.po_item_id, part_id: i.part_id, qty: Number(i.qty) })),
+      id,
+    );
+    if ("error" in poCheck) return { error: poCheck.error };
+    const mrCheck = await validateFinishPartsToMr(
+      supabase,
+      ((job.job_costing_finish_parts as any[]) ?? [])
+        .filter((f) => f.mr_item_id)
+        .map((f) => ({
+          mr_item_id: f.mr_item_id,
+          part_id: f.part_id,
+          qty: Number(f.qty),
+          cabang_id: f.customer_id ? null : f.cabang_id,
+        })),
+      id,
+    );
+    if ("error" in mrCheck) return { error: mrCheck.error };
+  }
 
   if (!wasApplied && willApply) {
     if (materialLines.length === 0) {
@@ -998,8 +1204,17 @@ export async function updateJobCostingStatus(id: number, status: string) {
     if (updErr) return { error: updErr.message };
   }
 
+  if (wasApplied !== willApply) {
+    const mrItemIds = finishPartMrItemIds(job);
+    if (mrItemIds.length > 0) {
+      await recomputeMrItemsFulfillment(supabase, mrItemIds);
+      revalidatePath("/mr");
+    }
+  }
+
   revalidatePath("/job-costing");
   revalidatePath("/stock");
+  revalidatePath("/po");
   return { success: true };
 }
 
@@ -1062,8 +1277,17 @@ export async function deleteJobCosting(id: number) {
     return { error: delErr.message };
   }
 
+  if (job.stock_applied_at) {
+    const mrItemIds = finishPartMrItemIds(job);
+    if (mrItemIds.length > 0) {
+      await recomputeMrItemsFulfillment(supabase, mrItemIds);
+      revalidatePath("/mr");
+    }
+  }
+
   revalidatePath("/job-costing");
   revalidatePath("/stock");
+  revalidatePath("/po");
   return { success: true };
 }
 

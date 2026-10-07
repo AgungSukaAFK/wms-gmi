@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { KoliRow } from "@/lib/shipment";
+import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
 import {
   notifyApprovers,
   notifyDocumentOwner,
@@ -611,66 +612,12 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
   // dari SEMUA item_transfer_items yang sudah completed buat mr_item itu,
   // mirror pola convert_status yang sudah ada -- supaya kalau nanti ada IT
   // yang di-reverse/dihapus, cukup panggil ulang recompute ini.
-  const mrItemIds = Array.from(
-    new Set(
-      (items || [])
-        .map((i: any) => i.mr_item_id)
-        .filter((id: unknown): id is number => typeof id === "number"),
-    ),
-  );
-
-  const affectedMrIds = new Set<number>();
-  for (const mrItemId of mrItemIds) {
-    const { data: mrItem } = await supabase
-      .from("mr_items")
-      .select("id, mr_id, qty_request")
-      .eq("id", mrItemId)
-      .maybeSingle();
-    if (!mrItem) continue;
-
-    const { data: completedRows } = await supabase
-      .from("item_transfer_items")
-      .select("qty, item_transfers!inner(status)")
-      .eq("mr_item_id", mrItemId)
-      .eq("item_transfers.status", "completed");
-    const totalCompleted = (completedRows || []).reduce(
-      (s: number, r: any) => s + (r.qty || 0),
-      0,
-    );
-
-    await supabase
-      .from("mr_items")
-      .update({ qty_received: Math.min(mrItem.qty_request, totalCompleted) })
-      .eq("id", mrItemId);
-
-    affectedMrIds.add(mrItem.mr_id);
-  }
-
-  for (const mrId of affectedMrIds) {
-    const { data: mrItems } = await supabase
-      .from("mr_items")
-      .select("qty_request, qty_received")
-      .eq("mr_id", mrId);
-    if (!mrItems) continue;
-    const totalRequest = mrItems.reduce(
-      (s: number, i: any) => s + i.qty_request,
-      0,
-    );
-    const totalReceived = mrItems.reduce(
-      (s: number, i: any) => s + i.qty_received,
-      0,
-    );
-    const mrStatus =
-      totalReceived <= 0
-        ? "open"
-        : totalReceived < totalRequest
-          ? "approved"
-          : "completed";
-    await supabase
-      .from("mrs")
-      .update({ mr_status: mrStatus as any })
-      .eq("id", mrId);
-  }
+  // Sumber pemenuhan lain (Job Costing -> MR) ikut dihitung di helper yang
+  // sama supaya tidak saling menimpa.
+  const mrItemIds = (items || [])
+    .map((i: any) => i.mr_item_id)
+    .filter((id: unknown): id is number => typeof id === "number");
+  const affectedMrIds = await recomputeMrItemsFulfillment(supabase, mrItemIds);
 
   if (affectedMrIds.size > 0) {
     revalidatePath("/mr");

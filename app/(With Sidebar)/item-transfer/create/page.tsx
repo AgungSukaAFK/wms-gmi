@@ -281,7 +281,11 @@ export default function CreateItemTransferPage() {
 
     // Resolve mr_item_id per baris via mr_id+part_id (pola yang sama dipakai
     // applyReceiveCompletion sebelum revisi ini).
-    const mrIds = Array.from(new Set((lines || []).map((l: any) => l.mr_id)));
+    // mr_id null = RI dari PO Non-PR (tidak terikat MR, jadi IT-nya cuma
+    // pindah stok biasa).
+    const mrIds = Array.from(
+      new Set((lines || []).map((l: any) => l.mr_id).filter(Boolean)),
+    );
     const { data: mrItemRows } =
       mrIds.length > 0
         ? await supabase

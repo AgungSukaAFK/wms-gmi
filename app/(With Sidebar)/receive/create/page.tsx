@@ -55,6 +55,11 @@ import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
+import {
+  isNonPrPo,
+  NON_PR_RECEIVE_CABANG_MISSING_MESSAGE,
+  resolveNonPrReceiveCabang,
+} from "@/lib/po-non-pr";
 
 interface ReceiveItem {
   po_item_id: number;
@@ -65,7 +70,7 @@ interface ReceiveItem {
   qty_po: number;
   qty_received: number;
   qty_sisa: number;
-  mr_id: number;
+  mr_id: number | null;
   vendor_name: string | null;
   qty_receive: number; // how many to receive in this RI
   cabang_penerima_id: number | null; // gudang tujuan fisik barang ini mendarat
@@ -152,7 +157,7 @@ export default function CreateReceivePage() {
     let query = supabase
       .from("pos")
       .select(
-        "id, po_kode, po_tanggal, po_receive_status, prs!inner(cabang_id, cabang(nama_cabang))",
+        "id, po_kode, po_tanggal, po_receive_status, po_jenis, cabang_id, cabang(nama_cabang), prs(cabang_id, cabang(nama_cabang))",
       )
       .eq("po_status", "approved")
       .neq("po_receive_status", "complete")
@@ -171,6 +176,19 @@ export default function CreateReceivePage() {
   const handleSelectPO = async (po: any) => {
     setSelectedPo(po);
     setPoPopoverOpen(false);
+
+    // PO Non-PR: barang wajib mendarat di GMI-JAKARTA (dikunci), lalu
+    // dikonversi lewat Job Costing -- bukan dibagi ke gudang MR.
+    let lockedCabangId: number | null = null;
+    if (isNonPrPo(po)) {
+      const cabang = await resolveNonPrReceiveCabang(supabase);
+      if (!cabang) {
+        toast.error(NON_PR_RECEIVE_CABANG_MISSING_MESSAGE);
+        setItems([]);
+        return;
+      }
+      lockedCabangId = cabang.id;
+    }
 
     // Fetch PO items that still have qty to receive
     const { data: poItems } = await supabase
@@ -194,7 +212,8 @@ export default function CreateReceivePage() {
         mr_id: item.mr_id,
         vendor_name: item.vendors?.vendor_name ?? null,
         qty_receive: item.qty - (item.qty_received ?? 0), // default to full remaining
-        cabang_penerima_id: po.prs?.cabang_id ?? null, // default: cabang PR, bisa diganti per baris
+        // default: cabang PR, bisa diganti per baris (PO Non-PR: dikunci)
+        cabang_penerima_id: lockedCabangId ?? po.prs?.cabang_id ?? null,
       }))
       .filter((i: ReceiveItem) => i.qty_sisa > 0);
 
@@ -238,7 +257,10 @@ export default function CreateReceivePage() {
       const result = await createReceive({
         ri_kode: riKode,
         po_id: selectedPo.id,
-        cabang_id: selectedPo.prs?.cabang_id ?? userProfile?.cabang_id,
+        cabang_id:
+          selectedPo.prs?.cabang_id ??
+          selectedPo.cabang_id ??
+          userProfile?.cabang_id,
         ri_pic: userProfile?.nama || "",
         ri_pic_id: userProfile?.id || undefined,
         ri_tanggal: riTanggal,
@@ -444,7 +466,10 @@ export default function CreateReceivePage() {
                                   {po.po_kode}
                                 </p>
                                 <p className="text-[9px] text-muted-foreground font-medium uppercase">
-                                  {po.prs?.cabang?.nama_cabang}
+                                  {isNonPrPo(po)
+                                    ? "PO Non-PR"
+                                    : po.prs?.cabang?.nama_cabang ||
+                                      po.cabang?.nama_cabang}
                                 </p>
                               </div>
                               <Badge
@@ -515,6 +540,8 @@ export default function CreateReceivePage() {
                   <p className="text-[10px] font-bold text-primary uppercase">
                     Set qty menjadi 0 untuk melewati item tersebut. Qty tidak
                     boleh melebihi sisa yang belum diterima.
+                    {isNonPrPo(selectedPo) &&
+                      " PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA, konversi ke PN PR lewat Job Costing."}
                   </p>
                 </div>
 
@@ -620,6 +647,7 @@ export default function CreateReceivePage() {
                               onValueChange={(val) =>
                                 updateCabangPenerima(idx, Number(val))
                               }
+                              disabled={isNonPrPo(selectedPo)}
                             >
                               <SelectTrigger className="h-8 text-xs font-bold">
                                 <SelectValue placeholder="Pilih gudang..." />

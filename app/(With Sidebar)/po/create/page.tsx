@@ -70,13 +70,24 @@ import {
   PPH_TYPE_OPTIONS,
   PPN_RATE_OPTIONS,
 } from "@/lib/po-tax";
+import { fetchPrItemConvertedQty } from "@/lib/pr-po-coverage";
+import type { PoJenis } from "@/lib/po-non-pr";
+import {
+  PO_CURRENCY_OPTIONS,
+  formatPoMoney,
+  getPoCurrencyDecimals,
+  getPoCurrencySymbol,
+  type PoCurrency,
+} from "@/lib/po-currency";
+import { PoMoneyInput } from "@/components/po/po-money-input";
 
 type Step = 1 | 2 | 3;
 
 interface POItem {
-  mr_id: number;
-  pr_item_id: number;
-  pr_id: number;
+  // null semua untuk item PO Non-PR (dipilih bebas dari master barang).
+  mr_id: number | null;
+  pr_item_id: number | null;
+  pr_id: number | null;
   pr_kode: string;
   part_id: number;
   part_number: string;
@@ -99,6 +110,18 @@ export default function CreatePOPage() {
   // User & auth
   const [userProfile, setUserProfile] = useState<any>(null);
   const [canViewPrice, setCanViewPrice] = useState(false);
+
+  // Jenis PO: "reguler" = item ditarik dari PR WMS; "non_pr" = item dipilih
+  // bebas dari master barang (PN/satuan beli beda dengan PR), PR cuma
+  // referensi teks. Lihat lib/po-non-pr.ts.
+  const [poJenis, setPoJenis] = useState<PoJenis>("reguler");
+  const [prReferensi, setPrReferensi] = useState("");
+  const [barangSearch, setBarangSearch] = useState("");
+  const [debouncedBarangSearch] = useDebounce(barangSearch, 300);
+  const [barangResults, setBarangResults] = useState<any[]>([]);
+  const [barangLoading, setBarangLoading] = useState(false);
+  const [barangPopoverOpen, setBarangPopoverOpen] = useState(false);
+  const isNonPr = poJenis === "non_pr";
 
   // Step 1 — Select PR
   const [prs, setPrs] = useState<any[]>([]);
@@ -123,15 +146,15 @@ export default function CreatePOPage() {
   const [poPaymentTerm, setPoPaymentTerm] = useState("");
   const [paymentTermCustom, setPaymentTermCustom] = useState(false);
   const [poKeterangan, setPoKeterangan] = useState("");
+  const [poCurrency, setPoCurrency] = useState<PoCurrency>("IDR");
+  const currencySymbol = getPoCurrencySymbol(poCurrency);
 
   // Pajak, diskon & ongkir
   const [hargaTermasukPajak, setHargaTermasukPajak] = useState(false);
   const [ppnMode, setPpnMode] = useState<"percent" | "amount">("amount");
   const [ppnRate, setPpnRate] = useState(0);
   const [ppnAmountManual, setPpnAmountManual] = useState(0);
-  const [diskonMode, setDiskonMode] = useState<"percent" | "amount">(
-    "amount",
-  );
+  const [diskonMode, setDiskonMode] = useState<"percent" | "amount">("amount");
   const [diskonValue, setDiskonValue] = useState(0);
   const [ongkir, setOngkir] = useState(0);
   const [pphType, setPphType] = useState("");
@@ -155,6 +178,65 @@ export default function CreatePOPage() {
   useEffect(() => {
     fetchApprovedPRs();
   }, [debouncedPrSearch]);
+
+  useEffect(() => {
+    if (!barangPopoverOpen) return;
+    const run = async () => {
+      setBarangLoading(true);
+      let q = supabase
+        .from("barang")
+        .select("id, part_number, part_name, part_satuan")
+        .order("part_number")
+        .limit(20);
+      if (debouncedBarangSearch) {
+        q = q.or(
+          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+        );
+      }
+      const { data } = await q;
+      setBarangResults(data || []);
+      setBarangLoading(false);
+    };
+    run();
+  }, [debouncedBarangSearch, barangPopoverOpen]);
+
+  const switchPoJenis = (next: PoJenis) => {
+    if (next === poJenis) return;
+    setPoJenis(next);
+    setSelectedPrs([]);
+    setPoItems([]);
+  };
+
+  const handleAddBarang = (b: any) => {
+    setBarangPopoverOpen(false);
+    setBarangSearch("");
+    if (poItems.some((i) => i.part_id === b.id)) {
+      toast.info(`${b.part_number} sudah ada di daftar item.`);
+      return;
+    }
+    setPoItems((prev) => [
+      ...prev,
+      {
+        mr_id: null,
+        pr_item_id: null,
+        pr_id: null,
+        pr_kode: "",
+        part_id: b.id,
+        part_number: b.part_number,
+        part_name: b.part_name,
+        satuan: b.part_satuan,
+        remaining: Number.POSITIVE_INFINITY,
+        selected: true,
+        qty: 1,
+        harga: 0,
+        vendor_id: selectedVendor?.id ?? null,
+      },
+    ]);
+  };
+
+  const removeItem = (idx: number) => {
+    setPoItems((prev) => prev.filter((_, i) => i !== idx));
+  };
 
   const fetchUser = async () => {
     const {
@@ -223,22 +305,11 @@ export default function CreatePOPage() {
     setVendorLoading(false);
   };
 
-  // Hitung qty yang sudah terpakai di PO lain (belum rejected) per pr_item.
+  // Hitung qty yang sudah terpakai di PO lain (belum rejected) per pr_item,
+  // termasuk link manual dari PO Non-PR.
   const fetchConvertedMap = async (prItemIds: number[]) => {
-    if (prItemIds.length === 0) return {} as Record<number, number>;
-    const { data } = await supabase
-      .from("po_items")
-      .select("pr_item_id, qty, pos!inner(po_status)")
-      .in("pr_item_id", prItemIds);
-    const map: Record<number, number> = {};
-    (data || []).forEach((row: any) => {
-      const poStatus = Array.isArray(row.pos)
-        ? row.pos[0]?.po_status
-        : row.pos?.po_status;
-      if (poStatus === "rejected") return;
-      map[row.pr_item_id] = (map[row.pr_item_id] || 0) + row.qty;
-    });
-    return map;
+    const converted = await fetchPrItemConvertedQty(supabase, prItemIds);
+    return Object.fromEntries(converted) as Record<number, number>;
   };
 
   const handleTogglePR = async (pr: any) => {
@@ -317,7 +388,9 @@ export default function CreatePOPage() {
 
   const handleVendorSelect = (vendor: any) => {
     setSelectedVendor(vendor);
-    setPoItems((prev) => prev.map((item) => ({ ...item, vendor_id: vendor.id })));
+    setPoItems((prev) =>
+      prev.map((item) => ({ ...item, vendor_id: vendor.id })),
+    );
     setVendorPopoverOpen(false);
   };
 
@@ -342,23 +415,20 @@ export default function CreatePOPage() {
   const selectableItemCount = poItems.filter((it) => it.remaining > 0).length;
   const allItemsSelected =
     selectableItemCount > 0 &&
-    poItems
-      .filter((it) => it.remaining > 0)
-      .every((it) => it.selected);
+    poItems.filter((it) => it.remaining > 0).every((it) => it.selected);
 
   const handleSubmit = () => {
     const chosen = poItems.filter((i) => i.selected && i.qty > 0);
     if (!poKode.trim()) return toast.error("Kode PO wajib diisi");
-    if (selectedPrs.length === 0) return toast.error("Pilih PR terlebih dahulu");
+    if (!isNonPr && selectedPrs.length === 0)
+      return toast.error("Pilih PR terlebih dahulu");
     if (chosen.length === 0)
       return toast.error("Tidak ada item terpilih untuk diproses ke PO");
     if (!selectedTemplateId) return toast.error("Pilih Alur Approval");
     if (!templates.find((t) => t.id.toString() === selectedTemplateId))
       return toast.error("Template approval tidak valid");
     if (!canViewPrice) {
-      return toast.error(
-        "Hanya user dengan akses harga yang bisa membuat PO.",
-      );
+      return toast.error("Hanya user dengan akses harga yang bisa membuat PO.");
     }
     if (!selectedVendor) return toast.error("Pilih vendor untuk PO ini.");
     const incomplete = chosen.filter((item) => !(item.harga > 0));
@@ -418,6 +488,7 @@ export default function CreatePOPage() {
         po_estimasi: poEstimasi || undefined,
         po_payment_term: poPaymentTerm || undefined,
         po_keterangan: poKeterangan || undefined,
+        po_currency: poCurrency,
         po_harga_termasuk_pajak: hargaTermasukPajak,
         po_ppn_mode: ppnMode,
         po_ppn_rate: ppnRate,
@@ -429,6 +500,8 @@ export default function CreatePOPage() {
         po_pph_mode: pphMode,
         po_pph_rate: pphType ? pphRate : 0,
         po_pph_amount: pphType ? pphAmountManual : 0,
+        po_jenis: poJenis,
+        po_pr_referensi: isNonPr ? prReferensi.trim() || undefined : undefined,
         approvals: approvalData,
         items: poItems
           .filter((i) => i.selected && i.qty > 0)
@@ -459,12 +532,21 @@ export default function CreatePOPage() {
     }
   };
 
-  const formatCurrency = (n: number) =>
-    new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-      minimumFractionDigits: 0,
-    }).format(n);
+  const formatCurrency = (n: number) => formatPoMoney(n, poCurrency);
+
+  const handleCurrencyChange = (next: PoCurrency) => {
+    setPoCurrency(next);
+    // IDR tidak pakai desimal -> bulatkan nominal yang sudah terlanjur diisi.
+    if (getPoCurrencyDecimals(next) === 0) {
+      setPoItems((prev) =>
+        prev.map((it) => ({ ...it, harga: Math.round(it.harga) })),
+      );
+      setPpnAmountManual((v) => Math.round(v));
+      setPphAmountManual((v) => Math.round(v));
+      setOngkir((v) => Math.round(v));
+      if (diskonMode === "amount") setDiskonValue((v) => Math.round(v));
+    }
+  };
 
   return (
     <>
@@ -489,7 +571,9 @@ export default function CreatePOPage() {
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
               {step === 1
-                ? "Langkah 1 dari 3 — Pilih Purchase Request"
+                ? isNonPr
+                  ? "Langkah 1 dari 3 — Pilih Barang (PO Non-PR)"
+                  : "Langkah 1 dari 3 — Pilih Purchase Request"
                 : step === 2
                   ? "Langkah 2 dari 3 — Tentukan Vendor & Harga"
                   : "Langkah 3 dari 3 — Isi Informasi PO"}
@@ -502,7 +586,7 @@ export default function CreatePOPage() {
       <Content>
         <div className="flex items-center gap-0">
           {[
-            { n: 1, label: "Pilih PR" },
+            { n: 1, label: isNonPr ? "Pilih Barang" : "Pilih PR" },
             { n: 2, label: "Vendor & Harga" },
             { n: 3, label: "Informasi PO" },
           ].map((s, i) => (
@@ -541,115 +625,282 @@ export default function CreatePOPage() {
       {step === 1 && (
         <Content>
           <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <div className="h-4 w-1 bg-primary rounded-full" />
-              <h3 className="text-[11px] font-bold uppercase">
-                Pilih Purchase Request yang Telah Disetujui (bisa lebih dari 1)
-              </h3>
-            </div>
-
-            <Popover open={prPopoverOpen} onOpenChange={setPrPopoverOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  variant="outline"
-                  className="w-full justify-start gap-2 h-10 font-bold text-xs"
-                >
-                  <Search className="h-4 w-4 text-muted-foreground" />
-                  {selectedPrs.length > 0 ? (
-                    <span className="text-foreground">
-                      {selectedPrs.length} PR Dipilih
-                    </span>
-                  ) : (
-                    <span className="text-muted-foreground">
-                      Cari Kode PR...
-                    </span>
-                  )}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-105 p-0" align="start">
-                <Command shouldFilter={false}>
-                  <CommandInput
-                    placeholder="Cari kode PR..."
-                    value={prSearch}
-                    onValueChange={setPrSearch}
-                  />
-                  <CommandList>
-                    {loading ? (
-                      <div className="py-6 flex items-center justify-center">
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                      </div>
-                    ) : prs.length === 0 ? (
-                      <CommandEmpty>
-                        Tidak ada PR approved yang tersedia.
-                      </CommandEmpty>
-                    ) : (
-                      prs.map((pr) => {
-                        const isChecked = selectedPrs.some(
-                          (p) => p.id === pr.id,
-                        );
-                        return (
-                          <CommandItem
-                            key={pr.id}
-                            value={pr.pr_kode}
-                            onSelect={() => handleTogglePR(pr)}
-                            className="gap-3 py-3"
-                          >
-                            {isChecked ? (
-                              <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
-                            ) : (
-                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
-                            )}
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5 flex-wrap">
-                                <p className="font-bold text-xs uppercase">
-                                  {pr.pr_kode}
-                                </p>
-                                <PrConvertStatusBadge
-                                  status={pr.pr_convert_status}
-                                />
-                              </div>
-                              <p className="text-[9px] text-muted-foreground font-medium uppercase">
-                                {pr.cabang?.nama_cabang} • {pr.profiles?.nama}
-                              </p>
-                            </div>
-                            <Badge
-                              variant="outline"
-                              className="text-[9px] font-bold uppercase shrink-0"
-                            >
-                              {formatDate(pr.pr_tanggal)}
-                            </Badge>
-                          </CommandItem>
-                        );
-                      })
+            <div className="space-y-1.5">
+              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                Jenis PO
+              </Label>
+              <div className="flex h-10 w-full max-w-md overflow-hidden rounded-md border border-input">
+                {(
+                  [
+                    { value: "reguler", label: "Dari PR (Reguler)" },
+                    { value: "non_pr", label: "Non-PR (PR hanya referensi)" },
+                  ] as { value: PoJenis; label: string }[]
+                ).map((opt, i) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => switchPoJenis(opt.value)}
+                    className={cn(
+                      "flex-1 px-3 text-xs font-bold transition-colors",
+                      i > 0 && "border-l border-input",
+                      poJenis === opt.value
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-background text-muted-foreground hover:bg-muted",
                     )}
-                  </CommandList>
-                </Command>
-              </PopoverContent>
-            </Popover>
-
-            {selectedPrs.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {selectedPrs.map((pr) => (
-                  <Badge
-                    key={pr.id}
-                    variant="outline"
-                    className="text-[10px] font-bold uppercase gap-1"
                   >
-                    {pr.pr_kode}
-                  </Badge>
+                    {opt.label}
+                  </button>
                 ))}
               </div>
-            )}
-
-            <div className="flex justify-end pt-2">
-              <Button
-                className="gap-2 font-bold text-xs uppercase"
-                disabled={selectedPrs.length === 0 || poItems.length === 0}
-                onClick={() => setStep(2)}
-              >
-                Lanjut ke Vendor & Harga <ChevronRight className="h-4 w-4" />
-              </Button>
+              {isNonPr && (
+                <p className="text-[10px] text-muted-foreground font-medium leading-relaxed">
+                  Untuk barang yang PN/satuan belinya beda dengan PR (mis. PR
+                  &quot;Pack of 100m Roll&quot;, dibeli &quot;1m Roll&quot;
+                  x100). Barang diterima di gudang GMI-JAKARTA, lalu dikonversi
+                  ke PN PR lewat Job Costing. Setelah PO dibuat, item bisa
+                  dihubungkan ke PR WMS dari halaman detail PO.
+                </p>
+              )}
             </div>
+
+            {isNonPr ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                    Referensi PR
+                  </Label>
+                  <Input
+                    value={prReferensi}
+                    onChange={(e) => setPrReferensi(e.target.value)}
+                    placeholder="Mis. PR-PPIC-0123 — Pack of 100m Roll (boleh PR di luar WMS)"
+                    className="h-10 font-medium text-sm"
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                    Tambah Barang
+                  </Label>
+                  <Popover
+                    open={barangPopoverOpen}
+                    onOpenChange={setBarangPopoverOpen}
+                  >
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start gap-2 h-10 font-bold text-xs"
+                      >
+                        <Package className="h-4 w-4 text-muted-foreground" />
+                        <span className="text-muted-foreground">
+                          Cari part number / nama barang...
+                        </span>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-105 p-0" align="start">
+                      <Command shouldFilter={false}>
+                        <CommandInput
+                          placeholder="Cari part number / nama..."
+                          value={barangSearch}
+                          onValueChange={setBarangSearch}
+                        />
+                        <CommandList>
+                          {barangLoading ? (
+                            <div className="py-6 flex items-center justify-center">
+                              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                            </div>
+                          ) : barangResults.length === 0 ? (
+                            <CommandEmpty>Barang tidak ditemukan.</CommandEmpty>
+                          ) : (
+                            barangResults.map((b) => (
+                              <CommandItem
+                                key={b.id}
+                                value={String(b.id)}
+                                onSelect={() => handleAddBarang(b)}
+                                className="gap-3 py-2.5"
+                              >
+                                <Package className="h-4 w-4 text-muted-foreground shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-bold text-xs font-mono uppercase">
+                                    {b.part_number}
+                                  </p>
+                                  <p className="text-[10px] text-muted-foreground uppercase truncate">
+                                    {b.part_name}
+                                  </p>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] font-bold uppercase shrink-0"
+                                >
+                                  {b.part_satuan}
+                                </Badge>
+                              </CommandItem>
+                            ))
+                          )}
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {poItems.length > 0 && (
+                  <div className="rounded-lg border border-border divide-y divide-border">
+                    {poItems.map((item, idx) => (
+                      <div
+                        key={item.part_id}
+                        className="flex items-center gap-3 px-3 py-2"
+                      >
+                        <span className="text-[11px] font-black font-mono uppercase">
+                          {item.part_number}
+                        </span>
+                        <span className="flex-1 min-w-0 truncate text-[10px] text-muted-foreground uppercase">
+                          {item.part_name}
+                        </span>
+                        <Badge
+                          variant="outline"
+                          className="text-[9px] font-bold uppercase"
+                        >
+                          {item.satuan}
+                        </Badge>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 text-[10px] font-bold text-destructive"
+                          onClick={() => removeItem(idx)}
+                        >
+                          Hapus
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex justify-end pt-2">
+                  <Button
+                    className="gap-2 font-bold text-xs uppercase"
+                    disabled={poItems.length === 0}
+                    onClick={() => setStep(2)}
+                  >
+                    Lanjut ke Vendor & Harga{" "}
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-2">
+                  <div className="h-4 w-1 bg-primary rounded-full" />
+                  <h3 className="text-[11px] font-bold uppercase">
+                    Pilih Purchase Request yang Telah Disetujui (bisa lebih dari
+                    1)
+                  </h3>
+                </div>
+
+                <Popover open={prPopoverOpen} onOpenChange={setPrPopoverOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="w-full justify-start gap-2 h-10 font-bold text-xs"
+                    >
+                      <Search className="h-4 w-4 text-muted-foreground" />
+                      {selectedPrs.length > 0 ? (
+                        <span className="text-foreground">
+                          {selectedPrs.length} PR Dipilih
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground">
+                          Cari Kode PR...
+                        </span>
+                      )}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-105 p-0" align="start">
+                    <Command shouldFilter={false}>
+                      <CommandInput
+                        placeholder="Cari kode PR..."
+                        value={prSearch}
+                        onValueChange={setPrSearch}
+                      />
+                      <CommandList>
+                        {loading ? (
+                          <div className="py-6 flex items-center justify-center">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          </div>
+                        ) : prs.length === 0 ? (
+                          <CommandEmpty>
+                            Tidak ada PR approved yang tersedia.
+                          </CommandEmpty>
+                        ) : (
+                          prs.map((pr) => {
+                            const isChecked = selectedPrs.some(
+                              (p) => p.id === pr.id,
+                            );
+                            return (
+                              <CommandItem
+                                key={pr.id}
+                                value={pr.pr_kode}
+                                onSelect={() => handleTogglePR(pr)}
+                                className="gap-3 py-3"
+                              >
+                                {isChecked ? (
+                                  <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                                ) : (
+                                  <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                                )}
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="font-bold text-xs uppercase">
+                                      {pr.pr_kode}
+                                    </p>
+                                    <PrConvertStatusBadge
+                                      status={pr.pr_convert_status}
+                                    />
+                                  </div>
+                                  <p className="text-[9px] text-muted-foreground font-medium uppercase">
+                                    {pr.cabang?.nama_cabang} •{" "}
+                                    {pr.profiles?.nama}
+                                  </p>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] font-bold uppercase shrink-0"
+                                >
+                                  {formatDate(pr.pr_tanggal)}
+                                </Badge>
+                              </CommandItem>
+                            );
+                          })
+                        )}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+
+                {selectedPrs.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {selectedPrs.map((pr) => (
+                      <Badge
+                        key={pr.id}
+                        variant="outline"
+                        className="text-[10px] font-bold uppercase gap-1"
+                      >
+                        {pr.pr_kode}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex justify-end pt-2">
+                  <Button
+                    className="gap-2 font-bold text-xs uppercase"
+                    disabled={selectedPrs.length === 0 || poItems.length === 0}
+                    onClick={() => setStep(2)}
+                  >
+                    Lanjut ke Vendor & Harga{" "}
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </Content>
       )}
@@ -667,75 +918,104 @@ export default function CreatePOPage() {
               </div>
               <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase flex-wrap justify-end">
                 <FileText className="h-3.5 w-3.5" />
-                {selectedPrs.map((pr) => pr.pr_kode).join(", ")}
+                {isNonPr
+                  ? `Non-PR${prReferensi.trim() ? ` — ${prReferensi.trim()}` : ""}`
+                  : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
               </div>
             </div>
           </Content>
 
           <Content>
-            <div className="mb-4 space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-                <Building2 className="h-3 w-3" /> Vendor
-              </Label>
-              <Popover
-                open={vendorPopoverOpen}
-                onOpenChange={(val) => {
-                  setVendorPopoverOpen(val);
-                  if (val) searchVendors(vendorSearch);
-                }}
-              >
-                <PopoverTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="h-10 w-full max-w-sm justify-start gap-1.5 font-bold text-sm"
-                  >
-                    <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                    {selectedVendor
-                      ? selectedVendor.vendor_name
-                      : "Pilih Vendor..."}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent className="w-72 p-0" align="start">
-                  <Command shouldFilter={false}>
-                    <CommandInput
-                      placeholder="Cari vendor..."
-                      value={vendorSearch}
-                      onValueChange={(val) => {
-                        setVendorSearch(val);
-                        searchVendors(val);
-                      }}
-                    />
-                    <CommandList>
-                      {vendorLoading ? (
-                        <div className="py-6 flex items-center justify-center">
-                          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                        </div>
-                      ) : vendorResults.length === 0 ? (
-                        <CommandEmpty>Vendor tidak ditemukan.</CommandEmpty>
-                      ) : (
-                        vendorResults.map((v) => (
-                          <CommandItem
-                            key={v.id}
-                            value={v.id.toString()}
-                            onSelect={() => handleVendorSelect(v)}
-                            className="text-xs font-bold"
-                          >
-                            {v.vendor_name}
-                            {v.vendor_no && (
-                              <span className="ml-2 text-[9px] text-muted-foreground font-mono">
-                                {v.vendor_no}
-                              </span>
-                            )}
-                          </CommandItem>
-                        ))
-                      )}
-                    </CommandList>
-                  </Command>
-                </PopoverContent>
-              </Popover>
-              <p className="text-[9px] text-muted-foreground font-medium">
-                Vendor berlaku untuk semua item di PO ini.
-              </p>
+            <div className="mb-4 flex flex-wrap items-start gap-4">
+              <div className="space-y-1.5 w-full max-w-sm">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                  <Building2 className="h-3 w-3" /> Vendor
+                </Label>
+                <Popover
+                  open={vendorPopoverOpen}
+                  onOpenChange={(val) => {
+                    setVendorPopoverOpen(val);
+                    if (val) searchVendors(vendorSearch);
+                  }}
+                >
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className="h-10 w-full max-w-sm justify-start gap-1.5 font-bold text-sm"
+                    >
+                      <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                      {selectedVendor
+                        ? selectedVendor.vendor_name
+                        : "Pilih Vendor..."}
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-72 p-0" align="start">
+                    <Command shouldFilter={false}>
+                      <CommandInput
+                        placeholder="Cari vendor..."
+                        value={vendorSearch}
+                        onValueChange={(val) => {
+                          setVendorSearch(val);
+                          searchVendors(val);
+                        }}
+                      />
+                      <CommandList>
+                        {vendorLoading ? (
+                          <div className="py-6 flex items-center justify-center">
+                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                          </div>
+                        ) : vendorResults.length === 0 ? (
+                          <CommandEmpty>Vendor tidak ditemukan.</CommandEmpty>
+                        ) : (
+                          vendorResults.map((v) => (
+                            <CommandItem
+                              key={v.id}
+                              value={v.id.toString()}
+                              onSelect={() => handleVendorSelect(v)}
+                              className="text-xs font-bold"
+                            >
+                              {v.vendor_name}
+                              {v.vendor_no && (
+                                <span className="ml-2 text-[9px] text-muted-foreground font-mono">
+                                  {v.vendor_no}
+                                </span>
+                              )}
+                            </CommandItem>
+                          ))
+                        )}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                <p className="text-[9px] text-muted-foreground font-medium">
+                  Vendor berlaku untuk semua item di PO ini.
+                </p>
+              </div>
+              <div className="space-y-1.5 w-full max-w-[14rem]">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                  <CreditCard className="h-3 w-3" /> Mata Uang
+                </Label>
+                <Select
+                  value={poCurrency}
+                  onValueChange={(val) =>
+                    handleCurrencyChange(val as PoCurrency)
+                  }
+                >
+                  <SelectTrigger className="h-10 font-bold text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PO_CURRENCY_OPTIONS.map((opt) => (
+                      <SelectItem key={opt.value} value={opt.value}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-[9px] text-muted-foreground font-medium">
+                  Berlaku untuk harga, pajak, diskon & ongkir PO ini.
+                </p>
+              </div>
             </div>
             <Table containerClassName="max-h-[55vh] overflow-y-auto">
               <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
@@ -788,7 +1068,7 @@ export default function CreatePOPage() {
                           variant="outline"
                           className="text-[9px] font-bold uppercase"
                         >
-                          {item.pr_kode}
+                          {item.pr_kode || "Non-PR"}
                         </Badge>
                       </TableCell>
                       <TableCell className="py-3 align-top">
@@ -806,7 +1086,11 @@ export default function CreatePOPage() {
                           <Input
                             type="number"
                             min={0}
-                            max={item.remaining}
+                            max={
+                              Number.isFinite(item.remaining)
+                                ? item.remaining
+                                : undefined
+                            }
                             disabled={!item.selected}
                             value={item.qty}
                             onChange={(e) =>
@@ -815,41 +1099,21 @@ export default function CreatePOPage() {
                             className="h-8 w-20 text-center font-bold text-sm mx-auto"
                           />
                           <span className="text-[9px] font-medium text-muted-foreground">
-                            Sisa {item.remaining} {item.satuan}
+                            {Number.isFinite(item.remaining)
+                              ? `Sisa ${item.remaining} ${item.satuan}`
+                              : item.satuan}
                           </span>
                         </div>
                       </TableCell>
                       <TableCell className="py-2 pr-4 align-middle">
                         {canViewPrice ? (
-                          <div className="flex items-center h-8 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
-                            <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
-                              Rp
-                            </span>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              className="flex-1 h-full px-2 text-xs font-bold bg-transparent outline-none"
-                              value={
-                                item.harga === 0
-                                  ? ""
-                                  : new Intl.NumberFormat("id-ID").format(
-                                      item.harga,
-                                    )
-                              }
-                              onChange={(e) => {
-                                const raw = e.target.value.replace(
-                                  /[^0-9]/g,
-                                  "",
-                                );
-                                updateItemField(
-                                  idx,
-                                  "harga",
-                                  raw ? parseInt(raw, 10) : 0,
-                                );
-                              }}
-                              placeholder="0"
-                            />
-                          </div>
+                          <PoMoneyInput
+                            currency={poCurrency}
+                            value={item.harga}
+                            onChange={(v) => updateItemField(idx, "harga", v)}
+                            className="h-8"
+                            inputClassName="text-xs"
+                          />
                         ) : (
                           <div className="flex items-center h-8 rounded-md border border-input bg-muted/40 px-2 text-xs font-bold text-muted-foreground uppercase">
                             Restricted
@@ -1087,7 +1351,7 @@ export default function CreatePOPage() {
                               : "bg-background text-muted-foreground hover:bg-muted",
                           )}
                         >
-                          Rp
+                          {currencySymbol}
                         </button>
                       </div>
                       {ppnMode === "percent" ? (
@@ -1110,33 +1374,13 @@ export default function CreatePOPage() {
                           </SelectContent>
                         </Select>
                       ) : (
-                        <div className="flex items-center h-10 flex-1 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
-                          <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
-                            Rp
-                          </span>
-                          <input
-                            type="text"
-                            inputMode="numeric"
-                            className="flex-1 h-full px-2 text-sm font-bold bg-transparent outline-none"
-                            value={
-                              ppnAmountManual === 0
-                                ? ""
-                                : new Intl.NumberFormat("id-ID").format(
-                                    ppnAmountManual,
-                                  )
-                            }
-                            onChange={(e) => {
-                              const raw = e.target.value.replace(
-                                /[^0-9]/g,
-                                "",
-                              );
-                              setPpnAmountManual(
-                                raw ? parseInt(raw, 10) : 0,
-                              );
-                            }}
-                            placeholder="0"
-                          />
-                        </div>
+                        <PoMoneyInput
+                          currency={poCurrency}
+                          value={ppnAmountManual}
+                          onChange={setPpnAmountManual}
+                          className="h-10 flex-1"
+                          inputClassName="text-sm"
+                        />
                       )}
                     </div>
                   </div>
@@ -1169,7 +1413,7 @@ export default function CreatePOPage() {
                               : "bg-background text-muted-foreground hover:bg-muted",
                           )}
                         >
-                          Rp
+                          {currencySymbol}
                         </button>
                       </div>
                       <Input
@@ -1191,26 +1435,13 @@ export default function CreatePOPage() {
                     <Label className="text-[10px] font-bold uppercase text-muted-foreground">
                       Ongkos Kirim
                     </Label>
-                    <div className="flex items-center h-10 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
-                      <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
-                        Rp
-                      </span>
-                      <input
-                        type="text"
-                        inputMode="numeric"
-                        className="flex-1 h-full px-2 text-sm font-bold bg-transparent outline-none"
-                        value={
-                          ongkir === 0
-                            ? ""
-                            : new Intl.NumberFormat("id-ID").format(ongkir)
-                        }
-                        onChange={(e) => {
-                          const raw = e.target.value.replace(/[^0-9]/g, "");
-                          setOngkir(raw ? parseInt(raw, 10) : 0);
-                        }}
-                        placeholder="0"
-                      />
-                    </div>
+                    <PoMoneyInput
+                      currency={poCurrency}
+                      value={ongkir}
+                      onChange={setOngkir}
+                      className="h-10"
+                      inputClassName="text-sm"
+                    />
                   </div>
                 </div>
 
@@ -1274,7 +1505,7 @@ export default function CreatePOPage() {
                                 : "bg-background text-muted-foreground hover:bg-muted",
                             )}
                           >
-                            Rp
+                            {currencySymbol}
                           </button>
                         </div>
                         {pphMode === "percent" ? (
@@ -1291,33 +1522,13 @@ export default function CreatePOPage() {
                             className="h-10 font-bold text-sm"
                           />
                         ) : (
-                          <div className="flex items-center h-10 flex-1 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
-                            <span className="px-2 text-[10px] font-bold text-muted-foreground bg-muted border-r border-input h-full flex items-center shrink-0">
-                              Rp
-                            </span>
-                            <input
-                              type="text"
-                              inputMode="numeric"
-                              className="flex-1 h-full px-2 text-sm font-bold bg-transparent outline-none"
-                              value={
-                                pphAmountManual === 0
-                                  ? ""
-                                  : new Intl.NumberFormat("id-ID").format(
-                                      pphAmountManual,
-                                    )
-                              }
-                              onChange={(e) => {
-                                const raw = e.target.value.replace(
-                                  /[^0-9]/g,
-                                  "",
-                                );
-                                setPphAmountManual(
-                                  raw ? parseInt(raw, 10) : 0,
-                                );
-                              }}
-                              placeholder="0"
-                            />
-                          </div>
+                          <PoMoneyInput
+                            currency={poCurrency}
+                            value={pphAmountManual}
+                            onChange={setPphAmountManual}
+                            className="h-10 flex-1"
+                            inputClassName="text-sm"
+                          />
                         )}
                       </div>
                     </div>
@@ -1467,9 +1678,11 @@ export default function CreatePOPage() {
             {/* Summary */}
             <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-2">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-                <span>Sumber PR</span>
-                <span className="text-foreground font-mono">
-                  {selectedPrs.map((pr) => pr.pr_kode).join(", ")}
+                <span>{isNonPr ? "Jenis PO" : "Sumber PR"}</span>
+                <span className="text-foreground font-mono text-right">
+                  {isNonPr
+                    ? `Non-PR${prReferensi.trim() ? ` — Ref: ${prReferensi.trim()}` : ""}`
+                    : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
                 </span>
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
@@ -1483,6 +1696,10 @@ export default function CreatePOPage() {
                 <span className="text-foreground">
                   {selectedVendor?.vendor_name || "-"}
                 </span>
+              </div>
+              <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                <span>Mata Uang</span>
+                <span className="text-foreground">{poCurrency}</span>
               </div>
 
               <div className="space-y-1.5 border-t border-border pt-2">
@@ -1516,11 +1733,8 @@ export default function CreatePOPage() {
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                     <span>
                       PPN (
-                      {ppnMode === "percent"
-                        ? `${ppnRate}%`
-                        : "nominal manual"}
-                      )
-                      {hargaTermasukPajak ? " — sudah termasuk harga" : ""}
+                      {ppnMode === "percent" ? `${ppnRate}%` : "nominal manual"}
+                      ){hargaTermasukPajak ? " — sudah termasuk harga" : ""}
                     </span>
                     <span className="text-foreground">
                       {hargaTermasukPajak
@@ -1533,11 +1747,7 @@ export default function CreatePOPage() {
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                     <span>Ongkos Kirim</span>
                     <span className="text-foreground">
-                      +{" "}
-                      {maskedPriceText(
-                        canViewPrice,
-                        formatCurrency(ongkir),
-                      )}
+                      + {maskedPriceText(canViewPrice, formatCurrency(ongkir))}
                     </span>
                   </div>
                 )}

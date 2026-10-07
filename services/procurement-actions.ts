@@ -6,11 +6,20 @@ import { canViewPOPrice, maskPOPriceItems } from "@/lib/po-price-access";
 import { toCompletedIfLegacy } from "@/lib/document-status";
 import { canCreateMR } from "@/lib/mr-permissions";
 import {
+  computePrConvertStatus,
+  fetchPrItemConvertedQty,
+} from "@/lib/pr-po-coverage";
+import {
+  NON_PR_RECEIVE_CABANG_MISSING_MESSAGE,
+  resolveNonPrReceiveCabang,
+} from "@/lib/po-non-pr";
+import {
   notifyApprovers,
   notifyDocumentOwner,
   createNotification,
 } from "@/services/notification-actions";
 import { evaluateMrFreeze, evaluateMrItemFreeze } from "@/services/freeze-actions";
+import { normalizePoCurrency } from "@/lib/po-currency";
 
 // ============================================================
 // PRIVATE HELPERS (server-side, uses authenticated server client)
@@ -763,35 +772,9 @@ async function _applyMrConversionStatus(mrId: number, supabase: any) {
  * converted into non-rejected POs.
  */
 async function _applyPrConversionStatus(prId: number, supabase: any) {
-  const { data: items } = await supabase
-    .from("pr_items")
-    .select("id, qty")
-    .eq("pr_id", prId);
-
-  if (!items || items.length === 0) return;
-
-  const itemIds = items.map((i: any) => i.id);
-  const { data: poItemRows } = await supabase
-    .from("po_items")
-    .select("pr_item_id, qty, pos!inner(po_status)")
-    .in("pr_item_id", itemIds);
-
-  const convertedMap = new Map<number, number>();
-  for (const row of poItemRows ?? []) {
-    const poStatus = Array.isArray(row.pos) ? row.pos[0]?.po_status : row.pos?.po_status;
-    if (poStatus === "rejected") continue;
-    convertedMap.set(row.pr_item_id, (convertedMap.get(row.pr_item_id) || 0) + row.qty);
-  }
-
-  const totalQty = items.reduce((s: number, i: any) => s + (i.qty || 0), 0);
-  const totalConverted = items.reduce(
-    (s: number, i: any) => s + Math.min(i.qty || 0, convertedMap.get(i.id) || 0),
-    0,
-  );
-
-  const status =
-    totalConverted <= 0 ? "pending" : totalConverted < totalQty ? "partial" : "complete";
-
+  // Ikut menghitung link manual dari PO Non-PR (lihat lib/pr-po-coverage.ts).
+  const status = await computePrConvertStatus(supabase, prId);
+  if (!status) return;
   await supabase.from("prs").update({ pr_convert_status: status }).eq("id", prId);
 }
 
@@ -1181,7 +1164,8 @@ export async function createReceive(data: {
     satuan: string;
     qty: number;
     po_id: number;
-    mr_id: number;
+    // null untuk item PO Non-PR (tidak terikat MR).
+    mr_id: number | null;
     po_item_id?: number | null;
     cabang_penerima_id: number;
   }[];
@@ -1191,6 +1175,23 @@ export async function createReceive(data: {
   const riKode = data.ri_kode?.trim();
   if (!riKode) {
     return { error: "Kode Receive wajib diisi manual." };
+  }
+
+  // PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA (lihat lib/po-non-pr.ts),
+  // divalidasi ulang di server -- jangan percaya payload client.
+  const { data: poHeader } = await supabase
+    .from("pos")
+    .select("po_jenis")
+    .eq("id", data.po_id)
+    .maybeSingle();
+  if (poHeader?.po_jenis === "non_pr") {
+    const nonPrCabang = await resolveNonPrReceiveCabang(supabase);
+    if (!nonPrCabang) return { error: NON_PR_RECEIVE_CABANG_MISSING_MESSAGE };
+    if (data.items.some((i) => i.cabang_penerima_id !== nonPrCabang.id)) {
+      return {
+        error: `Barang PO Non-PR wajib diterima di gudang ${nonPrCabang.nama_cabang}.`,
+      };
+    }
   }
 
   const { data: existingRi } = await supabase
@@ -1253,7 +1254,7 @@ export async function createReceive(data: {
   const itemsToInsert = data.items.map((item) => ({
     ri_id: ri.id,
     po_id: item.po_id,
-    mr_id: item.mr_id,
+    mr_id: item.mr_id ?? null,
     part_id: item.part_id,
     part_number: item.part_number,
     part_name: item.part_name,
@@ -1779,6 +1780,7 @@ export async function createPurchaseOrder(data: {
   po_estimasi?: string;
   po_payment_term?: string;
   po_keterangan?: string;
+  po_currency?: "IDR" | "USD" | "AUD";
   po_harga_termasuk_pajak?: boolean;
   po_ppn_mode?: "percent" | "amount";
   po_ppn_rate?: number;
@@ -1790,6 +1792,10 @@ export async function createPurchaseOrder(data: {
   po_pph_mode?: "percent" | "amount";
   po_pph_rate?: number;
   po_pph_amount?: number;
+  // "non_pr": item dipilih bebas dari master barang (PN/satuan pembelian beda
+  // dengan PR), PR cuma referensi teks di po_pr_referensi.
+  po_jenis?: "reguler" | "non_pr";
+  po_pr_referensi?: string;
   approvals?: any[];
   items: {
     part_id: number;
@@ -1799,9 +1805,9 @@ export async function createPurchaseOrder(data: {
     qty: number;
     harga: number;
     vendor_id: number | null;
-    mr_id: number;
-    pr_item_id: number;
-    pr_id: number;
+    mr_id: number | null;
+    pr_item_id: number | null;
+    pr_id: number | null;
   }[];
 }) {
   const supabase = await createClient();
@@ -1814,8 +1820,27 @@ export async function createPurchaseOrder(data: {
     return { error: "Tidak ada item untuk diproses ke PO." };
   }
 
+  const poJenis = data.po_jenis === "non_pr" ? "non_pr" : "reguler";
+  if (poJenis === "non_pr") {
+    if (data.items.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
+      return {
+        error:
+          "PO Non-PR tidak boleh berisi item dari PR. Gunakan fitur Hubungkan ke PR setelah PO dibuat.",
+      };
+    }
+    if (data.items.some((i) => !i.part_id || !(i.qty > 0))) {
+      return { error: "Barang dan qty (> 0) wajib diisi untuk semua item." };
+    }
+  } else if (data.items.some((i) => !i.pr_item_id || !i.mr_id)) {
+    return { error: "Item PO reguler wajib berasal dari PR." };
+  }
+
   const sourcePrIds = Array.from(
-    new Set(data.items.map((i) => i.pr_id).filter(Boolean)),
+    new Set(
+      data.items
+        .map((i) => i.pr_id)
+        .filter((id): id is number => Boolean(id)),
+    ),
   );
 
   const { data: existingPo } = await supabase
@@ -1875,31 +1900,21 @@ export async function createPurchaseOrder(data: {
 
   // Guard sisa qty: cegah konversi melebihi qty pr_items yang belum terpakai
   // (race-condition guard; client sudah cap tapi tetap divalidasi di server).
-  const prItemIds = data.items.map((i) => i.pr_item_id).filter(Boolean);
+  const prItemIds = data.items
+    .map((i) => i.pr_item_id)
+    .filter((id): id is number => Boolean(id));
   if (prItemIds.length > 0) {
     const { data: prItemRows } = await supabase
       .from("pr_items")
       .select("id, qty")
       .in("id", prItemIds);
-    const { data: existingPoItems } = await supabase
-      .from("po_items")
-      .select("pr_item_id, qty, pos!inner(po_status)")
-      .in("pr_item_id", prItemIds);
+    // Termasuk qty dari link manual PO Non-PR (po_item_pr_links).
+    const convertedMap = await fetchPrItemConvertedQty(supabase, prItemIds);
 
     const qtyMap = new Map((prItemRows ?? []).map((r: any) => [r.id, r.qty]));
-    const convertedMap = new Map<number, number>();
-    for (const row of existingPoItems ?? []) {
-      const poStatus = Array.isArray((row as any).pos)
-        ? (row as any).pos[0]?.po_status
-        : (row as any).pos?.po_status;
-      if (poStatus === "rejected") continue;
-      convertedMap.set(
-        row.pr_item_id,
-        (convertedMap.get(row.pr_item_id) || 0) + row.qty,
-      );
-    }
 
     for (const item of data.items) {
+      if (!item.pr_item_id) continue;
       const qty = qtyMap.get(item.pr_item_id) ?? 0;
       const already = convertedMap.get(item.pr_item_id) || 0;
       const remaining = Math.max(0, qty - already);
@@ -1931,12 +1946,20 @@ export async function createPurchaseOrder(data: {
       {
         po_kode: poKode,
         pr_id: sourcePrIds[0] ?? null,
+        po_jenis: poJenis,
+        po_pr_referensi:
+          poJenis === "non_pr" ? data.po_pr_referensi?.trim() || null : null,
+        // Reguler: biarkan NULL -> trigger pos_fill_cabang_from_pr mengisi dari
+        // PR (lokasi PO reguler = lokasi PR, seperti sebelumnya). Non-PR:
+        // lokasi pembuat PO.
+        cabang_id: poJenis === "non_pr" ? (data.cabang_id ?? null) : null,
         po_pic: data.po_pic,
         po_pic_id: data.po_pic_id,
         po_tanggal: data.po_tanggal,
         po_estimasi: data.po_estimasi ?? null,
         po_payment_term: data.po_payment_term ?? null,
         po_keterangan: data.po_keterangan ?? null,
+        po_currency: normalizePoCurrency(data.po_currency),
         po_harga_termasuk_pajak: data.po_harga_termasuk_pajak ?? false,
         po_ppn_mode: data.po_ppn_mode ?? "percent",
         po_ppn_rate: data.po_ppn_rate ?? 0,
@@ -1961,8 +1984,8 @@ export async function createPurchaseOrder(data: {
   // 3. Insert PO items
   const itemsToInsert = normalizedItems.map((item) => ({
     po_id: po.id,
-    mr_id: item.mr_id,
-    pr_item_id: item.pr_item_id,
+    mr_id: item.mr_id ?? null,
+    pr_item_id: item.pr_item_id ?? null,
     part_id: item.part_id,
     part_number: item.part_number,
     part_name: item.part_name,

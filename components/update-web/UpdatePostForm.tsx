@@ -55,7 +55,11 @@ import {
   updateUpdateWebPost,
   uploadUpdateWebMedia,
 } from "@/services/update-web-client";
-import { UpdateWebPost, UpdateWebVersion } from "@/type/update-web";
+import {
+  UPDATE_WEB_THUMBNAIL_ENABLED,
+  UpdateWebPost,
+  UpdateWebVersion,
+} from "@/type/update-web";
 import { UpdatePostPreview } from "./UpdatePostPreview";
 import {
   ThumbnailCropDialog,
@@ -284,7 +288,8 @@ export function UpdatePostForm({
       f.type.startsWith("image/"),
     );
     if (file) openCropWith(file);
-    else if (e.dataTransfer.files?.length) toast.error("File harus berupa gambar.");
+    else if (e.dataTransfer.files?.length)
+      toast.error("File harus berupa gambar.");
   };
 
   const handleThumbPaste = (e: React.ClipboardEvent) => {
@@ -357,9 +362,7 @@ export function UpdatePostForm({
     }
     const { major, minor, patch: p } = form.version;
     if (!form.autoVersion || mode === "edit") {
-      if (
-        ![major, minor, p].every((n) => Number.isInteger(n) && n >= 0)
-      ) {
+      if (![major, minor, p].every((n) => Number.isInteger(n) && n >= 0)) {
         toast.error("Nomor versi harus berupa angka bulat >= 0.");
         return;
       }
@@ -465,7 +468,13 @@ export function UpdatePostForm({
           forceMount
           className={cn("space-y-6", tab !== "write" && "hidden")}
         >
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
+          <div
+            className={cn(
+              "grid gap-6",
+              UPDATE_WEB_THUMBNAIL_ENABLED &&
+                "lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]",
+            )}
+          >
             {/* Kiri: metadata */}
             <div className="space-y-5">
               <div className="space-y-1.5">
@@ -572,111 +581,113 @@ export function UpdatePostForm({
             </div>
 
             {/* Kanan: thumbnail 16:9 */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between">
-                <Label>Thumbnail (16:9)</Label>
-                {!form.thumbnailUrl && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    className="h-7 text-xs"
-                    onClick={handleThumbPasteButton}
-                    disabled={submitting}
-                  >
-                    <ClipboardPaste className="h-3.5 w-3.5" /> Tempel
-                  </Button>
-                )}
-              </div>
-              <div
-                role="button"
-                tabIndex={0}
-                aria-label="Thumbnail. Klik untuk memilih, seret & lepas, atau tempel gambar."
-                onClick={() => !submitting && openCropWith(null)}
-                onKeyDown={(e) =>
-                  (e.key === "Enter" || e.key === " ") && openCropWith(null)
-                }
-                onPaste={handleThumbPaste}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  setThumbDragging(true);
-                }}
-                onDragLeave={() => setThumbDragging(false)}
-                onDrop={handleThumbDrop}
-                className={cn(
-                  "group relative aspect-video w-full cursor-pointer overflow-hidden rounded-xl border-2 border-dashed outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
-                  thumbDragging
-                    ? "border-primary bg-primary/5"
-                    : form.thumbnailUrl
-                      ? "border-transparent"
-                      : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/40",
-                )}
-              >
-                {form.thumbnailUrl ? (
-                  <>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={form.thumbnailUrl}
-                      alt="Thumbnail"
-                      className="h-full w-full object-cover"
-                    />
-                    <div
-                      className={cn(
-                        "absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100",
-                        thumbDragging && "opacity-100",
-                      )}
+            {UPDATE_WEB_THUMBNAIL_ENABLED && (
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <Label>Thumbnail (16:9)</Label>
+                  {!form.thumbnailUrl && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={handleThumbPasteButton}
+                      disabled={submitting}
                     >
-                      {thumbDragging ? (
-                        <p className="text-sm font-medium text-white">
-                          Lepaskan untuk mengganti
-                        </p>
-                      ) : (
-                        <>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="secondary"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              openCropWith(null);
-                            }}
-                            disabled={submitting}
-                          >
-                            <RefreshCw className="h-3.5 w-3.5" /> Ganti
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="destructive"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              patch({ thumbnailUrl: null });
-                            }}
-                            disabled={submitting}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" /> Hapus
-                          </Button>
-                        </>
-                      )}
+                      <ClipboardPaste className="h-3.5 w-3.5" /> Tempel
+                    </Button>
+                  )}
+                </div>
+                <div
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Thumbnail. Klik untuk memilih, seret & lepas, atau tempel gambar."
+                  onClick={() => !submitting && openCropWith(null)}
+                  onKeyDown={(e) =>
+                    (e.key === "Enter" || e.key === " ") && openCropWith(null)
+                  }
+                  onPaste={handleThumbPaste}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    setThumbDragging(true);
+                  }}
+                  onDragLeave={() => setThumbDragging(false)}
+                  onDrop={handleThumbDrop}
+                  className={cn(
+                    "group relative aspect-video w-full cursor-pointer overflow-hidden rounded-xl border-2 border-dashed outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring",
+                    thumbDragging
+                      ? "border-primary bg-primary/5"
+                      : form.thumbnailUrl
+                        ? "border-transparent"
+                        : "border-muted-foreground/25 hover:border-primary/50 hover:bg-muted/40",
+                  )}
+                >
+                  {form.thumbnailUrl ? (
+                    <>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={form.thumbnailUrl}
+                        alt="Thumbnail"
+                        className="h-full w-full object-cover"
+                      />
+                      <div
+                        className={cn(
+                          "absolute inset-0 flex items-center justify-center gap-2 bg-black/50 opacity-0 transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100",
+                          thumbDragging && "opacity-100",
+                        )}
+                      >
+                        {thumbDragging ? (
+                          <p className="text-sm font-medium text-white">
+                            Lepaskan untuk mengganti
+                          </p>
+                        ) : (
+                          <>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="secondary"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                openCropWith(null);
+                              }}
+                              disabled={submitting}
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" /> Ganti
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="destructive"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                patch({ thumbnailUrl: null });
+                              }}
+                              disabled={submitting}
+                            >
+                              <Trash2 className="h-3.5 w-3.5" /> Hapus
+                            </Button>
+                          </>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
+                      <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+                        <ImagePlus className="h-5 w-5" />
+                      </div>
+                      <p className="text-sm font-medium">
+                        {thumbDragging
+                          ? "Lepaskan gambar di sini"
+                          : "Seret & lepas, klik, atau tempel (Ctrl+V)"}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        Akan di-crop ke rasio 16:9 (1280×720)
+                      </p>
                     </div>
-                  </>
-                ) : (
-                  <div className="flex h-full flex-col items-center justify-center gap-2 p-4 text-center">
-                    <div className="flex h-11 w-11 items-center justify-center rounded-full bg-primary/10 text-primary">
-                      <ImagePlus className="h-5 w-5" />
-                    </div>
-                    <p className="text-sm font-medium">
-                      {thumbDragging
-                        ? "Lepaskan gambar di sini"
-                        : "Seret & lepas, klik, atau tempel (Ctrl+V)"}
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      Akan di-crop ke rasio 16:9 (1280×720)
-                    </p>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="space-y-1.5">
@@ -758,7 +769,9 @@ export function UpdatePostForm({
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {mode === "create" ? "Kosongkan draft?" : "Buang semua perubahan?"}
+              {mode === "create"
+                ? "Kosongkan draft?"
+                : "Buang semua perubahan?"}
             </AlertDialogTitle>
             <AlertDialogDescription>
               {mode === "create"

@@ -1,6 +1,7 @@
-// Modal detail 1 postingan Update Web - dibuka dari UpdatePostCard. Setelah
-// kirim komentar, post di-refetch (RPC return void). Publisher dapat tombol
-// Edit & Hapus.
+// Modal detail 1 postingan Update Web - dibuka dari UpdatePostCard atau deep
+// link /update-web?post=<id> (link notifikasi balasan komentar). Setelah kirim
+// komentar, post di-refetch (RPC return void). Publisher dapat tombol Edit &
+// Hapus.
 
 "use client";
 
@@ -35,6 +36,7 @@ import {
   fetchUpdateWebPostById,
 } from "@/services/update-web-client";
 import {
+  UpdateWebComment,
   UpdateWebPost,
   UpdateWebPostReactionSummary,
   UpdateWebReactionEmoji,
@@ -72,8 +74,11 @@ export function UpdatePostDetailDialog({
 
   if (!post) return null;
 
-  const handleSubmitComment = async (message: string) => {
-    await addUpdateWebPostComment(post.id, message);
+  const handleSubmitComment = async (
+    message: string,
+    replyTo: UpdateWebComment | null,
+  ) => {
+    await addUpdateWebPostComment(post.id, message, replyTo);
     onPostUpdated(await fetchUpdateWebPostById(post.id));
   };
 
