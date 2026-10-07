@@ -591,6 +591,11 @@ export function JobCostingDetailSheet({
                               {fp.cabang?.nama_cabang ??
                                 fp.customer?.customer_name ??
                                 "-"}
+                              {fp.mr_item?.mrs?.mr_kode && (
+                                <p className="text-[10px] font-mono font-semibold text-primary">
+                                  → MR {fp.mr_item.mrs.mr_kode}
+                                </p>
+                              )}
                             </TableCell>
                           </TableRow>
                         ))

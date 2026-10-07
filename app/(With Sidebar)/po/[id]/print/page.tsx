@@ -9,6 +9,7 @@ import { Content } from "@/components/content";
 import { formatDateDocument, formatDateTime } from "@/lib/utils";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
+import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 
 export default function POPrintPage() {
   const { id } = useParams();
@@ -53,7 +54,8 @@ export default function POPrintPage() {
         po_payment_term, po_pic, approvals,
         po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
         po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-        po_pph_rate, po_pph_amount,
+        po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, po_currency,
+        cabang(nama_cabang),
         prs(pr_kode, cabang(nama_cabang))
       `,
       )
@@ -148,11 +150,7 @@ export default function POPrintPage() {
   });
 
   const formatCurrency = (value: number) =>
-    new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-      minimumFractionDigits: 0,
-    }).format(value);
+    formatPoMoney(value, po?.po_currency);
 
   return (
     <Content>
@@ -211,7 +209,7 @@ export default function POPrintPage() {
                   Cabang
                 </span>
                 <span className="font-bold text-slate-900">
-                  : {po?.prs?.cabang?.nama_cabang || "-"}
+                  : {po?.prs?.cabang?.nama_cabang || po?.cabang?.nama_cabang || "-"}
                 </span>
               </div>
               <div className="flex border-b border-slate-100 pb-1.5">
@@ -219,7 +217,9 @@ export default function POPrintPage() {
                   Referensi PR
                 </span>
                 <span className="font-bold text-slate-900">
-                  : {po?.prs?.pr_kode || "-"}
+                  : {po?.po_jenis === "non_pr"
+                    ? po?.po_pr_referensi || "-"
+                    : po?.prs?.pr_kode || "-"}
                 </span>
               </div>
             </div>
@@ -258,16 +258,14 @@ export default function POPrintPage() {
             <p className="text-xs font-bold text-slate-900">{vendorLabel}</p>
           </div>
 
-          {po.po_payment_term && (
-            <div className="mb-4 bg-slate-50 p-3 border rounded-md">
-              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">
-                Syarat Pembayaran
-              </p>
-              <p className="text-xs font-bold text-slate-900">
-                {po.po_payment_term}
-              </p>
-            </div>
-          )}
+          <div className="mb-4 bg-slate-50 p-3 border rounded-md">
+            <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest mb-1">
+              Syarat Pembayaran & Mata Uang
+            </p>
+            <p className="text-xs font-bold text-slate-900">
+              {po.po_payment_term || "-"} · {normalizePoCurrency(po.po_currency)}
+            </p>
+          </div>
 
           {po.po_keterangan && (
             <div className="mb-10 bg-slate-50 p-3 border rounded-md">

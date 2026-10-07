@@ -127,7 +127,9 @@ export default function POListPage() {
       `
         id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
         po_pic, po_detail_status, po_payment_term, approvals, created_at,
-        prs!inner(
+        po_jenis, po_pr_referensi, cabang_id,
+        cabang(nama_cabang),
+        prs(
           id, pr_kode, cabang_id,
           cabang(nama_cabang),
           profiles(nama)
@@ -152,8 +154,10 @@ export default function POListPage() {
       query = query.in("po_receive_status", receiveStatusFilters);
     }
 
+    // pos.cabang_id (bukan prs.cabang_id lagi): PO Non-PR tidak punya PR.
+    // PO reguler di-backfill/diisi trigger dari PR-nya, jadi hasilnya sama.
     if (locationFilters.length > 0) {
-      query = query.in("prs.cabang_id", locationFilters);
+      query = query.in("cabang_id", locationFilters);
     }
 
     if (dateFrom) query = query.gte("po_tanggal", dateFrom);
@@ -246,9 +250,11 @@ export default function POListPage() {
           NO: index + 1,
           "KODE PO": po.po_kode || "-",
           "PR ASAL":
-            Array.from(new Set(prCodesByPo.get(po.id) || [])).join(", ") ||
-            po.prs?.pr_kode ||
-            "-",
+            po.po_jenis === "non_pr"
+              ? `NON-PR${po.po_pr_referensi ? ` (Ref: ${po.po_pr_referensi})` : ""}`
+              : Array.from(new Set(prCodesByPo.get(po.id) || [])).join(", ") ||
+                po.prs?.pr_kode ||
+                "-",
           VENDOR: vendorNames.join(", ") || "-",
           PIC: po.po_pic || "-",
           TANGGAL: toExcelDate(po.po_tanggal),
@@ -691,12 +697,30 @@ export default function POListPage() {
                           </div>
                           <div className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground uppercase tracking-tight">
                             <Building2 className="h-3 w-3" />{" "}
-                            {pr?.cabang?.nama_cabang || "-"}
+                            {pr?.cabang?.nama_cabang ||
+                              po.cabang?.nama_cabang ||
+                              "-"}
                           </div>
-                          {pr?.pr_kode && (
-                            <div className="text-[9px] text-muted-foreground font-mono">
-                              ↑ {pr.pr_kode}
+                          {po.po_jenis === "non_pr" ? (
+                            <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-mono">
+                              <Badge
+                                variant="outline"
+                                className="h-4 px-1 text-[8px] font-bold uppercase border-warning/40 text-warning"
+                              >
+                                Non-PR
+                              </Badge>
+                              {po.po_pr_referensi && (
+                                <span className="truncate max-w-40">
+                                  {po.po_pr_referensi}
+                                </span>
+                              )}
                             </div>
+                          ) : (
+                            pr?.pr_kode && (
+                              <div className="text-[9px] text-muted-foreground font-mono">
+                                ↑ {pr.pr_kode}
+                              </div>
+                            )
                           )}
                         </div>
                       </TableCell>

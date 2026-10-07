@@ -9,6 +9,7 @@
 import { createClient } from "@/lib/supabase/client";
 import {
   UPDATE_WEB_MAX_UPLOAD_BYTES,
+  UpdateWebComment,
   UpdateWebPost,
   UpdateWebPostReactionSummary,
   UpdateWebReactionEmoji,
@@ -247,13 +248,26 @@ export async function deleteUpdateWebPost(id: number): Promise<void> {
   }
 }
 
+// `replyTo` = komentar yang dibalas, cukup user_id + timestamp aslinya; nama &
+// kutipan diambil server. Server juga mengirim notifikasi ke pemiliknya.
+// p_reply_to HANYA dikirim kalau memang membalas, supaya komentar biasa tetap
+// jalan di DB yang belum menerima migration reply.
 export async function addUpdateWebPostComment(
   id: number,
   message: string,
+  replyTo?: Pick<UpdateWebComment, "user_id" | "timestamp"> | null,
 ): Promise<void> {
   const { error } = await createClient().rpc("add_update_web_post_comment", {
     p_id: id,
     p_message: message,
+    ...(replyTo
+      ? {
+          p_reply_to: {
+            user_id: replyTo.user_id,
+            timestamp: replyTo.timestamp,
+          },
+        }
+      : {}),
   });
   if (error) throw error;
 }

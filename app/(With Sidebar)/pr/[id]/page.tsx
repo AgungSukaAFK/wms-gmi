@@ -72,6 +72,10 @@ import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { normalizeDocumentStatus } from "@/lib/document-status";
 import Link from "next/link";
 import { Content } from "@/components/content";
+import {
+  fetchPrItemPoCoverage,
+  type PrItemPoCoverage,
+} from "@/lib/pr-po-coverage";
 
 export default function PRDetailPage({
   params,
@@ -85,7 +89,7 @@ export default function PRDetailPage({
   const [pr, setPr] = useState<any>(null);
   const [prItems, setPrItems] = useState<any[]>([]);
   const [poInfoByPrItem, setPoInfoByPrItem] = useState<
-    Record<number, { convertedQty: number; pos: { id: number; po_kode: string }[] }>
+    Record<number, PrItemPoCoverage>
   >({});
   const [loading, setLoading] = useState(true);
   const [updating, setUpdating] = useState(false);
@@ -177,31 +181,8 @@ export default function PRDetailPage({
 
       const prItemIds = (pItems || []).map((i: any) => i.id);
       if (prItemIds.length > 0) {
-        const { data: poItemRows } = await supabase
-          .from("po_items")
-          .select("pr_item_id, po_id, qty, pos!inner(po_status, po_kode)")
-          .in("pr_item_id", prItemIds);
-
-        const map: Record<
-          number,
-          { convertedQty: number; pos: { id: number; po_kode: string }[] }
-        > = {};
-        for (const row of poItemRows || []) {
-          const poRel = Array.isArray((row as any).pos)
-            ? (row as any).pos[0]
-            : (row as any).pos;
-          if (!poRel || poRel.po_status === "rejected") continue;
-          if (!map[row.pr_item_id]) {
-            map[row.pr_item_id] = { convertedQty: 0, pos: [] };
-          }
-          map[row.pr_item_id].convertedQty += row.qty;
-          if (!map[row.pr_item_id].pos.some((p) => p.id === row.po_id)) {
-            map[row.pr_item_id].pos.push({
-              id: row.po_id,
-              po_kode: poRel.po_kode,
-            });
-          }
-        }
+        // Termasuk PO Non-PR yang di-link manual (po_item_pr_links).
+        const map = await fetchPrItemPoCoverage(supabase, prItemIds);
         setPoInfoByPrItem(map);
       } else {
         setPoInfoByPrItem({});
@@ -1065,6 +1046,7 @@ export default function PRDetailPage({
                                 className="text-[9px] font-mono font-bold text-primary hover:underline"
                               >
                                 {po.po_kode}
+                                {po.via_link && " (Non-PR)"}
                               </Link>
                             ))}
                           </div>

@@ -7,6 +7,7 @@
 
 import { JSONContent } from "@tiptap/react";
 import { UpdatePostContentView } from "@/components/tiptap/update-post-content-view";
+import { UPDATE_WEB_THUMBNAIL_ENABLED } from "@/type/update-web";
 
 interface UpdatePostArticleProps {
   title: string;
@@ -23,7 +24,7 @@ export function UpdatePostArticle({
 }: UpdatePostArticleProps) {
   return (
     <>
-      {thumbnailUrl && (
+      {UPDATE_WEB_THUMBNAIL_ENABLED && thumbnailUrl && (
         // eslint-disable-next-line @next/next/no-img-element
         <img
           src={thumbnailUrl}

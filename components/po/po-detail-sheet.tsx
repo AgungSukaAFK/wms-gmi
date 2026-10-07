@@ -61,6 +61,8 @@ import { cn, formatDate } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
+import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
+import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 
 interface PODetailSheetProps {
   poId: number | null;
@@ -145,7 +147,8 @@ export function PODetailSheet({
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount,
+          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, po_currency,
+          cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -387,11 +390,7 @@ export function PODetailSheet({
     : null;
 
   const formatCurrency = (n: number) =>
-    new Intl.NumberFormat("id-ID", {
-      style: "currency",
-      currency: "IDR",
-      minimumFractionDigits: 0,
-    }).format(n);
+    formatPoMoney(n, po?.po_currency);
 
   const getStatusBadge = (status: string) => {
     switch (status) {
@@ -552,11 +551,13 @@ export function PODetailSheet({
                     </div>
                     <div className="flex items-center gap-2 text-[10px] font-bold text-primary uppercase tracking-tight">
                       <Building2 className="h-3.5 w-3.5 text-primary/50" />{" "}
-                      {po?.prs?.cabang?.nama_cabang || "-"}
+                      {po?.prs?.cabang?.nama_cabang || po?.cabang?.nama_cabang || "-"}
                     </div>
                     <div className="flex items-center gap-1.5 flex-wrap text-[10px] text-muted-foreground font-mono">
                       <FileText className="h-3 w-3" />↑{" "}
-                      {linkedPrs.length > 0
+                      {po?.po_jenis === "non_pr"
+                        ? `NON-PR${po.po_pr_referensi ? ` · ${po.po_pr_referensi}` : ""}`
+                        : linkedPrs.length > 0
                         ? linkedPrs.map((pr) => (
                             <Badge
                               key={pr.id}
@@ -588,6 +589,25 @@ export function PODetailSheet({
 
               {/* Body */}
               <div className="flex-1 overflow-y-auto p-6 space-y-8">
+                {po?.po_jenis === "non_pr" && (
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <div className="h-4 w-1 bg-primary rounded-full" />
+                      <h3 className="text-[11px] font-bold text-foreground uppercase tracking-tight">
+                        Job Costing & Link PR
+                      </h3>
+                    </div>
+                    <PoNonPrPanel
+                      poId={po.id}
+                      poStatus={po.po_status}
+                      prReferensi={po.po_pr_referensi}
+                      items={poItems}
+                      canLink={canViewPrice || isModerator}
+                      isModerator={isModerator}
+                      compact
+                    />
+                  </div>
+                )}
                 {/* Info Section */}
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
@@ -662,14 +682,17 @@ export function PODetailSheet({
                           {po?.po_estimasi ? formatDate(po.po_estimasi) : "-"}
                         </div>
                       </div>
-                      {po?.po_payment_term && (
+                      {po && (
                         <div className="col-span-2 bg-muted/40 border border-border rounded-lg p-3">
                           <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1">
-                            Syarat Pembayaran
+                            Syarat Pembayaran & Mata Uang
                           </p>
                           <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground">
                             <CreditCard className="h-3 w-3 text-muted-foreground" />
-                            {po.po_payment_term}
+                            {po.po_payment_term || "-"}
+                            <Badge variant="outline" className="ml-1 text-[9px] font-bold">
+                              {normalizePoCurrency(po.po_currency)}
+                            </Badge>
                           </div>
                         </div>
                       )}

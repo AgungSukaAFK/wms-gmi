@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { Suspense, useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { createJobCosting } from "@/services/finance-actions";
 import { useAuthStore } from "@/stores/auth-store";
@@ -47,10 +47,18 @@ import {
   UsersRound,
 } from "lucide-react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
+import {
+  fetchPoItemJcUsage,
+  NON_PR_RECEIVE_CABANG_MISSING_MESSAGE,
+  resolveNonPrReceiveCabang,
+} from "@/lib/po-non-pr";
+import { canViewPOPrice } from "@/lib/po-price-access";
+import { normalizePoCurrency } from "@/lib/po-currency";
 
 const rupiahFormatter = new Intl.NumberFormat("id-ID");
 
@@ -79,6 +87,9 @@ interface LineItem {
   stock_qty: number;
   qty: number;
   unit_price: number;
+  // Bahan dari item PO Non-PR (prefill via ?po_id=).
+  po_item_id?: number;
+  po_kode?: string;
 }
 
 interface FinishPartLineItem {
@@ -91,6 +102,9 @@ interface FinishPartLineItem {
   customer_id?: number;
   location_name: string;
   qty: number;
+  // "Kirim ke MR": finish part memenuhi item MR ini (gudang tujuan = gudang MR).
+  mr_item_id?: number;
+  mr_kode?: string;
 }
 
 interface BarangOption {
@@ -108,9 +122,29 @@ interface CustomerOption {
 }
 
 export default function JobCostingCreatePage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex justify-center py-10">
+          <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <JobCostingCreateForm />
+    </Suspense>
+  );
+}
+
+function JobCostingCreateForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const sourcePoId = Number(searchParams.get("po_id")) || null;
   const storeProfile = useAuthStore((s) => s.profile);
   const supabase = createClient();
+  const [sourcePo, setSourcePo] = useState<{ id: number; po_kode: string } | null>(null);
+  const [mrPickerFor, setMrPickerFor] = useState<string | null>(null);
+  const [mrOptions, setMrOptions] = useState<any[]>([]);
+  const [mrOptionsLoading, setMrOptionsLoading] = useState(false);
 
   const [cabangs, setCabangs] = useState<any[]>([]);
   const [submitting, setSubmitting] = useState(false);
@@ -175,7 +209,10 @@ export default function JobCostingCreatePage() {
   const [selectedBarangId, setSelectedBarangId] = useState<number | null>(null);
 
   useEffect(() => {
-    if (storeProfile?.cabang_id) {
+    // Dari PO Non-PR: cabang & lokasi asal sudah dikunci ke gudang penerima
+    // PO (lihat effect prefill), jangan ditimpa cabang profil yang hydrate
+    // belakangan.
+    if (storeProfile?.cabang_id && !sourcePoId) {
       setCabangId(String(storeProfile.cabang_id));
       setSelectedSourceCabangId(String(storeProfile.cabang_id));
       setFinishPartCabangId(String(storeProfile.cabang_id));
@@ -187,7 +224,92 @@ export default function JobCostingCreatePage() {
       .eq("is_active", true)
       .order("nama_cabang")
       .then((result: { data: any[] | null }) => setCabangs(result.data || []));
-  }, [storeProfile?.cabang_id, supabase]);
+  }, [storeProfile?.cabang_id, supabase, sourcePoId]);
+
+  // Prefill dari PO Non-PR (?po_id=): bahan = sisa item PO yang sudah
+  // diterima (RI) tapi belum dipakai Job Costing lain, lokasi asal = gudang
+  // penerima PO Non-PR (GMI-JAKARTA), harga = harga PO.
+  useEffect(() => {
+    if (!sourcePoId) return;
+    const run = async () => {
+      const { data: po } = await supabase
+        .from("pos")
+        .select(
+          "id, po_kode, po_jenis, po_currency, po_items(id, part_id, part_number, part_name, satuan, qty_received, harga)",
+        )
+        .eq("id", sourcePoId)
+        .maybeSingle();
+      if (!po || po.po_jenis !== "non_pr") {
+        toast.error("PO sumber tidak ditemukan atau bukan PO Non-PR.");
+        return;
+      }
+      const cabang = await resolveNonPrReceiveCabang(supabase);
+      if (!cabang) {
+        toast.error(NON_PR_RECEIVE_CABANG_MISSING_MESSAGE);
+        return;
+      }
+      setSourcePo({ id: po.id, po_kode: po.po_kode });
+      setCabangId(String(cabang.id));
+      setSourceLocationType("cabang");
+      setSelectedSourceCabangId(String(cabang.id));
+
+      const poItems = (po.po_items || []) as any[];
+      const usage = await fetchPoItemJcUsage(
+        supabase,
+        poItems.map((i) => i.id),
+      );
+      const { data: stockRows } = await supabase
+        .from("stock")
+        .select("part_id, qty")
+        .eq("cabang_id", cabang.id)
+        .in(
+          "part_id",
+          poItems.map((i) => i.part_id),
+        );
+      const stockMap = new Map(
+        (stockRows || []).map((r: any) => [Number(r.part_id), Number(r.qty) || 0]),
+      );
+      const showPrice = canViewPOPrice(storeProfile as any);
+      // Job Costing dihitung dalam Rupiah -- harga PO valas (USD/AUD) tidak
+      // ikut di-prefill (tidak ada kurs), user isi manual dalam Rp.
+      const poCurrency = normalizePoCurrency(po.po_currency);
+      const usePoPrice = showPrice && poCurrency === "IDR";
+
+      const lines: LineItem[] = poItems
+        .map((i) => ({
+          item: i,
+          sisa: (i.qty_received || 0) - (usage.get(i.id)?.qtyUsed || 0),
+        }))
+        .filter(({ sisa }) => sisa > 0)
+        .map(({ item, sisa }) => ({
+          id: crypto.randomUUID(),
+          part_id: item.part_id,
+          part_number: item.part_number,
+          part_name: item.part_name,
+          source_type: "cabang" as LocationType,
+          source_cabang_id: cabang.id,
+          source_name: cabang.nama_cabang,
+          unit: item.satuan,
+          stock_qty: stockMap.get(item.part_id) || 0,
+          qty: sisa,
+          unit_price: usePoPrice ? Number(item.harga) || 0 : 0,
+          po_item_id: item.id,
+          po_kode: po.po_kode,
+        }));
+      if (lines.length === 0) {
+        toast.info(
+          `Semua item PO ${po.po_kode} yang sudah diterima sudah dipakai Job Costing.`,
+        );
+      } else if (showPrice && poCurrency !== "IDR") {
+        toast.warning(
+          `PO ${po.po_kode} memakai mata uang ${poCurrency}. Harga bahan tidak di-prefill — isi manual dalam Rupiah.`,
+        );
+      }
+      setItems(lines);
+    };
+    run();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sourcePoId]);
 
   useEffect(() => {
     if (!cabangId) return;
@@ -480,6 +602,7 @@ export default function JobCostingCreatePage() {
           : undefined;
       const idx = prev.findIndex(
         (fp) =>
+          !fp.mr_item_id &&
           fp.part_id === selected.id &&
           fp.location_type === finishLocationType &&
           fp.cabang_id === cabangId &&
@@ -530,6 +653,51 @@ export default function JobCostingCreatePage() {
     );
   }
 
+  // Item MR approved yang masih butuh part finish part ini.
+  async function openMrPicker(fp: FinishPartLineItem) {
+    setMrPickerFor(fp.id);
+    setMrOptionsLoading(true);
+    const { data } = await supabase
+      .from("mr_items")
+      .select(
+        "id, qty_request, qty_received, mrs!inner(mr_kode, mr_status, cabang_id, cabang(nama_cabang))",
+      )
+      .eq("part_id", fp.part_id)
+      .eq("mrs.mr_status", "approved")
+      .order("id", { ascending: false })
+      .limit(30);
+    setMrOptions(
+      (data || [])
+        .map((r: any) => ({
+          ...r,
+          mr: Array.isArray(r.mrs) ? r.mrs[0] : r.mrs,
+          sisa: r.qty_request - (r.qty_received || 0),
+        }))
+        .filter((r: any) => r.sisa > 0),
+    );
+    setMrOptionsLoading(false);
+  }
+
+  function assignMrToFinishPart(fpId: string, opt: any | null) {
+    setFinishParts((prev) =>
+      prev.map((fp) => {
+        if (fp.id !== fpId) return fp;
+        if (!opt) return { ...fp, mr_item_id: undefined, mr_kode: undefined };
+        return {
+          ...fp,
+          mr_item_id: opt.id,
+          mr_kode: opt.mr.mr_kode,
+          location_type: "cabang",
+          cabang_id: opt.mr.cabang_id,
+          customer_id: undefined,
+          location_name: opt.mr.cabang?.nama_cabang || "-",
+          qty: Math.min(fp.qty, opt.sisa) || opt.sisa,
+        };
+      }),
+    );
+    setMrPickerFor(null);
+  }
+
   async function handleSubmit() {
     if (!cabangId) {
       toast.error("Pilih cabang terlebih dahulu.");
@@ -573,6 +741,7 @@ export default function JobCostingCreatePage() {
         cabang_id: fp.location_type === "cabang" ? fp.cabang_id : undefined,
         customer_id:
           fp.location_type === "customer" ? fp.customer_id : undefined,
+        mr_item_id: fp.mr_item_id,
       })),
       items: items.map((i) => ({
         part_id: i.part_id,
@@ -582,6 +751,7 @@ export default function JobCostingCreatePage() {
         qty: i.qty,
         unit: i.unit,
         unit_price: i.unit_price,
+        po_item_id: i.po_item_id,
         source_cabang_id:
           i.source_type === "cabang" ? i.source_cabang_id : undefined,
         source_customer_id:
@@ -601,6 +771,14 @@ export default function JobCostingCreatePage() {
   return (
     <Content title="Tambah Job Costing" description="Input data Job Costing">
       <div className="space-y-5">
+        {sourcePo && (
+          <div className="rounded-lg border border-warning/40 bg-warning/5 px-3 py-2 text-xs">
+            <span className="font-bold">Dari PO Non-PR {sourcePo.po_kode}</span>{" "}
+            — bahan sudah terisi dari item PO yang sudah diterima di gudang
+            GMI-JAKARTA. Tambahkan finish part (PN sesuai PR), pilih
+            &quot;Kirim ke MR&quot; kalau finish part langsung memenuhi MR.
+          </div>
+        )}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label className="text-xs font-semibold">
@@ -1038,7 +1216,17 @@ export default function JobCostingCreatePage() {
                     <TableCell className="font-mono text-xs">
                       {item.part_number}
                     </TableCell>
-                    <TableCell>{item.part_name}</TableCell>
+                    <TableCell>
+                      {item.part_name}
+                      {item.po_kode && (
+                        <Badge
+                          variant="outline"
+                          className="ml-1.5 text-[9px] font-mono font-bold"
+                        >
+                          PO {item.po_kode}
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell>
                       <Input
                         type="number"
@@ -1114,6 +1302,7 @@ export default function JobCostingCreatePage() {
                 <TableHead>Nama</TableHead>
                 <TableHead className="w-28">Qty</TableHead>
                 <TableHead>Lokasi Tujuan</TableHead>
+                <TableHead className="w-48">Kirim ke MR</TableHead>
                 <TableHead className="w-16 text-center">Aksi</TableHead>
               </TableRow>
             </TableHeader>
@@ -1121,7 +1310,7 @@ export default function JobCostingCreatePage() {
               {finishParts.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={7}
                     className="h-24 text-center text-muted-foreground"
                   >
                     Belum ada finish part ditambahkan.
@@ -1158,6 +1347,82 @@ export default function JobCostingCreatePage() {
                         )}
                         {fp.location_name}
                       </span>
+                    </TableCell>
+                    <TableCell>
+                      {fp.mr_item_id ? (
+                        <Badge
+                          variant="outline"
+                          className="gap-1 text-[10px] font-mono font-bold"
+                        >
+                          {fp.mr_kode}
+                          <button
+                            type="button"
+                            className="text-destructive"
+                            onClick={() => assignMrToFinishPart(fp.id, null)}
+                            aria-label="Lepas MR"
+                          >
+                            ×
+                          </button>
+                        </Badge>
+                      ) : (
+                        <Popover
+                          open={mrPickerFor === fp.id}
+                          onOpenChange={(open) =>
+                            open ? openMrPicker(fp) : setMrPickerFor(null)
+                          }
+                        >
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-8 text-xs"
+                            >
+                              Pilih MR...
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-80 p-0" align="start">
+                            <Command shouldFilter={false}>
+                              <CommandList>
+                                {mrOptionsLoading ? (
+                                  <div className="py-6 flex items-center justify-center">
+                                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                                  </div>
+                                ) : mrOptions.length === 0 ? (
+                                  <CommandEmpty>
+                                    Tidak ada MR approved yang masih butuh
+                                    part ini.
+                                  </CommandEmpty>
+                                ) : (
+                                  mrOptions.map((opt) => (
+                                    <CommandItem
+                                      key={opt.id}
+                                      value={String(opt.id)}
+                                      onSelect={() =>
+                                        assignMrToFinishPart(fp.id, opt)
+                                      }
+                                      className="py-2"
+                                    >
+                                      <div className="flex w-full items-center justify-between gap-2">
+                                        <div>
+                                          <p className="text-xs font-semibold font-mono">
+                                            {opt.mr.mr_kode}
+                                          </p>
+                                          <p className="text-[10px] text-muted-foreground">
+                                            {opt.mr.cabang?.nama_cabang}
+                                          </p>
+                                        </div>
+                                        <span className="text-[10px] text-muted-foreground">
+                                          Sisa {opt.sisa}
+                                        </span>
+                                      </div>
+                                    </CommandItem>
+                                  ))
+                                )}
+                              </CommandList>
+                            </Command>
+                          </PopoverContent>
+                        </Popover>
+                      )}
                     </TableCell>
                     <TableCell className="text-center">
                       <Button

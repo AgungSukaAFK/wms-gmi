@@ -14,6 +14,10 @@ import {
 import { applyReceiveCompletion } from "@/services/procurement-actions";
 import { evaluateMrFreeze } from "@/services/freeze-actions";
 import { syncShareStockStatuses } from "@/services/inventory-actions";
+import {
+  computePrConvertStatus,
+  fetchPrItemConvertedQty,
+} from "@/lib/pr-po-coverage";
 
 // Duplikat dari DELIVERY_ACTIVE_STATUSES di inventory-actions.ts — file itu
 // "use server" jadi cuma bisa export async function, tidak bisa export const
@@ -818,28 +822,9 @@ async function _recomputeMrConvertStatus(mrId: number, supabase: any) {
 }
 
 async function _recomputePrConvertStatus(prId: number, supabase: any) {
-  const { data: items } = await supabase.from("pr_items").select("id, qty").eq("pr_id", prId);
-  if (!items || items.length === 0) return;
-
-  const itemIds = items.map((i: any) => i.id);
-  const { data: poItemRows } = await supabase
-    .from("po_items")
-    .select("pr_item_id, qty, pos!inner(po_status)")
-    .in("pr_item_id", itemIds);
-
-  const convertedMap = new Map<number, number>();
-  for (const row of poItemRows ?? []) {
-    const poStatus = Array.isArray(row.pos) ? row.pos[0]?.po_status : row.pos?.po_status;
-    if (poStatus === "rejected") continue;
-    convertedMap.set(row.pr_item_id, (convertedMap.get(row.pr_item_id) || 0) + row.qty);
-  }
-
-  const totalQty = items.reduce((s: number, i: any) => s + (i.qty || 0), 0);
-  const totalConverted = items.reduce(
-    (s: number, i: any) => s + Math.min(i.qty || 0, convertedMap.get(i.id) || 0),
-    0,
-  );
-  const status = totalConverted <= 0 ? "pending" : totalConverted < totalQty ? "partial" : "complete";
+  // lib/pr-po-coverage.ts bukan modul "use server", aman diimport langsung.
+  const status = await computePrConvertStatus(supabase, prId);
+  if (!status) return;
   await supabase.from("prs").update({ pr_convert_status: status }).eq("id", prId);
 }
 
@@ -908,19 +893,9 @@ export async function moderatorEditPR(prId: number, payload: ModeratorPrEditPayl
   if (payload.updatedItems && payload.updatedItems.length > 0) {
     const updatedIds = payload.updatedItems.map((u) => u.id);
 
-    // 2. Guard: qty tidak boleh diturunkan di bawah qty yang sudah dikonversi ke PO.
-    const { data: poRows } = await supabase
-      .from("po_items")
-      .select("pr_item_id, qty, pos!inner(po_status)")
-      .in("pr_item_id", updatedIds);
-    const convertedToPoMap = new Map<number, number>();
-    for (const row of poRows || []) {
-      const poStatus = Array.isArray((row as any).pos)
-        ? (row as any).pos[0]?.po_status
-        : (row as any).pos?.po_status;
-      if (poStatus === "rejected") continue;
-      convertedToPoMap.set(row.pr_item_id, (convertedToPoMap.get(row.pr_item_id) || 0) + row.qty);
-    }
+    // 2. Guard: qty tidak boleh diturunkan di bawah qty yang sudah dikonversi
+    // ke PO (termasuk link manual dari PO Non-PR).
+    const convertedToPoMap = await fetchPrItemConvertedQty(supabase, updatedIds);
     for (const upd of payload.updatedItems) {
       const converted = convertedToPoMap.get(upd.id) || 0;
       if (converted > 0 && upd.qty < converted) {

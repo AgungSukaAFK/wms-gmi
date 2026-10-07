@@ -59,6 +59,9 @@ import {
   CalendarRange,
   Warehouse,
   Factory,
+  Gauge,
+  Snowflake,
+  Wrench,
 } from "lucide-react";
 
 // Update the menu data
@@ -122,6 +125,7 @@ const data = {
     { title: "Scheduled MR", url: "/mr/scheduled", icon: CalendarRange },
     { title: "Purchase Request", url: "/pr", icon: FileSpreadsheet },
     { title: "Purchase Order", url: "/po", icon: ShoppingCart },
+    { title: "PO Non-PR → Job Costing", url: "/po/non-pr", icon: Wrench },
     { title: "Receive Item", url: "/receive", icon: PackageCheck },
     { title: "Working Order", url: "/working-order", icon: Factory },
   ],
@@ -163,6 +167,10 @@ const data = {
       icon: Warehouse,
     },
   ],
+  navHmMaintenance: [
+    { title: "Periodic Maintenance", url: "/maintenance", icon: Gauge },
+    { title: "Forecasting AC", url: "/maintenance/forecast-ac", icon: Snowflake },
+  ],
   navSecondary: [
     {
       title: "Update Web",
@@ -198,6 +206,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     stockOut: boolean;
     soReguler: boolean;
     consignment: boolean;
+    hmMaintenance: boolean;
     help: boolean;
   };
 
@@ -211,6 +220,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     stockOut: false,
     soReguler: false,
     consignment: false,
+    hmMaintenance: false,
     help: false,
   };
   const [collapsedGroups, setCollapsedGroups] = React.useState<CollapsedGroups>(
@@ -465,6 +475,12 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
           items={markActive(data.navConsignment)}
           collapsed={collapsedGroups.consignment}
           onToggle={() => toggleGroup("consignment")}
+        />
+        <NavMain
+          label="HM Maintenance"
+          items={markActive(data.navHmMaintenance)}
+          collapsed={collapsedGroups.hmMaintenance}
+          onToggle={() => toggleGroup("hmMaintenance")}
         />
         <NavMain
           label="Bantuan"
