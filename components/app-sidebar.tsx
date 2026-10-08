@@ -12,6 +12,7 @@ import {
   SidebarHeader,
   SidebarRail,
   SidebarGroupLabel,
+  SidebarInput,
 } from "@/components/ui/sidebar";
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "./nav-user";
@@ -62,6 +63,8 @@ import {
   Gauge,
   Snowflake,
   Wrench,
+  Search,
+  X,
 } from "lucide-react";
 
 // Update the menu data
@@ -382,6 +385,106 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       return updated;
     });
   }, []);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const searchInputRef = React.useRef<HTMLInputElement>(null);
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const isSearching = normalizedQuery.length > 0;
+
+  const navGroups = (() => {
+    const groups: {
+      key: keyof CollapsedGroups;
+      label?: string;
+      items: React.ComponentProps<typeof NavMain>["items"];
+    }[] = [
+      { key: "admin", label: "Admin", items: markActive(adminItems) },
+      {
+        key: "main",
+        items: markActive(data.navMain).map((item) =>
+          item.url === "/notifications"
+            ? { ...item, badge: unreadCount }
+            : item,
+        ),
+      },
+      { key: "master", label: "Data Master", items: markActive(masterItems) },
+      {
+        key: "inventory",
+        label: "Inventory",
+        items: markActive(data.navInventory),
+      },
+      {
+        key: "procurement",
+        label: "Procurement",
+        items: markActive(data.navProcurement),
+      },
+      {
+        key: "stockOut",
+        label: "Stock Out Project",
+        items: markActive(data.navStockOut),
+      },
+      {
+        key: "soReguler",
+        label: "SO Reguler",
+        items: markActive(data.navSoReguler),
+      },
+      {
+        key: "consignment",
+        label: "Consignment",
+        items: markActive(data.navConsignment),
+      },
+      {
+        key: "hmMaintenance",
+        label: "HM Maintenance",
+        items: markActive(data.navHmMaintenance),
+      },
+      {
+        key: "help",
+        label: "Bantuan",
+        items: markActive(data.navSecondary).map((item) =>
+          item.url === "/update-web"
+            ? { ...item, dot: hasNewUpdateWeb }
+            : item,
+        ),
+      },
+    ];
+    return groups.filter((group) => group.items.length > 0);
+  })();
+
+  // Saat mencari: cocokkan judul menu atau nama grup, grup kosong disembunyikan,
+  // dan semua grup dipaksa terbuka biar hasilnya kelihatan.
+  const visibleGroups = (() => {
+    if (!isSearching) return navGroups;
+    return navGroups
+      .map((group) => {
+        const groupMatches = (group.label ?? "Menu")
+          .toLowerCase()
+          .includes(normalizedQuery);
+        return {
+          ...group,
+          items: groupMatches
+            ? group.items
+            : group.items.filter((item) =>
+                item.title.toLowerCase().includes(normalizedQuery),
+              ),
+        };
+      })
+      .filter((group) => group.items.length > 0);
+  })();
+
+  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Escape") {
+      setSearchQuery("");
+      return;
+    }
+    if (e.key === "Enter" && isSearching) {
+      const first = visibleGroups[0]?.items[0];
+      if (first) {
+        e.preventDefault();
+        setSearchQuery("");
+        router.push(first.url);
+      }
+    }
+  };
+
   // Sync localStorage if user reloads or navigates
   React.useEffect(() => {
     if (typeof window !== "undefined") {
@@ -408,90 +511,63 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             </span>
           </div>
         </div>
+        <div className="relative group-data-[collapsible=icon]:hidden">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <SidebarInput
+            ref={searchInputRef}
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={handleSearchKeyDown}
+            placeholder="Cari menu..."
+            aria-label="Cari menu"
+            className="pl-8 pr-8"
+          />
+          {searchQuery && (
+            <button
+              type="button"
+              onClick={() => {
+                setSearchQuery("");
+                searchInputRef.current?.focus();
+              }}
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
+              aria-label="Hapus pencarian"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
-        <div className="px-2 pb-2 flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-7 text-[10px] font-semibold"
-            onClick={allCollapsed ? expandAll : collapseAll}
-          >
-            {allCollapsed ? "Expand All" : "Collapse All"}
-          </Button>
-        </div>
-
-        {adminItems.length > 0 && (
-          <NavMain
-            label="Admin"
-            items={markActive(adminItems)}
-            collapsed={collapsedGroups.admin}
-            onToggle={() => toggleGroup("admin")}
-          />
+        {!isSearching && (
+          <div className="px-2 pb-2 flex gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-[10px] font-semibold"
+              onClick={allCollapsed ? expandAll : collapseAll}
+            >
+              {allCollapsed ? "Expand All" : "Collapse All"}
+            </Button>
+          </div>
         )}
-        <NavMain
-          items={markActive(data.navMain).map((item) =>
-            item.url === "/notifications"
-              ? { ...item, badge: unreadCount }
-              : item,
-          )}
-          collapsed={collapsedGroups.main}
-          onToggle={() => toggleGroup("main")}
-        />
-        <NavMain
-          label="Data Master"
-          items={markActive(masterItems)}
-          collapsed={collapsedGroups.master}
-          onToggle={() => toggleGroup("master")}
-        />
-        <NavMain
-          label="Inventory"
-          items={markActive(data.navInventory)}
-          collapsed={collapsedGroups.inventory}
-          onToggle={() => toggleGroup("inventory")}
-        />
-        <NavMain
-          label="Procurement"
-          items={markActive(data.navProcurement)}
-          collapsed={collapsedGroups.procurement}
-          onToggle={() => toggleGroup("procurement")}
-        />
-        <NavMain
-          label="Stock Out Project"
-          items={markActive(data.navStockOut)}
-          collapsed={collapsedGroups.stockOut}
-          onToggle={() => toggleGroup("stockOut")}
-        />
-        <NavMain
-          label="SO Reguler"
-          items={markActive(data.navSoReguler)}
-          collapsed={collapsedGroups.soReguler}
-          onToggle={() => toggleGroup("soReguler")}
-        />
-        <NavMain
-          label="Consignment"
-          items={markActive(data.navConsignment)}
-          collapsed={collapsedGroups.consignment}
-          onToggle={() => toggleGroup("consignment")}
-        />
-        <NavMain
-          label="HM Maintenance"
-          items={markActive(data.navHmMaintenance)}
-          collapsed={collapsedGroups.hmMaintenance}
-          onToggle={() => toggleGroup("hmMaintenance")}
-        />
-        <NavMain
-          label="Bantuan"
-          items={markActive(data.navSecondary).map((item) =>
-            item.url === "/update-web"
-              ? { ...item, dot: hasNewUpdateWeb }
-              : item,
-          )}
-          collapsed={collapsedGroups.help}
-          onToggle={() => toggleGroup("help")}
-        />
+
+        {visibleGroups.map((group) => (
+          <NavMain
+            key={group.key}
+            label={group.label}
+            items={group.items}
+            collapsed={isSearching ? false : collapsedGroups[group.key]}
+            onToggle={() => toggleGroup(group.key)}
+          />
+        ))}
+
+        {isSearching && visibleGroups.length === 0 && (
+          <p className="px-4 py-6 text-center text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+            Menu &quot;{searchQuery.trim()}&quot; tidak ditemukan
+          </p>
+        )}
       </SidebarContent>
 
       <SidebarFooter>
