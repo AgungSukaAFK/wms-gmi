@@ -8,6 +8,7 @@ import { canCreateMR } from "@/lib/mr-permissions";
 import {
   computePrConvertStatus,
   fetchPrItemConvertedQty,
+  fetchPrItemPoCoverage,
 } from "@/lib/pr-po-coverage";
 import {
   NON_PR_RECEIVE_CABANG_MISSING_MESSAGE,
@@ -784,6 +785,56 @@ async function _applyPrConversionStatus(prId: number, supabase: any) {
 }
 
 /**
+ * PR baru boleh "completed" kalau seluruh qty item-nya sudah ter-PO DAN semua
+ * PO (non-rejected) yang menutupinya sudah diterima penuh. Satu PO selesai
+ * belum berarti PR selesai -- PR bisa dipecah ke banyak PO, dan PR yang
+ * sudah completed hilang dari picker create PO (filter pr_status=approved).
+ */
+async function _applyPrCompletionStatus(prId: number, supabase: any) {
+  const { data: pr } = await supabase
+    .from("prs")
+    .select("pr_status")
+    .eq("id", prId)
+    .maybeSingle();
+  if (!pr || pr.pr_status !== "approved") return;
+
+  const { data: items } = await supabase
+    .from("pr_items")
+    .select("id, qty")
+    .eq("pr_id", prId);
+  if (!items || items.length === 0) return;
+
+  const coverage = await fetchPrItemPoCoverage(
+    supabase,
+    items.map((i: any) => i.id),
+  );
+  const allConverted = items.every(
+    (i: any) => (coverage[i.id]?.convertedQty || 0) >= (i.qty || 0),
+  );
+  if (!allConverted) return;
+
+  const poIds = Array.from(
+    new Set(Object.values(coverage).flatMap((c) => c.pos.map((p) => p.id))),
+  );
+  if (poIds.length === 0) return;
+
+  const { data: pos } = await supabase
+    .from("pos")
+    .select("po_receive_status")
+    .in("id", poIds);
+  const allReceived =
+    (pos ?? []).length === poIds.length &&
+    (pos ?? []).every((p: any) => p.po_receive_status === "complete");
+  if (!allReceived) return;
+
+  await supabase
+    .from("prs")
+    .update({ pr_status: "completed" as any })
+    .eq("id", prId)
+    .eq("pr_status", "approved");
+}
+
+/**
  * PURCHASE REQUEST (PR) SERVICES
  */
 export async function createPurchaseRequest(data: {
@@ -1379,17 +1430,38 @@ export async function applyReceiveCompletion(receiveId: number) {
     await supabase.from("pos").update(poUpdatePayload).eq("id", ri.po_id);
 
     if (poReceiveStatus === "complete") {
-      const { data: poHeader } = await supabase
-        .from("pos")
-        .select("pr_id")
-        .eq("id", ri.po_id)
-        .maybeSingle();
+      // Satu PO bisa berisi item dari beberapa PR (pos.pr_id cuma PR
+      // pertama), plus link manual PO Non-PR -- cek semua PR sumbernya.
+      const [{ data: poHeader }, { data: poItemRows }] = await Promise.all([
+        supabase.from("pos").select("pr_id").eq("id", ri.po_id).maybeSingle(),
+        supabase.from("po_items").select("id, pr_item_id").eq("po_id", ri.po_id),
+      ]);
+      const poItemIds = (poItemRows ?? []).map((r: any) => r.id);
+      const { data: linkRows } =
+        poItemIds.length > 0
+          ? await supabase
+              .from("po_item_pr_links")
+              .select("pr_item_id")
+              .in("po_item_id", poItemIds)
+          : { data: [] };
+      const prItemIds = Array.from(
+        new Set(
+          [...(poItemRows ?? []), ...(linkRows ?? [])]
+            .map((r: any) => r.pr_item_id)
+            .filter(Boolean),
+        ),
+      );
+      const { data: prItemRows } =
+        prItemIds.length > 0
+          ? await supabase.from("pr_items").select("pr_id").in("id", prItemIds)
+          : { data: [] };
+      const prIds = new Set<number>(
+        (prItemRows ?? []).map((r: any) => r.pr_id).filter(Boolean),
+      );
+      if (poHeader?.pr_id) prIds.add(poHeader.pr_id);
 
-      if (poHeader?.pr_id) {
-        await supabase
-          .from("prs")
-          .update({ pr_status: "completed" as any })
-          .eq("id", poHeader.pr_id);
+      for (const prId of prIds) {
+        await _applyPrCompletionStatus(prId, supabase);
       }
     }
   }
