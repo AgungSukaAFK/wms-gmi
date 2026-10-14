@@ -33,6 +33,7 @@ import {
   RotateCcw,
   ArrowLeft,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -57,7 +58,13 @@ import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { cn, formatDate } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
-import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
+import {
+  canViewPOPrice,
+  extractRoleNames,
+  maskedPriceText,
+} from "@/lib/po-price-access";
+import { canRevisePO } from "@/lib/po-revision";
+import { PoRevisionHistory } from "@/components/po/po-revision-history";
 import Link from "next/link";
 import { Content } from "@/components/content";
 import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
@@ -79,6 +86,7 @@ export default function PODetailPage({
   const [loading, setLoading] = useState(true);
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [canViewPrice, setCanViewPrice] = useState(false);
+  const [canRevise, setCanRevise] = useState(false);
 
   // Approval states
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -122,6 +130,7 @@ export default function PODetailPage({
         .eq("id", user.id)
         .single();
       setCanViewPrice(canViewPOPrice(profile));
+      setCanRevise(canRevisePO(extractRoleNames(profile as any)));
       setIsModerator(
         ((profile as any)?.roles || []).some(
           (r: any) => r.roles?.name === "moderator",
@@ -141,7 +150,7 @@ export default function PODetailPage({
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
+          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
           cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
@@ -517,6 +526,14 @@ export default function PODetailPage({
                 <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
                   {po?.po_kode}
                 </h1>
+                {Number(po?.po_revision) > 0 && (
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] font-black uppercase border-primary/40 text-primary"
+                  >
+                    Rev. {po.po_revision}
+                  </Badge>
+                )}
                 {getStatusBadge(po?.po_status)}
                 {getReceiveBadge(po?.po_receive_status)}
               </div>
@@ -529,6 +546,13 @@ export default function PODetailPage({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {canRevise && !modEditMode && po && (
+              <Link href={`/po/${poId}/edit`}>
+                <Button size="sm" variant="outline" className="gap-2 font-semibold">
+                  <Pencil className="h-4 w-4" /> Edit PO
+                </Button>
+              </Link>
+            )}
             {isModerator && !modEditMode && (
               <Button
                 size="sm"
@@ -1154,6 +1178,15 @@ export default function PODetailPage({
             );
           })}
         </div>
+      </Content>
+
+      <Content>
+        <PoRevisionHistory
+          poId={Number(poId)}
+          canViewPrice={canViewPrice}
+          createdAt={po?.created_at}
+          createdBy={po?.po_pic}
+        />
       </Content>
 
       <Content>

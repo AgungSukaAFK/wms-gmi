@@ -54,7 +54,7 @@ export default function POPrintPage() {
         po_payment_term, po_pic, approvals,
         po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
         po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-        po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
+        po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
         cabang(nama_cabang),
         prs(pr_kode, cabang(nama_cabang))
       `,
@@ -189,7 +189,10 @@ export default function POPrintPage() {
               </h2>
               <p className="text-xs font-medium text-slate-500">
                 No. Dokumen:{" "}
-                <span className="font-bold text-slate-900">{po.po_kode}</span>
+                <span className="font-bold text-slate-900">
+                  {po.po_kode}
+                  {Number(po.po_revision) > 0 && ` (Rev. ${po.po_revision})`}
+                </span>
               </p>
             </div>
           </div>

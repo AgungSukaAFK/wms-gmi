@@ -852,6 +852,7 @@ export async function createPurchaseRequest(data: {
     qty: number;
     mr_id: number;
     mr_item_id: number;
+    over_mr_note?: string | null;
   }[];
 }) {
   const supabase = await createClient();
@@ -909,13 +910,66 @@ export async function createPurchaseRequest(data: {
   }
 
   // Qty PR boleh melebihi sisa qty_pr MR (over-request disengaja, mis.
-  // pembulatan MOQ vendor / safety stock) -- tidak lagi di-cap di server,
-  // mengikuti keputusan produk: distribusinya cukup terlihat lewat
+  // pembulatan MOQ vendor / safety stock) -- tidak di-cap, tapi WAJIB disertai
+  // keterangan (pr_items.over_mr_note). Distribusinya tetap terlihat lewat
   // mr_convert_status ("complete" begitu qty_pr asli sudah terkonversi,
-  // lihat _applyMrConversionStatus di bawah) tanpa perlu memblokir submit.
+  // lihat _applyMrConversionStatus di bawah).
   for (const item of data.items) {
     if (!item.qty || item.qty <= 0) {
       return { error: `Qty ${item.part_number} harus lebih dari 0.` };
+    }
+  }
+
+  const mrItemIds = Array.from(
+    new Set(data.items.map((i) => i.mr_item_id).filter(Boolean)),
+  );
+  if (mrItemIds.length > 0) {
+    const { data: mrItemRows } = await supabase
+      .from("mr_items")
+      .select("id, qty_pr")
+      .in("id", mrItemIds);
+    const { data: existingPrItems } = await supabase
+      .from("pr_items")
+      .select("mr_item_id, qty, prs!inner(pr_status)")
+      .in("mr_item_id", mrItemIds);
+
+    const convertedMap = new Map<number, number>();
+    for (const row of existingPrItems || []) {
+      const prStatus = Array.isArray((row as any).prs)
+        ? (row as any).prs[0]?.pr_status
+        : (row as any).prs?.pr_status;
+      if (prStatus === "rejected") continue;
+      convertedMap.set(
+        row.mr_item_id,
+        (convertedMap.get(row.mr_item_id) || 0) + row.qty,
+      );
+    }
+    const qtyPrById = new Map(
+      (mrItemRows || []).map((r: any) => [r.id, r.qty_pr || 0]),
+    );
+
+    // Akumulasi per mr_item_id dalam PR ini (antisipasi item MR yang sama
+    // muncul lebih dari sekali di payload).
+    const usedInThisPr = new Map<number, number>();
+    for (const item of data.items) {
+      item.over_mr_note = item.over_mr_note?.trim() || null;
+      const used = usedInThisPr.get(item.mr_item_id) || 0;
+      usedInThisPr.set(item.mr_item_id, used + item.qty);
+      const remaining = Math.max(
+        0,
+        (qtyPrById.get(item.mr_item_id) || 0) -
+          (convertedMap.get(item.mr_item_id) || 0) -
+          used,
+      );
+      if (item.qty > remaining) {
+        if (!item.over_mr_note) {
+          return {
+            error: `Qty ${item.part_number} (${item.qty}) melebihi sisa MR (${remaining}). Keterangan wajib diisi.`,
+          };
+        }
+      } else {
+        item.over_mr_note = null;
+      }
     }
   }
 
@@ -947,9 +1001,12 @@ export async function createPurchaseRequest(data: {
   if (prError) return { error: prError.message };
 
   // Insert PR Items
-  const itemsToInsert = data.items.map((item) => ({
+  // over_mr_note hanya dikirim bila terisi, supaya PR biasa tetap bisa dibuat
+  // walau migration kolomnya belum jalan di DB (deploy tidak atomik).
+  const itemsToInsert = data.items.map(({ over_mr_note, ...item }) => ({
     pr_id: pr.id,
     ...item,
+    ...(over_mr_note ? { over_mr_note } : {}),
   }));
 
   const { error: itemsError } = await supabase

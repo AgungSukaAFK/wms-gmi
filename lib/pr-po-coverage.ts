@@ -15,9 +15,12 @@ function poRel(row: any) {
   return Array.isArray(row?.pos) ? row.pos[0] : row?.pos;
 }
 
+// excludePoId: abaikan satu PO (dipakai Edit/Revisi PO supaya qty PO yang
+// sedang diedit tidak ikut mengurangi sisa PR-nya sendiri).
 export async function fetchPrItemPoCoverage(
   supabase: any,
   prItemIds: number[],
+  opts?: { excludePoId?: number },
 ): Promise<Record<number, PrItemPoCoverage>> {
   const map: Record<number, PrItemPoCoverage> = {};
   if (prItemIds.length === 0) return map;
@@ -52,12 +55,14 @@ export async function fetchPrItemPoCoverage(
   for (const row of poItemRows ?? []) {
     const po = poRel(row);
     if (!po || po.po_status === "rejected") continue;
+    if (opts?.excludePoId && row.po_id === opts.excludePoId) continue;
     add(row.pr_item_id, row.qty, row.po_id, po.po_kode, false);
   }
   for (const row of linkRows ?? []) {
     const poItem = Array.isArray(row.po_items) ? row.po_items[0] : row.po_items;
     const po = poRel(poItem);
     if (!poItem || !po || po.po_status === "rejected") continue;
+    if (opts?.excludePoId && poItem.po_id === opts.excludePoId) continue;
     add(row.pr_item_id, row.qty_pr, poItem.po_id, po.po_kode, true);
   }
 
@@ -67,8 +72,9 @@ export async function fetchPrItemPoCoverage(
 export async function fetchPrItemConvertedQty(
   supabase: any,
   prItemIds: number[],
+  opts?: { excludePoId?: number },
 ): Promise<Map<number, number>> {
-  const coverage = await fetchPrItemPoCoverage(supabase, prItemIds);
+  const coverage = await fetchPrItemPoCoverage(supabase, prItemIds, opts);
   return new Map(
     Object.entries(coverage).map(([id, c]) => [Number(id), c.convertedQty]),
   );

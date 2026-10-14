@@ -994,6 +994,11 @@ export function PRDetailSheet({
                             <span className="block whitespace-normal wrap-break-word text-[10px] font-medium text-slate-400 uppercase leading-tight">
                               {item.part_name}
                             </span>
+                            {item.over_mr_note && (
+                              <span className="block whitespace-normal wrap-break-word text-[10px] text-warning mt-1">
+                                Melebihi MR: {item.over_mr_note}
+                              </span>
+                            )}
                           </TableCell>
                           <TableCell className="text-right py-3 align-top">
                             <Select

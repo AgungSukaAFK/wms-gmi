@@ -40,7 +40,7 @@ export default function PRPrintPage() {
 
     const { data: itemsData } = await supabase
       .from("pr_items")
-      .select("id, part_number, part_name, qty, satuan, status")
+      .select("*")
       .eq("pr_id", id)
       .order("created_at");
 
@@ -200,6 +200,11 @@ export default function PRPrintPage() {
                       <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                         {item.part_number}
                       </div>
+                      {item.over_mr_note && (
+                        <div className="text-[10px] italic mt-0.5">
+                          Ket: {item.over_mr_note}
+                        </div>
+                      )}
                     </td>
                     <td className="border border-slate-900 p-2 text-right font-bold">
                       {item.qty}

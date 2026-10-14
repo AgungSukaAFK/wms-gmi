@@ -56,6 +56,7 @@ interface DraftPrItem {
   remaining: number;
   selected: boolean;
   qty: number;
+  over_mr_note: string;
 }
 
 export default function CreatePRPage() {
@@ -217,6 +218,7 @@ export default function CreatePRPage() {
         remaining,
         selected: remaining > 0,
         qty: remaining,
+        over_mr_note: "",
       };
     });
     setDraftItems((prev) => [...prev, ...newDrafts]);
@@ -250,6 +252,14 @@ export default function CreatePRPage() {
     );
   };
 
+  const updateDraftItemNote = (mrItemId: number, note: string) => {
+    setDraftItems((prev) =>
+      prev.map((i) =>
+        i.mr_item_id === mrItemId ? { ...i, over_mr_note: note } : i,
+      ),
+    );
+  };
+
   const handleSave = () => {
     const chosen = draftItems.filter((i) => i.selected && i.qty > 0);
     if (!prKode) return toast.error("Kode PR harus diisi");
@@ -259,6 +269,13 @@ export default function CreatePRPage() {
       return toast.error("Tidak ada item terpilih untuk diproses ke PR");
     if (!templates.find((t) => t.id.toString() === selectedTemplateId))
       return toast.error("Template approval tidak valid");
+    const missingNote = chosen.find(
+      (i) => i.qty > i.remaining && !i.over_mr_note.trim(),
+    );
+    if (missingNote)
+      return toast.error(
+        `Isi keterangan untuk ${missingNote.part_number}: qty melebihi sisa MR`,
+      );
     setIsSignatureOpen(true);
   };
 
@@ -316,6 +333,8 @@ export default function CreatePRPage() {
           qty: item.qty,
           mr_id: item.mr_id,
           mr_item_id: item.mr_item_id,
+          over_mr_note:
+            item.qty > item.remaining ? item.over_mr_note.trim() : null,
         })),
       });
 
@@ -831,9 +850,26 @@ export default function CreatePRPage() {
                               Sisa {item.remaining}
                             </span>
                             {item.selected && item.qty > item.remaining && (
-                              <span className="text-[9px] font-bold text-warning uppercase">
-                                +{item.qty - item.remaining} melebihi MR
-                              </span>
+                              <>
+                                <span className="text-[9px] font-bold text-warning uppercase">
+                                  +{item.qty - item.remaining} melebihi MR
+                                </span>
+                                <Input
+                                  value={item.over_mr_note}
+                                  onChange={(e) =>
+                                    updateDraftItemNote(
+                                      item.mr_item_id,
+                                      e.target.value,
+                                    )
+                                  }
+                                  placeholder="Keterangan (wajib)"
+                                  className={cn(
+                                    "h-7 w-44 text-[11px] mt-1",
+                                    !item.over_mr_note.trim() &&
+                                      "border-destructive",
+                                  )}
+                                />
+                              </>
                             )}
                           </div>
                         </TableCell>

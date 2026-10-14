@@ -59,6 +59,9 @@ function rel(row: any, key: string) {
 export async function fetchSoItemFulfillment(
   supabase: any,
   soItemIds: number[],
+  // Abaikan satu PO (Edit/Revisi PO: qty PO yang sedang diedit jangan
+  // mengurangi sisa SO-nya sendiri).
+  opts?: { excludePoId?: number },
 ): Promise<Map<number, SoItemFulfillment>> {
   const map = new Map<number, SoItemFulfillment>();
   for (const id of soItemIds) {
@@ -88,6 +91,7 @@ export async function fetchSoItemFulfillment(
     const po = rel(row, "pos");
     const entry = map.get(row.so_item_id);
     if (!po || !entry || po.po_status === "rejected") continue;
+    if (opts?.excludePoId && po.id === opts.excludePoId) continue;
     entry.qtyPo += Number(row.qty) || 0;
     entry.qtyPoReceived += Number(row.qty_received) || 0;
     entry.pos.push({
