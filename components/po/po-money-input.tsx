@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { cn } from "@/lib/utils";
 import {
-  getPoCurrencyDecimals,
+  getPoCurrencyMaxDecimals,
   getPoCurrencySymbol,
   type PoCurrency,
 } from "@/lib/po-currency";
@@ -21,7 +21,7 @@ function formatForInput(value: number, decimals: number): string {
 
 /**
  * Input nominal PO dengan prefix simbol mata uang. Format id-ID: titik =
- * ribuan, koma = desimal. IDR cuma angka bulat; USD/AUD boleh 2 desimal.
+ * ribuan, koma = desimal. IDR cuma angka bulat; USD/AUD boleh s/d 10 desimal.
  * Selama fokus, teks mentah disimpan lokal supaya "12," tidak langsung
  * hilang komanya sebelum user selesai ngetik desimal.
  */
@@ -40,7 +40,7 @@ export function PoMoneyInput({
   inputClassName?: string;
   disabled?: boolean;
 }) {
-  const decimals = getPoCurrencyDecimals(currency);
+  const decimals = getPoCurrencyMaxDecimals(currency);
   const [draft, setDraft] = useState<string | null>(null);
 
   const handleChange = (raw: string) => {
