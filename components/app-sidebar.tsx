@@ -53,6 +53,7 @@ import {
   Undo2,
   Calculator,
   FileSignature,
+  ReceiptText,
   PackageSearch,
   ClipboardList,
   SlidersHorizontal,
@@ -142,6 +143,7 @@ const data = {
   ],
   navSoReguler: [
     { title: "DO Reguler", url: "/so-reguler/do", icon: Truck },
+    { title: "SO Reguler", url: "/so-reguler/so", icon: ReceiptText },
   ],
   navConsignment: [
     {

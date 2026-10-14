@@ -71,7 +71,7 @@ export default function DoRegulerPage() {
     let query = supabase
       .from("do_reguler")
       .select(
-        "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name)",
+        "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so:so_reguler!so_id(so_kode)",
         { count: "exact" },
       );
 
@@ -286,6 +286,11 @@ export default function DoRegulerPage() {
                   >
                     <TableCell className="font-bold text-foreground uppercase text-sm">
                       {r.do_kode}
+                      {r.so?.so_kode && (
+                        <code className="block text-[10px] font-medium text-primary normal-case">
+                          SO: {r.so.so_kode}
+                        </code>
+                      )}
                       {r.kode_po && (
                         <code className="block text-[10px] font-medium text-muted-foreground normal-case">
                           PO: {r.kode_po}

@@ -23,7 +23,7 @@ export default function DoRegulerPrintPage() {
       const { data: doData } = await supabase
         .from("do_reguler")
         .select(
-          "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name)",
+          "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so:so_reguler!so_id(so_kode)",
         )
         .eq("id", id)
         .single();
@@ -75,6 +75,7 @@ export default function DoRegulerPrintPage() {
             <p>Status: {header.status || "-"}</p>
             <p>Gudang: {header.dari?.nama_cabang || "-"}</p>
             <p>Customer: {header.customer?.customer_name || "-"}</p>
+            {header.so?.so_kode && <p>No. SO: {header.so.so_kode}</p>}
             <p>Kode PO: {header.kode_po || "-"}</p>
             <p>PIC: {header.pic || "-"}</p>
           </div>

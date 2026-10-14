@@ -147,7 +147,7 @@ export function PODetailSheet({
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, po_currency,
+          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
           cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
@@ -557,6 +557,8 @@ export function PODetailSheet({
                       <FileText className="h-3 w-3" />↑{" "}
                       {po?.po_jenis === "non_pr"
                         ? `NON-PR${po.po_pr_referensi ? ` · ${po.po_pr_referensi}` : ""}`
+                        : po?.po_jenis === "so"
+                        ? `SO ${po.so_reguler?.so_kode || "-"}`
                         : linkedPrs.length > 0
                         ? linkedPrs.map((pr) => (
                             <Badge

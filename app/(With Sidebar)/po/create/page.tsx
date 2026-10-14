@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import React, { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,7 @@ import {
   FileText,
   ShieldCheck,
   Percent,
+  ReceiptText,
 } from "lucide-react";
 import {
   Popover,
@@ -73,6 +74,10 @@ import {
 import { fetchPrItemConvertedQty } from "@/lib/pr-po-coverage";
 import type { PoJenis } from "@/lib/po-non-pr";
 import {
+  computeSoItemRemaining,
+  fetchSoItemFulfillment,
+} from "@/lib/so-reguler";
+import {
   PO_CURRENCY_OPTIONS,
   formatPoMoney,
   getPoCurrencyDecimals,
@@ -86,6 +91,8 @@ type Step = 1 | 2 | 3;
 interface POItem {
   // null semua untuk item PO Non-PR (dipilih bebas dari master barang).
   mr_id: number | null;
+  // Diisi untuk PO dari SO Reguler.
+  so_item_id?: number | null;
   pr_item_id: number | null;
   pr_id: number | null;
   pr_kode: string;
@@ -101,7 +108,23 @@ interface POItem {
 }
 
 export default function CreatePOPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="col-span-12 flex items-center justify-center min-h-[50vh]">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <CreatePOForm />
+    </Suspense>
+  );
+}
+
+function CreatePOForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialSoId = Number(searchParams.get("so_id")) || null;
   const supabase = createClient();
   const [step, setStep] = useState<Step>(1);
   const [loading, setLoading] = useState(false);
@@ -122,6 +145,15 @@ export default function CreatePOPage() {
   const [barangLoading, setBarangLoading] = useState(false);
   const [barangPopoverOpen, setBarangPopoverOpen] = useState(false);
   const isNonPr = poJenis === "non_pr";
+  const isSo = poJenis === "so";
+
+  // PO dari SO Reguler: 1 PO = 1 SO, item = sisa SO yang belum di-PO/DO.
+  const [selectedSo, setSelectedSo] = useState<any | null>(null);
+  const [soResults, setSoResults] = useState<any[]>([]);
+  const [soSearch, setSoSearch] = useState("");
+  const [debouncedSoSearch] = useDebounce(soSearch, 300);
+  const [soPopoverOpen, setSoPopoverOpen] = useState(false);
+  const [soLoading, setSoLoading] = useState(false);
 
   // Step 1 — Select PR
   const [prs, setPrs] = useState<any[]>([]);
@@ -173,7 +205,80 @@ export default function CreatePOPage() {
 
   useEffect(() => {
     fetchUser();
+    if (initialSoId) {
+      setPoJenis("so");
+      handleSelectSo(initialSoId);
+    }
   }, []);
+
+  useEffect(() => {
+    if (!soPopoverOpen) return;
+    const run = async () => {
+      let q = supabase
+        .from("so_reguler")
+        .select(
+          "id, so_kode, so_status, so_tanggal, customer:customers!customer_id(customer_name), cabang:cabang!cabang_id(nama_cabang)",
+        )
+        .in("so_status", ["open", "partial"])
+        .order("created_at", { ascending: false })
+        .limit(30);
+      if (debouncedSoSearch) q = q.ilike("so_kode", `%${debouncedSoSearch}%`);
+      const { data } = await q;
+      setSoResults(data || []);
+    };
+    run();
+  }, [debouncedSoSearch, soPopoverOpen]);
+
+  const handleSelectSo = async (soId: number) => {
+    setSoPopoverOpen(false);
+    setSoSearch("");
+    setSoLoading(true);
+    const { data: so } = await supabase
+      .from("so_reguler")
+      .select(
+        "id, so_kode, so_status, cabang:cabang!cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
+      )
+      .eq("id", soId)
+      .maybeSingle();
+    if (!so || so.so_status === "cancelled" || so.so_status === "completed") {
+      setSoLoading(false);
+      toast.error(so ? `SO ${so.so_kode} tidak bisa di-PO (status ${so.so_status}).` : "SO tidak ditemukan.");
+      return;
+    }
+    const soItems: any[] = [...(so.so_reguler_items || [])].sort(
+      (a, b) => a.id - b.id,
+    );
+    const fulfillment = await fetchSoItemFulfillment(
+      supabase,
+      soItems.map((i) => i.id),
+    );
+    const nextItems: POItem[] = soItems.map((i) => {
+      const { sisaPo } = computeSoItemRemaining(i.qty, fulfillment.get(i.id));
+      return {
+        mr_id: null,
+        pr_item_id: null,
+        pr_id: null,
+        pr_kode: "",
+        so_item_id: i.id,
+        part_id: i.part_id,
+        part_number: i.part_number,
+        part_name: i.part_name,
+        satuan: i.satuan,
+        remaining: sisaPo,
+        selected: sisaPo > 0,
+        qty: sisaPo,
+        harga: 0,
+        vendor_id: selectedVendor?.id ?? null,
+      };
+    });
+    setSoLoading(false);
+    if (!nextItems.some((i) => i.remaining > 0)) {
+      toast.error(`Semua item SO ${so.so_kode} sudah di-PO / dikirim.`);
+      return;
+    }
+    setSelectedSo(so);
+    setPoItems(nextItems);
+  };
 
   useEffect(() => {
     fetchApprovedPRs();
@@ -204,6 +309,7 @@ export default function CreatePOPage() {
     if (next === poJenis) return;
     setPoJenis(next);
     setSelectedPrs([]);
+    setSelectedSo(null);
     setPoItems([]);
   };
 
@@ -420,7 +526,8 @@ export default function CreatePOPage() {
   const handleSubmit = () => {
     const chosen = poItems.filter((i) => i.selected && i.qty > 0);
     if (!poKode.trim()) return toast.error("Kode PO wajib diisi");
-    if (!isNonPr && selectedPrs.length === 0)
+    if (isSo && !selectedSo) return toast.error("Pilih SO terlebih dahulu");
+    if (poJenis === "reguler" && selectedPrs.length === 0)
       return toast.error("Pilih PR terlebih dahulu");
     if (chosen.length === 0)
       return toast.error("Tidak ada item terpilih untuk diproses ke PO");
@@ -502,6 +609,7 @@ export default function CreatePOPage() {
         po_pph_amount: pphType ? pphAmountManual : 0,
         po_jenis: poJenis,
         po_pr_referensi: isNonPr ? prReferensi.trim() || undefined : undefined,
+        so_id: isSo ? selectedSo?.id : undefined,
         approvals: approvalData,
         items: poItems
           .filter((i) => i.selected && i.qty > 0)
@@ -509,6 +617,7 @@ export default function CreatePOPage() {
             mr_id: i.mr_id,
             pr_item_id: i.pr_item_id,
             pr_id: i.pr_id,
+            so_item_id: i.so_item_id ?? null,
             part_id: i.part_id,
             part_number: i.part_number,
             part_name: i.part_name,
@@ -573,7 +682,9 @@ export default function CreatePOPage() {
               {step === 1
                 ? isNonPr
                   ? "Langkah 1 dari 3 — Pilih Barang (PO Non-PR)"
-                  : "Langkah 1 dari 3 — Pilih Purchase Request"
+                  : isSo
+                    ? "Langkah 1 dari 3 — Pilih SO Reguler"
+                    : "Langkah 1 dari 3 — Pilih Purchase Request"
                 : step === 2
                   ? "Langkah 2 dari 3 — Tentukan Vendor & Harga"
                   : "Langkah 3 dari 3 — Isi Informasi PO"}
@@ -586,7 +697,10 @@ export default function CreatePOPage() {
       <Content>
         <div className="flex items-center gap-0">
           {[
-            { n: 1, label: isNonPr ? "Pilih Barang" : "Pilih PR" },
+            {
+              n: 1,
+              label: isNonPr ? "Pilih Barang" : isSo ? "Pilih SO" : "Pilih PR",
+            },
             { n: 2, label: "Vendor & Harga" },
             { n: 3, label: "Informasi PO" },
           ].map((s, i) => (
@@ -629,11 +743,12 @@ export default function CreatePOPage() {
               <Label className="text-[10px] uppercase font-bold text-muted-foreground">
                 Jenis PO
               </Label>
-              <div className="flex h-10 w-full max-w-md overflow-hidden rounded-md border border-input">
+              <div className="flex h-10 w-full max-w-2xl overflow-hidden rounded-md border border-input">
                 {(
                   [
                     { value: "reguler", label: "Dari PR (Reguler)" },
                     { value: "non_pr", label: "Non-PR (PR hanya referensi)" },
+                    { value: "so", label: "Dari SO Reguler" },
                   ] as { value: PoJenis; label: string }[]
                 ).map((opt, i) => (
                   <button
@@ -661,9 +776,110 @@ export default function CreatePOPage() {
                   dihubungkan ke PR WMS dari halaman detail PO.
                 </p>
               )}
+              {isSo && (
+                <p className="text-[10px] text-muted-foreground font-medium leading-relaxed">
+                  Untuk item SO Reguler yang stoknya belum ada. Barang diterima
+                  (Receive Item) di gudang lokasi site SO, lalu dikirim ke
+                  customer lewat DO Reguler dari SO yang sama. Qty dibatasi
+                  sisa SO yang belum di-PO / dikirim.
+                </p>
+              )}
             </div>
 
-            {isNonPr ? (
+            {isSo ? (
+              <>
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                    SO Reguler
+                  </Label>
+                  <Popover open={soPopoverOpen} onOpenChange={setSoPopoverOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="w-full justify-start gap-2 h-10 font-bold text-xs"
+                        disabled={soLoading}
+                      >
+                        {soLoading ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          <ReceiptText className="h-4 w-4 text-muted-foreground" />
+                        )}
+                        {selectedSo ? (
+                          <span className="text-foreground uppercase">
+                            {selectedSo.so_kode} —{" "}
+                            {selectedSo.customer?.customer_name}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">
+                            Cari Kode SO...
+                          </span>
+                        )}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-105 p-0" align="start">
+                      <Command shouldFilter={false}>
+                        <CommandInput
+                          placeholder="Cari kode SO..."
+                          value={soSearch}
+                          onValueChange={setSoSearch}
+                        />
+                        <CommandList>
+                          {soResults.length === 0 ? (
+                            <CommandEmpty>
+                              Tidak ada SO open/partial.
+                            </CommandEmpty>
+                          ) : (
+                            soResults.map((so) => (
+                              <CommandItem
+                                key={so.id}
+                                value={String(so.id)}
+                                onSelect={() => handleSelectSo(so.id)}
+                                className="gap-3 py-3"
+                              >
+                                <ReceiptText className="h-4 w-4 text-muted-foreground shrink-0" />
+                                <div className="flex-1 min-w-0">
+                                  <p className="font-bold text-xs uppercase">
+                                    {so.so_kode}
+                                  </p>
+                                  <p className="text-[9px] text-muted-foreground font-medium uppercase">
+                                    {so.cabang?.nama_cabang} →{" "}
+                                    {so.customer?.customer_name}
+                                  </p>
+                                </div>
+                                <Badge
+                                  variant="outline"
+                                  className="text-[9px] font-bold uppercase shrink-0"
+                                >
+                                  {formatDate(so.so_tanggal)}
+                                </Badge>
+                              </CommandItem>
+                            ))
+                          )}
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                  {selectedSo && (
+                    <p className="text-[10px] text-muted-foreground font-medium uppercase">
+                      Gudang penerima: {selectedSo.cabang?.nama_cabang} ·{" "}
+                      {poItems.filter((i) => i.remaining > 0).length} item bisa
+                      di-PO
+                    </p>
+                  )}
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <Button
+                    className="gap-2 font-bold text-xs uppercase"
+                    disabled={!selectedSo || poItems.length === 0}
+                    onClick={() => setStep(2)}
+                  >
+                    Lanjut ke Vendor & Harga{" "}
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </>
+            ) : isNonPr ? (
               <>
                 <div className="space-y-1.5">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground">
@@ -920,7 +1136,9 @@ export default function CreatePOPage() {
                 <FileText className="h-3.5 w-3.5" />
                 {isNonPr
                   ? `Non-PR${prReferensi.trim() ? ` — ${prReferensi.trim()}` : ""}`
-                  : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
+                  : isSo
+                    ? `SO ${selectedSo?.so_kode || ""}`
+                    : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
               </div>
             </div>
           </Content>
@@ -1028,7 +1246,7 @@ export default function CreatePOPage() {
                     />
                   </TableHead>
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-24">
-                    PR Asal
+                    {isSo ? "SO Asal" : "PR Asal"}
                   </TableHead>
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-28">
                     Part No.
@@ -1068,7 +1286,9 @@ export default function CreatePOPage() {
                           variant="outline"
                           className="text-[9px] font-bold uppercase"
                         >
-                          {item.pr_kode || "Non-PR"}
+                          {item.so_item_id
+                            ? selectedSo?.so_kode || "SO"
+                            : item.pr_kode || "Non-PR"}
                         </Badge>
                       </TableCell>
                       <TableCell className="py-3 align-top">
@@ -1678,11 +1898,15 @@ export default function CreatePOPage() {
             {/* Summary */}
             <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-2">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-                <span>{isNonPr ? "Jenis PO" : "Sumber PR"}</span>
+                <span>
+                  {isNonPr ? "Jenis PO" : isSo ? "Sumber SO" : "Sumber PR"}
+                </span>
                 <span className="text-foreground font-mono text-right">
                   {isNonPr
                     ? `Non-PR${prReferensi.trim() ? ` — Ref: ${prReferensi.trim()}` : ""}`
-                    : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
+                    : isSo
+                      ? `${selectedSo?.so_kode || "-"} — ${selectedSo?.customer?.customer_name || ""}`
+                      : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
                 </span>
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">

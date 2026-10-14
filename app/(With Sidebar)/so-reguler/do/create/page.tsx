@@ -1,8 +1,8 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +42,8 @@ import {
   User,
   ArrowRight,
   FileText,
+  ReceiptText,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -58,6 +60,10 @@ import {
 } from "@/lib/shipment";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { createDoReguler } from "@/services/do-reguler-actions";
+import {
+  computeSoItemRemaining,
+  fetchSoItemFulfillment,
+} from "@/lib/so-reguler";
 
 interface DOItem {
   part_id: number;
@@ -65,11 +71,30 @@ interface DOItem {
   part_name: string;
   satuan: string;
   qty: number;
+  // Diisi kalau DO dibuat dari SO Reguler.
+  so_item_id?: number;
+  sisa_so?: number;
 }
 
 export default function CreateDoRegulerPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="col-span-12 flex items-center justify-center min-h-[50vh]">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      }
+    >
+      <CreateDoRegulerForm />
+    </Suspense>
+  );
+}
+
+function CreateDoRegulerForm() {
   const supabase = createClient();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialSoId = Number(searchParams.get("so_id")) || null;
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -107,6 +132,14 @@ export default function CreateDoRegulerPage() {
   const [noResi, setNoResi] = useState("");
   const [estimasiHari, setEstimasiHari] = useState(14);
 
+  // DO dari SO Reguler (opsional). Customer & item mengikuti SO.
+  const [selectedSo, setSelectedSo] = useState<any | null>(null);
+  const [soResults, setSoResults] = useState<any[]>([]);
+  const [soSearch, setSoSearch] = useState("");
+  const [debouncedSoSearch] = useDebounce(soSearch, 300);
+  const [soPopoverOpen, setSoPopoverOpen] = useState(false);
+  const [soLoading, setSoLoading] = useState(false);
+
   // Item search
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 300);
@@ -137,10 +170,106 @@ export default function CreateDoRegulerPage() {
         .order("nama_cabang");
       setCabangs(cabangData || []);
 
+      if (initialSoId) await handleSelectSo(initialSoId);
+
       setInitialLoading(false);
     };
     init();
   }, []);
+
+  // Search SO yang masih bisa dikirim (open/partial)
+  useEffect(() => {
+    if (!soPopoverOpen) return;
+    const run = async () => {
+      let q = supabase
+        .from("so_reguler")
+        .select(
+          "id, so_kode, so_status, customer:customers!customer_id(customer_name), cabang:cabang!cabang_id(nama_cabang)",
+        )
+        .in("so_status", ["open", "partial"])
+        .order("created_at", { ascending: false })
+        .limit(20);
+      if (debouncedSoSearch) q = q.ilike("so_kode", `%${debouncedSoSearch}%`);
+      const { data } = await q;
+      setSoResults(data || []);
+    };
+    run();
+  }, [debouncedSoSearch, soPopoverOpen]);
+
+  const handleSelectSo = async (soId: number) => {
+    setSoPopoverOpen(false);
+    setSoSearch("");
+    setSoLoading(true);
+    const { data: so } = await supabase
+      .from("so_reguler")
+      .select(
+        "id, so_kode, so_status, cabang_id, customer_id, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
+      )
+      .eq("id", soId)
+      .maybeSingle();
+    if (!so || so.so_status === "cancelled" || so.so_status === "completed") {
+      setSoLoading(false);
+      toast.error(
+        so ? `SO ${so.so_kode} sudah ${so.so_status === "cancelled" ? "dibatalkan" : "selesai"}.` : "SO tidak ditemukan.",
+      );
+      return;
+    }
+    const soItems: any[] = [...(so.so_reguler_items || [])].sort(
+      (a, b) => a.id - b.id,
+    );
+    const fulfillment = await fetchSoItemFulfillment(
+      supabase,
+      soItems.map((i) => i.id),
+    );
+    // Gudang pengirim default = lokasi site SO (boleh diganti).
+    const cabangId = String(so.cabang_id);
+    const { data: stockRows } = await supabase
+      .from("stock")
+      .select("part_id, qty")
+      .eq("cabang_id", so.cabang_id)
+      .in(
+        "part_id",
+        soItems.map((i) => i.part_id),
+      );
+    const stock = new Map<number, number>(
+      (stockRows || []).map((r: any) => [r.part_id, Number(r.qty) || 0]),
+    );
+    const nextItems: DOItem[] = soItems
+      .map((i) => {
+        const { sisaDo } = computeSoItemRemaining(i.qty, fulfillment.get(i.id));
+        return {
+          part_id: i.part_id,
+          part_number: i.part_number,
+          part_name: i.part_name,
+          satuan: i.satuan,
+          so_item_id: i.id,
+          sisa_so: sisaDo,
+          qty: Math.max(0, Math.min(sisaDo, stock.get(i.part_id) ?? 0)),
+        };
+      })
+      .filter((i) => (i.sisa_so ?? 0) > 0);
+    if (nextItems.length === 0) {
+      setSoLoading(false);
+      toast.error(`Semua item SO ${so.so_kode} sudah terkirim.`);
+      return;
+    }
+    setSelectedSo(so);
+    setCustomerId(so.customer_id);
+    const soCustomer: any = Array.isArray(so.customer)
+      ? so.customer[0]
+      : so.customer;
+    setCustomerName(soCustomer?.customer_name || "");
+    setDariCabangId(cabangId);
+    setItems(nextItems);
+    setSoLoading(false);
+  };
+
+  const clearSo = () => {
+    setSelectedSo(null);
+    setItems([]);
+    setCustomerId(null);
+    setCustomerName("");
+  };
 
   // Stok gudang pengirim per item -- reaktif terhadap gudang & daftar item,
   // supaya kalau gudang pengirim diganti setelah item ditambahkan, qty
@@ -171,6 +300,18 @@ export default function CreateDoRegulerPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dariCabangId, itemPartIdsKey]);
+
+  // Mode SO: qty item ikut dibatasi stok gudang pengirim yang baru dipilih.
+  useEffect(() => {
+    if (!selectedSo) return;
+    setItems((prev) =>
+      prev.map((i) => ({
+        ...i,
+        qty: Math.min(i.qty, stockMap.get(i.part_id) ?? 0),
+      })),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stockMap]);
 
   // Search customer (server-side, dibatasi 20 hasil — tidak get-all)
   useEffect(() => {
@@ -243,17 +384,23 @@ export default function CreateDoRegulerPage() {
   };
 
   const updateQty = (partId: number, qty: number) => {
-    const requested = qty || 1;
+    // Mode SO: qty 0 = item dilewati (belum dikirim di DO ini).
+    const minQty = selectedSo ? 0 : 1;
+    const requested = Number.isFinite(qty) ? qty : minQty;
     const avail = stockMap.get(partId) ?? 0;
-    if (requested > avail) {
+    const sisaSo = items.find((i) => i.part_id === partId)?.sisa_so;
+    const cap = sisaSo !== undefined ? Math.min(avail, sisaSo) : avail;
+    if (requested > cap) {
       toast.warning(
-        `Maksimal ${avail} (tidak boleh lebih dari stok gudang pengirim).`,
+        sisaSo !== undefined && sisaSo < avail
+          ? `Maksimal ${cap} (sisa SO yang belum dikirim).`
+          : `Maksimal ${avail} (tidak boleh lebih dari stok gudang pengirim).`,
       );
     }
     setItems((prev) =>
       prev.map((i) =>
         i.part_id === partId
-          ? { ...i, qty: Math.max(1, Math.min(requested, avail)) }
+          ? { ...i, qty: Math.max(minQty, Math.min(requested, cap)) }
           : i,
       ),
     );
@@ -266,7 +413,10 @@ export default function CreateDoRegulerPage() {
     if (!doKode.trim()) return "Kode DO Reguler wajib diisi.";
     if (!dariCabangId) return "Pilih gudang pengirim.";
     if (!customerId) return "Pilih customer tujuan.";
-    if (items.length === 0) return "Tambahkan minimal satu item.";
+    if (items.filter((i) => i.qty > 0).length === 0)
+      return selectedSo
+        ? "Isi qty minimal satu item SO (stok gudang pengirim harus tersedia)."
+        : "Tambahkan minimal satu item.";
     if (isEkspedisi(shipmentType) && !ekspedisiCourier.trim())
       return "Isi nama ekspedisi/kurir.";
     if (isEkspedisi(shipmentType) && !layananKurir.trim())
@@ -290,6 +440,7 @@ export default function CreateDoRegulerPage() {
         do_tanggal: doTanggal,
         dari_cabang_id: Number(dariCabangId),
         customer_id: customerId!,
+        so_id: selectedSo?.id ?? null,
         kode_po: kodePo || undefined,
         shipment_type: shipmentType,
         ekspedisi:
@@ -317,18 +468,23 @@ export default function CreateDoRegulerPage() {
         estimasi_hari: estimasiHari,
         pic: pic || undefined,
         remarks: remarks || undefined,
-        items: items.map((i) => ({
-          part_id: i.part_id,
-          part_number: i.part_number,
-          part_name: i.part_name,
-          satuan: i.satuan,
-          qty: i.qty,
-        })),
+        items: items
+          .filter((i) => i.qty > 0)
+          .map((i) => ({
+            part_id: i.part_id,
+            part_number: i.part_number,
+            part_name: i.part_name,
+            satuan: i.satuan,
+            qty: i.qty,
+            so_item_id: i.so_item_id ?? null,
+          })),
       });
 
       if (result.error) throw new Error(result.error);
       toast.success("DO Reguler berhasil dibuat");
-      router.push("/so-reguler/do");
+      router.push(
+        selectedSo ? `/so-reguler/so/${selectedSo.id}` : "/so-reguler/do",
+      );
     } catch (e: any) {
       toast.error(e.message);
     } finally {
@@ -406,7 +562,11 @@ export default function CreateDoRegulerPage() {
             </Label>
             <Popover open={customerPopoverOpen} onOpenChange={setCustomerPopoverOpen}>
               <PopoverTrigger asChild>
-                <Button variant="outline" className="h-10 w-full justify-start font-bold text-sm">
+                <Button
+                  variant="outline"
+                  className="h-10 w-full justify-start font-bold text-sm"
+                  disabled={!!selectedSo}
+                >
                   {customerName || "Pilih customer..."}
                 </Button>
               </PopoverTrigger>
@@ -452,9 +612,80 @@ export default function CreateDoRegulerPage() {
         </div>
       </Content>
 
-      {/* Kode PO + Items */}
+      {/* SO + Kode PO + Items */}
       <Content>
         <div className="mb-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+          <div className="space-y-1.5">
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+              <ReceiptText className="h-3 w-3" /> Dari SO Reguler
+            </Label>
+            {selectedSo ? (
+              <div className="flex h-10 items-center justify-between rounded-md border border-primary/30 bg-primary/5 px-3">
+                <span className="text-sm font-bold uppercase">
+                  {selectedSo.so_kode}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-7 w-7"
+                  onClick={clearSo}
+                  title="Lepas SO (DO tanpa SO)"
+                >
+                  <X className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ) : (
+              <Popover open={soPopoverOpen} onOpenChange={setSoPopoverOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="h-10 w-full justify-start font-bold text-sm"
+                    disabled={soLoading}
+                  >
+                    {soLoading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <span className="text-muted-foreground">
+                        Pilih SO (opsional)...
+                      </span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-80 p-0 overflow-hidden" align="start">
+                  <div className="p-2 border-b bg-muted/40">
+                    <Input
+                      placeholder="Cari kode SO..."
+                      className="h-9 text-xs"
+                      value={soSearch}
+                      onChange={(e) => setSoSearch(e.target.value)}
+                    />
+                  </div>
+                  <div className="max-h-62.5 overflow-y-auto p-1.5">
+                    {soResults.map((so) => (
+                      <button
+                        key={so.id}
+                        onClick={() => handleSelectSo(so.id)}
+                        className="w-full text-left p-3 rounded-lg flex flex-col mb-1 hover:bg-muted"
+                      >
+                        <span className="font-bold text-xs uppercase">
+                          {so.so_kode}
+                        </span>
+                        <span className="text-[9px] text-muted-foreground uppercase">
+                          {so.cabang?.nama_cabang} →{" "}
+                          {so.customer?.customer_name}
+                        </span>
+                      </button>
+                    ))}
+                    {soResults.length === 0 && (
+                      <div className="p-6 text-center text-xs text-muted-foreground italic">
+                        Tidak ada SO open/partial.
+                      </div>
+                    )}
+                  </div>
+                </PopoverContent>
+              </Popover>
+            )}
+          </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <FileText className="h-3 w-3" /> Kode PO
@@ -473,6 +704,7 @@ export default function CreateDoRegulerPage() {
             <Package className="h-4 w-4 text-muted-foreground" />
             <h3 className="font-semibold text-sm">Daftar Item</h3>
           </div>
+          {!selectedSo && (
           <Popover open={searchOpen} onOpenChange={setSearchOpen}>
             <PopoverTrigger asChild>
               <Button variant="outline" size="sm" className="h-8 gap-2">
@@ -515,7 +747,15 @@ export default function CreateDoRegulerPage() {
               </div>
             </PopoverContent>
           </Popover>
+          )}
         </div>
+        {selectedSo && (
+          <p className="mb-3 text-[10px] font-medium text-muted-foreground">
+            Item mengikuti SO {selectedSo.so_kode}. Qty dibatasi sisa SO &amp;
+            stok gudang pengirim; isi 0 untuk item yang belum dikirim di DO ini
+            (mis. masih menunggu PO).
+          </p>
+        )}
         <div className="border rounded-lg overflow-hidden">
           <Table>
             <TableHeader className="bg-muted/50">
@@ -543,19 +783,25 @@ export default function CreateDoRegulerPage() {
                       <div className="flex flex-col items-center gap-0.5">
                         <Input
                           type="number"
-                          min={1}
-                          max={avail}
+                          min={selectedSo ? 0 : 1}
+                          max={
+                            item.sisa_so !== undefined
+                              ? Math.min(avail, item.sisa_so)
+                              : avail
+                          }
                           value={item.qty}
                           onChange={(e) => updateQty(item.part_id, parseInt(e.target.value))}
                           className="h-8 w-20 text-center text-xs"
                         />
                         <span className="text-[9px] font-medium text-amber-600">
                           Stok gudang {avail}
+                          {item.sisa_so !== undefined &&
+                            ` · Sisa SO ${item.sisa_so}`}
                         </span>
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => removeItem(item.part_id)}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" disabled={!!selectedSo} onClick={() => removeItem(item.part_id)}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </TableCell>

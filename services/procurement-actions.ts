@@ -20,6 +20,11 @@ import {
 } from "@/services/notification-actions";
 import { evaluateMrFreeze, evaluateMrItemFreeze } from "@/services/freeze-actions";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import {
+  computeSoItemRemaining,
+  fetchSoItemFulfillment,
+  refreshSoStatus,
+} from "@/lib/so-reguler";
 
 // ============================================================
 // PRIVATE HELPERS (server-side, uses authenticated server client)
@@ -1181,9 +1186,19 @@ export async function createReceive(data: {
   // divalidasi ulang di server -- jangan percaya payload client.
   const { data: poHeader } = await supabase
     .from("pos")
-    .select("po_jenis")
+    .select("po_jenis, cabang_id")
     .eq("id", data.po_id)
     .maybeSingle();
+  // PO dari SO: barang wajib mendarat di gudang site SO (pos.cabang_id), dari
+  // sana baru dikirim ke customer lewat DO Reguler.
+  if (
+    poHeader?.po_jenis === "so" &&
+    data.items.some(
+      (i) => Number(i.cabang_penerima_id) !== Number(poHeader.cabang_id),
+    )
+  ) {
+    return { error: "Barang PO dari SO wajib diterima di gudang site SO." };
+  }
   if (poHeader?.po_jenis === "non_pr") {
     const nonPrCabang = await resolveNonPrReceiveCabang(supabase);
     if (!nonPrCabang) return { error: NON_PR_RECEIVE_CABANG_MISSING_MESSAGE };
@@ -1794,8 +1809,11 @@ export async function createPurchaseOrder(data: {
   po_pph_amount?: number;
   // "non_pr": item dipilih bebas dari master barang (PN/satuan pembelian beda
   // dengan PR), PR cuma referensi teks di po_pr_referensi.
-  po_jenis?: "reguler" | "non_pr";
+  // "so": item ditarik dari SO Reguler (so_id + so_item_id per item), barang
+  // nanti diterima di gudang site SO lalu dikirim ke customer via DO Reguler.
+  po_jenis?: "reguler" | "non_pr" | "so";
   po_pr_referensi?: string;
+  so_id?: number | null;
   approvals?: any[];
   items: {
     part_id: number;
@@ -1808,6 +1826,7 @@ export async function createPurchaseOrder(data: {
     mr_id: number | null;
     pr_item_id: number | null;
     pr_id: number | null;
+    so_item_id?: number | null;
   }[];
 }) {
   const supabase = await createClient();
@@ -1820,8 +1839,52 @@ export async function createPurchaseOrder(data: {
     return { error: "Tidak ada item untuk diproses ke PO." };
   }
 
-  const poJenis = data.po_jenis === "non_pr" ? "non_pr" : "reguler";
-  if (poJenis === "non_pr") {
+  const poJenis =
+    data.po_jenis === "non_pr" || data.po_jenis === "so"
+      ? data.po_jenis
+      : "reguler";
+  // PO dari SO: lokasi PO = lokasi site SO (gudang penerima RI dikunci ke sini).
+  let soCabangId: number | null = null;
+  if (poJenis === "so") {
+    if (!data.so_id) return { error: "PO dari SO wajib memilih SO Reguler." };
+    if (data.items.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
+      return { error: "PO dari SO tidak boleh berisi item dari PR." };
+    }
+    const { data: so } = await supabase
+      .from("so_reguler")
+      .select("id, so_kode, so_status, cabang_id, so_reguler_items(id, qty)")
+      .eq("id", data.so_id)
+      .maybeSingle();
+    if (!so) return { error: "SO Reguler tidak ditemukan." };
+    if (so.so_status === "cancelled" || so.so_status === "completed") {
+      return { error: `SO ${so.so_kode} sudah ${so.so_status === "cancelled" ? "dibatalkan" : "selesai"}.` };
+    }
+    const soItems = new Map<number, number>(
+      (so.so_reguler_items || []).map((i: any) => [i.id, i.qty]),
+    );
+    if (data.items.some((i) => !i.so_item_id || !soItems.has(i.so_item_id))) {
+      return { error: `Semua item PO harus berasal dari SO ${so.so_kode}.` };
+    }
+    // Guard sisa qty SO yang belum di-PO / di-DO (race-condition guard).
+    const fulfillment = await fetchSoItemFulfillment(
+      supabase,
+      Array.from(soItems.keys()),
+    );
+    for (const item of data.items) {
+      const { sisaPo } = computeSoItemRemaining(
+        soItems.get(item.so_item_id!)!,
+        fulfillment.get(item.so_item_id!),
+      );
+      if (!(item.qty > 0) || item.qty > sisaPo) {
+        return {
+          error: `Qty ${item.part_number} melebihi sisa SO yang belum di-PO/DO (sisa ${sisaPo}).`,
+        };
+      }
+    }
+    soCabangId = Number(so.cabang_id);
+  } else if (data.items.some((i) => i.so_item_id)) {
+    return { error: "Item SO hanya bisa diproses lewat PO jenis SO." };
+  } else if (poJenis === "non_pr") {
     if (data.items.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
       return {
         error:
@@ -1949,10 +2012,16 @@ export async function createPurchaseOrder(data: {
         po_jenis: poJenis,
         po_pr_referensi:
           poJenis === "non_pr" ? data.po_pr_referensi?.trim() || null : null,
+        so_id: poJenis === "so" ? data.so_id : null,
         // Reguler: biarkan NULL -> trigger pos_fill_cabang_from_pr mengisi dari
         // PR (lokasi PO reguler = lokasi PR, seperti sebelumnya). Non-PR:
-        // lokasi pembuat PO.
-        cabang_id: poJenis === "non_pr" ? (data.cabang_id ?? null) : null,
+        // lokasi pembuat PO. SO: lokasi site SO.
+        cabang_id:
+          poJenis === "so"
+            ? soCabangId
+            : poJenis === "non_pr"
+              ? (data.cabang_id ?? null)
+              : null,
         po_pic: data.po_pic,
         po_pic_id: data.po_pic_id,
         po_tanggal: data.po_tanggal,
@@ -1986,6 +2055,7 @@ export async function createPurchaseOrder(data: {
     po_id: po.id,
     mr_id: item.mr_id ?? null,
     pr_item_id: item.pr_item_id ?? null,
+    so_item_id: poJenis === "so" ? (item.so_item_id ?? null) : null,
     part_id: item.part_id,
     part_number: item.part_number,
     part_name: item.part_name,
@@ -2005,6 +2075,7 @@ export async function createPurchaseOrder(data: {
   await Promise.all(
     sourcePrIds.map((prId) => _applyPrConversionStatus(prId, supabase)),
   );
+  if (poJenis === "so") await refreshSoStatus(supabase, data.so_id);
 
   // Notify pending PO approvers
   if (approvals.length > 0) {
@@ -2036,6 +2107,7 @@ export async function createPurchaseOrder(data: {
 
   revalidatePath("/po");
   revalidatePath("/pr");
+  if (poJenis === "so") revalidatePath("/so-reguler/so");
   return { success: true, data: po };
 }
 
@@ -2127,7 +2199,7 @@ export async function rejectPO(poId: number, reason: string) {
 
   const { data: po } = await supabase
     .from("pos")
-    .select("approvals, po_kode, po_pic_id")
+    .select("approvals, po_kode, po_pic_id, so_id")
     .eq("id", poId)
     .single();
   if (!po) return { error: "PO tidak ditemukan" };
@@ -2174,6 +2246,8 @@ export async function rejectPO(poId: number, reason: string) {
       affectedPrIds.map((prId) => _applyPrConversionStatus(prId, supabase)),
     );
   }
+  // Rejection juga membebaskan qty SO untuk di-PO ulang / langsung DO.
+  await refreshSoStatus(supabase, po.so_id);
 
   const rejecter = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "rejected",
@@ -2220,7 +2294,7 @@ export async function deletePO(poId: number) {
   const supabase = await createClient();
   const { data: po } = await supabase
     .from("pos")
-    .select("po_status, po_receive_status")
+    .select("po_status, po_receive_status, so_id")
     .eq("id", poId)
     .single();
   if (!po) return { error: "PO tidak ditemukan" };
@@ -2231,6 +2305,7 @@ export async function deletePO(poId: number) {
   }
   const { error } = await supabase.from("pos").delete().eq("id", poId);
   if (error) return { error: error.message };
+  await refreshSoStatus(supabase, po.so_id);
   revalidatePath("/po");
   return { success: true };
 }

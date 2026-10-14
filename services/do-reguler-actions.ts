@@ -3,6 +3,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { KoliRow } from "@/lib/shipment";
+import {
+  computeSoItemRemaining,
+  fetchSoItemFulfillment,
+  refreshSoStatus,
+} from "@/lib/so-reguler";
 
 const TRACKING_ORDER = [
   "created",
@@ -18,6 +23,8 @@ type DoItemInput = {
   part_name: string;
   satuan: string;
   qty: number;
+  // Diisi kalau DO dibuat dari SO Reguler.
+  so_item_id?: number | null;
 };
 
 async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
@@ -61,6 +68,8 @@ export async function createDoReguler(data: {
   do_tanggal: string;
   dari_cabang_id: number;
   customer_id: number;
+  // Opsional: DO dibuat dari SO Reguler (customer & item mengikuti SO).
+  so_id?: number | null;
   kode_po?: string;
   shipment_type?: string;
   ekspedisi?: string;
@@ -90,6 +99,49 @@ export async function createDoReguler(data: {
   if (!data.customer_id) return { error: "Customer tujuan wajib dipilih." };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar item tidak boleh kosong." };
+
+  // DO dari SO: customer harus sama dengan SO, semua item wajib dari SO
+  // tersebut, dan qty tidak boleh melebihi sisa SO yang belum di-DO.
+  const soId = data.so_id || null;
+  // Per so_item_id: berapa unit DO ini yang memakai barang hasil PO yang sudah
+  // diterima (do_reguler_items.qty_from_po), lihat computeSoItemRemaining.
+  const qtyFromPo = new Map<number, number>();
+  if (soId) {
+    const { data: so } = await supabase
+      .from("so_reguler")
+      .select("id, so_kode, so_status, customer_id, so_reguler_items(id, qty, part_number)")
+      .eq("id", soId)
+      .maybeSingle();
+    if (!so) return { error: "SO Reguler tidak ditemukan." };
+    if (so.so_status === "cancelled")
+      return { error: `SO ${so.so_kode} sudah dibatalkan.` };
+    if (Number(so.customer_id) !== Number(data.customer_id))
+      return { error: `Customer DO harus sama dengan customer SO ${so.so_kode}.` };
+    const soItems = new Map<number, { qty: number; part_number: string }>(
+      (so.so_reguler_items || []).map((i: any) => [i.id, i]),
+    );
+    if (data.items.some((i) => !i.so_item_id || !soItems.has(i.so_item_id)))
+      return { error: `Semua item DO harus berasal dari SO ${so.so_kode}.` };
+    const fulfillment = await fetchSoItemFulfillment(
+      supabase,
+      Array.from(soItems.keys()),
+    );
+    const over: string[] = [];
+    for (const item of data.items) {
+      const soItem = soItems.get(item.so_item_id!)!;
+      const { sisaDo, poPoolAvailable } = computeSoItemRemaining(
+        soItem.qty,
+        fulfillment.get(item.so_item_id!),
+      );
+      if (item.qty > sisaDo)
+        over.push(`${item.part_number}: kirim ${item.qty}, sisa SO ${sisaDo}`);
+      qtyFromPo.set(item.so_item_id!, Math.min(item.qty, poPoolAvailable));
+    }
+    if (over.length > 0)
+      return { error: "Qty melebihi sisa SO:\n" + over.join("\n") };
+  } else if (data.items.some((i) => i.so_item_id)) {
+    return { error: "Item SO hanya bisa dikirim lewat DO yang memilih SO." };
+  }
 
   // Kode unik
   const { data: existing } = await supabase
@@ -131,6 +183,7 @@ export async function createDoReguler(data: {
         do_tanggal: data.do_tanggal,
         dari_cabang_id: data.dari_cabang_id,
         customer_id: data.customer_id,
+        so_id: soId,
         kode_po: data.kode_po?.trim() || null,
         shipment_type: data.shipment_type || "ekspedisi_laut",
         ekspedisi: data.ekspedisi || null,
@@ -164,6 +217,8 @@ export async function createDoReguler(data: {
     part_name: item.part_name,
     satuan: item.satuan,
     qty: item.qty,
+    so_item_id: soId ? item.so_item_id : null,
+    qty_from_po: (soId && qtyFromPo.get(item.so_item_id!)) || 0,
   }));
   const { error: itemsError } = await supabase
     .from("do_reguler_items")
@@ -200,7 +255,10 @@ export async function createDoReguler(data: {
     .update({ stock_released: true })
     .eq("id", doRow.id);
 
+  await refreshSoStatus(supabase, soId);
+
   revalidatePath("/so-reguler/do");
+  revalidatePath("/so-reguler/so");
   revalidatePath("/stock");
   return { success: true, data: doRow };
 }
@@ -399,7 +457,7 @@ export async function cancelDoReguler(doId: number, reason: string) {
 
   const { data: doRow } = await supabase
     .from("do_reguler")
-    .select("id, do_kode, dari_cabang_id, status, stock_released")
+    .select("id, do_kode, dari_cabang_id, status, stock_released, so_id")
     .eq("id", doId)
     .single();
   if (!doRow) return { error: "DO Reguler tidak ditemukan" };
@@ -459,7 +517,10 @@ export async function cancelDoReguler(doId: number, reason: string) {
     .eq("id", doId);
   if (error) return { error: error.message };
 
+  await refreshSoStatus(supabase, doRow.so_id);
+
   revalidatePath("/so-reguler/do");
+  revalidatePath("/so-reguler/so");
   revalidatePath("/stock");
   return { success: true };
 }
@@ -478,7 +539,7 @@ export async function deleteDoReguler(doId: number) {
 
   const { data: doRow } = await supabase
     .from("do_reguler")
-    .select("id, do_kode, dari_cabang_id, status, stock_released")
+    .select("id, do_kode, dari_cabang_id, status, stock_released, so_id")
     .eq("id", doId)
     .single();
   if (!doRow) return { error: "DO Reguler tidak ditemukan" };
@@ -527,7 +588,10 @@ export async function deleteDoReguler(doId: number) {
   const { error } = await supabase.from("do_reguler").delete().eq("id", doId);
   if (error) return { error: error.message };
 
+  await refreshSoStatus(supabase, doRow.so_id);
+
   revalidatePath("/so-reguler/do");
+  revalidatePath("/so-reguler/so");
   revalidatePath("/stock");
   return { success: true };
 }

@@ -141,7 +141,7 @@ export default function PODetailPage({
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, po_currency,
+          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
           cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
@@ -723,7 +723,30 @@ export default function PODetailPage({
         </Content>
       )}
 
-      {po?.po_jenis !== "non_pr" && (
+      {po?.po_jenis === "so" && (
+        <Content title="Referensi SO Reguler">
+          <div className="flex flex-wrap items-center gap-2">
+            {po.so_reguler ? (
+              <Link href={`/so-reguler/so/${po.so_reguler.id}`}>
+                <Badge
+                  variant="outline"
+                  className="text-[10px] font-bold uppercase font-mono hover:bg-muted transition-colors cursor-pointer"
+                >
+                  {po.so_reguler.so_kode}
+                </Badge>
+              </Link>
+            ) : (
+              <span className="text-xs text-muted-foreground italic">-</span>
+            )}
+            <span className="text-[10px] text-muted-foreground font-medium">
+              Diterima di gudang {po.cabang?.nama_cabang || "-"}, lalu dikirim
+              ke customer lewat DO Reguler dari SO ini.
+            </span>
+          </div>
+        </Content>
+      )}
+
+      {po?.po_jenis !== "non_pr" && po?.po_jenis !== "so" && (
       <Content title="Referensi Purchase Request">
         <div className="flex flex-wrap items-center gap-2">
           {linkedPrs.length > 0 ? (

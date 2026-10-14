@@ -157,7 +157,7 @@ export function DoRegulerDetailSheet({
     const { data: doData } = await supabase
       .from("do_reguler")
       .select(
-        "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name, customer_no)",
+        "*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name, customer_no), so:so_reguler!so_id(id, so_kode)",
       )
       .eq("id", doId)
       .single();
@@ -353,6 +353,14 @@ export function DoRegulerDetailSheet({
                 </span>
               </div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[10px] font-medium text-muted-foreground uppercase">
+                {doRow.so?.so_kode && (
+                  <a
+                    href={`/so-reguler/so/${doRow.so.id}`}
+                    className="flex items-center gap-1 text-primary hover:underline"
+                  >
+                    <FileText className="h-3 w-3" /> SO: {doRow.so.so_kode}
+                  </a>
+                )}
                 <span className="flex items-center gap-1">
                   <FileText className="h-3 w-3" /> PO: {doRow.kode_po || "-"}
                 </span>

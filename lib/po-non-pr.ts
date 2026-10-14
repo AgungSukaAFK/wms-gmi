@@ -3,12 +3,18 @@
 // di PR (mis. PR "Pack of 100m Roll", beli "1m Roll" x100, lalu dikonversi
 // lewat Job Costing). Lihat supabase/migrations/20261006100000_po_non_pr_and_jc_link.sql.
 
-export type PoJenis = "reguler" | "non_pr";
+// "so": PO dari SO Reguler (lihat lib/so-reguler.ts).
+export type PoJenis = "reguler" | "non_pr" | "so";
 
 export const PO_JENIS_LABEL: Record<PoJenis, string> = {
   reguler: "Reguler",
   non_pr: "Non-PR",
+  so: "Dari SO",
 };
+
+export function isSoPo(po: { po_jenis?: string | null } | null | undefined) {
+  return po?.po_jenis === "so";
+}
 
 export function isNonPrPo(po: { po_jenis?: string | null } | null | undefined) {
   return po?.po_jenis === "non_pr";

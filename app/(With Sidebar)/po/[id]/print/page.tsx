@@ -54,7 +54,7 @@ export default function POPrintPage() {
         po_payment_term, po_pic, approvals,
         po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
         po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-        po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, po_currency,
+        po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
         cabang(nama_cabang),
         prs(pr_kode, cabang(nama_cabang))
       `,
@@ -219,7 +219,9 @@ export default function POPrintPage() {
                 <span className="font-bold text-slate-900">
                   : {po?.po_jenis === "non_pr"
                     ? po?.po_pr_referensi || "-"
-                    : po?.prs?.pr_kode || "-"}
+                    : po?.po_jenis === "so"
+                      ? `SO ${po?.so_reguler?.so_kode || "-"}`
+                      : po?.prs?.pr_kode || "-"}
                 </span>
               </div>
             </div>

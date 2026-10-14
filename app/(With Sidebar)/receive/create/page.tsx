@@ -57,6 +57,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import {
   isNonPrPo,
+  isSoPo,
   NON_PR_RECEIVE_CABANG_MISSING_MESSAGE,
   resolveNonPrReceiveCabang,
 } from "@/lib/po-non-pr";
@@ -188,6 +189,16 @@ export default function CreateReceivePage() {
         return;
       }
       lockedCabangId = cabang.id;
+    }
+    // PO dari SO Reguler: barang mendarat di gudang lokasi site SO (dikunci),
+    // dari sana dikirim ke customer lewat DO Reguler.
+    if (isSoPo(po)) {
+      if (!po.cabang_id) {
+        toast.error("Lokasi site PO dari SO tidak diketahui.");
+        setItems([]);
+        return;
+      }
+      lockedCabangId = Number(po.cabang_id);
     }
 
     // Fetch PO items that still have qty to receive
@@ -468,7 +479,9 @@ export default function CreateReceivePage() {
                                 <p className="text-[9px] text-muted-foreground font-medium uppercase">
                                   {isNonPrPo(po)
                                     ? "PO Non-PR"
-                                    : po.prs?.cabang?.nama_cabang ||
+                                    : isSoPo(po)
+                                      ? `PO dari SO · ${po.cabang?.nama_cabang || "-"}`
+                                      : po.prs?.cabang?.nama_cabang ||
                                       po.cabang?.nama_cabang}
                                 </p>
                               </div>
@@ -542,6 +555,8 @@ export default function CreateReceivePage() {
                     boleh melebihi sisa yang belum diterima.
                     {isNonPrPo(selectedPo) &&
                       " PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA, konversi ke PN PR lewat Job Costing."}
+                    {isSoPo(selectedPo) &&
+                      ` PO dari SO Reguler: gudang penerima dikunci ke lokasi site SO (${selectedPo?.cabang?.nama_cabang || "-"}), lalu kirim ke customer lewat DO Reguler.`}
                   </p>
                 </div>
 
@@ -647,7 +662,9 @@ export default function CreateReceivePage() {
                               onValueChange={(val) =>
                                 updateCabangPenerima(idx, Number(val))
                               }
-                              disabled={isNonPrPo(selectedPo)}
+                              disabled={
+                                isNonPrPo(selectedPo) || isSoPo(selectedPo)
+                              }
                             >
                               <SelectTrigger className="h-8 text-xs font-bold">
                                 <SelectValue placeholder="Pilih gudang..." />
