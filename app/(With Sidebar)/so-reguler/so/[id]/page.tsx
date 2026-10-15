@@ -42,6 +42,7 @@ import { formatDate } from "@/lib/utils";
 import {
   computeSoItemRemaining,
   fetchSoItemFulfillment,
+  pendingSoDos,
   type SoItemFulfillment,
 } from "@/lib/so-reguler";
 import { SoStatusBadge } from "@/components/so-reguler/so-status-badge";
@@ -160,6 +161,9 @@ export default function SoRegulerDetailPage({
   const isClosed = so.so_status === "cancelled";
   const totalSisaPo = rows.reduce((s, r) => s + r.sisaPo, 0);
   const totalSisaDo = rows.reduce((s, r) => s + r.sisaDo, 0);
+  // DO yang masih dalam pengiriman: SO belum boleh "selesai" sebelum ini
+  // semua diterima customer.
+  const pendingDos = isClosed ? [] : pendingSoDos(rows.map((r) => r.f));
 
   return (
     <>
@@ -220,6 +224,25 @@ export default function SoRegulerDetailPage({
             )}
           </div>
         </div>
+        {pendingDos.length > 0 && (
+          <div className="mt-4 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-xs">
+            <p className="font-bold text-warning flex items-center gap-1.5">
+              <Truck className="h-3.5 w-3.5" />
+              {totalSisaDo === 0
+                ? "Semua qty sudah di-DO, SO selesai setelah DO berikut diterima customer:"
+                : "Masih proses di DO:"}
+            </p>
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {pendingDos.map((d) => (
+                <Link key={d.id} href="/so-reguler/do">
+                  <Badge variant="outline" className="font-bold uppercase">
+                    {d.do_kode} · {d.status === "active" ? "dalam pengiriman" : d.status}
+                  </Badge>
+                </Link>
+              ))}
+            </div>
+          </div>
+        )}
       </Content>
 
       <Content>

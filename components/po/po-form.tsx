@@ -482,8 +482,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     // Note: pr_items has no harga column; user enters harga in step 2
     const { data: items } = await supabase
       .from("pr_items")
-      .select("id, mr_id, part_id, part_number, part_name, satuan, qty")
+      .select("id, mr_id, part_id, part_number, part_name, satuan, qty, status")
       .eq("pr_id", pr.id)
+      .neq("status", "rejected")
       .order("created_at");
 
     const prItemIds = (items || []).map((i: any) => i.id);

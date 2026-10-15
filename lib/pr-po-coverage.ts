@@ -80,16 +80,24 @@ export async function fetchPrItemConvertedQty(
   );
 }
 
+// Item PR yang ditolak approver (keputusan per-item di approvePR) tidak
+// pernah boleh di-PO, jadi tidak ikut dihitung sebagai kebutuhan PR.
+export function isPrItemRejected(item: { status?: string | null }): boolean {
+  return (item?.status || "").toLowerCase() === "rejected";
+}
+
 // pending / partial / complete untuk prs.pr_convert_status.
 export async function computePrConvertStatus(
   supabase: any,
   prId: number,
 ): Promise<"pending" | "partial" | "complete" | null> {
-  const { data: items } = await supabase
+  const { data: allItems } = await supabase
     .from("pr_items")
-    .select("id, qty")
+    .select("id, qty, status")
     .eq("pr_id", prId);
-  if (!items || items.length === 0) return null;
+  if (!allItems || allItems.length === 0) return null;
+  const items = allItems.filter((i: any) => !isPrItemRejected(i));
+  if (items.length === 0) return "complete";
 
   const converted = await fetchPrItemConvertedQty(
     supabase,

@@ -70,6 +70,20 @@ export function ShareStockDetailSheet({
   const [loading, setLoading] = useState(false);
   const [updatingItem, setUpdatingItem] = useState<number | null>(null);
   const [bypassingItem, setBypassingItem] = useState<number | null>(null);
+  // Bypass & ubah status manual khusus moderator/admin (server juga menolak).
+  const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
+  useEffect(() => {
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      const { data } = await supabase
+        .from("user_roles")
+        .select("roles(name)")
+        .eq("user_id", user.id);
+      setIsModeratorOrAdmin(
+        (data || []).some((r: any) => ["moderator", "admin"].includes(r.roles?.name)),
+      );
+    });
+  }, []);
 
   // PR Context for this MR
   const [prRecords, setPrRecords] = useState<any[]>([]);
@@ -460,7 +474,7 @@ export function ShareStockDetailSheet({
                                   item.part_name,
                                 )
                               }
-                              disabled={updatingItem === item.id}
+                              disabled={updatingItem === item.id || !isModeratorOrAdmin}
                             >
                               <SelectTrigger
                                 className={cn(
@@ -534,7 +548,7 @@ export function ShareStockDetailSheet({
                           </div>
 
                           {/* Bypass button */}
-                          {item.ss_status !== "closed" && (
+                          {item.ss_status !== "closed" && isModeratorOrAdmin && (
                             <div className="pt-3 border-t border-slate-200/50">
                               <Button
                                 variant="outline"

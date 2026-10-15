@@ -5,11 +5,17 @@ import { revalidatePath } from "next/cache";
 import { canViewPOPrice, maskPOPriceItems } from "@/lib/po-price-access";
 import { toCompletedIfLegacy } from "@/lib/document-status";
 import { canCreateMR } from "@/lib/mr-permissions";
+import { fetchPrItemConvertedQty, isPrItemRejected } from "@/lib/pr-po-coverage";
 import {
-  computePrConvertStatus,
-  fetchPrItemConvertedQty,
-  fetchPrItemPoCoverage,
-} from "@/lib/pr-po-coverage";
+  applyMrConversionStatus,
+  applyPrCompletionStatus,
+  applyPrConversionStatus,
+  fetchMrItemPrConvertedQty,
+  fetchPoItemPendingReceiveQty,
+  fetchPoSourcePrIds,
+  syncPoReceiveAndCompletion,
+} from "@/lib/procurement-status";
+import { applyReceiveCompletion } from "@/lib/receive-posting";
 import {
   NON_PR_RECEIVE_CABANG_MISSING_MESSAGE,
   resolveNonPrReceiveCabang,
@@ -137,6 +143,16 @@ function _processStep(
     },
   };
   return newApprovals;
+}
+
+/**
+ * Approval berurutan: hanya pemilik step PENDING PERTAMA yang boleh
+ * approve/reject. Tanpa ini approver step belakang bisa "mendahului", atau
+ * menghidupkan lagi dokumen yang sudah ditolak di step sebelumnya.
+ */
+function _isUsersTurn(approvals: any[], userId: string): boolean {
+  const next = (approvals || []).find((a: any) => a.status === "pending");
+  return !!next && (next.userid === userId || next.user_id === userId);
 }
 
 /**
@@ -282,10 +298,14 @@ export async function createMaterialRequest(data: {
 
   if (mrError) return { error: mrError.message };
 
-  // 2. Insert MR Items
+  // 2. Insert MR Items. MR yang langsung approved (template tanpa step
+  // approver) tidak melewati Final Decision alokasi, jadi seluruh qty-nya
+  // otomatis jatah PR -- tanpa ini qty_pr = 0 dan item "gantung".
+  const autoApproved = mr.mr_status === "approved";
   const itemsToInsert = data.items.map((item) => ({
     mr_id: mr.id,
     ...item,
+    ...(autoApproved ? { qty_pr: item.qty_request, qty_sharestock_total: 0 } : {}),
   }));
 
   const { error: itemsError } = await supabase
@@ -379,12 +399,19 @@ export async function approveMR(
     .single();
 
   if (mrError || !mr) return { error: "MR not found" };
+  if (mr.mr_status !== "open") {
+    return { error: `MR sudah berstatus ${mr.mr_status}, tidak bisa di-approve.` };
+  }
 
-  // 2. Identify current pending approval step
-  const approvals = [...mr.approvals];
-  const currentStepIndex = approvals.findIndex((a) => a.status === "pending");
+  // 2. Identify current pending approval step -- wajib milik user ini.
+  const originalApprovals = mr.approvals ?? [];
+  const approvals = originalApprovals.map((a: any) => ({ ...a }));
+  const currentStepIndex = approvals.findIndex((a: any) => a.status === "pending");
 
   if (currentStepIndex === -1) return { error: "No pending approval steps" };
+  if (!_isUsersTurn(approvals, user.id)) {
+    return { error: "Bukan giliran Anda untuk approval MR ini." };
+  }
 
   // Update current step
   approvals[currentStepIndex].status = "approved";
@@ -393,124 +420,176 @@ export async function approveMR(
 
   // 3. Check if this is the last step
   const isLastStep = currentStepIndex === approvals.length - 1;
-  let status = "open";
+  const status = isLastStep ? "approved" : "open";
 
-  if (isLastStep) {
+  // Final Decision (alokasi PR vs Share Stock) per item. Scheduled MR sudah
+  // memutuskan alokasinya saat create (services/scheduled-mr-actions.ts).
+  type ItemPlan = {
+    mr_item_id: number;
+    qty_pr: number;
+    qty_sharestock_total: number;
+    sharestocks: { source_cabang_id: number; qty: number; deadline: string | null }[];
+  };
+  const plans: ItemPlan[] = [];
+
+  if (isLastStep && mr.mr_type !== "scheduled") {
     const mrDueDate = mr?.mr_due_date
       ? String(mr.mr_due_date).slice(0, 10)
       : null;
 
-    status = "approved";
+    // ---------- VALIDATE ALL FIRST (belum ada mutasi DB) ----------
+    // Semua item MR wajib punya keputusan; item tanpa entri alokasi = seluruh
+    // qty_request jadi jatah PR (tidak boleh ada qty yang tidak terdistribusi).
+    const { data: mrItemRows, error: mrItemsError } = await supabase
+      .from("mr_items")
+      .select("id, part_number, qty_request")
+      .eq("mr_id", mrId);
+    if (mrItemsError) return { error: mrItemsError.message };
+    const allocByItem = new Map<number, any>(
+      (allocations || []).map((a: any) => [Number(a.mr_item_id), a]),
+    );
+    for (const id of allocByItem.keys()) {
+      if (!(mrItemRows || []).some((r: any) => r.id === id)) {
+        return { error: `Item MR (id ${id}) bukan bagian dari MR ini.` };
+      }
+    }
 
-    // Scheduled MR: alokasi PR vs Share Stock sudah diputuskan requester saat
-    // create (lihat services/scheduled-mr-actions.ts), jadi tidak ada lagi
-    // alokasi yang perlu diproses di sini walau caller mengirim allocations.
-    if (mr.mr_type !== "scheduled" && allocations && allocations.length > 0) {
-      // ---------- VALIDATE ALL FIRST (belum ada mutasi DB) ----------
-      const allocItemIds = allocations
-        .map((a: any) => a.mr_item_id)
-        .filter((id: any): id is number => typeof id === "number");
-      const { data: mrItemRows, error: mrItemsError } = await supabase
-        .from("mr_items")
-        .select("id, part_number, qty_request")
-        .in("id", allocItemIds);
-      if (mrItemsError) return { error: mrItemsError.message };
-      const mrItemById = new Map((mrItemRows || []).map((r) => [r.id, r]));
-
-      for (const alloc of allocations) {
-        const allocationDeadline = alloc?.deadline
-          ? String(alloc.deadline).slice(0, 10)
-          : null;
-
-        if (
-          mrDueDate &&
-          Number(alloc?.qty_sharestock_total || 0) > 0 &&
-          allocationDeadline &&
-          allocationDeadline > mrDueDate
-        ) {
-          return {
-            error: `Deadline supply item ${alloc?.part_number || "-"} tidak boleh melewati due date MR (${mrDueDate}).`,
-          };
-        }
-
-        // Gudang sumber tidak boleh sama dengan gudang tujuan MR ini.
-        if (alloc.sharestocks && alloc.sharestocks.length > 0) {
-          const sameWarehouse = alloc.sharestocks.find(
-            (ss: any) => ss.source_cabang_id === mr.cabang_id,
-          );
-          if (sameWarehouse) {
-            return {
-              error: `Gudang sumber untuk item ${alloc?.part_number || "-"} tidak boleh sama dengan gudang tujuan MR.`,
-            };
-          }
-        }
-
-        // Total share stock tidak boleh melebihi qty_request OTORITATIF
-        // (fresh dari DB, bukan dari payload client).
-        const mrItemRow = mrItemById.get(alloc.mr_item_id);
-        if (!mrItemRow) {
-          return { error: `Item MR (id ${alloc.mr_item_id}) tidak ditemukan.` };
-        }
-        const requestedShare = Number(alloc.qty_sharestock_total || 0);
-        if (requestedShare > mrItemRow.qty_request) {
-          return {
-            error: `Total share stock item ${mrItemRow.part_number} (${requestedShare}) melebihi qty yang diminta MR (${mrItemRow.qty_request}).`,
-          };
-        }
-        // qty_sharestock_total harus konsisten dengan total baris alokasi
-        // yang benar-benar akan di-insert (cegah drift).
-        const sumSS = (alloc.sharestocks || []).reduce(
-          (s: number, ss: any) => s + Number(ss.qty || 0),
-          0,
-        );
-        if (sumSS !== requestedShare) {
-          return {
-            error: `Data alokasi item ${mrItemRow.part_number} tidak konsisten (total baris ${sumSS} != ${requestedShare}).`,
-          };
-        }
+    for (const mrItemRow of mrItemRows || []) {
+      const alloc = allocByItem.get(mrItemRow.id);
+      const qtyRequest = Number(mrItemRow.qty_request) || 0;
+      if (!alloc) {
+        plans.push({
+          mr_item_id: mrItemRow.id,
+          qty_pr: qtyRequest,
+          qty_sharestock_total: 0,
+          sharestocks: [],
+        });
+        continue;
       }
 
-      // ---------- SEMUA VALID -> APPLY MUTASI ----------
-      for (const alloc of allocations) {
-        // Create sharestock entries
-        if (alloc.sharestocks && alloc.sharestocks.length > 0) {
-          const sharestockEntries = alloc.sharestocks.map((ss: any) => ({
-            mr_item_id: alloc.mr_item_id,
-            source_cabang_id: ss.source_cabang_id,
-            qty: ss.qty,
-            // Deadline per item (diisi approver terakhir). Berlaku untuk semua
-            // sumber alokasi item ini; dipakai mekanisme freeze MR.
-            deadline: ss.deadline ?? alloc.deadline ?? null,
-          }));
-          const { error: insErr } = await supabase
-            .from("mr_sharestock_allocations")
-            .insert(sharestockEntries);
-          if (insErr) return { error: insErr.message };
-        }
+      const allocationDeadline = alloc?.deadline
+        ? String(alloc.deadline).slice(0, 10)
+        : null;
+      const sharestocks = (alloc.sharestocks || []).filter(
+        (ss: any) => Number(ss.qty || 0) > 0,
+      );
+      const requestedShare = sharestocks.reduce(
+        (s: number, ss: any) => s + Number(ss.qty || 0),
+        0,
+      );
 
-        // Update mr_items with qty_pr and qty_sharestock_total
-        const { error: updErr } = await supabase
-          .from("mr_items")
-          .update({
-            qty_pr: alloc.qty_pr,
-            qty_sharestock_total: alloc.qty_sharestock_total,
-          })
-          .eq("id", alloc.mr_item_id);
-        if (updErr) return { error: updErr.message };
+      if (
+        mrDueDate &&
+        requestedShare > 0 &&
+        allocationDeadline &&
+        allocationDeadline > mrDueDate
+      ) {
+        return {
+          error: `Deadline supply item ${mrItemRow.part_number} tidak boleh melewati due date MR (${mrDueDate}).`,
+        };
       }
+      if (sharestocks.some((ss: any) => ss.source_cabang_id === mr.cabang_id)) {
+        return {
+          error: `Gudang sumber untuk item ${mrItemRow.part_number} tidak boleh sama dengan gudang tujuan MR.`,
+        };
+      }
+      if (sharestocks.some((ss: any) => !Number.isInteger(Number(ss.qty)) || Number(ss.qty) < 0)) {
+        return { error: `Qty share stock item ${mrItemRow.part_number} tidak valid.` };
+      }
+      // Total share stock tidak boleh melebihi qty_request OTORITATIF (DB).
+      if (requestedShare > qtyRequest) {
+        return {
+          error: `Total share stock item ${mrItemRow.part_number} (${requestedShare}) melebihi qty yang diminta MR (${qtyRequest}).`,
+        };
+      }
+      if (
+        alloc.qty_sharestock_total !== undefined &&
+        Number(alloc.qty_sharestock_total || 0) !== requestedShare
+      ) {
+        return {
+          error: `Data alokasi item ${mrItemRow.part_number} tidak konsisten (total baris ${requestedShare} != ${alloc.qty_sharestock_total}).`,
+        };
+      }
+      // PR + Share Stock wajib persis = qty_request: qty_pr dihitung server,
+      // tidak dipercaya dari payload.
+      const qtyPr = qtyRequest - requestedShare;
+      if (alloc.qty_pr !== undefined && Number(alloc.qty_pr) !== qtyPr) {
+        return {
+          error: `Alokasi item ${mrItemRow.part_number} tidak konsisten: PR ${alloc.qty_pr} + share stock ${requestedShare} harus = qty request ${qtyRequest}.`,
+        };
+      }
+      plans.push({
+        mr_item_id: mrItemRow.id,
+        qty_pr: qtyPr,
+        qty_sharestock_total: requestedShare,
+        sharestocks: sharestocks.map((ss: any) => ({
+          source_cabang_id: ss.source_cabang_id,
+          qty: Number(ss.qty),
+          deadline: ss.deadline ?? alloc.deadline ?? null,
+        })),
+      });
     }
   }
 
-  // 4. Update MR
-  const { error: updateError } = await supabase
+  // 4. Update MR -- conditional pada status 'open': di step terakhir status
+  // berubah open -> approved, jadi dua klik / dua request bersamaan hanya
+  // satu yang lolos (alokasi share stock tidak ter-insert dobel). Step
+  // non-terakhir idempotent (hasil approve step yang sama selalu sama).
+  const { data: claimed, error: updateError } = await supabase
     .from("mrs")
     .update({
       approvals,
       mr_status: toCompletedIfLegacy(status) as any,
     })
-    .eq("id", mrId);
+    .eq("id", mrId)
+    .eq("mr_status", "open")
+    .select("id");
 
   if (updateError) return { error: updateError.message };
+  if (!claimed || claimed.length === 0) {
+    return { error: "MR ini baru saja diproses oleh request lain. Muat ulang halaman." };
+  }
+
+  // 5. Apply alokasi (hanya step terakhir). Gagal -> kembalikan MR ke kondisi
+  // sebelum approve supaya tidak ada MR approved dengan alokasi setengah jadi.
+  if (plans.length > 0) {
+    const rollback = async (message: string) => {
+      await supabase
+        .from("mr_sharestock_allocations")
+        .delete()
+        .in("mr_item_id", plans.map((p) => p.mr_item_id));
+      await supabase
+        .from("mrs")
+        .update({ approvals: originalApprovals, mr_status: "open" })
+        .eq("id", mrId);
+      return { error: message };
+    };
+    for (const plan of plans) {
+      if (plan.sharestocks.length > 0) {
+        const { error: insErr } = await supabase
+          .from("mr_sharestock_allocations")
+          .insert(
+            plan.sharestocks.map((ss) => ({
+              mr_item_id: plan.mr_item_id,
+              source_cabang_id: ss.source_cabang_id,
+              qty: ss.qty,
+              // Deadline per item (diisi approver terakhir); dipakai freeze MR.
+              deadline: ss.deadline,
+            })),
+          );
+        if (insErr) return rollback(insErr.message);
+      }
+
+      const { error: updErr } = await supabase
+        .from("mr_items")
+        .update({
+          qty_pr: plan.qty_pr,
+          qty_sharestock_total: plan.qty_sharestock_total,
+        })
+        .eq("id", plan.mr_item_id);
+      if (updErr) return rollback(updErr.message);
+    }
+  }
 
   const mrUrl = mr.mr_type === "scheduled" ? `/mr/scheduled/${mrId}` : `/mr/${mrId}`;
 
@@ -549,10 +628,16 @@ export async function rejectMR(mrId: number, reason: string) {
 
   const { data: mr } = await supabase
     .from("mrs")
-    .select("mr_kode, mr_pic_id, approvals, mr_type")
+    .select("mr_kode, mr_pic_id, approvals, mr_type, mr_status")
     .eq("id", mrId)
     .single();
   if (!mr) return { error: "MR not found" };
+  if (mr.mr_status !== "open") {
+    return { error: `MR sudah berstatus ${mr.mr_status}, tidak bisa ditolak.` };
+  }
+  if (!_isUsersTurn(mr.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval MR ini." };
+  }
 
   const approvals = [...mr.approvals];
   const currentStepIndex = approvals.findIndex((a) => a.status === "pending");
@@ -569,7 +654,8 @@ export async function rejectMR(mrId: number, reason: string) {
       rejection_reason: reason,
       approvals,
     })
-    .eq("id", mrId);
+    .eq("id", mrId)
+    .eq("mr_status", "open");
 
   if (error) return { error: error.message };
 
@@ -735,106 +821,6 @@ export async function editMrByApprover(mrId: number, payload: MrEditPayload) {
 }
 
 /**
- * Recompute mrs.mr_convert_status from qty_pr vs qty actually converted into
- * non-rejected PRs. Mirrors the po_receive_status pattern (pending/partial/complete).
- */
-async function _applyMrConversionStatus(mrId: number, supabase: any) {
-  const { data: items } = await supabase
-    .from("mr_items")
-    .select("id, qty_pr")
-    .eq("mr_id", mrId)
-    .gt("qty_pr", 0);
-
-  if (!items || items.length === 0) return;
-
-  const itemIds = items.map((i: any) => i.id);
-  const { data: prItemRows } = await supabase
-    .from("pr_items")
-    .select("mr_item_id, qty, prs!inner(pr_status)")
-    .in("mr_item_id", itemIds);
-
-  const convertedMap = new Map<number, number>();
-  for (const row of prItemRows ?? []) {
-    const prStatus = Array.isArray(row.prs) ? row.prs[0]?.pr_status : row.prs?.pr_status;
-    if (prStatus === "rejected") continue;
-    convertedMap.set(row.mr_item_id, (convertedMap.get(row.mr_item_id) || 0) + row.qty);
-  }
-
-  const totalQtyPr = items.reduce((s: number, i: any) => s + (i.qty_pr || 0), 0);
-  const totalConverted = items.reduce(
-    (s: number, i: any) =>
-      s + Math.min(i.qty_pr || 0, convertedMap.get(i.id) || 0),
-    0,
-  );
-
-  const status =
-    totalConverted <= 0 ? "pending" : totalConverted < totalQtyPr ? "partial" : "complete";
-
-  await supabase.from("mrs").update({ mr_convert_status: status }).eq("id", mrId);
-}
-
-/**
- * Recompute prs.pr_convert_status from pr_items.qty vs qty actually
- * converted into non-rejected POs.
- */
-async function _applyPrConversionStatus(prId: number, supabase: any) {
-  // Ikut menghitung link manual dari PO Non-PR (lihat lib/pr-po-coverage.ts).
-  const status = await computePrConvertStatus(supabase, prId);
-  if (!status) return;
-  await supabase.from("prs").update({ pr_convert_status: status }).eq("id", prId);
-}
-
-/**
- * PR baru boleh "completed" kalau seluruh qty item-nya sudah ter-PO DAN semua
- * PO (non-rejected) yang menutupinya sudah diterima penuh. Satu PO selesai
- * belum berarti PR selesai -- PR bisa dipecah ke banyak PO, dan PR yang
- * sudah completed hilang dari picker create PO (filter pr_status=approved).
- */
-async function _applyPrCompletionStatus(prId: number, supabase: any) {
-  const { data: pr } = await supabase
-    .from("prs")
-    .select("pr_status")
-    .eq("id", prId)
-    .maybeSingle();
-  if (!pr || pr.pr_status !== "approved") return;
-
-  const { data: items } = await supabase
-    .from("pr_items")
-    .select("id, qty")
-    .eq("pr_id", prId);
-  if (!items || items.length === 0) return;
-
-  const coverage = await fetchPrItemPoCoverage(
-    supabase,
-    items.map((i: any) => i.id),
-  );
-  const allConverted = items.every(
-    (i: any) => (coverage[i.id]?.convertedQty || 0) >= (i.qty || 0),
-  );
-  if (!allConverted) return;
-
-  const poIds = Array.from(
-    new Set(Object.values(coverage).flatMap((c) => c.pos.map((p) => p.id))),
-  );
-  if (poIds.length === 0) return;
-
-  const { data: pos } = await supabase
-    .from("pos")
-    .select("po_receive_status")
-    .in("id", poIds);
-  const allReceived =
-    (pos ?? []).length === poIds.length &&
-    (pos ?? []).every((p: any) => p.po_receive_status === "complete");
-  if (!allReceived) return;
-
-  await supabase
-    .from("prs")
-    .update({ pr_status: "completed" as any })
-    .eq("id", prId)
-    .eq("pr_status", "approved");
-}
-
-/**
  * PURCHASE REQUEST (PR) SERVICES
  */
 export async function createPurchaseRequest(data: {
@@ -863,6 +849,38 @@ export async function createPurchaseRequest(data: {
   }
   if (!data.items || data.items.length === 0) {
     return { error: "Tidak ada item untuk diproses ke PR." };
+  }
+
+  for (const item of data.items) {
+    if (!item.qty || item.qty <= 0 || !Number.isInteger(Number(item.qty))) {
+      return { error: `Qty ${item.part_number} harus bilangan bulat lebih dari 0.` };
+    }
+    if (!item.mr_item_id) {
+      return { error: `Item ${item.part_number} wajib berasal dari item MR.` };
+    }
+  }
+
+  // Data item (MR, part) diambil dari DB -- payload client tidak dipercaya.
+  {
+    const ids = Array.from(new Set(data.items.map((i) => i.mr_item_id)));
+    const { data: rows } = await supabase
+      .from("mr_items")
+      .select("id, mr_id, part_id, part_number, part_name, satuan, mrs!inner(mr_status)")
+      .in("id", ids);
+    const byId = new Map((rows || []).map((r: any) => [r.id, r]));
+    for (const item of data.items) {
+      const mi: any = byId.get(item.mr_item_id);
+      if (!mi) return { error: `Item MR ${item.part_number} tidak ditemukan.` };
+      const mrStatus = Array.isArray(mi.mrs) ? mi.mrs[0]?.mr_status : mi.mrs?.mr_status;
+      if (mrStatus !== "approved") {
+        return { error: `MR item ${mi.part_number} tidak berstatus approved (status: ${mrStatus}).` };
+      }
+      item.mr_id = mi.mr_id;
+      item.part_id = mi.part_id;
+      item.part_number = mi.part_number;
+      item.part_name = mi.part_name;
+      item.satuan = mi.satuan;
+    }
   }
 
   const sourceMrIds = Array.from(
@@ -913,13 +931,7 @@ export async function createPurchaseRequest(data: {
   // pembulatan MOQ vendor / safety stock) -- tidak di-cap, tapi WAJIB disertai
   // keterangan (pr_items.over_mr_note). Distribusinya tetap terlihat lewat
   // mr_convert_status ("complete" begitu qty_pr asli sudah terkonversi,
-  // lihat _applyMrConversionStatus di bawah).
-  for (const item of data.items) {
-    if (!item.qty || item.qty <= 0) {
-      return { error: `Qty ${item.part_number} harus lebih dari 0.` };
-    }
-  }
-
+  // lihat applyMrConversionStatus).
   const mrItemIds = Array.from(
     new Set(data.items.map((i) => i.mr_item_id).filter(Boolean)),
   );
@@ -928,22 +940,8 @@ export async function createPurchaseRequest(data: {
       .from("mr_items")
       .select("id, qty_pr")
       .in("id", mrItemIds);
-    const { data: existingPrItems } = await supabase
-      .from("pr_items")
-      .select("mr_item_id, qty, prs!inner(pr_status)")
-      .in("mr_item_id", mrItemIds);
-
-    const convertedMap = new Map<number, number>();
-    for (const row of existingPrItems || []) {
-      const prStatus = Array.isArray((row as any).prs)
-        ? (row as any).prs[0]?.pr_status
-        : (row as any).prs?.pr_status;
-      if (prStatus === "rejected") continue;
-      convertedMap.set(
-        row.mr_item_id,
-        (convertedMap.get(row.mr_item_id) || 0) + row.qty,
-      );
-    }
+    // Item PR yang ditolak per-item tidak dihitung "sudah di-PR".
+    const convertedMap = await fetchMrItemPrConvertedQty(supabase, mrItemIds);
     const qtyPrById = new Map(
       (mrItemRows || []).map((r: any) => [r.id, r.qty_pr || 0]),
     );
@@ -1016,7 +1014,7 @@ export async function createPurchaseRequest(data: {
 
   // Recompute conversion progress for every source MR involved.
   await Promise.all(
-    sourceMrIds.map((mrId) => _applyMrConversionStatus(mrId, supabase)),
+    sourceMrIds.map((mrId) => applyMrConversionStatus(supabase, mrId)),
   );
 
   // Notify pending PR approvers
@@ -1051,32 +1049,117 @@ export async function createPurchaseRequest(data: {
   return { success: true, data: pr };
 }
 
+async function _isModeratorOrAdmin(supabase: any): Promise<string | null> {
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return null;
+  const { data } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  const ok = (data || []).some((r: any) =>
+    ["moderator", "admin"].includes(r?.roles?.name),
+  );
+  return ok ? user.id : null;
+}
+
 /**
- * UPDATE PR STATUS
+ * UPDATE PR STATUS (override manual moderator/admin).
+ * Dijaga supaya qty tidak bocor: PR yang sudah ter-PO tidak boleh keluar dari
+ * approved, PR rejected yang dihidupkan lagi harus muat di sisa MR, dan
+ * "completed" hanya mengikuti kondisi nyata (semua ter-PO & diterima).
  */
 export async function updatePRStatus(prId: number, status: string) {
   const supabase = await createClient();
+  if (!(await _isModeratorOrAdmin(supabase))) {
+    return { error: "Hanya moderator/admin yang dapat mengubah status PR secara manual." };
+  }
   const normalizedStatus = toCompletedIfLegacy(status);
+  if (!["open", "approved", "rejected", "completed"].includes(normalizedStatus)) {
+    return { error: "Status tidak valid." };
+  }
+
+  const { data: pr } = await supabase
+    .from("prs")
+    .select("pr_status")
+    .eq("id", prId)
+    .maybeSingle();
+  if (!pr) return { error: "PR tidak ditemukan" };
+
+  const { data: items } = await supabase
+    .from("pr_items")
+    .select("id, mr_id, mr_item_id, qty, status, part_number")
+    .eq("pr_id", prId);
+  const itemIds = (items || []).map((i: any) => i.id);
+  const converted = await fetchPrItemConvertedQty(supabase, itemIds);
+  const hasPo = Array.from(converted.values()).some((q) => q > 0);
+
+  if (["open", "rejected"].includes(normalizedStatus) && hasPo) {
+    return { error: "PR ini sudah dikonversi ke PO. Urus PO-nya dulu sebelum mengubah status keluar dari approved." };
+  }
+  if (pr.pr_status === "rejected" && normalizedStatus !== "rejected") {
+    // Qty PR rejected sudah dibebaskan ke MR -- wajib muat di sisa qty_pr.
+    const active = (items || []).filter((i: any) => !isPrItemRejected(i) && i.mr_item_id);
+    const mrItemIds = Array.from(new Set(active.map((i: any) => i.mr_item_id)));
+    if (mrItemIds.length > 0) {
+      const { data: mrRows } = await supabase.from("mr_items").select("id, qty_pr").in("id", mrItemIds);
+      const qtyPr = new Map((mrRows || []).map((r: any) => [r.id, r.qty_pr || 0]));
+      const elsewhere = await fetchMrItemPrConvertedQty(supabase, mrItemIds, { excludePrId: prId });
+      const used = new Map<number, number>();
+      for (const i of active) used.set(i.mr_item_id, (used.get(i.mr_item_id) || 0) + Number(i.qty));
+      for (const [mrItemId, q] of used) {
+        const sisa = Math.max(0, (qtyPr.get(mrItemId) || 0) - (elsewhere.get(mrItemId) || 0));
+        if (q > sisa) {
+          return { error: `PR tidak bisa dihidupkan lagi: qty melebihi sisa MR yang belum di-PR (${sisa}).` };
+        }
+      }
+    }
+  }
+
   const { error } = await supabase
     .from("prs")
     .update({
-      pr_status: normalizedStatus as any,
+      // "completed" manual dievaluasi ulang di bawah (tidak bisa dipaksa).
+      pr_status: (normalizedStatus === "completed" ? "approved" : normalizedStatus) as any,
       updated_at: new Date().toISOString(),
     })
     .eq("id", prId);
 
   if (error) return { error: error.message };
 
+  await applyPrConversionStatus(supabase, prId);
+  await applyPrCompletionStatus(supabase, prId);
+  const mrIds = Array.from(new Set((items || []).map((i: any) => i.mr_id).filter(Boolean))) as number[];
+  for (const mrId of mrIds) await applyMrConversionStatus(supabase, mrId);
+
   revalidatePath("/pr");
   return { success: true };
 }
 
 /**
- * UPDATE PR ITEM STATUS
+ * UPDATE PR ITEM STATUS (override manual moderator/admin).
  * Stock is NOT adjusted here. Stock additions happen via Receive Item (RI) from a PO.
+ * Item yang sudah ter-PO tidak boleh ditolak (qty PO-nya jadi yatim).
  */
 export async function updatePRItemStatus(itemId: number, status: string) {
   const supabase = await createClient();
+  if (!(await _isModeratorOrAdmin(supabase))) {
+    return { error: "Hanya moderator/admin yang dapat mengubah status item PR secara manual." };
+  }
+
+  const { data: item } = await supabase
+    .from("pr_items")
+    .select("id, pr_id, mr_id")
+    .eq("id", itemId)
+    .maybeSingle();
+  if (!item) return { error: "Item PR tidak ditemukan." };
+  if (status === "rejected") {
+    const converted = await fetchPrItemConvertedQty(supabase, [itemId]);
+    if ((converted.get(itemId) || 0) > 0) {
+      return { error: "Item ini sudah di-PO, tidak bisa ditolak. Urus PO-nya dulu." };
+    }
+  }
 
   const { error } = await supabase
     .from("pr_items")
@@ -1088,16 +1171,24 @@ export async function updatePRItemStatus(itemId: number, status: string) {
 
   if (error) return { error: error.message };
 
+  // Item ditolak/diaktifkan lagi mengubah kebutuhan PR & jatah MR.
+  await applyPrConversionStatus(supabase, item.pr_id);
+  await applyPrCompletionStatus(supabase, item.pr_id);
+  if (item.mr_id) await applyMrConversionStatus(supabase, item.mr_id);
+
   revalidatePath("/pr");
   return { success: true };
 }
 
 /**
- * UPDATE MR ITEM SHARE STOCK STATUS
+ * UPDATE MR ITEM SHARE STOCK STATUS (override manual moderator/admin).
  * Stock movement for Share Stock is handled by Delivery transactions.
  */
 export async function updateMRItemSSStatus(itemId: number, status: string) {
   const supabase = await createClient();
+  if (!(await _isModeratorOrAdmin(supabase))) {
+    return { error: "Hanya moderator/admin yang dapat mengubah status share stock secara manual." };
+  }
 
   const { error } = await supabase
     .from("mr_items")
@@ -1111,150 +1202,6 @@ export async function updateMRItemSSStatus(itemId: number, status: string) {
 
   revalidatePath("/share-stock");
   revalidatePath("/mr");
-  return { success: true };
-}
-
-/**
- * PRIVATE HELPER: Adjust Stock at an explicit cabang (gudang penerima RI,
- * BUKAN otomatis cabang MR lagi -- lihat catatan di applyReceiveCompletion).
- */
-async function adjustItemStock(
-  cabangId: number,
-  partId: number,
-  partNumber: string | null,
-  quantity: number,
-  mode: "add" | "subtract",
-  type: "PR" | "SS" | "RI",
-  fromStatus: string,
-  toStatus: string,
-  referenceKode: string,
-) {
-  const supabase = await createClient();
-
-  const branchId = cabangId;
-  const { data: cabangRow } = await supabase
-    .from("cabang")
-    .select("nama_cabang")
-    .eq("id", branchId)
-    .maybeSingle();
-  const mrLocationName = cabangRow?.nama_cabang || "Unknown Site";
-
-  // Resolve canonical part_id using part_number when available.
-  let canonicalPartId = partId;
-  if (partNumber) {
-    const { data: partByNumber } = await supabase
-      .from("barang")
-      .select("id")
-      .eq("part_number", partNumber)
-      .maybeSingle();
-
-    if (partByNumber?.id) {
-      canonicalPartId = partByNumber.id;
-    }
-  }
-  const qtyChange = mode === "add" ? quantity : -quantity;
-
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
-  const { data: partInfo } = await supabase
-    .from("barang")
-    .select("part_number, part_name, part_satuan")
-    .eq("id", canonicalPartId)
-    .maybeSingle();
-
-  let actorLabel = "System";
-  if (user?.id) {
-    const { data: profile } = await supabase
-      .from("profiles")
-      .select("nama")
-      .eq("id", user.id)
-      .maybeSingle();
-    actorLabel = profile?.nama || user.email || user.id;
-  }
-
-  // B. Fetch Current Stock for Upsert/Update logic
-  const { data: existingStock } = await supabase
-    .from("stock")
-    .select("qty")
-    .eq("part_id", canonicalPartId)
-    .eq("cabang_id", branchId)
-    .maybeSingle();
-
-  const qtyBefore = existingStock?.qty || 0;
-  const qtyAfter = qtyBefore + qtyChange;
-
-  if (mode === "subtract" && !existingStock) {
-    return {
-      error:
-        "Riwayat gagal dicatat karena stok awal tidak ditemukan untuk pengurangan.",
-    };
-  }
-
-  if (mode === "subtract" && qtyAfter < 0) {
-    return {
-      error:
-        "Riwayat gagal dicatat karena pengurangan membuat stok menjadi negatif.",
-    };
-  }
-
-  if (existingStock) {
-    // Update existing
-    const { error: updateStockError } = await supabase
-      .from("stock")
-      .update({
-        qty: qtyAfter,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("part_id", canonicalPartId)
-      .eq("cabang_id", branchId);
-
-    if (updateStockError) {
-      return { error: `Gagal update stok: ${updateStockError.message}` };
-    }
-  } else if (mode === "add") {
-    // Initialize new stock record only if adding
-    const { error: insertStockError } = await supabase.from("stock").insert({
-      part_id: canonicalPartId,
-      cabang_id: branchId,
-      qty: quantity,
-    });
-
-    if (insertStockError) {
-      return { error: `Gagal membuat stok baru: ${insertStockError.message}` };
-    }
-  }
-
-  // C. Log Movement
-  const movementNote = [
-    `${mode === "add" ? "STOK DITAMBAH" : "STOK DIKURANGI"} via ${type}`,
-    `Status: ${fromStatus} -> ${toStatus}`,
-    `Part: ${partInfo?.part_number || partNumber || "N/A"} - ${partInfo?.part_name || "Unknown Part"}`,
-    `Gudang Penerima: ${mrLocationName}`,
-    `Qty: ${qtyBefore} ${partInfo?.part_satuan || ""} -> ${qtyAfter} ${partInfo?.part_satuan || ""}`,
-    `Ref: ${referenceKode}`,
-    `By: ${actorLabel}`,
-  ].join(" | ");
-
-  const { error: movementError } = await supabase
-    .from("stock_movements")
-    .insert({
-      part_id: canonicalPartId,
-      cabang_id: branchId,
-      qty_change: qtyChange,
-      type: type,
-      reference_id: referenceKode,
-      created_by: user?.id,
-      notes: movementNote,
-    });
-
-  if (movementError) {
-    return {
-      error: `Stok terupdate, tapi gagal simpan riwayat: ${movementError.message}`,
-    };
-  }
-
   return { success: true };
 }
 
@@ -1294,9 +1241,61 @@ export async function createReceive(data: {
   // divalidasi ulang di server -- jangan percaya payload client.
   const { data: poHeader } = await supabase
     .from("pos")
-    .select("po_jenis, cabang_id")
+    .select("po_jenis, cabang_id, po_status")
     .eq("id", data.po_id)
     .maybeSingle();
+  if (!poHeader) return { error: "PO tidak ditemukan." };
+  if (poHeader.po_status !== "approved") {
+    return { error: `PO berstatus ${poHeader.po_status}, tidak bisa diterima.` };
+  }
+  if (!data.items?.length) return { error: "Tidak ada item yang diterima." };
+
+  // Validasi qty per item PO di server: data item diambil dari po_items (bukan
+  // payload), dan qty tidak boleh melebihi sisa = qty PO - sudah diterima -
+  // qty di RI lain yang masih menunggu approval (supaya dua RI pending tidak
+  // sama-sama menerima qty yang sama).
+  {
+    if (data.items.some((i) => !i.po_item_id)) {
+      return { error: "Setiap item RI wajib merujuk item PO." };
+    }
+    if (data.items.some((i) => !(i.qty > 0) || !Number.isInteger(Number(i.qty)))) {
+      return { error: "Qty terima harus bilangan bulat lebih dari 0." };
+    }
+    if (data.items.some((i) => !i.cabang_penerima_id)) {
+      return { error: "Gudang penerima wajib dipilih untuk setiap item." };
+    }
+    const poItemIds = Array.from(new Set(data.items.map((i) => Number(i.po_item_id))));
+    const { data: poItemRows } = await supabase
+      .from("po_items")
+      .select("id, po_id, part_id, part_number, part_name, satuan, qty, qty_received, mr_id")
+      .in("id", poItemIds);
+    const poItemById = new Map((poItemRows || []).map((r: any) => [r.id, r]));
+    const pending = await fetchPoItemPendingReceiveQty(supabase, poItemIds);
+    const requested = new Map<number, number>();
+    for (const item of data.items) {
+      const pi: any = poItemById.get(Number(item.po_item_id));
+      if (!pi || pi.po_id !== data.po_id) {
+        return { error: `Item ${item.part_number} bukan bagian dari PO ini.` };
+      }
+      item.po_id = pi.po_id;
+      item.part_id = pi.part_id;
+      item.part_number = pi.part_number;
+      item.part_name = pi.part_name;
+      item.satuan = pi.satuan;
+      item.mr_id = pi.mr_id ?? null;
+      requested.set(pi.id, (requested.get(pi.id) || 0) + Number(item.qty));
+    }
+    for (const [poItemId, qty] of requested) {
+      const pi: any = poItemById.get(poItemId);
+      const sisa =
+        (Number(pi.qty) || 0) - (Number(pi.qty_received) || 0) - (pending.get(poItemId) || 0);
+      if (qty > sisa) {
+        return {
+          error: `Qty terima ${pi.part_number} (${qty}) melebihi sisa PO yang belum diterima (${Math.max(0, sisa)}, sudah termasuk RI lain yang masih menunggu approval).`,
+        };
+      }
+    }
+  }
   // PO dari SO: barang wajib mendarat di gudang site SO (pos.cabang_id), dari
   // sana baru dikirim ke customer lewat DO Reguler.
   if (
@@ -1402,130 +1401,6 @@ export async function createReceive(data: {
   return { success: true };
 }
 
-export async function applyReceiveCompletion(receiveId: number) {
-  const supabase = await createClient();
-  const { data: ri } = await supabase
-    .from("receives")
-    .select("id, po_id, ri_kode")
-    .eq("id", receiveId)
-    .single();
-
-  if (!ri) {
-    return { error: "Receive tidak ditemukan" };
-  }
-
-  const { data: receiveItems } = await supabase
-    .from("receive_items")
-    .select("po_id, mr_id, part_id, part_number, qty, po_item_id, cabang_penerima_id")
-    .eq("ri_id", receiveId);
-
-  if (!receiveItems || receiveItems.length === 0) {
-    return { error: "Receive items tidak ditemukan" };
-  }
-
-  // Per-item: update po_items.qty_received + stock di gudang penerima.
-  // Distribusi ke MR (mr_items.qty_received / mrs.mr_status) TIDAK lagi
-  // terjadi di sini -- itu baru terjadi saat Item Transfer yang dibuat dari
-  // RI ini di-finalize (lihat finalizeItemTransfer di item-transfer-actions.ts).
-  for (const item of receiveItems) {
-    if (item.po_item_id) {
-      const { data: poItem } = await supabase
-        .from("po_items")
-        .select("qty_received")
-        .eq("id", item.po_item_id)
-        .single();
-      if (poItem) {
-        await supabase
-          .from("po_items")
-          .update({ qty_received: poItem.qty_received + item.qty })
-          .eq("id", item.po_item_id);
-      }
-    }
-
-    if (!item.cabang_penerima_id) {
-      // RI lama (pra-revisi) tanpa gudang penerima -- lewati posting stok di
-      // sini, sudah terlanjur diposting lewat alur lama saat pertama kali
-      // completed.
-      continue;
-    }
-
-    await adjustItemStock(
-      item.cabang_penerima_id,
-      item.part_id,
-      item.part_number,
-      item.qty,
-      "add",
-      "RI",
-      "pending",
-      "received",
-      ri.ri_kode,
-    );
-  }
-
-  const { data: allPoItems } = await supabase
-    .from("po_items")
-    .select("qty, qty_received")
-    .eq("po_id", ri.po_id);
-
-  if (allPoItems) {
-    const allReceived = allPoItems.every((i: any) => i.qty_received >= i.qty);
-    const someReceived = allPoItems.some((i: any) => i.qty_received > 0);
-    const poReceiveStatus = allReceived
-      ? "complete"
-      : someReceived
-        ? "partial"
-        : "pending";
-
-    const poUpdatePayload: Record<string, string> = {
-      po_receive_status: poReceiveStatus,
-    };
-
-    if (poReceiveStatus === "complete") {
-      poUpdatePayload.po_status = "completed";
-    }
-
-    await supabase.from("pos").update(poUpdatePayload).eq("id", ri.po_id);
-
-    if (poReceiveStatus === "complete") {
-      // Satu PO bisa berisi item dari beberapa PR (pos.pr_id cuma PR
-      // pertama), plus link manual PO Non-PR -- cek semua PR sumbernya.
-      const [{ data: poHeader }, { data: poItemRows }] = await Promise.all([
-        supabase.from("pos").select("pr_id").eq("id", ri.po_id).maybeSingle(),
-        supabase.from("po_items").select("id, pr_item_id").eq("po_id", ri.po_id),
-      ]);
-      const poItemIds = (poItemRows ?? []).map((r: any) => r.id);
-      const { data: linkRows } =
-        poItemIds.length > 0
-          ? await supabase
-              .from("po_item_pr_links")
-              .select("pr_item_id")
-              .in("po_item_id", poItemIds)
-          : { data: [] };
-      const prItemIds = Array.from(
-        new Set(
-          [...(poItemRows ?? []), ...(linkRows ?? [])]
-            .map((r: any) => r.pr_item_id)
-            .filter(Boolean),
-        ),
-      );
-      const { data: prItemRows } =
-        prItemIds.length > 0
-          ? await supabase.from("pr_items").select("pr_id").in("id", prItemIds)
-          : { data: [] };
-      const prIds = new Set<number>(
-        (prItemRows ?? []).map((r: any) => r.pr_id).filter(Boolean),
-      );
-      if (poHeader?.pr_id) prIds.add(poHeader.pr_id);
-
-      for (const prId of prIds) {
-        await _applyPrCompletionStatus(prId, supabase);
-      }
-    }
-  }
-
-  return { success: true };
-}
-
 export async function approveReceive(riId: number, signatureUrl: string) {
   const supabase = await createClient();
   const {
@@ -1539,7 +1414,7 @@ export async function approveReceive(riId: number, signatureUrl: string) {
 
   const { data: receive } = await supabase
     .from("receives")
-    .select("id, approvals, ri_status, ri_kode, ri_pic_id")
+    .select("id, approvals, ri_status, ri_kode, ri_pic_id, completed_at")
     .eq("id", riId)
     .single();
   if (!receive) return { error: "Receive tidak ditemukan" };
@@ -1549,6 +1424,9 @@ export async function approveReceive(riId: number, signatureUrl: string) {
   }
   if (receive.ri_status === "rejected") {
     return { error: "Receive sudah rejected dan tidak bisa di-approve." };
+  }
+  if (!_isUsersTurn(receive.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval Receive ini." };
   }
 
   const { data: userProfile } = await supabase
@@ -1577,14 +1455,9 @@ export async function approveReceive(riId: number, signatureUrl: string) {
 
   const isAllDone = updatedApprovals.every((a: any) => a.status !== "pending");
 
-  if (isAllDone) {
-    const completionResult = await applyReceiveCompletion(riId);
-    if ((completionResult as any)?.error) {
-      return completionResult;
-    }
-  }
-
-  const { error: updateError } = await supabase
+  // Claim status dulu (open -> completed, kondisional) SEBELUM posting stok,
+  // supaya dua klik / dua request bersamaan tidak memposting stok dua kali.
+  const { data: claimed, error: updateError } = await supabase
     .from("receives")
     .update({
       approvals: updatedApprovals as any,
@@ -1592,9 +1465,30 @@ export async function approveReceive(riId: number, signatureUrl: string) {
       rejection_reason: null,
       completed_at: isAllDone ? new Date().toISOString() : null,
     })
-    .eq("id", riId);
+    .eq("id", riId)
+    .eq("ri_status", "open")
+    .select("id");
 
   if (updateError) return { error: updateError.message };
+  if (!claimed || claimed.length === 0) {
+    return { error: "Receive ini baru saja diproses oleh request lain. Muat ulang halaman." };
+  }
+
+  if (isAllDone) {
+    const completionResult = await applyReceiveCompletion(supabase, riId);
+    if ((completionResult as any)?.error) {
+      // Posting gagal -> kembalikan ke status sebelum approve.
+      await supabase
+        .from("receives")
+        .update({
+          approvals: receive.approvals as any,
+          ri_status: "open",
+          completed_at: null,
+        })
+        .eq("id", riId);
+      return completionResult;
+    }
+  }
 
   const justProcessed = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "approved",
@@ -1657,6 +1551,9 @@ export async function rejectReceive(
   if (receive.ri_status === "rejected") {
     return { error: "Receive sudah rejected." };
   }
+  if (!_isUsersTurn(receive.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval Receive ini." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -1694,7 +1591,8 @@ export async function rejectReceive(
       rejection_reason: reason.trim(),
       completed_at: null,
     })
-    .eq("id", riId);
+    .eq("id", riId)
+    .eq("ri_status", "open");
 
   if (updateError) return { error: updateError.message };
 
@@ -1769,6 +1667,31 @@ export async function approvePR(
     .eq("id", prId)
     .single();
   if (!pr) return { error: "PR tidak ditemukan" };
+  if (pr.pr_status !== "open") {
+    return { error: `PR sudah berstatus ${pr.pr_status}, tidak bisa di-approve.` };
+  }
+  if (!_isUsersTurn(pr.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval PR ini." };
+  }
+
+  const { data: prItemRows } = await supabase
+    .from("pr_items")
+    .select("id, mr_id")
+    .eq("pr_id", prId);
+  const prItemIdSet = new Set((prItemRows || []).map((r: any) => r.id));
+  if (
+    (itemDecisions || []).some(
+      (d) => !prItemIdSet.has(d.itemId) || !["approved", "rejected"].includes(d.status),
+    )
+  ) {
+    return { error: "Keputusan per-item tidak valid untuk PR ini." };
+  }
+  if (
+    prItemIdSet.size > 0 &&
+    (itemDecisions || []).filter((d) => d.status === "rejected").length >= prItemIdSet.size
+  ) {
+    return { error: "Semua item ditolak -- gunakan Tolak PR." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -1797,21 +1720,38 @@ export async function approvePR(
   const isLastStep = updatedApprovals.every((a: any) => a.status !== "pending");
   const newStatus = isLastStep ? "approved" : "open";
 
+  // Kondisional status 'open': step terakhir mengubah open -> approved,
+  // jadi request ganda hanya satu yang lolos.
+  const { data: claimed, error } = await supabase
+    .from("prs")
+    .update({ approvals: updatedApprovals as any, pr_status: newStatus as any })
+    .eq("id", prId)
+    .eq("pr_status", "open")
+    .select("id");
+  if (error) return { error: error.message };
+  if (!claimed || claimed.length === 0) {
+    return { error: "PR ini baru saja diproses oleh request lain. Muat ulang halaman." };
+  }
+
   // When it's the final approval step, apply per-item decisions
   if (isLastStep && itemDecisions.length > 0) {
     for (const decision of itemDecisions) {
       await supabase
         .from("pr_items")
         .update({ status: decision.status as any })
-        .eq("id", decision.itemId);
+        .eq("id", decision.itemId)
+        .eq("pr_id", prId);
     }
   }
-
-  const { error } = await supabase
-    .from("prs")
-    .update({ approvals: updatedApprovals as any, pr_status: newStatus as any })
-    .eq("id", prId);
-  if (error) return { error: error.message };
+  if (isLastStep) {
+    // Item yang ditolak membebaskan jatah qty_pr MR-nya & tidak dihitung
+    // sebagai kebutuhan PR.
+    const mrIds = Array.from(
+      new Set((prItemRows || []).map((r: any) => r.mr_id).filter(Boolean)),
+    ) as number[];
+    await Promise.all(mrIds.map((mrId) => applyMrConversionStatus(supabase, mrId)));
+    await applyPrConversionStatus(supabase, prId);
+  }
 
   const justProcessed = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "approved",
@@ -1849,10 +1789,18 @@ export async function rejectPR(prId: number, reason: string) {
 
   const { data: pr } = await supabase
     .from("prs")
-    .select("approvals, pr_kode, pr_pic_id")
+    .select("approvals, pr_kode, pr_pic_id, pr_status")
     .eq("id", prId)
     .single();
   if (!pr) return { error: "PR tidak ditemukan" };
+  // Hanya PR yang masih dalam proses approval yang bisa ditolak -- PR yang
+  // sudah approved bisa jadi sudah di-PO (qty-nya tidak boleh dibebaskan).
+  if (pr.pr_status !== "open") {
+    return { error: `PR sudah berstatus ${pr.pr_status}, tidak bisa ditolak.` };
+  }
+  if (!_isUsersTurn(pr.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval PR ini." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -1874,7 +1822,8 @@ export async function rejectPR(prId: number, reason: string) {
       approvals: updatedApprovals as any,
       pr_status: "rejected" as any,
     })
-    .eq("id", prId);
+    .eq("id", prId)
+    .eq("pr_status", "open");
   if (error) return { error: error.message };
 
   // Rejection frees up the converted qty on source MR(s) for reconversion.
@@ -1886,7 +1835,7 @@ export async function rejectPR(prId: number, reason: string) {
     new Set((prItems ?? []).map((i: any) => i.mr_id).filter(Boolean)),
   );
   await Promise.all(
-    affectedMrIds.map((mrId) => _applyMrConversionStatus(mrId, supabase)),
+    affectedMrIds.map((mrId) => applyMrConversionStatus(supabase, mrId)),
   );
 
   const rejecter = updatedApprovals.find(
@@ -2027,13 +1976,6 @@ export async function createPurchaseOrder(data: {
     return { error: "Item PO reguler wajib berasal dari PR." };
   }
 
-  const sourcePrIds = Array.from(
-    new Set(
-      data.items
-        .map((i) => i.pr_id)
-        .filter((id): id is number => Boolean(id)),
-    ),
-  );
 
   const { data: existingPo } = await supabase
     .from("pos")
@@ -2098,18 +2040,35 @@ export async function createPurchaseOrder(data: {
   if (prItemIds.length > 0) {
     const { data: prItemRows } = await supabase
       .from("pr_items")
-      .select("id, qty")
+      .select("id, pr_id, mr_id, qty, status, part_number, prs!inner(pr_status)")
       .in("id", prItemIds);
     // Termasuk qty dari link manual PO Non-PR (po_item_pr_links).
     const convertedMap = await fetchPrItemConvertedQty(supabase, prItemIds);
 
-    const qtyMap = new Map((prItemRows ?? []).map((r: any) => [r.id, r.qty]));
+    const prItemById = new Map((prItemRows ?? []).map((r: any) => [r.id, r]));
+    const usedInThisPo = new Map<number, number>();
 
     for (const item of data.items) {
       if (!item.pr_item_id) continue;
-      const qty = qtyMap.get(item.pr_item_id) ?? 0;
+      const pri: any = prItemById.get(item.pr_item_id);
+      if (!pri) return { error: `Item PR ${item.part_number} tidak ditemukan.` };
+      const prStatus = Array.isArray(pri.prs) ? pri.prs[0]?.pr_status : pri.prs?.pr_status;
+      if (prStatus !== "approved") {
+        return { error: `PR untuk item ${item.part_number} tidak berstatus approved (status: ${prStatus}).` };
+      }
+      if (isPrItemRejected(pri)) {
+        return { error: `Item ${item.part_number} ditolak approver PR, tidak bisa di-PO.` };
+      }
+      if (!Number.isInteger(Number(item.qty)) || !(item.qty > 0)) {
+        return { error: `Qty ${item.part_number} harus bilangan bulat lebih dari 0.` };
+      }
+      // Lineage diambil dari DB, bukan payload.
+      item.pr_id = pri.pr_id;
+      item.mr_id = pri.mr_id;
+      const used = usedInThisPo.get(item.pr_item_id) || 0;
+      usedInThisPo.set(item.pr_item_id, used + item.qty);
       const already = convertedMap.get(item.pr_item_id) || 0;
-      const remaining = Math.max(0, qty - already);
+      const remaining = Math.max(0, (Number(pri.qty) || 0) - already - used);
       if (item.qty > remaining) {
         return {
           error: `Qty ${item.part_number} melebihi sisa yang bisa dikonversi ke PO (sisa ${remaining}).`,
@@ -2117,6 +2076,15 @@ export async function createPurchaseOrder(data: {
       }
     }
   }
+
+  // Setelah guard di atas, pr_id per item sudah diambil dari DB.
+  const sourcePrIds = Array.from(
+    new Set(
+      data.items
+        .map((i) => i.pr_id)
+        .filter((id): id is number => Boolean(id)),
+    ),
+  );
 
   const normalizedItems = maskPOPriceItems(data.items, canViewPrice);
 
@@ -2202,7 +2170,7 @@ export async function createPurchaseOrder(data: {
 
   // Recompute conversion progress for every source PR involved.
   await Promise.all(
-    sourcePrIds.map((prId) => _applyPrConversionStatus(prId, supabase)),
+    sourcePrIds.map((prId) => applyPrConversionStatus(supabase, prId)),
   );
   if (poJenis === "so") await refreshSoStatus(supabase, data.so_id);
 
@@ -2256,6 +2224,12 @@ export async function approvePO(poId: number, signatureUrl?: string) {
     .eq("id", poId)
     .single();
   if (fetchErr || !po) return { error: "PO tidak ditemukan" };
+  if (po.po_status !== "open") {
+    return { error: `PO sudah berstatus ${po.po_status}, tidak bisa di-approve.` };
+  }
+  if (!_isUsersTurn(po.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval PO ini." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -2283,12 +2257,20 @@ export async function approvePO(poId: number, signatureUrl?: string) {
   const isAllDone = updatedApprovals.every((a: any) => a.status !== "pending");
   const newStatus = isAllDone ? "approved" : "open";
 
-  const { error } = await supabase
+  const { data: claimed, error } = await supabase
     .from("pos")
     .update({ approvals: updatedApprovals as any, po_status: newStatus as any })
-    .eq("id", poId);
+    .eq("id", poId)
+    .eq("po_status", "open")
+    .select("id");
 
   if (error) return { error: error.message };
+  if (!claimed || claimed.length === 0) {
+    return { error: "PO ini baru saja diproses oleh request lain. Muat ulang halaman." };
+  }
+  // PO hasil revisi yang penerimaannya sudah penuh langsung jadi completed
+  // (dan PR sumbernya ikut dievaluasi).
+  if (isAllDone) await syncPoReceiveAndCompletion(supabase, poId);
 
   const justProcessed = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "approved",
@@ -2328,10 +2310,18 @@ export async function rejectPO(poId: number, reason: string) {
 
   const { data: po } = await supabase
     .from("pos")
-    .select("approvals, po_kode, po_pic_id, so_id")
+    .select("approvals, po_kode, po_pic_id, so_id, po_status")
     .eq("id", poId)
     .single();
   if (!po) return { error: "PO tidak ditemukan" };
+  // Hanya PO yang masih dalam proses approval yang bisa ditolak -- PO
+  // approved bisa sudah ada penerimaan (qty PR-nya tidak boleh dibebaskan).
+  if (po.po_status !== "open") {
+    return { error: `PO sudah berstatus ${po.po_status}, tidak bisa ditolak.` };
+  }
+  if (!_isUsersTurn(po.approvals ?? [], user.id)) {
+    return { error: "Bukan giliran Anda untuk approval PO ini." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -2353,27 +2343,14 @@ export async function rejectPO(poId: number, reason: string) {
       approvals: updatedApprovals as any,
       po_status: "rejected" as any,
     })
-    .eq("id", poId);
+    .eq("id", poId)
+    .eq("po_status", "open");
 
   if (error) return { error: error.message };
 
   // Rejection frees up the converted qty on source PR(s) for reconversion.
-  const { data: poItems } = await supabase
-    .from("po_items")
-    .select("pr_item_id")
-    .eq("po_id", poId);
-  const poPrItemIds = (poItems ?? []).map((i: any) => i.pr_item_id).filter(Boolean);
-  if (poPrItemIds.length > 0) {
-    const { data: prItemRows } = await supabase
-      .from("pr_items")
-      .select("pr_id")
-      .in("id", poPrItemIds);
-    const affectedPrIds = Array.from(
-      new Set((prItemRows ?? []).map((r: any) => r.pr_id).filter(Boolean)),
-    );
-    await Promise.all(
-      affectedPrIds.map((prId) => _applyPrConversionStatus(prId, supabase)),
-    );
+  for (const prId of await fetchPoSourcePrIds(supabase, poId)) {
+    await applyPrConversionStatus(supabase, prId);
   }
   // Rejection juga membebaskan qty SO untuk di-PO ulang / langsung DO.
   await refreshSoStatus(supabase, po.so_id);
@@ -2432,10 +2409,29 @@ export async function deletePO(poId: number) {
       error: "PO tidak bisa dihapus karena sudah ada penerimaan barang",
     };
   }
+  // RI yang masih menunggu approval juga dihitung "ada penerimaan".
+  const { count: riCount } = await supabase
+    .from("receives")
+    .select("id", { count: "exact", head: true })
+    .eq("po_id", poId)
+    .neq("ri_status", "rejected");
+  if (riCount && riCount > 0) {
+    return {
+      error: "PO tidak bisa dihapus karena sudah ada dokumen Receive Item (termasuk yang masih menunggu approval).",
+    };
+  }
+  // PR sumber dicatat SEBELUM PO dihapus supaya progres konversinya bisa
+  // dihitung ulang (PO yang hilang membebaskan qty PR).
+  const sourcePrIds = await fetchPoSourcePrIds(supabase, poId);
   const { error } = await supabase.from("pos").delete().eq("id", poId);
   if (error) return { error: error.message };
+  for (const prId of sourcePrIds) {
+    await applyPrConversionStatus(supabase, prId);
+    await applyPrCompletionStatus(supabase, prId);
+  }
   await refreshSoStatus(supabase, po.so_id);
   revalidatePath("/po");
+  revalidatePath("/pr");
   return { success: true };
 }
 

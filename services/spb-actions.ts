@@ -2,6 +2,13 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import {
+  postReturnSpb,
+  postSpbStockOut,
+  refreshSpbStatus,
+  resolveSpbIdFromInvoice,
+  returnSpbOutstandingStock,
+} from "@/lib/spb-posting";
 
 type SpbItemPayload = {
   part_id: number;
@@ -332,240 +339,13 @@ function processStockOutApprovalStep(
 
 async function applySpbPosting(spbId: number, actorId: string) {
   const supabase = await createClient();
-
-  const { data: spbHeader, error: spbErr } = await supabase
-    .from("spb")
-    .select("id, spb_no, cabang_id")
-    .eq("id", spbId)
-    .single();
-
-  if (spbErr || !spbHeader) {
-    return { error: spbErr?.message || "SPB tidak ditemukan." };
-  }
-
-  const { data: detailRows, error: detailErr } = await supabase
-    .from("spb_details")
-    .select("part_id, dtl_spb_part_number, dtl_spb_qty")
-    .eq("spb_id", spbId);
-
-  if (detailErr) return { error: detailErr.message };
-  if (!detailRows?.length) return { error: "Detail SPB tidak ditemukan." };
-
-  const stockSnapshots: Array<{
-    stockId: number;
-    oldQty: number;
-    newQty: number;
-    partId: number;
-    partNumber: string;
-  }> = [];
-
-  for (const row of detailRows) {
-    if (!row.part_id || !row.dtl_spb_qty || row.dtl_spb_qty <= 0) {
-      return { error: "Qty item SPB tidak valid." };
-    }
-
-    const { data: stockRow, error: stockErr } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", row.part_id)
-      .eq("cabang_id", spbHeader.cabang_id)
-      .single();
-
-    if (stockErr || !stockRow) {
-      return {
-        error: `Stok untuk part ${row.dtl_spb_part_number} tidak ditemukan di cabang.`,
-      };
-    }
-
-    if ((stockRow.qty || 0) < row.dtl_spb_qty) {
-      return {
-        error: `Stok part ${row.dtl_spb_part_number} tidak mencukupi.`,
-      };
-    }
-
-    stockSnapshots.push({
-      stockId: stockRow.id,
-      oldQty: stockRow.qty,
-      newQty: stockRow.qty - row.dtl_spb_qty,
-      partId: row.part_id,
-      partNumber: row.dtl_spb_part_number,
-    });
-  }
-
-  const alreadyPosted = await Promise.all(
-    stockSnapshots.map(async (snap) => {
-      const { data } = await supabase
-        .from("stock_movements")
-        .select("id")
-        .eq("type", "SPB_OUT")
-        .eq("reference_id", spbHeader.spb_no)
-        .eq("part_id", snap.partId)
-        .limit(1)
-        .maybeSingle();
-      return Boolean(data);
-    }),
-  );
-
-  if (alreadyPosted.every(Boolean)) {
-    return { success: true };
-  }
-
-  for (const snap of stockSnapshots) {
-    const { error: upErr } = await supabase
-      .from("stock")
-      .update({ qty: snap.newQty })
-      .eq("id", snap.stockId);
-
-    if (upErr) {
-      return { error: upErr.message };
-    }
-
-    await supabase.from("stock_movements").insert({
-      part_id: snap.partId,
-      cabang_id: spbHeader.cabang_id,
-      qty_change: -Math.abs(snap.oldQty - snap.newQty),
-      type: "SPB_OUT",
-      reference_id: spbHeader.spb_no,
-      notes: `Stock out dari SPB ${spbHeader.spb_no}`,
-      created_by: actorId,
-    });
-  }
-
-  return { success: true };
+  return postSpbStockOut(supabase, spbId, actorId);
 }
 
-export async function applyReturnSpbPosting(returnId: number, actorId: string) {
-  const supabase = await createClient();
-
-  const { data: header, error: headerErr } = await supabase
-    .from("return_spb")
-    .select(
-      "id, rtn_kode, spb_id, details:return_spb_details(spb_dtl_id, part_id, dtl_rtn_qty_return)",
-    )
-    .eq("id", returnId)
-    .single();
-
-  if (headerErr || !header) {
-    return { error: headerErr?.message || "Return SPB tidak ditemukan." };
-  }
-
-  const { data: spbHeader, error: spbErr } = await supabase
-    .from("spb")
-    .select("id, cabang_id")
-    .eq("id", header.spb_id)
-    .single();
-
-  if (spbErr || !spbHeader) {
-    return { error: spbErr?.message || "SPB tidak ditemukan." };
-  }
-
-  const detailRows = (header.details || []) as Array<{
-    spb_dtl_id: number;
-    part_id: number;
-    dtl_rtn_qty_return: number;
-  }>;
-
-  if (!detailRows.length) {
-    return { error: "Detail return SPB tidak ditemukan." };
-  }
-
-  const alreadyPosted = await Promise.all(
-    detailRows.map(async (row) => {
-      const { data } = await supabase
-        .from("stock_movements")
-        .select("id")
-        .eq("type", "SPB_RETURN")
-        .eq("reference_id", header.rtn_kode)
-        .eq("part_id", row.part_id)
-        .limit(1)
-        .maybeSingle();
-      return Boolean(data);
-    }),
-  );
-
-  if (alreadyPosted.every(Boolean)) {
-    return { success: true };
-  }
-
-  for (const row of detailRows) {
-    const qty = row.dtl_rtn_qty_return || 0;
-    if (qty <= 0) continue;
-
-    const { data: spbDetail, error: spbDetailErr } = await supabase
-      .from("spb_details")
-      .select("dtl_spb_qty_returned")
-      .eq("id", row.spb_dtl_id)
-      .single();
-
-    if (spbDetailErr || !spbDetail) {
-      return {
-        error:
-          spbDetailErr?.message || "Detail SPB untuk return tidak ditemukan.",
-      };
-    }
-
-    await supabase
-      .from("spb_details")
-      .update({
-        dtl_spb_qty_returned: (spbDetail.dtl_spb_qty_returned || 0) + qty,
-      })
-      .eq("id", row.spb_dtl_id);
-
-    const { data: stockRow } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", row.part_id)
-      .eq("cabang_id", spbHeader.cabang_id)
-      .maybeSingle();
-
-    if (stockRow?.id) {
-      await supabase
-        .from("stock")
-        .update({ qty: (stockRow.qty || 0) + qty })
-        .eq("id", stockRow.id);
-    } else {
-      await supabase.from("stock").insert({
-        part_id: row.part_id,
-        cabang_id: spbHeader.cabang_id,
-        qty,
-        min_qty: 0,
-        max_qty: 0,
-      });
-    }
-
-    await supabase.from("stock_movements").insert({
-      part_id: row.part_id,
-      cabang_id: spbHeader.cabang_id,
-      qty_change: qty,
-      type: "SPB_RETURN",
-      reference_id: header.rtn_kode,
-      notes: "Stock return from SPB",
-      created_by: actorId,
-    });
-  }
-
-  const { data: allDetails } = await supabase
-    .from("spb_details")
-    .select("dtl_spb_qty, dtl_spb_qty_returned")
-    .eq("spb_id", header.spb_id);
-
-  const allReturned = (allDetails || []).every(
-    (d) => (d.dtl_spb_qty_returned || 0) >= (d.dtl_spb_qty || 0),
-  );
-
-  await supabase
-    .from("spb")
-    .update({ spb_status: allReturned ? "Returned" : "Partial" })
-    .eq("id", header.spb_id);
-
-  await supabase
-    .from("return_spb")
-    .update({ rtn_status: allReturned ? "Returned" : "Partial" })
-    .eq("id", returnId);
-
-  return { success: true };
-}
-
+// Status SPB dihitung dari dokumen turunan (lib/spb-posting.ts), tidak lagi
+// di-set langsung per aksi -- supaya tidak mundur karena urutan dokumen.
+// Posting retur ada di lib/spb-posting.ts (postReturnSpb), sengaja bukan
+// server action supaya tidak bisa dipanggil langsung dari browser.
 export async function finalizeSpbPoStatus(spbPoId: number) {
   const supabase = await createClient();
   const { data: po } = await supabase
@@ -573,69 +353,25 @@ export async function finalizeSpbPoStatus(spbPoId: number) {
     .select("spb_id")
     .eq("id", spbPoId)
     .single();
-
-  if (po?.spb_id) {
-    await supabase
-      .from("spb")
-      .update({ spb_status: "PO_ATTACH" })
-      .eq("id", po.spb_id);
-  }
+  await refreshSpbStatus(supabase, po?.spb_id);
 }
 
 export async function finalizeSpbDoStatus(spbDoId: number) {
   const supabase = await createClient();
   const { data: doHeader } = await supabase
     .from("spb_do")
-    .select("spb_po_id")
+    .select("spb_po:spb_po_id(spb_id)")
     .eq("id", spbDoId)
     .single();
-
-  if (!doHeader?.spb_po_id) return;
-
-  const { data: po } = await supabase
-    .from("spb_po")
-    .select("spb_id")
-    .eq("id", doHeader.spb_po_id)
-    .single();
-
-  if (po?.spb_id) {
-    await supabase
-      .from("spb")
-      .update({ spb_status: "DO_ATTACH" })
-      .eq("id", po.spb_id);
-  }
+  const po: any = Array.isArray((doHeader as any)?.spb_po)
+    ? (doHeader as any).spb_po[0]
+    : (doHeader as any)?.spb_po;
+  await refreshSpbStatus(supabase, po?.spb_id);
 }
 
 export async function finalizeSpbInvoiceStatus(spbInvoiceId: number) {
   const supabase = await createClient();
-  const { data: invoiceHeader } = await supabase
-    .from("spb_invoice")
-    .select("spb_do_id")
-    .eq("id", spbInvoiceId)
-    .single();
-
-  if (!invoiceHeader?.spb_do_id) return;
-
-  const { data: doHeader } = await supabase
-    .from("spb_do")
-    .select("spb_po_id")
-    .eq("id", invoiceHeader.spb_do_id)
-    .single();
-
-  if (!doHeader?.spb_po_id) return;
-
-  const { data: po } = await supabase
-    .from("spb_po")
-    .select("spb_id")
-    .eq("id", doHeader.spb_po_id)
-    .single();
-
-  if (po?.spb_id) {
-    await supabase
-      .from("spb")
-      .update({ spb_status: "DONE_QUOTE" })
-      .eq("id", po.spb_id);
-  }
+  await refreshSpbStatus(supabase, await resolveSpbIdFromInvoice(supabase, spbInvoiceId));
 }
 
 export async function generateSpbKode(cabangId?: number) {
@@ -968,41 +704,40 @@ export async function deleteSpb(id: number) {
 
   const { data: header, error: headerErr } = await supabase
     .from("spb")
-    .select("id, spb_no, cabang_id")
+    .select("id, spb_no, cabang_id, spb_status")
     .eq("id", id)
     .single();
   if (headerErr || !header)
     return { error: headerErr?.message || "SPB tidak ditemukan." };
 
-  const { data: items, error: itemsErr } = await supabase
-    .from("spb_details")
-    .select("part_id, dtl_spb_qty")
-    .eq("spb_id", id);
+  const { count: pendingReturns } = await supabase
+    .from("return_spb")
+    .select("id", { count: "exact", head: true })
+    .eq("spb_id", id)
+    .eq("approval_status", "open");
+  if (pendingReturns && pendingReturns > 0) {
+    return { error: "SPB ini punya Return SPB yang masih menunggu approval. Selesaikan/tolak dulu." };
+  }
 
-  if (itemsErr) return { error: itemsErr.message };
-
-  for (const item of items || []) {
-    const { data: stockRow, error: stockErr } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", header.cabang_id)
-      .single();
-
-    if (!stockErr && stockRow) {
-      await supabase
-        .from("stock")
-        .update({ qty: (stockRow.qty || 0) + (item.dtl_spb_qty || 0) })
-        .eq("id", stockRow.id);
-
-      await supabase.from("stock_movements").insert({
-        part_id: item.part_id,
-        cabang_id: header.cabang_id,
-        qty_change: item.dtl_spb_qty,
+  // SPB CANCELLED: stoknya sudah dikembalikan saat cancel -> jangan dobel.
+  if (header.spb_status !== "CANCELLED") {
+    // Claim dulu (tandai CANCELLED secara kondisional) supaya request ganda
+    // tidak mengembalikan stok dua kali.
+    const { data: claimed, error: claimErr } = await supabase
+      .from("spb")
+      .update({ spb_status: "CANCELLED" })
+      .eq("id", id)
+      .neq("spb_status", "CANCELLED")
+      .select("id");
+    if (claimErr) return { error: claimErr.message };
+    if (claimed && claimed.length > 0) {
+      await returnSpbOutstandingStock(supabase, {
+        spbId: id,
+        spbNo: header.spb_no,
+        cabangId: header.cabang_id,
+        actorId: user.id,
         type: "SPB_ROLLBACK",
-        reference_id: header.spb_no,
-        notes: "Rollback due to SPB delete",
-        created_by: user.id,
+        note: "Rollback due to SPB delete (qty yang belum diretur)",
       });
     }
   }
@@ -1078,12 +813,24 @@ export async function createSpbPo(payload: {
 
   const { data: spbHeader } = await supabase
     .from("spb")
-    .select("id, cabang_id")
+    .select("id, cabang_id, spb_status")
     .eq("id", payload.spb_id)
     .single();
 
   if (!spbHeader?.cabang_id) {
     return { error: "SPB sumber tidak valid." };
+  }
+  if (spbHeader.spb_status === "CANCELLED") {
+    return { error: "SPB sudah dibatalkan." };
+  }
+  const dtlIds = Array.from(new Set(payload.details.map((d) => d.spb_dtl_id)));
+  const { data: ownDetails } = await supabase
+    .from("spb_details")
+    .select("id")
+    .eq("spb_id", payload.spb_id)
+    .in("id", dtlIds);
+  if ((ownDetails || []).length !== dtlIds.length) {
+    return { error: "Ada item yang bukan bagian dari SPB ini." };
   }
 
   // SPB PO tidak punya approval digital -- langsung 'completed' saat dibuat
@@ -1106,9 +853,9 @@ export async function createSpbPo(payload: {
   if (poErr || !poHeader)
     return { error: poErr?.message || "Gagal membuat SPB PO." };
 
-  const rows = payload.details.map((d) => ({
+  const rows = dtlIds.map((spb_dtl_id) => ({
     spb_po_id: poHeader.id,
-    spb_dtl_id: d.spb_dtl_id,
+    spb_dtl_id,
   }));
   const { error: rowsErr } = await supabase.from("spb_po_details").insert(rows);
   if (rowsErr) {
@@ -1211,6 +958,15 @@ export async function createSpbDo(payload: {
   const cabangId = spbRelation?.cabang_id;
   if (!cabangId) {
     return { error: "PO sumber tidak valid." };
+  }
+  const poDtlIds = Array.from(new Set(payload.details.map((d) => d.spb_po_dtl_id)));
+  const { data: ownPoDetails } = await supabase
+    .from("spb_po_details")
+    .select("id")
+    .eq("spb_po_id", payload.spb_po_id)
+    .in("id", poDtlIds);
+  if ((ownPoDetails || []).length !== poDtlIds.length) {
+    return { error: "Ada item yang bukan bagian dari SPB PO ini." };
   }
 
   // SPB DO tidak punya approval digital -- langsung 'completed' saat dibuat,
@@ -1490,12 +1246,15 @@ export async function createReturnSpb(payload: {
 
   const { data: spbHeader, error: spbErr } = await supabase
     .from("spb")
-    .select("id, spb_no, cabang_id")
+    .select("id, spb_no, cabang_id, spb_status")
     .eq("id", payload.spb_id)
     .single();
 
   if (spbErr || !spbHeader)
     return { error: spbErr?.message || "SPB tidak ditemukan." };
+  if (spbHeader.spb_status === "CANCELLED") {
+    return { error: "SPB sudah dibatalkan (stok sudah dikembalikan), tidak bisa diretur." };
+  }
 
   if (!payload.approval_template_id) {
     return {
@@ -1523,32 +1282,57 @@ export async function createReturnSpb(payload: {
     part_id: number;
     qty: number;
   }> = [];
-  for (const d of payload.details) {
-    if (!d.qty_return || d.qty_return <= 0) continue;
-
-    const { data: spbDetail, error: detailErr } = await supabase
-      .from("spb_details")
-      .select("id, dtl_spb_qty, dtl_spb_qty_returned")
-      .eq("id", d.spb_dtl_id)
-      .single();
-
-    if (detailErr || !spbDetail) {
-      return { error: `Detail SPB ${d.spb_dtl_id} tidak ditemukan.` };
+  const activeDetails = payload.details.filter((d) => d.qty_return && d.qty_return > 0);
+  if (activeDetails.some((d) => !Number.isInteger(Number(d.qty_return)))) {
+    return { error: "Qty return harus bilangan bulat." };
+  }
+  const dtlIds = Array.from(new Set(activeDetails.map((d) => d.spb_dtl_id)));
+  const { data: spbDetails } = dtlIds.length
+    ? await supabase
+        .from("spb_details")
+        .select("id, part_id, dtl_spb_part_number, dtl_spb_qty, dtl_spb_qty_returned")
+        .eq("spb_id", payload.spb_id)
+        .in("id", dtlIds)
+    : { data: [] as any[] };
+  const detailById = new Map((spbDetails || []).map((d: any) => [d.id, d]));
+  // Retur lain yang masih menunggu approval ikut mengurangi sisa, supaya dua
+  // retur pending tidak sama-sama mengembalikan qty yang sama.
+  const { data: pendingRows } = dtlIds.length
+    ? await supabase
+        .from("return_spb_details")
+        .select("spb_dtl_id, dtl_rtn_qty_return, return_spb!inner(approval_status)")
+        .in("spb_dtl_id", dtlIds)
+        .eq("return_spb.approval_status", "open")
+    : { data: [] as any[] };
+  const pendingByDtl = new Map<number, number>();
+  for (const r of pendingRows || []) {
+    pendingByDtl.set(r.spb_dtl_id, (pendingByDtl.get(r.spb_dtl_id) || 0) + Number(r.dtl_rtn_qty_return || 0));
+  }
+  const requestedByDtl = new Map<number, number>();
+  for (const d of activeDetails) {
+    const spbDetail: any = detailById.get(d.spb_dtl_id);
+    if (!spbDetail) {
+      return { error: `Detail SPB ${d.spb_dtl_id} bukan bagian dari SPB ini.` };
     }
-
-    const maxReturn =
-      (spbDetail.dtl_spb_qty || 0) - (spbDetail.dtl_spb_qty_returned || 0);
-    if (d.qty_return > maxReturn) {
-      return {
-        error: `Qty return melebihi sisa qty pada detail ${d.spb_dtl_id}.`,
-      };
-    }
-
+    requestedByDtl.set(d.spb_dtl_id, (requestedByDtl.get(d.spb_dtl_id) || 0) + Number(d.qty_return));
+    // part diambil dari detail SPB, bukan payload.
     toReturnRows.push({
       spb_dtl_id: d.spb_dtl_id,
-      part_id: d.part_id,
-      qty: d.qty_return,
+      part_id: spbDetail.part_id,
+      qty: Number(d.qty_return),
     });
+  }
+  for (const [dtlId, qty] of requestedByDtl) {
+    const spbDetail: any = detailById.get(dtlId);
+    const maxReturn =
+      (spbDetail.dtl_spb_qty || 0) -
+      (spbDetail.dtl_spb_qty_returned || 0) -
+      (pendingByDtl.get(dtlId) || 0);
+    if (qty > maxReturn) {
+      return {
+        error: `Qty return ${spbDetail.dtl_spb_part_number} (${qty}) melebihi sisa yang bisa diretur (${Math.max(0, maxReturn)}, sudah termasuk retur lain yang menunggu approval).`,
+      };
+    }
   }
 
   if (!toReturnRows.length) {
@@ -1665,7 +1449,9 @@ async function approveStockOutDocument(
   const stillPending = approvals.some((a: any) => a.status === "pending");
   const nextStatus = stillPending ? "open" : "completed";
 
-  const { data: updated, error: updateErr } = await supabase
+  // Kondisional status 'open': dua klik di step terakhir hanya satu yang
+  // lolos, jadi posting (retur stok) tidak jalan dua kali.
+  const { data: updatedRows, error: updateErr } = await supabase
     .from(table)
     .update({
       approvals,
@@ -1674,17 +1460,21 @@ async function approveStockOutDocument(
       rejection_reason: null,
     })
     .eq("id", id)
-    .select("*")
-    .single();
+    .eq("approval_status", "open")
+    .select("*");
 
   if (updateErr) return { error: updateErr.message };
+  const updated = updatedRows?.[0];
+  if (!updated) {
+    return { error: "Dokumen ini baru saja diproses oleh request lain. Muat ulang halaman." };
+  }
 
   if (!stillPending && onComplete) {
     const finalizeResult = await onComplete(id, me.user.id);
     if (finalizeResult?.error) {
       await supabase
         .from(table)
-        .update({ approval_status: "open", completed_at: null })
+        .update({ approval_status: "open", completed_at: null, approvals: row.approvals })
         .eq("id", id);
       return { error: finalizeResult.error };
     }
@@ -1780,39 +1570,17 @@ export async function cancelSpb(id: number, reason: string) {
     };
   }
 
-  const { data: items, error: itemsErr } = await supabase
-    .from("spb_details")
-    .select("part_id, dtl_spb_qty")
-    .eq("spb_id", id);
-  if (itemsErr) return { error: itemsErr.message };
-
-  for (const item of items || []) {
-    const { data: stockRow, error: stockErr } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", header.cabang_id)
-      .single();
-
-    if (!stockErr && stockRow) {
-      await supabase
-        .from("stock")
-        .update({ qty: (stockRow.qty || 0) + (item.dtl_spb_qty || 0) })
-        .eq("id", stockRow.id);
-
-      await supabase.from("stock_movements").insert({
-        part_id: item.part_id,
-        cabang_id: header.cabang_id,
-        qty_change: item.dtl_spb_qty,
-        type: "SPB_CANCEL",
-        reference_id: header.spb_no,
-        notes: `Cancel SPB ${header.spb_no}: ${notes}`,
-        created_by: user.id,
-      });
-    }
+  const { count: pendingReturns } = await supabase
+    .from("return_spb")
+    .select("id", { count: "exact", head: true })
+    .eq("spb_id", id)
+    .eq("approval_status", "open");
+  if (pendingReturns && pendingReturns > 0) {
+    return { error: "SPB ini punya Return SPB yang masih menunggu approval. Selesaikan/tolak dulu." };
   }
 
-  const { error: updateErr } = await supabase
+  // Claim (kondisional) dulu sebelum stok dikembalikan -> tidak dobel.
+  const { data: claimed, error: updateErr } = await supabase
     .from("spb")
     .update({
       spb_status: "CANCELLED",
@@ -1820,8 +1588,24 @@ export async function cancelSpb(id: number, reason: string) {
       cancelled_by: user.id,
       cancel_reason: notes,
     })
-    .eq("id", id);
+    .eq("id", id)
+    .neq("spb_status", "CANCELLED")
+    .select("id");
   if (updateErr) return { error: updateErr.message };
+  if (!claimed || claimed.length === 0) {
+    return { error: "SPB ini sudah dibatalkan sebelumnya." };
+  }
+
+  // Hanya qty yang BELUM diretur yang dikembalikan (retur sudah mengembalikan
+  // sebagian stok sendiri).
+  await returnSpbOutstandingStock(supabase, {
+    spbId: id,
+    spbNo: header.spb_no,
+    cabangId: header.cabang_id,
+    actorId: user.id,
+    type: "SPB_CANCEL",
+    note: `Cancel SPB ${header.spb_no}: ${notes}`,
+  });
 
   revalidateStockOutPaths();
   return { success: true };
@@ -1839,7 +1623,8 @@ export async function rejectSpbInvoice(id: number, reason: string) {
 
 export async function approveReturnSpb(id: number) {
   return approveStockOutDocument("return_spb", id, async (docId, actorId) => {
-    const res = await applyReturnSpbPosting(docId, actorId);
+    const supabase = await createClient();
+    const res = await postReturnSpb(supabase, docId, actorId);
     if (res.error) return { error: res.error };
   });
 }
@@ -2051,7 +1836,7 @@ export async function getSpbOptionsForPo(params?: {
     .from("spb")
     .select("id, spb_no, spb_status")
     .eq("spb_is_deleted", false)
-    .in("spb_status", ["DONE QUOT", "PO_ATTACH", "DO_ATTACH", "DONE_QUOTE"])
+    .in("spb_status", ["DONE QUOT", "PO_ATTACH", "DO_ATTACH"])
     .order("created_at", { ascending: false })
     .limit(limit);
 
@@ -2158,6 +1943,8 @@ export async function getSpbOptionsForReturn(params?: {
     .from("spb")
     .select("id, spb_no, spb_status")
     .eq("spb_is_deleted", false)
+    // SPB yang dibatalkan stoknya sudah dikembalikan semua.
+    .neq("spb_status", "CANCELLED")
     .order("created_at", { ascending: false })
     .limit(limit);
 

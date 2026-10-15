@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { changeStockQty } from "@/lib/stock-mutation";
 
 // ============================================================
 // PENERIMAAN KONSINYASI — konfirmasi customer atas satu IK (staff internal
@@ -108,10 +109,38 @@ export async function createConsignmentPenerimaan(data: {
   if (!data.items || data.items.length === 0)
     return { error: "Daftar item tidak boleh kosong." };
 
+  // Item & qty kirim diambil dari IK di DB (bukan payload): setiap item IK
+  // wajib muncul tepat sekali, qty terima 0..qty kirim.
+  {
+    const { data: ikItems } = await supabase
+      .from("consignment_ik_items")
+      .select("id, part_id, part_number, part_name, satuan, qty")
+      .eq("ik_id", data.ik_id);
+    const ikItemById = new Map((ikItems || []).map((r: any) => [r.id, r]));
+    const seen = new Set<number>();
+    for (const item of data.items) {
+      const ikItem: any = ikItemById.get(item.ik_item_id);
+      if (!ikItem) return { error: `${item.part_number}: bukan item dari IK ini.` };
+      if (seen.has(item.ik_item_id)) return { error: `${item.part_number}: item IK muncul lebih dari sekali.` };
+      seen.add(item.ik_item_id);
+      item.part_id = ikItem.part_id;
+      item.part_number = ikItem.part_number;
+      item.part_name = ikItem.part_name;
+      item.satuan = ikItem.satuan;
+      item.qty_kirim = Number(ikItem.qty) || 0;
+    }
+    if (seen.size !== ikItemById.size)
+      return { error: "Semua item IK wajib dicatat penerimaannya (qty terima boleh 0)." };
+  }
+
   for (const item of data.items) {
-    if (item.qty_terima < 0 || item.qty_terima > item.qty_kirim)
+    if (
+      !Number.isInteger(Number(item.qty_terima)) ||
+      item.qty_terima < 0 ||
+      item.qty_terima > item.qty_kirim
+    )
       return {
-        error: `${item.part_number}: qty terima harus antara 0 - ${item.qty_kirim}.`,
+        error: `${item.part_number}: qty terima harus bilangan bulat antara 0 - ${item.qty_kirim}.`,
       };
     if (item.status === "komplain" && !item.catatan_komplain?.trim())
       return { error: `${item.part_number}: catatan komplain wajib diisi.` };
@@ -175,7 +204,11 @@ export async function createConsignmentPenerimaan(data: {
   const { error: itemsError } = await supabase
     .from("consignment_penerimaan_items")
     .insert(itemsToInsert);
-  if (itemsError) return { error: itemsError.message };
+  if (itemsError) {
+    // Jangan tinggalkan header tanpa item (UNIQUE ik_id akan memblok input ulang).
+    await supabase.from("consignment_penerimaan").delete().eq("id", header.id);
+    return { error: itemsError.message };
+  }
 
   // Pindahkan qty_terima: kurangi stok gudang tujuan IK, tambahkan ke
   // customer_stock. Selisih (qty_kirim - qty_terima) sengaja dibiarkan di
@@ -183,18 +216,12 @@ export async function createConsignmentPenerimaan(data: {
   for (const item of data.items) {
     if (item.qty_terima <= 0) continue;
 
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", ik.ke_cabang_id)
-      .maybeSingle();
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty - item.qty_terima })
-        .eq("id", destStock.id);
-    }
+    await changeStockQty(
+      supabase,
+      { partId: item.part_id, cabangId: ik.ke_cabang_id },
+      -item.qty_terima,
+      { allowNegative: true, label: item.part_number },
+    );
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
       cabang_id: ik.ke_cabang_id,
@@ -205,22 +232,11 @@ export async function createConsignmentPenerimaan(data: {
       notes: `Penerimaan ${kode} (IK ${ik.ik_kode}): ${item.part_number} ${item.part_name} diterima customer`,
     });
 
-    const { data: custStock } = await supabase
-      .from("customer_stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("customer_id", customerId)
-      .maybeSingle();
-    if (custStock) {
-      await supabase
-        .from("customer_stock")
-        .update({ qty: custStock.qty + item.qty_terima })
-        .eq("id", custStock.id);
-    } else {
-      await supabase
-        .from("customer_stock")
-        .insert([{ part_id: item.part_id, customer_id: customerId, qty: item.qty_terima }]);
-    }
+    await changeStockQty(
+      supabase,
+      { table: "customer_stock", partId: item.part_id, customerId },
+      item.qty_terima,
+    );
   }
 
   revalidatePath("/so-reguler/consignment/penerimaan");
@@ -297,25 +313,24 @@ export async function deleteConsignmentPenerimaan(penerimaanId: number) {
     .select("part_id, part_number, part_name, qty_terima")
     .eq("penerimaan_id", penerimaanId);
 
+  // Hapus dulu baru stok dibalik: request ganda tidak membalik dua kali.
+  const { data: deleted, error } = await supabase
+    .from("consignment_penerimaan")
+    .delete()
+    .eq("id", penerimaanId)
+    .select("id");
+  if (error) return { error: error.message };
+  if (!deleted || deleted.length === 0) return { error: "Penerimaan sudah dihapus." };
+
   for (const item of items || []) {
     if (item.qty_terima <= 0) continue;
 
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", keCabangId)
-      .maybeSingle();
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty + item.qty_terima })
-        .eq("id", destStock.id);
-    } else {
-      await supabase
-        .from("stock")
-        .insert([{ part_id: item.part_id, cabang_id: keCabangId, qty: item.qty_terima }]);
-    }
+    await changeStockQty(
+      supabase,
+      { partId: item.part_id, cabangId: keCabangId },
+      item.qty_terima,
+      { allowNegative: true },
+    );
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
       cabang_id: keCabangId,
@@ -326,25 +341,13 @@ export async function deleteConsignmentPenerimaan(penerimaanId: number) {
       notes: `Pembatalan Penerimaan ${penerimaan.penerimaan_kode} (IK ${ikKode}): ${item.part_number} ${item.part_name} dikembalikan ke gudang tujuan`,
     });
 
-    const { data: custStock } = await supabase
-      .from("customer_stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("customer_id", penerimaan.customer_id)
-      .maybeSingle();
-    if (custStock) {
-      await supabase
-        .from("customer_stock")
-        .update({ qty: custStock.qty - item.qty_terima })
-        .eq("id", custStock.id);
-    }
+    await changeStockQty(
+      supabase,
+      { table: "customer_stock", partId: item.part_id, customerId: penerimaan.customer_id },
+      -item.qty_terima,
+      { allowNegative: true },
+    );
   }
-
-  const { error } = await supabase
-    .from("consignment_penerimaan")
-    .delete()
-    .eq("id", penerimaanId);
-  if (error) return { error: error.message };
 
   revalidatePath("/so-reguler/consignment/penerimaan");
   revalidatePath("/so-reguler/consignment/customer-stock");

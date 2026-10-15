@@ -2,6 +2,15 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import {
+  applyMrConversionStatus,
+  applyPrCompletionStatus,
+  applyPrConversionStatus,
+  fetchPoSourcePrIds,
+  syncPoReceiveAndCompletion,
+} from "@/lib/procurement-status";
+import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
+import { refreshSoStatus } from "@/lib/so-reguler";
 
 export type CascadeDeleteDocType = "mr" | "pr" | "po" | "receive" | "delivery";
 
@@ -106,6 +115,12 @@ export async function moderatorDeleteDocument(
     return { success: false, error: "Alasan penghapusan wajib diisi." };
   }
 
+  // Dokumen yang TIDAK ikut terhapus tapi status/qty-nya bergantung pada
+  // dokumen yang dihapus -- dicatat sebelum hapus, dihitung ulang sesudahnya
+  // dengan rumus terpusat (lib/procurement-status.ts & lib/mr-fulfillment.ts:
+  // item PR rejected, share stock, bypass, WO, RI langsung ke gudang MR).
+  const survivors = await collectCascadeSurvivors(guard.supabase, docType, docId);
+
   const { data, error } = await guard.supabase.rpc("execute_cascade_document_delete", {
     p_doc_type: docType,
     p_doc_id: docId,
@@ -124,6 +139,8 @@ export async function moderatorDeleteDocument(
     };
   }
 
+  await recomputeCascadeSurvivors(guard.supabase, survivors);
+
   revalidatePath("/mr");
   revalidatePath("/mr/scheduled");
   revalidatePath("/pr");
@@ -135,4 +152,96 @@ export async function moderatorDeleteDocument(
   revalidatePath("/planning-supply");
 
   return { success: true, data: result };
+}
+
+type CascadeSurvivors = {
+  poIds: number[];
+  prIds: number[];
+  mrIds: number[];
+  mrItemIds: number[];
+  soIds: number[];
+};
+
+async function collectCascadeSurvivors(
+  supabase: any,
+  docType: CascadeDeleteDocType,
+  docId: number,
+): Promise<CascadeSurvivors> {
+  const out: CascadeSurvivors = { poIds: [], prIds: [], mrIds: [], mrItemIds: [], soIds: [] };
+  const addMrItemsOfPrItems = async (prItemIds: number[]) => {
+    if (prItemIds.length === 0) return;
+    const { data } = await supabase
+      .from("pr_items")
+      .select("mr_id, mr_item_id")
+      .in("id", prItemIds);
+    for (const r of data || []) {
+      if (r.mr_id) out.mrIds.push(r.mr_id);
+      if (r.mr_item_id) out.mrItemIds.push(r.mr_item_id);
+    }
+  };
+  try {
+    if (docType === "pr") {
+      const { data } = await supabase.from("pr_items").select("id").eq("pr_id", docId);
+      await addMrItemsOfPrItems((data || []).map((r: any) => r.id));
+    } else if (docType === "po") {
+      out.prIds.push(...(await fetchPoSourcePrIds(supabase, docId)));
+      const { data: po } = await supabase.from("pos").select("so_id").eq("id", docId).maybeSingle();
+      if (po?.so_id) out.soIds.push(po.so_id);
+      const { data } = await supabase.from("po_items").select("pr_item_id").eq("po_id", docId);
+      await addMrItemsOfPrItems((data || []).map((r: any) => r.pr_item_id).filter(Boolean));
+    } else if (docType === "receive") {
+      const { data: ri } = await supabase.from("receives").select("po_id").eq("id", docId).maybeSingle();
+      if (ri?.po_id) {
+        out.poIds.push(ri.po_id);
+        out.prIds.push(...(await fetchPoSourcePrIds(supabase, ri.po_id)));
+        const { data: po } = await supabase.from("pos").select("so_id").eq("id", ri.po_id).maybeSingle();
+        if (po?.so_id) out.soIds.push(po.so_id);
+      }
+      const { data } = await supabase
+        .from("receive_items")
+        .select("po_items(pr_item_id)")
+        .eq("ri_id", docId);
+      await addMrItemsOfPrItems(
+        (data || [])
+          .map((r: any) => (Array.isArray(r.po_items) ? r.po_items[0] : r.po_items)?.pr_item_id)
+          .filter(Boolean),
+      );
+    } else if (docType === "delivery") {
+      const { data } = await supabase
+        .from("delivery_items")
+        .select("mr_item_id, mr_items(mr_id)")
+        .eq("dlv_id", docId);
+      for (const r of data || []) {
+        if (r.mr_item_id) out.mrItemIds.push(r.mr_item_id);
+        const mi = Array.isArray(r.mr_items) ? r.mr_items[0] : r.mr_items;
+        if (mi?.mr_id) out.mrIds.push(mi.mr_id);
+      }
+    }
+  } catch (e) {
+    console.error("Gagal mengumpulkan dokumen terdampak cascade delete:", e);
+  }
+  return out;
+}
+
+async function recomputeCascadeSurvivors(supabase: any, s: CascadeSurvivors) {
+  const uniq = (a: number[]) => Array.from(new Set(a.filter(Boolean)));
+  try {
+    for (const poId of uniq(s.poIds)) {
+      const { data: exists } = await supabase.from("pos").select("id").eq("id", poId).maybeSingle();
+      if (exists) await syncPoReceiveAndCompletion(supabase, poId);
+    }
+    for (const prId of uniq(s.prIds)) {
+      await applyPrConversionStatus(supabase, prId);
+      await applyPrCompletionStatus(supabase, prId);
+    }
+    for (const mrId of uniq(s.mrIds)) await applyMrConversionStatus(supabase, mrId);
+    const { data: liveItems } = uniq(s.mrItemIds).length
+      ? await supabase.from("mr_items").select("id").in("id", uniq(s.mrItemIds))
+      : { data: [] as any[] };
+    const liveIds = (liveItems || []).map((r: any) => r.id);
+    if (liveIds.length > 0) await recomputeMrItemsFulfillment(supabase, liveIds);
+    for (const soId of uniq(s.soIds)) await refreshSoStatus(supabase, soId);
+  } catch (e) {
+    console.error("Gagal menghitung ulang dokumen terdampak cascade delete:", e);
+  }
 }

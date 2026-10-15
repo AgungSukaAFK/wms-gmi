@@ -210,6 +210,24 @@ export default function CreateReceivePage() {
       .eq("po_id", po.id)
       .order("id");
 
+    // RI lain untuk PO ini yang masih menunggu approval ikut mengurangi sisa
+    // (qty_received baru naik saat RI completed).
+    const { data: pendingRows } = await supabase
+      .from("receive_items")
+      .select("po_item_id, qty, receives!inner(ri_status)")
+      .in(
+        "po_item_id",
+        (poItems || []).map((i: any) => i.id),
+      )
+      .eq("receives.ri_status", "open");
+    const pendingByPoItem = new Map<number, number>();
+    for (const r of pendingRows || []) {
+      pendingByPoItem.set(
+        r.po_item_id,
+        (pendingByPoItem.get(r.po_item_id) || 0) + Number(r.qty || 0),
+      );
+    }
+
     const receiveItems: ReceiveItem[] = (poItems || [])
       .map((item: any) => ({
         po_item_id: item.id,
@@ -219,10 +237,16 @@ export default function CreateReceivePage() {
         satuan: item.satuan,
         qty_po: item.qty,
         qty_received: item.qty_received ?? 0,
-        qty_sisa: item.qty - (item.qty_received ?? 0),
+        qty_sisa: Math.max(
+          0,
+          item.qty - (item.qty_received ?? 0) - (pendingByPoItem.get(item.id) || 0),
+        ),
         mr_id: item.mr_id,
         vendor_name: item.vendors?.vendor_name ?? null,
-        qty_receive: item.qty - (item.qty_received ?? 0), // default to full remaining
+        qty_receive: Math.max(
+          0,
+          item.qty - (item.qty_received ?? 0) - (pendingByPoItem.get(item.id) || 0),
+        ), // default to full remaining
         // default: cabang PR, bisa diganti per baris (PO Non-PR: dikunci)
         cabang_penerima_id: lockedCabangId ?? po.prs?.cabang_id ?? null,
       }))

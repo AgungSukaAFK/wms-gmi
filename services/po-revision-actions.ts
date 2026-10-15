@@ -2,10 +2,13 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { fetchPrItemConvertedQty, isPrItemRejected } from "@/lib/pr-po-coverage";
 import {
-  computePrConvertStatus,
-  fetchPrItemConvertedQty,
-} from "@/lib/pr-po-coverage";
+  applyPrCompletionStatus,
+  applyPrConversionStatus,
+  fetchPoItemPendingReceiveQty,
+  syncPoReceiveAndCompletion,
+} from "@/lib/procurement-status";
 import {
   computeSoItemRemaining,
   fetchSoItemFulfillment,
@@ -116,6 +119,10 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
 
   const { data: po } = await supabase.from("pos").select("*").eq("id", poId).single();
   if (!po) return { error: "PO tidak ditemukan." };
+  // PO rejected sudah membebaskan qty PR/SO-nya (bisa sudah di-PO ulang di PO
+  // lain), jadi saat dihidupkan lagi lewat revisi, SELURUH qty item wajib
+  // lolos cek sisa PR/SO -- tidak ada pengecualian "qty tidak dinaikkan".
+  const wasRejected = po.po_status === "rejected";
 
   const poKode = payload.po_kode?.trim();
   if (!poKode) return { error: "Kode PO wajib diisi." };
@@ -207,13 +214,23 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     if (msg) return { error: msg };
   }
 
-  // Guard qty item lama: tidak boleh di bawah qty yang sudah diterima.
+  // Guard qty item lama: tidak boleh di bawah qty yang sudah diterima +
+  // qty di RI yang masih menunggu approval (kalau tidak, RI itu nanti
+  // memposting penerimaan melebihi qty PO).
+  if (items.some((i) => !Number.isInteger(Number(i.qty)))) {
+    return { error: "Qty item harus bilangan bulat." };
+  }
+  const pendingRi = await fetchPoItemPendingReceiveQty(
+    supabase,
+    currentItems.map((i: any) => i.id),
+  );
   for (const i of items) {
     if (!i.po_item_id) continue;
     const cur = currentById.get(i.po_item_id);
-    if (i.qty < num(cur.qty_received)) {
+    const floor = num(cur.qty_received) + (pendingRi.get(i.po_item_id) || 0);
+    if (i.qty < floor) {
       return {
-        error: `Qty ${cur.part_number} tidak boleh di bawah qty yang sudah diterima (${cur.qty_received}).`,
+        error: `Qty ${cur.part_number} tidak boleh di bawah qty yang sudah diterima + RI yang menunggu approval (${floor}).`,
       };
     }
   }
@@ -231,15 +248,31 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
   }
   if (prItemIds.length > 0) {
     const [{ data: prItemRows }, converted] = await Promise.all([
-      supabase.from("pr_items").select("id, qty").in("id", prItemIds),
+      supabase
+        .from("pr_items")
+        .select("id, qty, status, prs!inner(pr_status)")
+        .in("id", prItemIds),
       fetchPrItemConvertedQty(supabase, prItemIds, { excludePoId: poId }),
     ]);
     const qtyMap = new Map((prItemRows || []).map((r: any) => [r.id, num(r.qty)]));
+    const prItemRowById = new Map((prItemRows || []).map((r: any) => [r.id, r]));
     for (const i of items) {
       const prItemId = effPrItemId(i);
       if (!prItemId) continue;
+      const pri: any = prItemRowById.get(prItemId);
+      const isNewLink = !i.po_item_id || wasRejected;
+      if (isNewLink && pri) {
+        const prStatus = Array.isArray(pri.prs) ? pri.prs[0]?.pr_status : pri.prs?.pr_status;
+        if (prStatus !== "approved") {
+          return { error: `PR untuk item ${i.part_number} tidak berstatus approved (status: ${prStatus}).` };
+        }
+        if (isPrItemRejected(pri)) {
+          return { error: `Item ${i.part_number} ditolak approver PR, tidak bisa di-PO.` };
+        }
+      }
       const remaining = Math.max(0, (qtyMap.get(prItemId) ?? 0) - (converted.get(prItemId) || 0));
-      const original = i.po_item_id ? num(currentById.get(i.po_item_id).qty) : 0;
+      const original =
+        i.po_item_id && !wasRejected ? num(currentById.get(i.po_item_id).qty) : 0;
       if (i.qty > remaining && i.qty > original) {
         return {
           error: `Qty ${i.part_number} melebihi sisa yang bisa dikonversi dari PR (sisa ${remaining}).`,
@@ -270,7 +303,8 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     for (const i of items) {
       const soItemId = effSoItemId(i)!;
       const { sisaPo } = computeSoItemRemaining(soQty.get(soItemId)!, fulfillment.get(soItemId));
-      const original = i.po_item_id ? num(currentById.get(i.po_item_id).qty) : 0;
+      const original =
+        i.po_item_id && !wasRejected ? num(currentById.get(i.po_item_id).qty) : 0;
       if (i.qty > sisaPo && i.qty > original) {
         return {
           error: `Qty ${i.part_number} melebihi sisa SO yang belum di-PO/DO (sisa ${sisaPo}).`,
@@ -383,12 +417,17 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
       [...currentItems, ...afterItems].map((i: any) => i.pr_id).filter(Boolean) as number[],
     ),
   );
-  await Promise.all(
-    involvedPrIds.map(async (prId) => {
-      const status = await computePrConvertStatus(supabase, prId);
-      if (status) await supabase.from("prs").update({ pr_convert_status: status }).eq("id", prId);
-    }),
-  );
+  for (const prId of involvedPrIds) {
+    await applyPrConversionStatus(supabase, prId);
+  }
+  // PO tanpa step approval tersisa langsung approved -> bisa langsung
+  // completed kalau penerimaannya sudah penuh. PR sumber (yang mungkin
+  // completed) dievaluasi ulang: qty PO yang naik / PO yang kembali open
+  // berarti PR belum selesai.
+  if (newStatus === "approved") await syncPoReceiveAndCompletion(supabase, poId);
+  for (const prId of involvedPrIds) {
+    await applyPrCompletionStatus(supabase, prId);
+  }
   if (poJenis === "so") await refreshSoStatus(supabase, po.so_id);
 
   // Riwayat.

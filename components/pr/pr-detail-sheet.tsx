@@ -313,14 +313,17 @@ export function PRDetailSheet({
   const nextPendingApproval = approvals.find(
     (a: any) => a.status === "pending",
   );
+  // PR yang sudah rejected/approved tidak boleh di-approve lagi walau masih
+  // ada step "pending" tersisa (step setelah penolakan).
   const isMyTurn =
     currentUser &&
+    pr?.pr_status === "open" &&
     nextPendingApproval &&
     nextPendingApproval.userid === currentUser.id;
 
   // PR sudah dikonversi ke PO kalau pr_convert_status bukan lagi 'pending'.
   const modPreviouslyApprovedLike =
-    !!pr && ["approved", "done", "closed"].includes(pr.pr_status);
+    !!pr && ["approved", "done", "closed", "completed"].includes(pr.pr_status);
   const modWillBeApproved =
     modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
   const modDowngradeLocked =
@@ -868,7 +871,7 @@ export function PRDetailSheet({
                   <Select
                     value={normalizeDocumentStatus(pr?.pr_status)}
                     onValueChange={handleStatusChange}
-                    disabled={updating}
+                    disabled={updating || !isModerator}
                   >
                     <SelectTrigger className="h-10 bg-white border-blue-200 font-bold text-xs uppercase text-slate-700 rounded-lg">
                       {updating ? (
@@ -1006,7 +1009,7 @@ export function PRDetailSheet({
                               onValueChange={(val) =>
                                 requestItemStatusChange(item, val)
                               }
-                              disabled={updatingItem === item.id}
+                              disabled={updatingItem === item.id || !isModerator}
                             >
                               <SelectTrigger
                                 className={cn(

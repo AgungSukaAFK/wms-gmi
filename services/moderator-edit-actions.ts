@@ -7,17 +7,26 @@ import {
   notifyDocumentOwner,
   createNotification,
 } from "@/services/notification-actions";
-import {
-  applyReturnSpbPosting,
-  finalizeSpbInvoiceStatus,
-} from "@/services/spb-actions";
-import { applyReceiveCompletion } from "@/services/procurement-actions";
+import { finalizeSpbInvoiceStatus } from "@/services/spb-actions";
+import { postReturnSpb } from "@/lib/spb-posting";
+import { applyReceiveCompletion } from "@/lib/receive-posting";
 import { evaluateMrFreeze } from "@/services/freeze-actions";
 import { syncShareStockStatuses } from "@/services/inventory-actions";
+import { fetchPrItemConvertedQty } from "@/lib/pr-po-coverage";
 import {
-  computePrConvertStatus,
-  fetchPrItemConvertedQty,
-} from "@/lib/pr-po-coverage";
+  applyMrConversionStatus,
+  applyPrCompletionStatus,
+  applyPrConversionStatus,
+  fetchMrItemPrConvertedQty,
+  fetchPoItemPendingReceiveQty,
+  fetchPoSourcePrIds,
+  syncPoReceiveAndCompletion,
+} from "@/lib/procurement-status";
+import { recomputeMrFulfillmentForMrs } from "@/lib/mr-fulfillment";
+
+// Status yang dianggap "sudah lolos approval" (termasuk completed -- dokumen
+// completed juga sudah punya distribusi/penerimaan yang harus dijaga).
+const APPROVED_LIKE_STATUSES = ["approved", "done", "closed", "completed"];
 
 // Duplikat dari DELIVERY_ACTIVE_STATUSES di inventory-actions.ts — file itu
 // "use server" jadi cuma bisa export async function, tidak bisa export const
@@ -191,21 +200,35 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
       return { error: "Ada item yang mau dihapus sudah punya alokasi Share Stock terkait." };
   }
 
-  // 2. Guard: qty tidak boleh diturunkan di bawah qty yang sudah dialokasikan.
-  if (payload.updatedItems) {
+  // 2. Guard: qty tidak boleh diturunkan di bawah qty yang sudah benar-benar
+  // terpakai: alokasi share stock + qty yang sudah dikonversi ke PR aktif.
+  // (Sisa jatah PR yang belum dipakai boleh dipangkas -- qty_pr ikut
+  // menyesuaikan di langkah 4b.)
+  const mrWasApprovedLike = APPROVED_LIKE_STATUSES.includes(mr.mr_status);
+  if (payload.updatedItems && payload.updatedItems.length > 0) {
+    if (payload.updatedItems.some((u) => !(u.qty_request > 0) || !Number.isInteger(Number(u.qty_request)))) {
+      return { error: "Qty request harus bilangan bulat lebih dari 0." };
+    }
+    const prUsed = await fetchMrItemPrConvertedQty(
+      supabase,
+      payload.updatedItems.map((u) => u.id),
+    );
     for (const upd of payload.updatedItems) {
       const existing = itemById.get(upd.id);
       if (!existing) continue;
-      const allocated = (existing.qty_pr || 0) + (existing.qty_sharestock_total || 0);
-      if (allocated > 0 && upd.qty_request < allocated) {
+      const floor = mrWasApprovedLike
+        ? (existing.qty_sharestock_total || 0) +
+          Math.min(existing.qty_pr || 0, prUsed.get(upd.id) || 0)
+        : (existing.qty_pr || 0) + (existing.qty_sharestock_total || 0);
+      if (floor > 0 && upd.qty_request < floor) {
         return {
-          error: `Qty item ${existing.part_number} tidak boleh diturunkan di bawah qty yang sudah dialokasikan (${allocated}).`,
+          error: `Qty item ${existing.part_number} tidak boleh diturunkan di bawah qty yang sudah dialokasikan/di-PR (${floor}).`,
         };
       }
     }
   }
 
-  const previousApprovedLike = ["approved", "done", "closed"].includes(mr.mr_status);
+  const previousApprovedLike = APPROVED_LIKE_STATUSES.includes(mr.mr_status);
   const newStatus = deriveStatus(payload.approvals);
   const newApprovedLike = newStatus === "approved";
 
@@ -271,13 +294,33 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
 
   let insertedItemIds: number[] = [];
   if (payload.newItems && payload.newItems.length > 0) {
-    const toInsert = payload.newItems.map((i) => ({ ...i, mr_id: mrId }));
+    const toInsert = payload.newItems.map((i) => ({
+      ...i,
+      mr_id: mrId,
+      // MR approved: item baru otomatis seluruhnya jatah PR (lihat 4b).
+      ...(previousApprovedLike ? { qty_pr: i.qty_request, qty_sharestock_total: 0 } : {}),
+    }));
     const { data: inserted, error: insertErr } = await supabase
       .from("mr_items")
       .insert(toInsert)
       .select("id");
     if (insertErr) return { error: `Gagal tambah item: ${insertErr.message}` };
     insertedItemIds = (inserted || []).map((i: any) => i.id);
+  }
+
+  // 4b. MR yang sudah approved tidak lewat Final Decision lagi: qty yang
+  // diubah otomatis jadi jatah PR (share stock tetap), supaya tidak ada qty
+  // yang menggantung tanpa jalur pemenuhan. Item baru: lihat insert di atas.
+  if (previousApprovedLike) {
+    for (const upd of payload.updatedItems || []) {
+      const existing = itemById.get(upd.id);
+      if (!existing) continue;
+      await supabase
+        .from("mr_items")
+        .update({ qty_pr: Math.max(0, upd.qty_request - (existing.qty_sharestock_total || 0)) })
+        .eq("id", upd.id)
+        .eq("mr_id", mrId);
+    }
   }
 
   // 5. Header patch.
@@ -322,7 +365,7 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
     // ---------- VALIDATE ALL FIRST (belum ada mutasi alokasi) ----------
     for (const itemId of allItemIds) {
       const alloc = allocByItem.get(itemId);
-      if (!alloc) continue; // tanpa entri alokasi → default: sudah full qty_request di qty_pr lewat item update, tidak perlu apa2 di sini
+      if (!alloc) continue; // tanpa entri alokasi → seluruh qty_request jadi jatah PR (di-apply di bawah)
       const allocationDeadline = alloc.deadline ? String(alloc.deadline).slice(0, 10) : null;
 
       if (
@@ -379,7 +422,15 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
     // ---------- SEMUA VALID -> APPLY MUTASI ----------
     for (const itemId of allItemIds) {
       const alloc = allocByItem.get(itemId);
-      if (!alloc) continue;
+      const freshItem = freshById.get(itemId);
+      if (!alloc) {
+        const { error: defErr } = await supabase
+          .from("mr_items")
+          .update({ qty_pr: freshItem?.qty_request ?? 0, qty_sharestock_total: 0 })
+          .eq("id", itemId);
+        if (defErr) return { error: defErr.message };
+        continue;
+      }
 
       if (alloc.sharestocks && alloc.sharestocks.length > 0) {
         const sharestockEntries = alloc.sharestocks.map((ss) => ({
@@ -394,16 +445,23 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
         if (insErr) return { error: insErr.message };
       }
 
+      // qty_pr dihitung server: PR + share stock = qty_request persis.
+      const shareTotal = Number(alloc.qty_sharestock_total || 0);
       const { error: updErr } = await supabase
         .from("mr_items")
         .update({
-          qty_pr: alloc.qty_pr,
-          qty_sharestock_total: alloc.qty_sharestock_total,
+          qty_pr: Math.max(0, (freshItem?.qty_request ?? 0) - shareTotal),
+          qty_sharestock_total: shareTotal,
         })
         .eq("id", itemId);
       if (updErr) return { error: updErr.message };
     }
   }
+
+  // 6b. Progres konversi & pemenuhan MR dihitung ulang (qty_request bisa
+  // berubah; MR completed yang qty-nya naik kembali approved, dan sebaliknya).
+  await applyMrConversionStatus(supabase, mrId);
+  await recomputeMrFulfillmentForMrs(supabase, [mrId]);
 
   // 7. Audit log.
   const { data: myProfile } = await supabase
@@ -590,23 +648,22 @@ export async function moderatorEditShareStockAllocations(
     m.set(src, (m.get(src) || 0) + row.qty_on_delivery);
   }
 
-  // Floor guard #2: qty yang sudah dikonversi ke PR (PR belum rejected) per
-  // item — qty_pr baru tidak boleh turun di bawah ini.
-  const { data: prItemRows } = await supabase
-    .from("pr_items")
-    .select("mr_item_id, qty, prs!inner(pr_status)")
+  // Qty yang sudah dipindah lewat Bypass share stock juga lantai per sumber.
+  const { data: bypassRows, error: bypassErr } = await supabase
+    .from("mr_sharestock_bypasses")
+    .select("mr_item_id, source_cabang_id, qty")
     .in("mr_item_id", itemIds);
-  const alreadyPrByItem = new Map<number, number>();
-  for (const row of prItemRows || []) {
-    const prStatus = Array.isArray((row as any).prs)
-      ? (row as any).prs[0]?.pr_status
-      : (row as any).prs?.pr_status;
-    if (prStatus === "rejected") continue;
-    alreadyPrByItem.set(
-      row.mr_item_id,
-      (alreadyPrByItem.get(row.mr_item_id) || 0) + row.qty,
-    );
+  if (!bypassErr) {
+    for (const row of bypassRows || []) {
+      if (!activeByItem.has(row.mr_item_id)) activeByItem.set(row.mr_item_id, new Map());
+      const m = activeByItem.get(row.mr_item_id)!;
+      m.set(row.source_cabang_id, (m.get(row.source_cabang_id) || 0) + row.qty);
+    }
   }
+
+  // Floor guard #2: qty yang sudah dikonversi ke PR aktif (PR belum rejected,
+  // item tidak ditolak per-item) -- qty_pr baru tidak boleh turun di bawah ini.
+  const alreadyPrByItem = await fetchMrItemPrConvertedQty(supabase, itemIds);
 
   // ---------- VALIDATE ALL FIRST (belum ada mutasi) ----------
   for (const item of items) {
@@ -739,6 +796,8 @@ export async function moderatorEditShareStockAllocations(
   // (mis. item yang tadinya "closed" karena sudah full-delivered di qty lama
   // sekarang harus balik ke "approved" kalau qty-nya dinaikkan).
   await syncShareStockStatuses(itemIds).catch(console.error);
+  // qty_pr berubah -> progres konversi MR ke PR ikut berubah.
+  await applyMrConversionStatus(supabase, mrId);
 
   const { data: myProfile } = await supabase
     .from("profiles")
@@ -785,47 +844,14 @@ export async function moderatorEditShareStockAllocations(
   return { success: true };
 }
 
-// Duplicated (not imported) from procurement-actions.ts's _applyMrConversionStatus /
-// _applyPrConversionStatus: those live in a "use server" module where every export
-// becomes a Server Action, so importing an internal helper with a non-serializable
-// `supabase` client argument across that boundary is unsafe. Kept in sync manually —
-// same aggregation logic (qty converted vs qty available → pending/partial/complete).
+// Rumus konversi terpusat di lib/procurement-status.ts (modul biasa, bukan
+// "use server", aman diimport).
 async function _recomputeMrConvertStatus(mrId: number, supabase: any) {
-  const { data: items } = await supabase
-    .from("mr_items")
-    .select("id, qty_pr")
-    .eq("mr_id", mrId)
-    .gt("qty_pr", 0);
-  if (!items || items.length === 0) return;
-
-  const itemIds = items.map((i: any) => i.id);
-  const { data: prItemRows } = await supabase
-    .from("pr_items")
-    .select("mr_item_id, qty, prs!inner(pr_status)")
-    .in("mr_item_id", itemIds);
-
-  const convertedMap = new Map<number, number>();
-  for (const row of prItemRows ?? []) {
-    const prStatus = Array.isArray(row.prs) ? row.prs[0]?.pr_status : row.prs?.pr_status;
-    if (prStatus === "rejected") continue;
-    convertedMap.set(row.mr_item_id, (convertedMap.get(row.mr_item_id) || 0) + row.qty);
-  }
-
-  const totalQtyPr = items.reduce((s: number, i: any) => s + (i.qty_pr || 0), 0);
-  const totalConverted = items.reduce(
-    (s: number, i: any) => s + Math.min(i.qty_pr || 0, convertedMap.get(i.id) || 0),
-    0,
-  );
-  const status =
-    totalConverted <= 0 ? "pending" : totalConverted < totalQtyPr ? "partial" : "complete";
-  await supabase.from("mrs").update({ mr_convert_status: status }).eq("id", mrId);
+  await applyMrConversionStatus(supabase, mrId);
 }
 
 async function _recomputePrConvertStatus(prId: number, supabase: any) {
-  // lib/pr-po-coverage.ts bukan modul "use server", aman diimport langsung.
-  const status = await computePrConvertStatus(supabase, prId);
-  if (!status) return;
-  await supabase.from("prs").update({ pr_convert_status: status }).eq("id", prId);
+  await applyPrConversionStatus(supabase, prId);
 }
 
 /**
@@ -920,20 +946,10 @@ export async function moderatorEditPR(prId: number, payload: ModeratorPrEditPayl
         .from("mr_items")
         .select("id, qty_pr, part_number")
         .in("id", mrItemIds);
-      const { data: siblingPrItems } = await supabase
-        .from("pr_items")
-        .select("mr_item_id, qty, prs!inner(pr_status)")
-        .in("mr_item_id", mrItemIds)
-        .neq("pr_id", prId);
-
-      const elsewhereMap = new Map<number, number>();
-      for (const row of siblingPrItems || []) {
-        const prStatus = Array.isArray((row as any).prs)
-          ? (row as any).prs[0]?.pr_status
-          : (row as any).prs?.pr_status;
-        if (prStatus === "rejected") continue;
-        elsewhereMap.set(row.mr_item_id, (elsewhereMap.get(row.mr_item_id) || 0) + row.qty);
-      }
+      // PR lain yang aktif (bukan rejected, item tidak ditolak per-item).
+      const elsewhereMap = await fetchMrItemPrConvertedQty(supabase, mrItemIds, {
+        excludePrId: prId,
+      });
       const mrItemById = new Map((mrItemRows || []).map((r: any) => [r.id, r]));
 
       for (const upd of payload.updatedItems) {
@@ -952,7 +968,7 @@ export async function moderatorEditPR(prId: number, payload: ModeratorPrEditPayl
     }
   }
 
-  const previousApprovedLike = ["approved", "done", "closed"].includes(pr.pr_status);
+  const previousApprovedLike = APPROVED_LIKE_STATUSES.includes(pr.pr_status);
   const newStatus = deriveStatus(payload.approvals);
   const newApprovedLike = newStatus === "approved";
 
@@ -960,6 +976,38 @@ export async function moderatorEditPR(prId: number, payload: ModeratorPrEditPayl
     const rejectedStep = payload.approvals.find((a) => a.status === "rejected");
     if (!rejectedStep?.notes?.trim()) {
       return { error: "Catatan/alasan penolakan wajib diisi pada tahap yang di-reject." };
+    }
+  }
+
+  // 3b. PR rejected yang dihidupkan lagi: qty-nya sudah dibebaskan ke MR dan
+  // bisa sudah dipakai PR lain -- seluruh item wajib muat di sisa qty_pr MR.
+  if (pr.pr_status === "rejected" && newStatus !== "rejected") {
+    const keptItems = (currentItems || []).filter(
+      (i: any) => !(payload.deletedItemIds || []).includes(i.id) && i.mr_item_id,
+    );
+    const qtyOf = (i: any) =>
+      payload.updatedItems?.find((u) => u.id === i.id)?.qty ?? Number(i.qty) ?? 0;
+    const mrItemIds = Array.from(new Set(keptItems.map((i: any) => i.mr_item_id)));
+    if (mrItemIds.length > 0) {
+      const { data: mrItemRows } = await supabase
+        .from("mr_items")
+        .select("id, qty_pr")
+        .in("id", mrItemIds);
+      const qtyPrById = new Map((mrItemRows || []).map((r: any) => [r.id, r.qty_pr || 0]));
+      const elsewhere = await fetchMrItemPrConvertedQty(supabase, mrItemIds, { excludePrId: prId });
+      const usedHere = new Map<number, number>();
+      for (const i of keptItems) {
+        usedHere.set(i.mr_item_id, (usedHere.get(i.mr_item_id) || 0) + qtyOf(i));
+      }
+      for (const [mrItemId, qty] of usedHere) {
+        const sisa = Math.max(0, (qtyPrById.get(mrItemId) || 0) - (elsewhere.get(mrItemId) || 0));
+        if (qty > sisa) {
+          const item = keptItems.find((i: any) => i.mr_item_id === mrItemId);
+          return {
+            error: `PR rejected tidak bisa dihidupkan lagi: qty ${item?.part_number} (${qty}) melebihi sisa MR yang belum di-PR (${sisa}).`,
+          };
+        }
+      }
     }
   }
 
@@ -1014,17 +1062,18 @@ export async function moderatorEditPR(prId: number, payload: ModeratorPrEditPayl
   if (updateErr) return { error: updateErr.message };
 
   // 7. Recompute conversion progress (denominator/numerator berubah kalau ada
-  // item dihapus/qty berubah) supaya persentase di UI lain tidak jadi janggal.
-  if (
-    (payload.deletedItemIds && payload.deletedItemIds.length > 0) ||
-    (payload.updatedItems && payload.updatedItems.length > 0)
-  ) {
-    await _recomputePrConvertStatus(prId, supabase);
+  // item dihapus/qty berubah, atau status PR berubah dari/ke rejected) supaya
+  // persentase di UI lain tidak jadi janggal.
+  await _recomputePrConvertStatus(prId, supabase);
+  {
     const involvedMrIds = Array.from(
       new Set((currentItems || []).map((i: any) => i.mr_id).filter(Boolean)),
     );
-    await Promise.all(involvedMrIds.map((mrId) => _recomputeMrConvertStatus(mrId, supabase)));
+    await Promise.all(involvedMrIds.map((mrId) => _recomputeMrConvertStatus(mrId as number, supabase)));
   }
+  // PR yang tadinya completed tetap completed kalau syaratnya masih terpenuhi
+  // (semua ter-PO & diterima penuh), selain itu kembali approved.
+  if (newStatus === "approved") await applyPrCompletionStatus(supabase, prId);
 
   // 8. Audit log.
   const { data: myProfile } = await supabase
@@ -1101,23 +1150,6 @@ export async function moderatorEditPR(prId: number, payload: ModeratorPrEditPayl
   return { success: true };
 }
 
-// Mirrors the receive-status aggregation in createReceive() (procurement-actions.ts):
-// qty_received per line vs qty ordered → pending/partial/complete. Only the
-// receive_status is synced here (po_status stays whatever the moderator set via
-// approvals) since qty can shrink under Moderator Edit and change the percentage.
-async function _recomputePoReceiveStatus(poId: number, supabase: any) {
-  const { data: items } = await supabase
-    .from("po_items")
-    .select("qty, qty_received")
-    .eq("po_id", poId);
-  if (!items || items.length === 0) return;
-
-  const allReceived = items.every((i: any) => i.qty_received >= i.qty);
-  const someReceived = items.some((i: any) => i.qty_received > 0);
-  const status = allReceived ? "complete" : someReceived ? "partial" : "pending";
-  await supabase.from("pos").update({ po_receive_status: status }).eq("id", poId);
-}
-
 /**
  * Edit PO secara penuh oleh moderator: header (tanggal/estimasi/payment
  * term/keterangan), qty item (existing saja — sama seperti PR, item baru
@@ -1166,25 +1198,37 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
     .eq("po_id", poId);
   const itemById = new Map((currentItems || []).map((i: any) => [i.id, i]));
 
+  // RI yang masih menunggu approval ikut dihitung "sudah diterima" untuk
+  // guard di bawah (kalau tidak, RI itu nanti memposting melebihi qty PO).
+  const pendingRi = await fetchPoItemPendingReceiveQty(
+    supabase,
+    (currentItems || []).map((i: any) => i.id),
+  );
+
   // 1. Guard: item yang mau dihapus tidak boleh sudah ada barang yang diterima.
   if (payload.deletedItemIds && payload.deletedItemIds.length > 0) {
     for (const id of payload.deletedItemIds) {
       const item = itemById.get(id);
-      if (item && item.qty_received > 0) {
+      if (item && (item.qty_received > 0 || (pendingRi.get(id) || 0) > 0)) {
         return {
-          error: `Item ${item.part_number} sudah ada barang diterima (${item.qty_received}), tidak bisa dihapus.`,
+          error: `Item ${item.part_number} sudah ada barang diterima / RI yang menunggu approval, tidak bisa dihapus.`,
         };
       }
     }
   }
 
   if (payload.updatedItems && payload.updatedItems.length > 0) {
-    // 2. Guard: qty tidak boleh diturunkan di bawah qty yang sudah diterima.
+    // 2. Guard: qty tidak boleh diturunkan di bawah qty yang sudah diterima
+    // + qty RI yang masih menunggu approval.
     for (const upd of payload.updatedItems) {
       const item = itemById.get(upd.id);
-      if (item && upd.qty < item.qty_received) {
+      const floor = (item?.qty_received || 0) + (pendingRi.get(upd.id) || 0);
+      if (!Number.isInteger(Number(upd.qty)) || !(upd.qty > 0)) {
+        return { error: `Qty item ${item?.part_number || upd.id} harus bilangan bulat lebih dari 0.` };
+      }
+      if (item && upd.qty < floor) {
         return {
-          error: `Qty item ${item.part_number} tidak boleh diturunkan di bawah qty yang sudah diterima (${item.qty_received}).`,
+          error: `Qty item ${item.part_number} tidak boleh diturunkan di bawah qty yang sudah diterima + RI menunggu approval (${floor}).`,
         };
       }
     }
@@ -1203,20 +1247,10 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
         .from("pr_items")
         .select("id, qty, part_number")
         .in("id", prItemIds);
-      const { data: siblingPoItems } = await supabase
-        .from("po_items")
-        .select("pr_item_id, qty, pos!inner(po_status)")
-        .in("pr_item_id", prItemIds)
-        .neq("po_id", poId);
-
-      const elsewhereMap = new Map<number, number>();
-      for (const row of siblingPoItems || []) {
-        const poStatus = Array.isArray((row as any).pos)
-          ? (row as any).pos[0]?.po_status
-          : (row as any).pos?.po_status;
-        if (poStatus === "rejected") continue;
-        elsewhereMap.set(row.pr_item_id, (elsewhereMap.get(row.pr_item_id) || 0) + row.qty);
-      }
+      // PO lain aktif + link manual PO Non-PR (rumus yang sama dgn create PO).
+      const elsewhereMap = await fetchPrItemConvertedQty(supabase, prItemIds, {
+        excludePoId: poId,
+      });
       const prItemById = new Map((prItemRows || []).map((r: any) => [r.id, r]));
 
       for (const upd of payload.updatedItems) {
@@ -1235,7 +1269,7 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
     }
   }
 
-  const previousApprovedLike = ["approved", "done", "closed"].includes(po.po_status);
+  const previousApprovedLike = APPROVED_LIKE_STATUSES.includes(po.po_status);
   const newStatus = deriveStatus(payload.approvals);
   const newApprovedLike = newStatus === "approved";
 
@@ -1247,12 +1281,44 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
   }
 
   // 4. Guard: turun dari approved (atau setara) hanya boleh kalau belum ada
-  // barang yang diterima sama sekali untuk PO ini.
-  if (previousApprovedLike && !newApprovedLike && po.po_receive_status !== "pending") {
+  // barang yang diterima sama sekali untuk PO ini (termasuk RI pending).
+  if (
+    previousApprovedLike &&
+    !newApprovedLike &&
+    (po.po_receive_status !== "pending" || Array.from(pendingRi.values()).some((q) => q > 0))
+  ) {
     return {
       error:
-        "PO ini sudah mulai diterima (partial/complete). Tidak bisa mengubah status approval keluar dari 'approved' tanpa membereskan penerimaan tersebut terlebih dahulu.",
+        "PO ini sudah mulai diterima (partial/complete) atau ada RI yang menunggu approval. Tidak bisa mengubah status approval keluar dari 'approved' tanpa membereskan penerimaan tersebut terlebih dahulu.",
     };
+  }
+
+  // 4b. PO rejected yang dihidupkan lagi: qty PR-nya sudah dibebaskan (bisa
+  // sudah di-PO ulang), jadi seluruh item wajib muat di sisa PR.
+  if (po.po_status === "rejected" && newStatus !== "rejected") {
+    const kept = (currentItems || []).filter(
+      (i: any) => !(payload.deletedItemIds || []).includes(i.id) && i.pr_item_id,
+    );
+    const prIds = Array.from(new Set(kept.map((i: any) => i.pr_item_id)));
+    if (prIds.length > 0) {
+      const { data: prRows } = await supabase.from("pr_items").select("id, qty").in("id", prIds);
+      const prQty = new Map((prRows || []).map((r: any) => [r.id, Number(r.qty) || 0]));
+      const elsewhere = await fetchPrItemConvertedQty(supabase, prIds, { excludePoId: poId });
+      const usedHere = new Map<number, number>();
+      for (const i of kept) {
+        const q = payload.updatedItems?.find((u) => u.id === i.id)?.qty ?? Number(i.qty) ?? 0;
+        usedHere.set(i.pr_item_id, (usedHere.get(i.pr_item_id) || 0) + q);
+      }
+      for (const [prItemId, q] of usedHere) {
+        const sisa = Math.max(0, (prQty.get(prItemId) || 0) - (elsewhere.get(prItemId) || 0));
+        if (q > sisa) {
+          const it = kept.find((i: any) => i.pr_item_id === prItemId);
+          return {
+            error: `PO rejected tidak bisa dihidupkan lagi: qty ${it?.part_number} (${q}) melebihi sisa PR yang belum di-PO (${sisa}).`,
+          };
+        }
+      }
+    }
   }
 
   // 5. Apply item mutations.
@@ -1291,24 +1357,23 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
   if (updateErr) return { error: updateErr.message };
 
   // 7. Recompute penerimaan (denominator berubah kalau qty diubah/item dihapus)
-  // dan progres konversi PR sumbernya, supaya tidak ada persentase yang janggal.
-  if (
-    (payload.deletedItemIds && payload.deletedItemIds.length > 0) ||
-    (payload.updatedItems && payload.updatedItems.length > 0)
-  ) {
-    await _recomputePoReceiveStatus(poId, supabase);
-    const prItemIds = (currentItems || [])
-      .map((i: any) => i.pr_item_id)
-      .filter(Boolean);
-    if (prItemIds.length > 0) {
-      const { data: prItemRows } = await supabase
-        .from("pr_items")
-        .select("id, pr_id")
-        .in("id", prItemIds);
-      const involvedPrIds = Array.from(
-        new Set((prItemRows || []).map((r: any) => r.pr_id).filter(Boolean)),
-      );
-      await Promise.all(involvedPrIds.map((prId) => _recomputePrConvertStatus(prId, supabase)));
+  // + po_status approved<->completed, progres konversi & completion PR
+  // sumbernya (status PO dari/ke rejected juga mengubah coverage PR).
+  // PR sumber dicatat dari item SEBELUM edit (item yang dihapus ikut).
+  {
+    const prItemIds = (currentItems || []).map((i: any) => i.pr_item_id).filter(Boolean);
+    const { data: prItemRows } =
+      prItemIds.length > 0
+        ? await supabase.from("pr_items").select("pr_id").in("id", prItemIds)
+        : { data: [] as any[] };
+    const involvedPrIds = new Set<number>(
+      (prItemRows || []).map((r: any) => r.pr_id).filter(Boolean),
+    );
+    for (const id of await fetchPoSourcePrIds(supabase, poId)) involvedPrIds.add(id);
+    await syncPoReceiveAndCompletion(supabase, poId);
+    for (const prId of involvedPrIds) {
+      await _recomputePrConvertStatus(prId, supabase);
+      await applyPrCompletionStatus(supabase, prId);
     }
   }
 
@@ -1490,14 +1555,33 @@ export async function moderatorEditReceive(riId: number, payload: ModeratorRecei
         .select("id, qty, qty_received, part_number")
         .in("id", poItemIds);
       const poItemById = new Map((poItemRows || []).map((r: any) => [r.id, r]));
+      // RI lain yang masih menunggu approval ikut mengurangi sisa.
+      const pendingOther = await fetchPoItemPendingReceiveQty(supabase, poItemIds, {
+        excludeRiId: riId,
+      });
+      const requestedByPoItem = new Map<number, number>();
+      for (const upd of payload.updatedItems) {
+        const item = itemById.get(upd.id);
+        if (!item?.po_item_id) continue;
+        requestedByPoItem.set(
+          item.po_item_id,
+          (requestedByPoItem.get(item.po_item_id) || 0) + Number(upd.qty || 0),
+        );
+      }
 
       for (const upd of payload.updatedItems) {
         const item = itemById.get(upd.id);
         if (!item?.po_item_id) continue;
         const poItem = poItemById.get(item.po_item_id);
         if (!poItem) continue;
-        const remaining = Math.max(0, (poItem.qty || 0) - (poItem.qty_received || 0));
-        if (upd.qty > remaining) {
+        const remaining = Math.max(
+          0,
+          (poItem.qty || 0) - (poItem.qty_received || 0) - (pendingOther.get(item.po_item_id) || 0),
+        );
+        if (!(upd.qty > 0) || !Number.isInteger(Number(upd.qty))) {
+          return { error: `Qty item ${item.part_number} harus bilangan bulat lebih dari 0.` };
+        }
+        if ((requestedByPoItem.get(item.po_item_id) || 0) > remaining) {
           return {
             error: `Qty item ${item.part_number} melebihi sisa yang bisa diterima dari PO (sisa ${remaining}).`,
           };
@@ -1553,14 +1637,25 @@ export async function moderatorEditReceive(riId: number, payload: ModeratorRecei
   if (payload.ri_pic !== undefined) headerPatch.ri_pic = payload.ri_pic;
   if (payload.ri_keterangan !== undefined) headerPatch.ri_keterangan = payload.ri_keterangan || null;
 
-  const { error: updateErr } = await supabase.from("receives").update(headerPatch).eq("id", riId);
+  // Kondisional pada status lama: kalau RI ini barusan di-complete lewat
+  // approve normal (atau edit lain), update ini tidak lolos -> tidak ada
+  // posting stok dobel.
+  const { data: claimedRi, error: updateErr } = await supabase
+    .from("receives")
+    .update(headerPatch)
+    .eq("id", riId)
+    .eq("ri_status", previousStatus)
+    .select("id");
   if (updateErr) return { error: updateErr.message };
+  if (!claimedRi || claimedRi.length === 0) {
+    return { error: "Receive ini baru saja diubah proses lain. Muat ulang halaman." };
+  }
 
   // 6. Baru pertama kali completed lewat mode ini → jalankan posting stok yang
   // sama seperti alur approve normal. Kalau gagal, rollback status supaya tidak
   // ada dokumen yang "completed" tanpa posting.
   if (!previousCompleted && newCompleted) {
-    const completionResult = await applyReceiveCompletion(riId);
+    const completionResult = await applyReceiveCompletion(supabase, riId);
     if ((completionResult as any)?.error) {
       await supabase
         .from("receives")
@@ -1767,8 +1862,16 @@ async function _moderatorEditStockOut(params: {
     completed_at: newCompleted ? (row.completed_at ?? new Date().toISOString()) : null,
   };
 
-  const { error: updateErr } = await supabase.from(table).update(patch).eq("id", id);
+  const { data: claimedRows, error: updateErr } = await supabase
+    .from(table)
+    .update(patch)
+    .eq("id", id)
+    .eq("approval_status", previousStatus)
+    .select("id");
   if (updateErr) return { error: updateErr.message };
+  if (!claimedRows || claimedRows.length === 0) {
+    return { error: "Dokumen ini baru saja diubah proses lain. Muat ulang halaman." };
+  }
 
   if (!previousCompleted && newCompleted && onFirstComplete) {
     const finalizeResult = await onFirstComplete(id);
@@ -1877,7 +1980,7 @@ export async function moderatorEditReturnSpb(id: number, payload: ModeratorRetur
       const {
         data: { user },
       } = await supabase.auth.getUser();
-      return applyReturnSpbPosting(docId, user?.id || "");
+      return postReturnSpb(supabase, docId, user?.id || "");
     },
     documentUrl: "/return-spb",
   });

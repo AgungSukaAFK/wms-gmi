@@ -126,6 +126,8 @@ export default function CreateItemTransferPage() {
   // Form
   const [itKode, setItKode] = useState("");
   const [itTanggal, setItTanggal] = useState(toYmdLocal());
+  // Gudang asal bisa dipilih; default gudang user sendiri.
+  const [dariCabang, setDariCabang] = useState<number | null>(null);
   const [keCabang, setKeCabang] = useState<number | null>(null);
   const [items, setItems] = useState<ITItem[]>([]);
   const [remarks, setRemarks] = useState("");
@@ -183,7 +185,8 @@ export default function CreateItemTransferPage() {
         .select("id, nama_cabang")
         .eq("is_active", true)
         .order("nama_cabang");
-      setCabangs((cabangData || []).filter((c: any) => c.id !== profile?.cabang_id));
+      setCabangs(cabangData || []);
+      setDariCabang(profile?.cabang_id ?? null);
 
       const { data: usersData } = await supabase
         .from("profiles")
@@ -226,13 +229,13 @@ export default function CreateItemTransferPage() {
   // asal (cabang) user ini -- cuma RI yang barangnya "mendarat" di cabang
   // kita yang bisa jadi sumber IT.
   useEffect(() => {
-    if (!riDialogOpen || !userProfile?.cabang_id) return;
+    if (!riDialogOpen || !dariCabang) return;
     const run = async () => {
       let q = supabase
         .from("receives")
         .select("id, ri_kode, ri_tanggal, receive_items!inner(cabang_penerima_id)")
         .eq("ri_status", "completed")
-        .eq("receive_items.cabang_penerima_id", userProfile.cabang_id)
+        .eq("receive_items.cabang_penerima_id", dariCabang)
         .order("ri_tanggal", { ascending: false })
         .limit(20);
       if (debouncedRiSearch) q = q.ilike("ri_kode", `%${debouncedRiSearch}%`);
@@ -247,7 +250,7 @@ export default function CreateItemTransferPage() {
       setRiResults(uniq);
     };
     run();
-  }, [debouncedRiSearch, riDialogOpen, userProfile?.cabang_id]);
+  }, [debouncedRiSearch, riDialogOpen, dariCabang]);
 
   const selectRi = async (ri: any) => {
     setSelectedRi(ri);
@@ -257,10 +260,10 @@ export default function CreateItemTransferPage() {
     const { data: lines } = await supabase
       .from("receive_items")
       .select(
-        "id, part_id, part_number, part_name, satuan, qty, mr_id, mrs(mr_kode)",
+        "id, part_id, part_number, part_name, satuan, qty, mr_id, mrs(mr_kode), po_items(pr_items(mr_item_id, mr_items(mrs(cabang_id))))",
       )
       .eq("ri_id", ri.id)
-      .eq("cabang_penerima_id", userProfile.cabang_id);
+      .eq("cabang_penerima_id", dariCabang);
 
     const receiveItemIds = (lines || []).map((l: any) => l.id);
     const { data: usedRows } =
@@ -279,10 +282,12 @@ export default function CreateItemTransferPage() {
       );
     }
 
-    // Resolve mr_item_id per baris via mr_id+part_id (pola yang sama dipakai
-    // applyReceiveCompletion sebelum revisi ini).
-    // mr_id null = RI dari PO Non-PR (tidak terikat MR, jadi IT-nya cuma
-    // pindah stok biasa).
+    // Lineage MR presisi lewat po_item -> pr_item -> mr_item (bukan tebak
+    // mr_id+part_id yang salah kalau MR punya PN sama di 2 baris). Fallback
+    // mr_id+part_id hanya untuk data lama yang unik. mr_id null = RI dari PO
+    // Non-PR (tidak terikat MR, IT-nya cuma pindah stok biasa). Baris RI yang
+    // gudang penerimanya = gudang MR sudah dikredit ke MR saat RI completed,
+    // jadi tidak dibawa lagi (server juga memaksa ini).
     const mrIds = Array.from(
       new Set((lines || []).map((l: any) => l.mr_id).filter(Boolean)),
     );
@@ -293,10 +298,19 @@ export default function CreateItemTransferPage() {
             .select("id, mr_id, part_id")
             .in("mr_id", mrIds)
         : { data: [] as any[] };
-    const mrItemMap = new Map<string, number>();
-    for (const mi of mrItemRows || []) {
-      mrItemMap.set(`${mi.mr_id}:${mi.part_id}`, mi.id);
-    }
+    const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+    const resolveMrItem = (l: any): { id: number | null; credited: boolean } => {
+      const prItem = one(one(l.po_items)?.pr_items);
+      if (prItem?.mr_item_id) {
+        const mrCabang = one(one(prItem.mr_items)?.mrs)?.cabang_id;
+        const credited = mrCabang != null && Number(mrCabang) === Number(dariCabang);
+        return { id: credited ? null : prItem.mr_item_id, credited };
+      }
+      const matches = (mrItemRows || []).filter(
+        (mi: any) => mi.mr_id === l.mr_id && mi.part_id === l.part_id,
+      );
+      return { id: matches.length === 1 ? matches[0].id : null, credited: false };
+    };
 
     const draft: RiLine[] = (lines || [])
       .map((l: any) => {
@@ -309,8 +323,10 @@ export default function CreateItemTransferPage() {
           satuan: l.satuan,
           qty_sisa: sisa,
           qty_pilih: sisa,
-          mr_item_id: mrItemMap.get(`${l.mr_id}:${l.part_id}`) ?? null,
-          mr_kode: l.mrs?.mr_kode || "-",
+          mr_item_id: resolveMrItem(l).id,
+          mr_kode: resolveMrItem(l).credited
+            ? `${l.mrs?.mr_kode || "-"} (sudah terpenuhi saat RI)`
+            : l.mrs?.mr_kode || "-",
           selected: sisa > 0,
         };
       })
@@ -405,8 +421,8 @@ export default function CreateItemTransferPage() {
 
   const addItem = async (barang: any) => {
     if (items.some((i) => i.part_id === barang.id)) return;
-    if (!userProfile?.cabang_id) {
-      toast.error("Cabang asal tidak diketahui.");
+    if (!dariCabang) {
+      toast.error("Pilih gudang asal terlebih dahulu.");
       return;
     }
     if (!keCabang) {
@@ -418,12 +434,12 @@ export default function CreateItemTransferPage() {
       .from("stock")
       .select("qty")
       .eq("part_id", barang.id)
-      .eq("cabang_id", userProfile.cabang_id)
+      .eq("cabang_id", dariCabang)
       .maybeSingle();
     const avail = stock?.qty ?? 0;
     if (avail <= 0) {
       toast.error(
-        `Stok ${barang.part_number} di gudang Anda kosong. Tidak bisa ditransfer.`,
+        `Stok ${barang.part_number} di gudang asal kosong. Tidak bisa ditransfer.`,
       );
       return;
     }
@@ -485,7 +501,9 @@ export default function CreateItemTransferPage() {
 
   const validate = () => {
     if (!itKode.trim()) return "Kode Item Transfer wajib diisi.";
+    if (!dariCabang) return "Pilih gudang asal.";
     if (!keCabang) return "Pilih gudang tujuan.";
+    if (dariCabang === keCabang) return "Gudang asal dan tujuan tidak boleh sama.";
     if (items.length === 0) return "Tambahkan minimal satu item.";
     if (!picUid) return "PIC harus dipilih.";
     if (!receiverUid) return "Penerima harus dipilih.";
@@ -547,7 +565,7 @@ export default function CreateItemTransferPage() {
       const result = await createItemTransfer({
         it_kode: itKode.trim(),
         it_tanggal: itTanggal,
-        dari_cabang_id: userProfile.cabang_id,
+        dari_cabang_id: dariCabang!,
         ke_cabang_id: keCabang!,
         shipment_type: shipmentType,
         ekspedisi:
@@ -651,9 +669,29 @@ export default function CreateItemTransferPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
               <Building2 className="h-3 w-3" /> Gudang Asal
             </Label>
-            <div className="h-10 rounded-md border border-input bg-muted/40 px-3 flex items-center text-sm font-bold uppercase">
-              {userProfile?.cabang?.nama_cabang || "-"}
-            </div>
+            <Select
+              value={dariCabang?.toString()}
+              onValueChange={(v) => {
+                const next = parseInt(v);
+                setDariCabang(next);
+                if (keCabang === next) setKeCabang(null);
+                if (items.length > 0) {
+                  setItems([]);
+                  toast.info("Daftar item direset karena gudang asal berubah.");
+                }
+              }}
+            >
+              <SelectTrigger className="h-10 text-sm font-bold">
+                <SelectValue placeholder="Pilih gudang asal..." />
+              </SelectTrigger>
+              <SelectContent>
+                {cabangs.map((c) => (
+                  <SelectItem key={c.id} value={c.id.toString()}>
+                    {c.nama_cabang}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
@@ -675,11 +713,13 @@ export default function CreateItemTransferPage() {
                 <SelectValue placeholder="Pilih gudang tujuan..." />
               </SelectTrigger>
               <SelectContent>
-                {cabangs.map((c) => (
-                  <SelectItem key={c.id} value={c.id.toString()}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
+                {cabangs
+                  .filter((c) => c.id !== dariCabang)
+                  .map((c) => (
+                    <SelectItem key={c.id} value={c.id.toString()}>
+                      {c.nama_cabang}
+                    </SelectItem>
+                  ))}
               </SelectContent>
             </Select>
           </div>

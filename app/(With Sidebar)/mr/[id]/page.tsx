@@ -567,7 +567,7 @@ export default function MRDetailPage({
   };
 
   const modPreviouslyApprovedLike =
-    mr && ["approved", "done", "closed"].includes(mr.mr_status);
+    mr && ["approved", "done", "closed", "completed"].includes(mr.mr_status);
   const modWillBeApproved =
     modApprovals.length > 0 && modApprovals.every((a) => a.status === "approved");
   const showModAllocationForm =

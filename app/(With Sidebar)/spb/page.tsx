@@ -360,7 +360,6 @@ export default function SpbPage() {
                 <SelectItem value="DONE QUOT">DONE QUOT</SelectItem>
                 <SelectItem value="PO_ATTACH">PO_ATTACH</SelectItem>
                 <SelectItem value="DO_ATTACH">DO_ATTACH</SelectItem>
-                <SelectItem value="DONE_QUOTE">DONE_QUOTE</SelectItem>
                 <SelectItem value="Partial">Partial</SelectItem>
                 <SelectItem value="Returned">Returned</SelectItem>
                 <SelectItem value="CANCELLED">CANCELLED</SelectItem>
@@ -715,7 +714,6 @@ export default function SpbPage() {
                   <SelectItem value="DONE QUOT">DONE QUOT</SelectItem>
                   <SelectItem value="PO_ATTACH">PO_ATTACH</SelectItem>
                   <SelectItem value="DO_ATTACH">DO_ATTACH</SelectItem>
-                  <SelectItem value="DONE_QUOTE">DONE_QUOTE</SelectItem>
                   <SelectItem value="Partial">Partial</SelectItem>
                   <SelectItem value="Returned">Returned</SelectItem>
                 </SelectContent>

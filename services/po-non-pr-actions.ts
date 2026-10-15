@@ -6,6 +6,7 @@ import {
   computePrConvertStatus,
   fetchPrItemConvertedQty,
 } from "@/lib/pr-po-coverage";
+import { applyPrCompletionStatus } from "@/lib/procurement-status";
 
 // "Hubungkan ke PR" untuk item PO Non-PR (escape plan, lihat
 // supabase/migrations/20261006100000_po_non_pr_and_jc_link.sql). Relasi
@@ -28,6 +29,8 @@ async function refreshPrStatus(supabase: any, prId: number) {
   if (status) {
     await supabase.from("prs").update({ pr_convert_status: status }).eq("id", prId);
   }
+  // Link baru/dihapus bisa membuat PR (tidak) lagi completed.
+  await applyPrCompletionStatus(supabase, prId);
 }
 
 export async function linkPoItemToPrItem(data: {
@@ -68,10 +71,13 @@ export async function linkPoItemToPrItem(data: {
 
   const { data: prItem } = await supabase
     .from("pr_items")
-    .select("id, pr_id, qty, part_number, satuan, prs!inner(pr_kode, pr_status)")
+    .select("id, pr_id, qty, status, part_number, satuan, prs!inner(pr_kode, pr_status)")
     .eq("id", data.pr_item_id)
     .maybeSingle();
   if (!prItem) return { error: "Item PR tidak ditemukan." };
+  if (prItem.status === "rejected") {
+    return { error: "Item PR ini ditolak approver, tidak bisa dihubungkan ke PO." };
+  }
   const pr: any = Array.isArray(prItem.prs) ? prItem.prs[0] : prItem.prs;
   if (pr?.pr_status !== "approved") {
     return { error: `PR ${pr?.pr_kode || ""} belum/tidak berstatus approved.` };

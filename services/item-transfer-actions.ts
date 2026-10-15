@@ -3,7 +3,11 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { KoliRow } from "@/lib/shipment";
-import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
+import {
+  recomputeMrItemsFulfillment,
+  resolveReceiveItemsMrLineage,
+} from "@/lib/mr-fulfillment";
+import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
 import {
   notifyApprovers,
   notifyDocumentOwner,
@@ -27,39 +31,30 @@ async function releaseStockFromSource(
   items: { part_id: number; part_number: string; part_name: string; qty: number }[],
   userId?: string,
 ) {
-  // Validasi ulang: stok asal harus mencukupi saat ini.
-  const violations: string[] = [];
-  for (const item of items) {
-    const { data: srcStock } = await supabase
-      .from("stock")
-      .select("qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", it.dari_cabang_id)
-      .maybeSingle();
-    const avail = srcStock?.qty ?? 0;
-    if (item.qty > avail) {
-      violations.push(`${item.part_number}: minta ${item.qty}, stok ${avail}`);
+  // Total per part (PN sama di beberapa baris dijumlah), dipotong atomik.
+  // Kalau ada yang gagal, potongan yang sudah terjadi dikembalikan.
+  const neededByPart = sumQtyByPart(items, (i) => i.qty);
+  const deducted: { partId: number; qty: number }[] = [];
+  for (const [partId, qty] of neededByPart) {
+    const sample = items.find((i) => i.part_id === partId)!;
+    const res = await changeStockQty(
+      supabase,
+      { partId, cabangId: it.dari_cabang_id },
+      -qty,
+      { label: sample.part_number },
+    );
+    if (!res.ok) {
+      for (const d of deducted) {
+        await changeStockQty(supabase, { partId: d.partId, cabangId: it.dari_cabang_id }, d.qty, {
+          allowNegative: true,
+        });
+      }
+      return { error: "Stok gudang asal tidak mencukupi:\n" + res.error };
     }
-  }
-  if (violations.length > 0) {
-    return {
-      error: "Stok gudang asal tidak mencukupi:\n" + violations.join("\n"),
-    };
+    deducted.push({ partId, qty });
   }
 
   for (const item of items) {
-    const { data: srcStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", it.dari_cabang_id)
-      .maybeSingle();
-    if (srcStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: srcStock.qty - item.qty })
-        .eq("id", srcStock.id);
-    }
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
       cabang_id: it.dari_cabang_id,
@@ -136,8 +131,60 @@ export async function createItemTransfer(data: {
   if (existing)
     return { error: "Kode Item Transfer sudah digunakan. Gunakan kode lain." };
 
-  // Validasi qty <= stok gudang asal
+  if (data.items.some((i) => !(i.qty > 0) || !Number.isInteger(Number(i.qty))))
+    return { error: "Qty item harus bilangan bulat lebih dari 0." };
+
+  // Baris "dari RI": divalidasi ulang di server -- RI harus completed, barang
+  // mendarat di gudang asal IT ini, part sama, dan total qty tidak melebihi
+  // sisa RI (qty RI - IT lain yang belum rejected). mr_item_id diturunkan dari
+  // lineage RI (po_item -> pr_item -> mr_item), bukan dari payload. Baris RI
+  // yang sudah mendarat di gudang MR-nya sendiri sudah mengkredit MR saat RI
+  // completed, jadi tidak membawa mr_item_id lagi (cegah kredit dobel).
+  const riItemIds = Array.from(
+    new Set(data.items.map((i) => i.receive_item_id).filter(Boolean) as number[]),
+  );
+  if (riItemIds.length > 0) {
+    const lineage = await resolveReceiveItemsMrLineage(supabase, riItemIds);
+    const { data: usedRows } = await supabase
+      .from("item_transfer_items")
+      .select("receive_item_id, qty, item_transfers!inner(status)")
+      .in("receive_item_id", riItemIds)
+      .neq("item_transfers.status", "rejected");
+    const usedMap = new Map<number, number>();
+    for (const row of usedRows || []) {
+      usedMap.set(row.receive_item_id, (usedMap.get(row.receive_item_id) || 0) + Number(row.qty));
+    }
+    const requested = new Map<number, number>();
+    for (const item of data.items) {
+      if (!item.receive_item_id) continue;
+      const l = lineage.get(item.receive_item_id);
+      if (!l) return { error: `${item.part_number}: baris RI sumber tidak ditemukan.` };
+      if (l.ri_status !== "completed")
+        return { error: `${item.part_number}: RI sumber belum completed.` };
+      if (Number(l.cabang_penerima_id) !== Number(data.dari_cabang_id))
+        return { error: `${item.part_number}: barang RI ini tidak diterima di gudang asal yang dipilih.` };
+      if (Number(l.part_id) !== Number(item.part_id))
+        return { error: `${item.part_number}: part tidak sesuai dengan baris RI sumber.` };
+      item.mr_item_id = l.mr_item_id;
+      requested.set(item.receive_item_id, (requested.get(item.receive_item_id) || 0) + Number(item.qty));
+    }
+    for (const [riItemId, qty] of requested) {
+      const l = lineage.get(riItemId)!;
+      const sisa = l.qty - (usedMap.get(riItemId) || 0);
+      if (qty > sisa) {
+        const name = data.items.find((i) => i.receive_item_id === riItemId)?.part_number;
+        return { error: `${name}: qty ${qty} melebihi sisa RI yang belum di-transfer (${Math.max(0, sisa)}).` };
+      }
+    }
+  }
+  // Tanpa RI sumber tidak ada lineage MR yang sah.
+  for (const item of data.items) {
+    if (!item.receive_item_id) item.mr_item_id = null;
+  }
+
+  // Validasi qty <= stok gudang asal (dijumlah per part)
   const partIds = data.items.map((i) => i.part_id);
+  const neededByPart = sumQtyByPart(data.items, (i) => i.qty);
   const { data: stockRows } = await supabase
     .from("stock")
     .select("part_id, qty")
@@ -145,11 +192,10 @@ export async function createItemTransfer(data: {
     .in("part_id", partIds);
   const stockMap = new Map((stockRows || []).map((s: any) => [s.part_id, s.qty]));
   const violations: string[] = [];
-  for (const item of data.items) {
-    const avail = (stockMap.get(item.part_id) as number) ?? 0;
-    if (item.qty <= 0) violations.push(`${item.part_number}: qty harus > 0`);
-    else if (item.qty > avail)
-      violations.push(`${item.part_number}: minta ${item.qty}, stok ${avail}`);
+  for (const [partId, needed] of neededByPart) {
+    const avail = (stockMap.get(partId) as number) ?? 0;
+    const name = data.items.find((i) => i.part_id === partId)?.part_number;
+    if (needed > avail) violations.push(`${name}: minta ${needed}, stok ${avail}`);
   }
   if (violations.length > 0)
     return { error: "Qty melebihi stok gudang asal:\n" + violations.join("\n") };
@@ -165,19 +211,20 @@ export async function createItemTransfer(data: {
     (destRows || []).map((s: any) => [s.part_id, s]),
   );
   const destViolations: string[] = [];
-  for (const item of data.items) {
-    const d = destMap.get(item.part_id) as
+  for (const [partId, needed] of neededByPart) {
+    const name = data.items.find((i) => i.part_id === partId)?.part_number;
+    const d = destMap.get(partId) as
       | { qty: number; max_qty: number }
       | undefined;
     const destMax = d?.max_qty ?? 0;
     const destQty = d?.qty ?? 0;
     if (destMax <= 0)
       destViolations.push(
-        `${item.part_number}: belum ada batas max stok di gudang tujuan`,
+        `${name}: belum ada batas max stok di gudang tujuan`,
       );
-    else if (destQty + item.qty > destMax)
+    else if (destQty + needed > destMax)
       destViolations.push(
-        `${item.part_number}: ${destQty} + ${item.qty} melebihi max ${destMax}`,
+        `${name}: ${destQty} + ${needed} melebihi max ${destMax}`,
       );
   }
   if (destViolations.length > 0)
@@ -246,12 +293,18 @@ export async function createItemTransfer(data: {
   const { error: itemsError } = await supabase
     .from("item_transfer_items")
     .insert(itemsToInsert);
-  if (itemsError) return { error: itemsError.message };
+  if (itemsError) {
+    await supabase.from("item_transfers").delete().eq("id", it.id);
+    return { error: itemsError.message };
+  }
 
   // Jika langsung approved (tanpa langkah pending), keluarkan stok sekarang.
   if (initialStatus === "approved") {
     const res = await releaseStockFromSource(supabase, it, data.items, user.id);
-    if (res.error) return { error: res.error };
+    if (res.error) {
+      await supabase.from("item_transfers").delete().eq("id", it.id);
+      return { error: res.error };
+    }
     await supabase
       .from("item_transfers")
       .update({ stock_released: true })
@@ -287,20 +340,46 @@ export async function approveItemTransfer(itId: number, signatureUrl: string) {
     .eq("id", itId)
     .single();
   if (itError || !it) return { error: "Item Transfer tidak ditemukan" };
-  if (it.status === "rejected")
-    return { error: "Item Transfer ini sudah ditolak" };
+  if (it.status !== "open")
+    return { error: `Item Transfer berstatus ${it.status}, tidak bisa di-approve.` };
 
-  const approvals = [...(it.approvals || [])];
+  const originalApprovals = it.approvals || [];
+  const approvals = originalApprovals.map((a: any) => ({ ...a }));
   const currentStepIndex = approvals.findIndex(
     (a: any) => a.status === "pending",
   );
   if (currentStepIndex === -1)
     return { error: "Tidak ada langkah approval yang menunggu" };
+  const currentStep = approvals[currentStepIndex];
+  if (currentStep.userid !== user.id && currentStep.user_id !== user.id)
+    return { error: "Bukan giliran Anda untuk approval Item Transfer ini." };
 
   const isLastStep = currentStepIndex === approvals.length - 1;
 
-  // Jika langkah terakhir: keluarkan stok dari gudang asal (validasi dulu).
-  if (isLastStep && !it.stock_released) {
+  approvals[currentStepIndex].status = "approved";
+  approvals[currentStepIndex].signature_url = signatureUrl;
+  approvals[currentStepIndex].processed_at = new Date().toISOString();
+
+  // Claim kondisional (status masih open & stok belum keluar) SEBELUM stok
+  // dipotong, supaya dua klik tidak memotong stok gudang asal dua kali.
+  const { data: claimed, error: updateError } = await supabase
+    .from("item_transfers")
+    .update({
+      approvals,
+      status: isLastStep ? "approved" : "open",
+      stock_released: isLastStep ? true : it.stock_released,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", itId)
+    .eq("status", "open")
+    .eq("stock_released", false)
+    .select("id");
+  if (updateError) return { error: updateError.message };
+  if (!claimed || claimed.length === 0)
+    return { error: "Item Transfer ini baru saja diproses oleh request lain. Muat ulang halaman." };
+
+  // Langkah terakhir: keluarkan stok dari gudang asal. Gagal -> kembalikan.
+  if (isLastStep) {
     const { data: items } = await supabase
       .from("item_transfer_items")
       .select("part_id, part_number, part_name, qty")
@@ -311,23 +390,14 @@ export async function approveItemTransfer(itId: number, signatureUrl: string) {
       items || [],
       user.id,
     );
-    if (res.error) return { error: res.error };
+    if (res.error) {
+      await supabase
+        .from("item_transfers")
+        .update({ approvals: originalApprovals, status: "open", stock_released: false })
+        .eq("id", itId);
+      return { error: res.error };
+    }
   }
-
-  approvals[currentStepIndex].status = "approved";
-  approvals[currentStepIndex].signature_url = signatureUrl;
-  approvals[currentStepIndex].processed_at = new Date().toISOString();
-
-  const { error: updateError } = await supabase
-    .from("item_transfers")
-    .update({
-      approvals,
-      status: isLastStep ? "approved" : "open",
-      stock_released: isLastStep ? true : it.stock_released,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", itId);
-  if (updateError) return { error: updateError.message };
 
   notifyDocumentOwner(
     it.uid_requester,
@@ -377,14 +447,18 @@ export async function rejectItemTransfer(itId: number, reason: string) {
         "Tidak bisa menolak: stok sudah keluar dari gudang asal (IT sudah disetujui).",
     };
 
+  if (it.status !== "open")
+    return { error: `Item Transfer berstatus ${it.status}, tidak bisa ditolak.` };
+
   const approvals = [...(it.approvals || [])];
   const idx = approvals.findIndex((a: any) => a.status === "pending");
-  if (idx !== -1) {
-    approvals[idx].status = "rejected";
-    approvals[idx].processed_at = new Date().toISOString();
-  }
+  if (idx === -1) return { error: "Tidak ada langkah approval yang menunggu" };
+  if (approvals[idx].userid !== user.id && approvals[idx].user_id !== user.id)
+    return { error: "Bukan giliran Anda untuk approval Item Transfer ini." };
+  approvals[idx].status = "rejected";
+  approvals[idx].processed_at = new Date().toISOString();
 
-  const { error } = await supabase
+  const { data: claimed, error } = await supabase
     .from("item_transfers")
     .update({
       status: "rejected",
@@ -392,8 +466,13 @@ export async function rejectItemTransfer(itId: number, reason: string) {
       approvals,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", itId);
+    .eq("id", itId)
+    .eq("status", "open")
+    .eq("stock_released", false)
+    .select("id");
   if (error) return { error: error.message };
+  if (!claimed || claimed.length === 0)
+    return { error: "Item Transfer ini baru saja diproses oleh request lain. Muat ulang halaman." };
 
   notifyDocumentOwner(
     it.uid_requester,
@@ -560,38 +639,9 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
     .eq("it_id", itId);
   if (!items || items.length === 0) return { error: "Tidak ada item transfer" };
 
-  // Tambah stok ke gudang tujuan
-  for (const item of items) {
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", it.ke_cabang_id)
-      .maybeSingle();
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty + item.qty })
-        .eq("id", destStock.id);
-    } else {
-      await supabase
-        .from("stock")
-        .insert([
-          { part_id: item.part_id, cabang_id: it.ke_cabang_id, qty: item.qty },
-        ]);
-    }
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: it.ke_cabang_id,
-      qty_change: item.qty,
-      type: "IT",
-      reference_id: it.it_kode,
-      created_by: user.id,
-      notes: `Item Transfer ${it.it_kode}: ${item.part_number} ${item.part_name} diterima di cabang ${it.ke_cabang_id}`,
-    });
-  }
-
-  const { error } = await supabase
+  // Claim dulu (kondisional: belum completed & belum ada tanda tangan
+  // penerima) SEBELUM stok ditambah -- dua klik tidak menambah stok dua kali.
+  const { data: claimed, error } = await supabase
     .from("item_transfers")
     .update({
       status: "completed",
@@ -604,8 +654,31 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
       uid_receiver: user.id,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", itId);
+    .eq("id", itId)
+    .eq("status", "approved")
+    .is("signature_receiver_id", null)
+    .select("id");
   if (error) return { error: error.message };
+  if (!claimed || claimed.length === 0) return { success: true, alreadyFinalized: true };
+
+  // Tambah stok ke gudang tujuan
+  for (const item of items) {
+    await changeStockQty(
+      supabase,
+      { partId: item.part_id, cabangId: it.ke_cabang_id },
+      item.qty,
+      { label: item.part_number },
+    );
+    await supabase.from("stock_movements").insert({
+      part_id: item.part_id,
+      cabang_id: it.ke_cabang_id,
+      qty_change: item.qty,
+      type: "IT",
+      reference_id: it.it_kode,
+      created_by: user.id,
+      notes: `Item Transfer ${it.it_kode}: ${item.part_number} ${item.part_name} diterima di cabang ${it.ke_cabang_id}`,
+    });
+  }
 
   // Distribusi qty ke MR: item IT yang bawa referensi mr_item_id berarti
   // ini pemenuhan MR (turunan RI -> IT). Live-recompute (bukan increment)
@@ -645,10 +718,13 @@ export async function deleteItemTransfer(itId: number) {
       error: "Tidak bisa menghapus: stok sudah bergerak. Batalkan via proses.",
     };
 
+  // Kondisional: jangan sampai terhapus bersamaan dengan approve terakhir
+  // yang baru saja mengeluarkan stok.
   const { error } = await supabase
     .from("item_transfers")
     .delete()
-    .eq("id", itId);
+    .eq("id", itId)
+    .eq("stock_released", false);
   if (error) return { error: error.message };
 
   revalidatePath("/item-transfer");

@@ -3,6 +3,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { notifyApprovers, notifyDocumentOwner } from "@/services/notification-actions";
+import { changeStockQty } from "@/lib/stock-mutation";
+import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
 
 // ============================================================
 // WORKING ORDER (WO) — proses assembly/produksi internal: PN target
@@ -367,13 +369,10 @@ export async function createWorkingOrder(data: {
  * Terapkan efek stok On Process: kurangi stok komponen, tambah stok PN
  * target, di Gudang WO. Divalidasi dulu (semua-atau-tidak-sama-sekali)
  * karena stok bisa berubah antara WO dibuat & full-approved.
+ * SENGAJA tidak di-export: modul ini "use server", fungsi yang di-export
+ * bisa dipanggil langsung dari browser dan memposting stok berulang.
  */
-export async function applyWoOnProcess(woId: number) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-
+async function applyWoOnProcess(supabase: any, woId: number, userId?: string) {
   const { data: wo } = await supabase
     .from("working_orders")
     .select("id, wo_kode, gudang_cabang_id")
@@ -399,72 +398,51 @@ export async function applyWoOnProcess(woId: number) {
     }
   }
 
-  const violations: string[] = [];
-  const stockByComponent = new Map<number, { id: number; qty: number } | null>();
+  // Potong komponen atomik per part; gagal -> kembalikan yang sudah dipotong.
+  const deducted: { partId: number; qty: number }[] = [];
   for (const [partId, { total, sample }] of requiredByComponent) {
     const needed = Math.ceil(total);
-    const { data: stockRow } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", partId)
-      .eq("cabang_id", wo.gudang_cabang_id)
-      .maybeSingle();
-    stockByComponent.set(partId, stockRow ?? null);
-    const avail = stockRow?.qty ?? 0;
-    if (needed > avail) {
-      violations.push(
-        `${sample.component_part_number}: stok Gudang WO ${avail}, dibutuhkan ${needed}.`,
-      );
+    const res = await changeStockQty(
+      supabase,
+      { partId, cabangId: wo.gudang_cabang_id },
+      -needed,
+      { label: sample.component_part_number },
+    );
+    if (!res.ok) {
+      for (const d of deducted) {
+        await changeStockQty(supabase, { partId: d.partId, cabangId: wo.gudang_cabang_id }, d.qty, { allowNegative: true });
+      }
+      return { error: `Stok komponen tidak mencukupi (Gudang WO):\n${res.error}` };
     }
+    deducted.push({ partId, qty: needed });
   }
-  if (violations.length > 0) {
-    return { error: "Stok komponen tidak mencukupi:\n" + violations.join("\n") };
-  }
-
-  // Apply: kurangi tiap komponen (sekali per komponen, jumlah teragregasi).
   for (const [partId, { total, sample }] of requiredByComponent) {
-    const needed = Math.ceil(total);
-    const stockRow = stockByComponent.get(partId)!;
-    await supabase
-      .from("stock")
-      .update({ qty: stockRow.qty - needed })
-      .eq("id", stockRow.id);
     await supabase.from("stock_movements").insert({
       part_id: partId,
       cabang_id: wo.gudang_cabang_id,
-      qty_change: -needed,
+      qty_change: -Math.ceil(total),
       type: "WO_KOMPONEN",
       reference_id: wo.wo_kode,
-      created_by: user?.id,
+      created_by: userId,
       notes: `WO ${wo.wo_kode}: ${sample.component_part_number} keluar untuk produksi`,
     });
   }
 
   // Apply: tambah tiap PN target.
   for (const item of items) {
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", wo.gudang_cabang_id)
-      .maybeSingle();
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty + item.qty })
-        .eq("id", destStock.id);
-    } else {
-      await supabase
-        .from("stock")
-        .insert({ part_id: item.part_id, cabang_id: wo.gudang_cabang_id, qty: item.qty });
-    }
+    await changeStockQty(
+      supabase,
+      { partId: item.part_id, cabangId: wo.gudang_cabang_id },
+      item.qty,
+      { label: item.part_number },
+    );
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
       cabang_id: wo.gudang_cabang_id,
       qty_change: item.qty,
       type: "WO_PRODUKSI",
       reference_id: wo.wo_kode,
-      created_by: user?.id,
+      created_by: userId,
       notes: `WO ${wo.wo_kode}: ${item.part_number} diproduksi (masuk stok)`,
     });
 
@@ -503,6 +481,12 @@ export async function approveWorkingOrder(woId: number, signatureUrl: string) {
   if (!wo) return { error: "WO tidak ditemukan." };
   if (wo.wo_status !== "Pending Approval")
     return { error: `WO berstatus ${wo.wo_status}, tidak bisa di-approve.` };
+  // Approval berurutan: hanya pemilik step pending pertama.
+  {
+    const next = (wo.approvals || []).find((a: any) => a.status === "pending");
+    if (!next || (next.userid !== user.id && next.user_id !== user.id))
+      return { error: "Bukan giliran Anda untuk approval WO ini." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -519,12 +503,9 @@ export async function approveWorkingOrder(woId: number, signatureUrl: string) {
 
   const isAllDone = updatedApprovals.every((a: any) => a.status !== "pending");
 
-  if (isAllDone) {
-    const result = await applyWoOnProcess(woId);
-    if ((result as any)?.error) return result;
-  }
-
-  const { error: updateError } = await supabase
+  // Claim kondisional (masih Pending Approval) SEBELUM stok diproses, supaya
+  // dua klik di step terakhir tidak memproduksi/memotong stok dua kali.
+  const { data: claimed, error: updateError } = await supabase
     .from("working_orders")
     .update({
       approvals: updatedApprovals as any,
@@ -532,8 +513,23 @@ export async function approveWorkingOrder(woId: number, signatureUrl: string) {
       rejection_reason: null,
       on_process_at: isAllDone ? new Date().toISOString() : null,
     })
-    .eq("id", woId);
+    .eq("id", woId)
+    .eq("wo_status", "Pending Approval")
+    .select("id");
   if (updateError) return { error: updateError.message };
+  if (!claimed || claimed.length === 0)
+    return { error: "WO ini baru saja diproses oleh request lain. Muat ulang halaman." };
+
+  if (isAllDone) {
+    const result = await applyWoOnProcess(supabase, woId, user.id);
+    if ((result as any)?.error) {
+      await supabase
+        .from("working_orders")
+        .update({ approvals: wo.approvals, wo_status: "Pending Approval", on_process_at: null })
+        .eq("id", woId);
+      return result;
+    }
+  }
 
   const justProcessed = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "approved",
@@ -578,6 +574,12 @@ export async function rejectWorkingOrder(woId: number, reason: string, signature
   if (!wo) return { error: "WO tidak ditemukan." };
   if (wo.wo_status !== "Pending Approval")
     return { error: `WO berstatus ${wo.wo_status}, tidak bisa ditolak.` };
+  // Approval berurutan: hanya pemilik step pending pertama.
+  {
+    const next = (wo.approvals || []).find((a: any) => a.status === "pending");
+    if (!next || (next.userid !== user.id && next.user_id !== user.id))
+      return { error: "Bukan giliran Anda untuk approval WO ini." };
+  }
 
   const { data: userProfile } = await supabase
     .from("profiles")
@@ -606,7 +608,8 @@ export async function rejectWorkingOrder(woId: number, reason: string, signature
       wo_status: "Rejected",
       rejection_reason: reason.trim(),
     })
-    .eq("id", woId);
+    .eq("id", woId)
+    .eq("wo_status", "Pending Approval");
   if (updateError) return { error: updateError.message };
 
   const rejecter = updatedApprovals.find((a: any) => a.userid === user.id && a.status === "rejected");
@@ -655,30 +658,47 @@ export async function closeWorkingOrder(woId: number) {
   if (!isAllowed)
     return { error: "Hanya anggota approval WO ini atau moderator yang dapat menyelesaikan WO." };
 
+  // Claim kondisional dulu (On Process -> Closed) supaya klik ganda tidak
+  // menambah qty_wo dua kali.
+  const { data: claimed, error } = await supabase
+    .from("working_orders")
+    .update({ wo_status: "Closed", closed_at: new Date().toISOString(), closed_by: user.id })
+    .eq("id", woId)
+    .eq("wo_status", "On Process")
+    .select("id");
+  if (error) return { error: error.message };
+  if (!claimed || claimed.length === 0)
+    return { error: "WO ini baru saja diproses oleh request lain. Muat ulang halaman." };
+
   const { data: items } = await supabase
     .from("working_order_items")
     .select("id, mr_item_id, applied_qty")
     .eq("wo_id", woId);
+  const mrItemIds = Array.from(
+    new Set((items || []).map((i: any) => i.mr_item_id).filter(Boolean)),
+  ) as number[];
 
-  for (const item of items || []) {
-    const { data: mrItem } = await supabase
-      .from("mr_items")
-      .select("qty_wo")
-      .eq("id", item.mr_item_id)
-      .single();
-    if (mrItem) {
+  // qty_wo = total applied_qty dari SEMUA WO Closed untuk item MR itu
+  // (dihitung ulang, bukan increment).
+  if (mrItemIds.length > 0) {
+    const { data: closedRows } = await supabase
+      .from("working_order_items")
+      .select("mr_item_id, applied_qty, working_orders!inner(wo_status)")
+      .in("mr_item_id", mrItemIds)
+      .eq("working_orders.wo_status", "Closed");
+    const totals = new Map<number, number>();
+    for (const r of closedRows || []) {
+      totals.set(r.mr_item_id, (totals.get(r.mr_item_id) || 0) + Number(r.applied_qty || 0));
+    }
+    for (const mrItemId of mrItemIds) {
       await supabase
         .from("mr_items")
-        .update({ qty_wo: Number(mrItem.qty_wo || 0) + Number(item.applied_qty || 0) })
-        .eq("id", item.mr_item_id);
+        .update({ qty_wo: totals.get(mrItemId) || 0 })
+        .eq("id", mrItemId);
     }
+    // WO Closed = pemenuhan MR (qty_received / mr_status).
+    await recomputeMrItemsFulfillment(supabase, mrItemIds);
   }
-
-  const { error } = await supabase
-    .from("working_orders")
-    .update({ wo_status: "Closed", closed_at: new Date().toISOString(), closed_by: user.id })
-    .eq("id", woId);
-  if (error) return { error: error.message };
 
   revalidatePath("/working-order");
   revalidatePath(`/working-order/${woId}`);
@@ -810,36 +830,45 @@ export async function editWorkingOrder(woId: number, itemUpdates: WoItemEditInpu
 
   // Status On Process: hitung & validasi delta stok dulu (semua-atau-tidak).
   if (wo.wo_status === "On Process") {
-    const componentDelta = new Map<number, { delta: number; sample: any }>();
-    for (const c of changes) {
-      for (const comp of c.woItem.working_order_item_components || []) {
-        const newRequired = Number(comp.qty_per_unit) * c.newQty;
-        const rowDelta = newRequired - Number(comp.applied_qty_required || 0);
-        const prev = componentDelta.get(comp.component_part_id);
-        componentDelta.set(comp.component_part_id, {
-          delta: (prev?.delta || 0) + rowDelta,
-          sample: comp,
-        });
+    // Delta komponen = ceil(total baru) - ceil(total lama) per komponen, dari
+    // SEMUA item WO (bukan cuma yang diubah) -- sama dengan pembulatan saat
+    // On Process. Membulatkan delta-nya sendiri bikin qty terpotong melenceng.
+    const { data: allWoItems } = await supabase
+      .from("working_order_items")
+      .select("id, working_order_item_components(component_part_id, component_part_number, qty_per_unit, applied_qty_required)")
+      .eq("wo_id", woId);
+    const changeByItemId = new Map(changes.map((c) => [c.woItem.id, c]));
+    const componentTotals = new Map<number, { oldTotal: number; newTotal: number; sample: any }>();
+    for (const it of allWoItems || []) {
+      const change = changeByItemId.get(it.id);
+      for (const comp of it.working_order_item_components || []) {
+        const oldReq = Number(comp.applied_qty_required || 0);
+        const newReq = change ? Number(comp.qty_per_unit) * change.newQty : oldReq;
+        const prev = componentTotals.get(comp.component_part_id) || { oldTotal: 0, newTotal: 0, sample: comp };
+        prev.oldTotal += oldReq;
+        prev.newTotal += newReq;
+        componentTotals.set(comp.component_part_id, prev);
       }
+    }
+    const componentDelta = new Map<number, { qtyChange: number; sample: any }>();
+    for (const [partId, t] of componentTotals) {
+      // qtyChange stok: konsumsi naik -> stok turun.
+      const qtyChange = Math.ceil(t.oldTotal - 1e-9) - Math.ceil(t.newTotal - 1e-9);
+      if (qtyChange !== 0) componentDelta.set(partId, { qtyChange, sample: t.sample });
     }
 
     const violations: string[] = [];
-    const stockCache = new Map<number, { id: number; qty: number } | null>();
-    for (const [partId, { delta, sample }] of componentDelta) {
-      if (Math.abs(delta) < 1e-9) continue;
+    for (const [partId, { qtyChange, sample }] of componentDelta) {
+      if (qtyChange >= 0) continue;
       const { data: stockRow } = await supabase
         .from("stock")
-        .select("id, qty")
+        .select("qty")
         .eq("part_id", partId)
         .eq("cabang_id", wo.gudang_cabang_id)
         .maybeSingle();
-      stockCache.set(partId, stockRow ?? null);
-      if (delta > 0) {
-        const needed = Math.ceil(delta);
-        const avail = stockRow?.qty ?? 0;
-        if (needed > avail) {
-          violations.push(`${sample.component_part_number}: stok Gudang WO ${avail}, butuh tambahan ${needed}.`);
-        }
+      const avail = stockRow?.qty ?? 0;
+      if (-qtyChange > avail) {
+        violations.push(`${sample.component_part_number}: stok Gudang WO ${avail}, butuh tambahan ${-qtyChange}.`);
       }
     }
 
@@ -865,16 +894,15 @@ export async function editWorkingOrder(woId: number, itemUpdates: WoItemEditInpu
       return { error: "Penyesuaian stok tidak bisa diterapkan:\n" + violations.join("\n") };
     }
 
-    // Apply component deltas (sekali per komponen, teragregasi).
-    for (const [partId, { delta, sample }] of componentDelta) {
-      if (Math.abs(delta) < 1e-9) continue;
-      const stockRow = stockCache.get(partId);
-      const qtyChange = delta > 0 ? -Math.ceil(delta) : Math.floor(-delta);
-      if (stockRow) {
-        await supabase.from("stock").update({ qty: stockRow.qty + qtyChange }).eq("id", stockRow.id);
-      } else if (qtyChange > 0) {
-        await supabase.from("stock").insert({ part_id: partId, cabang_id: wo.gudang_cabang_id, qty: qtyChange });
-      }
+    // Apply component deltas (sekali per komponen, teragregasi, atomik).
+    for (const [partId, { qtyChange, sample }] of componentDelta) {
+      const res = await changeStockQty(
+        supabase,
+        { partId, cabangId: wo.gudang_cabang_id },
+        qtyChange,
+        { label: sample.component_part_number },
+      );
+      if (!res.ok) return { error: res.error };
       await supabase.from("stock_movements").insert({
         part_id: partId,
         cabang_id: wo.gudang_cabang_id,
@@ -890,19 +918,12 @@ export async function editWorkingOrder(woId: number, itemUpdates: WoItemEditInpu
     for (const c of changes) {
       const itemDelta = c.newQty - c.oldQty;
       if (itemDelta !== 0) {
-        const { data: destStock } = await supabase
-          .from("stock")
-          .select("id, qty")
-          .eq("part_id", c.woItem.part_id)
-          .eq("cabang_id", wo.gudang_cabang_id)
-          .maybeSingle();
-        if (destStock) {
-          await supabase.from("stock").update({ qty: destStock.qty + itemDelta }).eq("id", destStock.id);
-        } else if (itemDelta > 0) {
-          await supabase
-            .from("stock")
-            .insert({ part_id: c.woItem.part_id, cabang_id: wo.gudang_cabang_id, qty: itemDelta });
-        }
+        await changeStockQty(
+          supabase,
+          { partId: c.woItem.part_id, cabangId: wo.gudang_cabang_id },
+          itemDelta,
+          { allowNegative: true, label: c.woItem.part_number },
+        );
         await supabase.from("stock_movements").insert({
           part_id: c.woItem.part_id,
           cabang_id: wo.gudang_cabang_id,

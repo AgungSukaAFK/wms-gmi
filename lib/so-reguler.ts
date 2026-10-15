@@ -148,10 +148,38 @@ export function computeSoItemRemaining(
   };
 }
 
+/**
+ * DO Reguler yang masih dalam proses pengiriman (belum diterima customer,
+ * belum dibatalkan) untuk item-item SO -- unik per DO.
+ */
+export function pendingSoDos(
+  fulfillments: (Pick<SoItemFulfillment, "dos"> | undefined)[],
+): { id: number; do_kode: string; status: string }[] {
+  const map = new Map<number, { id: number; do_kode: string; status: string }>();
+  for (const f of fulfillments) {
+    for (const d of f?.dos || []) {
+      if (d.status !== "completed" && d.status !== "cancelled") {
+        map.set(d.id, { id: d.id, do_kode: d.do_kode, status: d.status });
+      }
+    }
+  }
+  return Array.from(map.values());
+}
+
+/**
+ * SO "completed" hanya kalau seluruh qty sudah di-DO DAN semua DO-nya sudah
+ * selesai (barang diterima customer). Selama masih ada DO dalam proses, SO
+ * tetap "partial" (lihat pendingSoDos untuk info nomor DO-nya).
+ */
 export function computeSoStatus(
   items: { qty: number; qtyDo: number; qtyPo: number }[],
+  opts?: { hasPendingDo?: boolean },
 ): Exclude<SoStatus, "cancelled"> {
-  if (items.length > 0 && items.every((i) => i.qtyDo >= i.qty)) {
+  if (
+    items.length > 0 &&
+    items.every((i) => i.qtyDo >= i.qty) &&
+    !opts?.hasPendingDo
+  ) {
     return "completed";
   }
   if (items.some((i) => i.qtyDo > 0 || i.qtyPo > 0)) return "partial";
@@ -160,8 +188,8 @@ export function computeSoStatus(
 
 /**
  * Hitung ulang & simpan so_reguler.so_status. Dipanggil setelah aksi yang
- * mengubah pemenuhan SO (buat/batal/hapus DO, buat/tolak/hapus PO). SO yang
- * sudah dibatalkan tidak disentuh.
+ * mengubah pemenuhan SO (buat/batal/hapus DO, update tracking DO,
+ * buat/tolak/hapus PO). SO yang sudah dibatalkan tidak disentuh.
  */
 export async function refreshSoStatus(supabase: any, soId: number | null | undefined) {
   if (!soId) return;
@@ -182,6 +210,7 @@ export async function refreshSoStatus(supabase: any, soId: number | null | undef
       qtyDo: f.get(i.id)?.qtyDo ?? 0,
       qtyPo: f.get(i.id)?.qtyPo ?? 0,
     })),
+    { hasPendingDo: pendingSoDos(items.map((i) => f.get(i.id))).length > 0 },
   );
   if (next !== so.so_status) {
     await supabase.from("so_reguler").update({ so_status: next }).eq("id", soId);

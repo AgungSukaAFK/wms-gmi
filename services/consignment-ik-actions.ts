@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
 
 // ============================================================
 // ITEM KONSINYASI (IK) — dokumen pengiriman fisik barang Consignment dari
@@ -115,8 +116,8 @@ export async function createConsignmentIk(data: {
     return { error: "Gudang asal dan tujuan tidak boleh sama." };
 
   for (const item of data.items) {
-    if (!item.qty || item.qty <= 0)
-      return { error: `${item.part_number}: qty harus lebih dari 0.` };
+    if (!item.qty || item.qty <= 0 || !Number.isInteger(Number(item.qty)))
+      return { error: `${item.part_number}: qty harus bilangan bulat lebih dari 0.` };
   }
 
   // Gudang tujuan wajib salah satu gudang yang terhubung ke site customer SO.
@@ -142,9 +143,19 @@ export async function createConsignmentIk(data: {
   const soItemIds = data.items.map((i) => i.so_item_id);
   const { data: soItemRows } = await supabase
     .from("consignment_so_items")
-    .select("id, part_number, qty")
+    .select("id, so_id, part_id, part_number, part_name, satuan, qty")
     .in("id", soItemIds);
   const soItemById = new Map((soItemRows || []).map((r: any) => [r.id, r]));
+  // Item wajib milik SO ini; data part diambil dari item SO (bukan payload).
+  for (const item of data.items) {
+    const soItem: any = soItemById.get(item.so_item_id);
+    if (!soItem || soItem.so_id !== data.so_id)
+      return { error: `${item.part_number}: bukan item dari SO Consignment ini.` };
+    item.part_id = soItem.part_id;
+    item.part_number = soItem.part_number;
+    item.part_name = soItem.part_name;
+    item.satuan = soItem.satuan;
+  }
 
   const { data: existingIkItems } = await supabase
     .from("consignment_ik_items")
@@ -159,35 +170,37 @@ export async function createConsignmentIk(data: {
   }
 
   const qtyViolations: string[] = [];
+  const requestedBySoItem = new Map<number, number>();
   for (const item of data.items) {
-    const soItem = soItemById.get(item.so_item_id);
-    if (!soItem) {
-      qtyViolations.push(`${item.part_number}: item SO tidak ditemukan.`);
-      continue;
-    }
-    const alreadyShipped = shippedByItem.get(item.so_item_id) || 0;
+    requestedBySoItem.set(item.so_item_id, (requestedBySoItem.get(item.so_item_id) || 0) + item.qty);
+  }
+  for (const [soItemId, requested] of requestedBySoItem) {
+    const soItem: any = soItemById.get(soItemId);
+    const alreadyShipped = shippedByItem.get(soItemId) || 0;
     const remaining = Number(soItem.qty) - alreadyShipped;
-    if (item.qty > remaining) {
+    if (requested > remaining) {
       qtyViolations.push(
-        `${item.part_number}: sisa yang belum dikirim ${remaining}, diminta ${item.qty}.`,
+        `${soItem.part_number}: sisa yang belum dikirim ${remaining}, diminta ${requested}.`,
       );
     }
   }
   if (qtyViolations.length > 0)
     return { error: "Qty melebihi sisa yang belum dikirim:\n" + qtyViolations.join("\n") };
 
-  // Guard stok gudang asal.
+  // Guard stok gudang asal (dijumlah per part).
   const stockViolations: string[] = [];
-  for (const item of data.items) {
+  const neededByPart = sumQtyByPart(data.items, (i) => i.qty);
+  for (const [partId, needed] of neededByPart) {
     const { data: srcStock } = await supabase
       .from("stock")
       .select("qty")
-      .eq("part_id", item.part_id)
+      .eq("part_id", partId)
       .eq("cabang_id", data.dari_cabang_id)
       .maybeSingle();
     const avail = srcStock?.qty ?? 0;
-    if (item.qty > avail) {
-      stockViolations.push(`${item.part_number}: stok gudang asal ${avail}, diminta ${item.qty}.`);
+    if (needed > avail) {
+      const name = data.items.find((i) => i.part_id === partId)?.part_number;
+      stockViolations.push(`${name}: stok gudang asal ${avail}, diminta ${needed}.`);
     }
   }
   if (stockViolations.length > 0)
@@ -234,61 +247,83 @@ export async function createConsignmentIk(data: {
     satuan: item.satuan,
     qty: item.qty,
   }));
+  const removeIk = async () => {
+    await supabase.from("consignment_ik_items").delete().eq("ik_id", ik.id);
+    await supabase.from("consignment_ik").delete().eq("id", ik.id);
+  };
   const { error: itemsError } = await supabase
     .from("consignment_ik_items")
     .insert(itemsToInsert);
-  if (itemsError) return { error: itemsError.message };
+  if (itemsError) {
+    await removeIk();
+    return { error: itemsError.message };
+  }
+
+  // Verifikasi ulang setelah insert: IK lain yang dibuat bersamaan bisa saja
+  // lolos cek sisa yang sama -> kalau total kirim melebihi qty SO, batalkan.
+  {
+    const { data: shippedRows } = await supabase
+      .from("consignment_ik_items")
+      .select("so_item_id, qty")
+      .in("so_item_id", soItemIds);
+    const shippedNow = new Map<number, number>();
+    for (const row of shippedRows || []) {
+      shippedNow.set(row.so_item_id, (shippedNow.get(row.so_item_id) || 0) + Number(row.qty));
+    }
+    for (const [soItemId] of requestedBySoItem) {
+      const soItem: any = soItemById.get(soItemId);
+      if ((shippedNow.get(soItemId) || 0) > Number(soItem.qty)) {
+        await removeIk();
+        return { error: `${soItem.part_number}: qty kirim melebihi sisa SO (bentrok dengan IK lain yang baru dibuat). Coba lagi.` };
+      }
+    }
+  }
 
   // Pindahkan stok: potong gudang asal, tambah gudang tujuan — instan,
   // tanpa approval (beda dari Delivery/Item Transfer yang butuh finalize).
+  // Atomik per part; gagal -> potongan yang sudah terjadi dikembalikan.
+  const deducted: { partId: number; qty: number }[] = [];
+  for (const [partId, qty] of neededByPart) {
+    const name = data.items.find((i) => i.part_id === partId)?.part_number;
+    const res = await changeStockQty(
+      supabase,
+      { partId, cabangId: data.dari_cabang_id },
+      -qty,
+      { label: name },
+    );
+    if (!res.ok) {
+      for (const d of deducted) {
+        await changeStockQty(supabase, { partId: d.partId, cabangId: data.dari_cabang_id }, d.qty, { allowNegative: true });
+      }
+      await removeIk();
+      return { error: res.error };
+    }
+    deducted.push({ partId, qty });
+  }
+  for (const [partId, qty] of neededByPart) {
+    await changeStockQty(supabase, { partId, cabangId: data.ke_cabang_id }, qty);
+  }
   for (const item of data.items) {
-    const { data: srcStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", data.dari_cabang_id)
-      .maybeSingle();
-    if (srcStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: srcStock.qty - item.qty })
-        .eq("id", srcStock.id);
-    }
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: data.dari_cabang_id,
-      qty_change: -item.qty,
-      type: "IK",
-      reference_id: ikKode,
-      created_by: user.id,
-      notes: `IK ${ikKode}: ${item.part_number} ${item.part_name} keluar dari gudang asal (consignment)`,
-    });
-
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", data.ke_cabang_id)
-      .maybeSingle();
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty + item.qty })
-        .eq("id", destStock.id);
-    } else {
-      await supabase
-        .from("stock")
-        .insert([{ part_id: item.part_id, cabang_id: data.ke_cabang_id, qty: item.qty }]);
-    }
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: data.ke_cabang_id,
-      qty_change: item.qty,
-      type: "IK",
-      reference_id: ikKode,
-      created_by: user.id,
-      notes: `IK ${ikKode}: ${item.part_number} ${item.part_name} masuk ke gudang tujuan (consignment)`,
-    });
+    await supabase.from("stock_movements").insert([
+      {
+        part_id: item.part_id,
+        cabang_id: data.dari_cabang_id,
+        qty_change: -item.qty,
+        type: "IK",
+        reference_id: ikKode,
+        created_by: user.id,
+        notes: `IK ${ikKode}: ${item.part_number} ${item.part_name} keluar dari gudang asal (consignment)`,
+      },
+      {
+        part_id: item.part_id,
+        cabang_id: data.ke_cabang_id,
+        qty_change: item.qty,
+        type: "IK",
+        reference_id: ikKode,
+        created_by: user.id,
+        notes: `IK ${ikKode}: ${item.part_number} ${item.part_name} masuk ke gudang tujuan (consignment)`,
+      },
+    ]);
   }
 
   revalidatePath("/so-reguler/consignment/ik");
@@ -333,65 +368,61 @@ export async function deleteConsignmentIk(ikId: number) {
     .single();
   if (!ik) return { error: "IK tidak ditemukan." };
 
+  // IK yang sudah punya Penerimaan tidak boleh dihapus: sebagian stoknya
+  // sudah pindah ke customer_stock. Hapus Penerimaan-nya dulu. (Dicek SEBELUM
+  // stok dibalik -- dulu stok terlanjur dibalik lalu delete gagal di FK.)
+  const { count: penerimaanCount } = await supabase
+    .from("consignment_penerimaan")
+    .select("id", { count: "exact", head: true })
+    .eq("ik_id", ikId);
+  if (penerimaanCount && penerimaanCount > 0) {
+    return { error: "IK ini sudah punya dokumen Penerimaan. Hapus Penerimaan-nya dulu sebelum menghapus IK." };
+  }
+
   const { data: items } = await supabase
     .from("consignment_ik_items")
     .select("part_id, part_number, part_name, qty")
     .eq("ik_id", ikId);
 
-  for (const item of items || []) {
-    // Balikin ke gudang asal.
-    const { data: srcStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", ik.dari_cabang_id)
-      .maybeSingle();
-    if (srcStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: srcStock.qty + item.qty })
-        .eq("id", srcStock.id);
-    } else {
-      await supabase
-        .from("stock")
-        .insert([{ part_id: item.part_id, cabang_id: ik.dari_cabang_id, qty: item.qty }]);
-    }
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: ik.dari_cabang_id,
-      qty_change: item.qty,
-      type: "IK",
-      reference_id: ik.ik_kode,
-      created_by: user.id,
-      notes: `Pembatalan IK ${ik.ik_kode}: ${item.part_number} ${item.part_name} dikembalikan ke gudang asal`,
-    });
-
-    // Kurangi dari gudang tujuan.
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", ik.ke_cabang_id)
-      .maybeSingle();
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty - item.qty })
-        .eq("id", destStock.id);
-    }
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: ik.ke_cabang_id,
-      qty_change: -item.qty,
-      type: "IK",
-      reference_id: ik.ik_kode,
-      created_by: user.id,
-      notes: `Pembatalan IK ${ik.ik_kode}: ${item.part_number} ${item.part_name} dikeluarkan dari gudang tujuan`,
-    });
-  }
-
-  const { error } = await supabase.from("consignment_ik").delete().eq("id", ikId);
+  // Hapus dulu (baru stok dibalik) -> kalau delete gagal, stok tidak ikut
+  // berubah; dan request ganda tidak membalik stok dua kali.
+  const { data: deleted, error } = await supabase
+    .from("consignment_ik")
+    .delete()
+    .eq("id", ikId)
+    .select("id");
   if (error) return { error: error.message };
+  if (!deleted || deleted.length === 0) return { error: "IK sudah dihapus." };
+
+  for (const item of items || []) {
+    // Balikin ke gudang asal, keluarkan dari gudang tujuan.
+    await changeStockQty(supabase, { partId: item.part_id, cabangId: ik.dari_cabang_id }, item.qty, {
+      allowNegative: true,
+    });
+    await changeStockQty(supabase, { partId: item.part_id, cabangId: ik.ke_cabang_id }, -item.qty, {
+      allowNegative: true,
+    });
+    await supabase.from("stock_movements").insert([
+      {
+        part_id: item.part_id,
+        cabang_id: ik.dari_cabang_id,
+        qty_change: item.qty,
+        type: "IK",
+        reference_id: ik.ik_kode,
+        created_by: user.id,
+        notes: `Pembatalan IK ${ik.ik_kode}: ${item.part_number} ${item.part_name} dikembalikan ke gudang asal`,
+      },
+      {
+        part_id: item.part_id,
+        cabang_id: ik.ke_cabang_id,
+        qty_change: -item.qty,
+        type: "IK",
+        reference_id: ik.ik_kode,
+        created_by: user.id,
+        notes: `Pembatalan IK ${ik.ik_kode}: ${item.part_number} ${item.part_name} dikeluarkan dari gudang tujuan`,
+      },
+    ]);
+  }
 
   revalidatePath("/so-reguler/consignment/ik");
   revalidatePath("/so-reguler/consignment/dashboard");

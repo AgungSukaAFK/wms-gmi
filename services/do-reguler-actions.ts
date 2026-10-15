@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { KoliRow } from "@/lib/shipment";
+import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
 import {
   computeSoItemRemaining,
   fetchSoItemFulfillment,
@@ -109,7 +110,7 @@ export async function createDoReguler(data: {
   if (soId) {
     const { data: so } = await supabase
       .from("so_reguler")
-      .select("id, so_kode, so_status, customer_id, so_reguler_items(id, qty, part_number)")
+      .select("id, so_kode, so_status, customer_id, cabang_id, so_reguler_items(id, qty, part_id, part_number, part_name, satuan)")
       .eq("id", soId)
       .maybeSingle();
     if (!so) return { error: "SO Reguler tidak ditemukan." };
@@ -117,25 +118,41 @@ export async function createDoReguler(data: {
       return { error: `SO ${so.so_kode} sudah dibatalkan.` };
     if (Number(so.customer_id) !== Number(data.customer_id))
       return { error: `Customer DO harus sama dengan customer SO ${so.so_kode}.` };
-    const soItems = new Map<number, { qty: number; part_number: string }>(
+    const soItems = new Map<number, any>(
       (so.so_reguler_items || []).map((i: any) => [i.id, i]),
     );
     if (data.items.some((i) => !i.so_item_id || !soItems.has(i.so_item_id)))
       return { error: `Semua item DO harus berasal dari SO ${so.so_kode}.` };
+    // Data part diambil dari item SO (bukan payload).
+    for (const item of data.items) {
+      const soItem = soItems.get(item.so_item_id!);
+      item.part_id = soItem.part_id;
+      item.part_number = soItem.part_number;
+      item.part_name = soItem.part_name;
+      item.satuan = soItem.satuan;
+    }
     const fulfillment = await fetchSoItemFulfillment(
       supabase,
       Array.from(soItems.keys()),
     );
-    const over: string[] = [];
+    // Item SO yang sama bisa muncul lebih dari sekali -> dijumlah.
+    const requestedBySoItem = new Map<number, number>();
     for (const item of data.items) {
-      const soItem = soItems.get(item.so_item_id!)!;
+      requestedBySoItem.set(item.so_item_id!, (requestedBySoItem.get(item.so_item_id!) || 0) + item.qty);
+    }
+    // Barang hasil PO dari SO mendarat di gudang site SO -- hanya DO yang
+    // dikirim dari gudang itu yang memakai "pool" barang PO.
+    const shipsFromSoSite = Number(data.dari_cabang_id) === Number(so.cabang_id);
+    const over: string[] = [];
+    for (const [soItemId, requested] of requestedBySoItem) {
+      const soItem = soItems.get(soItemId)!;
       const { sisaDo, poPoolAvailable } = computeSoItemRemaining(
         soItem.qty,
-        fulfillment.get(item.so_item_id!),
+        fulfillment.get(soItemId),
       );
-      if (item.qty > sisaDo)
-        over.push(`${item.part_number}: kirim ${item.qty}, sisa SO ${sisaDo}`);
-      qtyFromPo.set(item.so_item_id!, Math.min(item.qty, poPoolAvailable));
+      if (requested > sisaDo)
+        over.push(`${soItem.part_number}: kirim ${requested}, sisa SO ${sisaDo}`);
+      qtyFromPo.set(soItemId, shipsFromSoSite ? Math.min(requested, poPoolAvailable) : 0);
     }
     if (over.length > 0)
       return { error: "Qty melebihi sisa SO:\n" + over.join("\n") };
@@ -164,10 +181,14 @@ export async function createDoReguler(data: {
   );
   const violations: string[] = [];
   for (const item of data.items) {
-    const avail = (stockMap.get(item.part_id) as number) ?? 0;
-    if (item.qty <= 0) violations.push(`${item.part_number}: qty harus > 0`);
-    else if (item.qty > avail)
-      violations.push(`${item.part_number}: minta ${item.qty}, stok ${avail}`);
+    if (!(item.qty > 0) || !Number.isInteger(Number(item.qty)))
+      violations.push(`${item.part_number}: qty harus bilangan bulat > 0`);
+  }
+  const neededByPart = sumQtyByPart(data.items, (i) => i.qty);
+  for (const [partId, needed] of neededByPart) {
+    const avail = (stockMap.get(partId) as number) ?? 0;
+    const name = data.items.find((i) => i.part_id === partId)?.part_number;
+    if (needed > avail) violations.push(`${name}: minta ${needed}, stok ${avail}`);
   }
   if (violations.length > 0)
     return {
@@ -209,7 +230,8 @@ export async function createDoReguler(data: {
     .single();
   if (doError) return { error: doError.message };
 
-  // Insert items
+  // Insert items. qty_from_po per item SO dibagi ke baris-barisnya.
+  const fromPoLeft = new Map(qtyFromPo);
   const itemsToInsert = data.items.map((item) => ({
     do_id: doRow.id,
     part_id: item.part_id,
@@ -218,27 +240,64 @@ export async function createDoReguler(data: {
     satuan: item.satuan,
     qty: item.qty,
     so_item_id: soId ? item.so_item_id : null,
-    qty_from_po: (soId && qtyFromPo.get(item.so_item_id!)) || 0,
+    qty_from_po: (() => {
+      if (!soId) return 0;
+      const left = fromPoLeft.get(item.so_item_id!) || 0;
+      const used = Math.min(left, item.qty);
+      fromPoLeft.set(item.so_item_id!, left - used);
+      return used;
+    })(),
   }));
+  const removeDo = async () => {
+    await supabase.from("do_reguler_items").delete().eq("do_id", doRow.id);
+    await supabase.from("do_reguler").delete().eq("id", doRow.id);
+  };
   const { error: itemsError } = await supabase
     .from("do_reguler_items")
     .insert(itemsToInsert);
-  if (itemsError) return { error: itemsError.message };
+  if (itemsError) {
+    await removeDo();
+    return { error: itemsError.message };
+  }
 
-  // Keluarkan stok dari gudang pengirim (langsung)
-  for (const item of data.items) {
-    const { data: srcStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", data.dari_cabang_id)
-      .maybeSingle();
-    if (srcStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: srcStock.qty - item.qty })
-        .eq("id", srcStock.id);
+  // Verifikasi ulang setelah insert (DO lain bisa dibuat bersamaan dan lolos
+  // cek sisa yang sama) -- kalau total DO melebihi qty SO, batalkan.
+  if (soId) {
+    const soItemIds = Array.from(new Set(data.items.map((i) => i.so_item_id!)));
+    const { data: soItemRows } = await supabase
+      .from("so_reguler_items")
+      .select("id, qty, part_number")
+      .in("id", soItemIds);
+    const after = await fetchSoItemFulfillment(supabase, soItemIds);
+    for (const si of soItemRows || []) {
+      if ((after.get(si.id)?.qtyDo || 0) > Number(si.qty)) {
+        await removeDo();
+        return { error: `${si.part_number}: qty DO melebihi sisa SO (bentrok dengan DO lain yang baru dibuat). Coba lagi.` };
+      }
     }
+  }
+
+  // Keluarkan stok dari gudang pengirim (langsung), atomik per part. Gagal ->
+  // potongan yang sudah terjadi dikembalikan & DO dibatalkan.
+  const deducted: { partId: number; qty: number }[] = [];
+  for (const [partId, qty] of neededByPart) {
+    const name = data.items.find((i) => i.part_id === partId)?.part_number;
+    const res = await changeStockQty(
+      supabase,
+      { partId, cabangId: data.dari_cabang_id },
+      -qty,
+      { label: name },
+    );
+    if (!res.ok) {
+      for (const d of deducted) {
+        await changeStockQty(supabase, { partId: d.partId, cabangId: data.dari_cabang_id }, d.qty, { allowNegative: true });
+      }
+      await removeDo();
+      return { error: res.error };
+    }
+    deducted.push({ partId, qty });
+  }
+  for (const item of data.items) {
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
       cabang_id: data.dari_cabang_id,
@@ -285,7 +344,7 @@ export async function updateDoRegulerTracking(
 
   const { data: doRow } = await supabase
     .from("do_reguler")
-    .select("id, status, dari_cabang_id, uid_requester")
+    .select("id, status, dari_cabang_id, uid_requester, so_id")
     .eq("id", doId)
     .single();
   if (!doRow) return { error: "DO Reguler tidak ditemukan" };
@@ -320,10 +379,15 @@ export async function updateDoRegulerTracking(
       status: reachedDelivered ? "completed" : "active",
       updated_at: new Date().toISOString(),
     })
-    .eq("id", doId);
+    .eq("id", doId)
+    .neq("status", "cancelled");
   if (error) return { error: error.message };
 
+  // SO baru "completed" kalau semua DO-nya sudah diterima customer.
+  await refreshSoStatus(supabase, doRow.so_id);
+
   revalidatePath("/so-reguler/do");
+  revalidatePath("/so-reguler/so");
   return { success: true };
 }
 
@@ -356,7 +420,7 @@ export async function updateDoRegulerTrackingModerator(
 
   const { data: doRow } = await supabase
     .from("do_reguler")
-    .select("status")
+    .select("status, so_id")
     .eq("id", doId)
     .single();
   if (!doRow) return { error: "DO Reguler tidak ditemukan" };
@@ -377,10 +441,14 @@ export async function updateDoRegulerTrackingModerator(
       tracking_note_updated_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .eq("id", doId);
+    .eq("id", doId)
+    .neq("status", "cancelled");
   if (error) return { error: error.message };
 
+  await refreshSoStatus(supabase, doRow.so_id);
+
   revalidatePath("/so-reguler/do");
+  revalidatePath("/so-reguler/so");
   return { success: true };
 }
 
@@ -464,6 +532,25 @@ export async function cancelDoReguler(doId: number, reason: string) {
   if (doRow.status === "cancelled")
     return { error: "DO Reguler ini sudah dibatalkan." };
 
+  // Claim pembatalan dulu (kondisional) supaya request ganda tidak
+  // mengembalikan stok dua kali.
+  const { data: claimed, error } = await supabase
+    .from("do_reguler")
+    .update({
+      status: "cancelled",
+      stock_released: false,
+      cancel_reason: reason?.trim() || "-",
+      cancelled_by: user.id,
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", doId)
+    .neq("status", "cancelled")
+    .select("id");
+  if (error) return { error: error.message };
+  if (!claimed || claimed.length === 0)
+    return { error: "DO Reguler ini sudah dibatalkan." };
+
   // Kembalikan stok ke gudang pengirim (jika sebelumnya sudah keluar)
   if (doRow.stock_released) {
     const { data: items } = await supabase
@@ -472,26 +559,12 @@ export async function cancelDoReguler(doId: number, reason: string) {
       .eq("do_id", doId);
 
     for (const item of items || []) {
-      const { data: srcStock } = await supabase
-        .from("stock")
-        .select("id, qty")
-        .eq("part_id", item.part_id)
-        .eq("cabang_id", doRow.dari_cabang_id)
-        .maybeSingle();
-      if (srcStock) {
-        await supabase
-          .from("stock")
-          .update({ qty: srcStock.qty + item.qty })
-          .eq("id", srcStock.id);
-      } else {
-        await supabase.from("stock").insert([
-          {
-            part_id: item.part_id,
-            cabang_id: doRow.dari_cabang_id,
-            qty: item.qty,
-          },
-        ]);
-      }
+      await changeStockQty(
+        supabase,
+        { partId: item.part_id, cabangId: doRow.dari_cabang_id },
+        item.qty,
+        { allowNegative: true },
+      );
       await supabase.from("stock_movements").insert({
         part_id: item.part_id,
         cabang_id: doRow.dari_cabang_id,
@@ -503,19 +576,6 @@ export async function cancelDoReguler(doId: number, reason: string) {
       });
     }
   }
-
-  const { error } = await supabase
-    .from("do_reguler")
-    .update({
-      status: "cancelled",
-      stock_released: false,
-      cancel_reason: reason?.trim() || "-",
-      cancelled_by: user.id,
-      cancelled_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", doId);
-  if (error) return { error: error.message };
 
   await refreshSoStatus(supabase, doRow.so_id);
 
@@ -547,32 +607,26 @@ export async function deleteDoReguler(doId: number) {
     return { error: "DO Reguler ini sudah dibatalkan." };
 
   if (doRow.stock_released) {
+    // Claim (stock_released true -> false secara kondisional) sebelum stok
+    // dikembalikan, supaya tidak dobel dengan cancel/hapus bersamaan.
+    const { data: claimed } = await supabase
+      .from("do_reguler")
+      .update({ stock_released: false })
+      .eq("id", doId)
+      .eq("stock_released", true)
+      .select("id");
     const { data: items } = await supabase
       .from("do_reguler_items")
       .select("part_id, part_number, part_name, qty")
       .eq("do_id", doId);
 
-    for (const item of items || []) {
-      const { data: srcStock } = await supabase
-        .from("stock")
-        .select("id, qty")
-        .eq("part_id", item.part_id)
-        .eq("cabang_id", doRow.dari_cabang_id)
-        .maybeSingle();
-      if (srcStock) {
-        await supabase
-          .from("stock")
-          .update({ qty: srcStock.qty + item.qty })
-          .eq("id", srcStock.id);
-      } else {
-        await supabase.from("stock").insert([
-          {
-            part_id: item.part_id,
-            cabang_id: doRow.dari_cabang_id,
-            qty: item.qty,
-          },
-        ]);
-      }
+    for (const item of claimed && claimed.length > 0 ? items || [] : []) {
+      await changeStockQty(
+        supabase,
+        { partId: item.part_id, cabangId: doRow.dari_cabang_id },
+        item.qty,
+        { allowNegative: true },
+      );
       await supabase.from("stock_movements").insert({
         part_id: item.part_id,
         cabang_id: doRow.dari_cabang_id,

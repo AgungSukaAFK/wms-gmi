@@ -755,7 +755,11 @@ export function DeliveryDetailSheet({
                   <Select
                     value={normalizeDocumentStatus(delivery?.status)}
                     onValueChange={handleStatusChange}
-                    disabled={updating}
+                    disabled={
+                      updating ||
+                      !isModeratorOrAdmin ||
+                      !["open", "approved"].includes(delivery?.status)
+                    }
                   >
                     <SelectTrigger className="h-10 bg-white border-blue-200 font-bold text-xs uppercase text-slate-700 rounded-lg">
                       {updating ? (
@@ -780,8 +784,10 @@ export function DeliveryDetailSheet({
                       >
                         Approved
                       </SelectItem>
+                      {/* Completed hanya lewat finalize penerimaan. */}
                       <SelectItem
                         value="completed"
+                        disabled
                         className="text-xs font-bold uppercase text-slate-900"
                       >
                         Completed

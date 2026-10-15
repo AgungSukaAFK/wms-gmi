@@ -162,7 +162,7 @@ export default function CreatePRPage() {
     if (mrItemIds.length === 0) return {} as Record<number, number>;
     const { data } = await supabase
       .from("pr_items")
-      .select("mr_item_id, qty, prs!inner(pr_status)")
+      .select("mr_item_id, qty, status, prs!inner(pr_status)")
       .in("mr_item_id", mrItemIds);
     const map: Record<number, number> = {};
     (data || []).forEach((row: any) => {
@@ -170,6 +170,8 @@ export default function CreatePRPage() {
         ? row.prs[0]?.pr_status
         : row.prs?.pr_status;
       if (prStatus === "rejected") return;
+      // Item yang ditolak per-item oleh approver PR tidak memakai jatah MR.
+      if (row.status === "rejected") return;
       map[row.mr_item_id] = (map[row.mr_item_id] || 0) + row.qty;
     });
     return map;

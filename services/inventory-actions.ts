@@ -5,6 +5,8 @@ import { evaluateMrFreeze, evaluateMrItemFreeze } from "./freeze-actions";
 import { revalidatePath } from "next/cache";
 import { toCompletedIfLegacy } from "@/lib/document-status";
 import type { KoliRow } from "@/lib/shipment";
+import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
+import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
 
 const DELIVERY_ACTIVE_STATUSES = [
   "open",
@@ -173,6 +175,23 @@ async function computeShareStockRemaining(
     if (!remaining.has(d.mr_item_id)) remaining.set(d.mr_item_id, new Map());
     const m = remaining.get(d.mr_item_id)!;
     m.set(src, (m.get(src) || 0) - d.qty_on_delivery);
+  }
+
+  // Qty yang sudah dipindah lewat Bypass juga mengurangi sisa alokasi.
+  let bypassQuery = supabase
+    .from("mr_sharestock_bypasses")
+    .select("mr_item_id, source_cabang_id, qty")
+    .in("mr_item_id", mrItemIds);
+  if (sourceCabangId) {
+    bypassQuery = bypassQuery.eq("source_cabang_id", sourceCabangId);
+  }
+  const { data: bypassRows, error: bypassError } = await bypassQuery;
+  if (!bypassError) {
+    for (const b of bypassRows || []) {
+      if (!remaining.has(b.mr_item_id)) remaining.set(b.mr_item_id, new Map());
+      const m = remaining.get(b.mr_item_id)!;
+      m.set(b.source_cabang_id, (m.get(b.source_cabang_id) || 0) - b.qty);
+    }
   }
 
   return { remaining };
@@ -351,6 +370,13 @@ async function _validateAndApplyDeliveryItems(
     }),
   );
 
+  // Total kebutuhan per part (PN yang sama bisa muncul di beberapa baris,
+  // mis. dari beberapa MR) -- stok dicek terhadap totalnya, bukan per baris.
+  if (items.some((i) => !(i.qty_on_delivery > 0) || !Number.isInteger(Number(i.qty_on_delivery)))) {
+    return { error: "Qty delivery harus bilangan bulat lebih dari 0." };
+  }
+  const neededByPart = sumQtyByPart(items, (i) => i.qty_on_delivery);
+
   for (const stockInfo of sourceStockList) {
     if (stockInfo.error) {
       return { error: stockInfo.error.message };
@@ -362,20 +388,24 @@ async function _validateAndApplyDeliveryItems(
       };
     }
 
-    if (stockInfo.sourceStock.qty < stockInfo.item.qty_on_delivery) {
+    const neededTotal = neededByPart.get(stockInfo.item.part_id) || 0;
+    if (stockInfo.sourceStock.qty < neededTotal) {
       return {
-        error: `Stok ${stockInfo.item.part_name} di cabang asal tidak mencukupi`,
+        error: `Stok ${stockInfo.item.part_name} di cabang asal tidak mencukupi (tersedia ${stockInfo.sourceStock.qty}, dibutuhkan ${neededTotal})`,
       };
     }
 
     if (typeof stockInfo.item.mr_item_id === "number") {
       const remainingAllocation = allocationByItemId.get(stockInfo.item.mr_item_id) || 0;
-      if (stockInfo.item.qty_on_delivery > remainingAllocation) {
+      const requestedForItem = items
+        .filter((i) => i.mr_item_id === stockInfo.item.mr_item_id)
+        .reduce((sum, i) => sum + i.qty_on_delivery, 0);
+      if (requestedForItem > remainingAllocation) {
         return {
           error:
             remainingAllocation <= 0
               ? `Alokasi share stock untuk ${stockInfo.item.part_name} sudah habis di cabang asal. Silakan pilih item lain atau ubah cabang asal.`
-              : `Qty delivery ${stockInfo.item.part_name} melebihi sisa alokasi share stock (sisa: ${remainingAllocation}, diminta: ${stockInfo.item.qty_on_delivery})`,
+              : `Qty delivery ${stockInfo.item.part_name} melebihi sisa alokasi share stock (sisa: ${remainingAllocation}, diminta: ${requestedForItem})`,
         };
       }
     }
@@ -402,6 +432,18 @@ async function _validateAndApplyDeliveryItems(
         row.mr_item_id,
         (activeTotalByItem.get(row.mr_item_id) || 0) + row.qty_on_delivery,
       );
+    }
+    const { data: bypassAll, error: bypassAllErr } = await supabase
+      .from("mr_sharestock_bypasses")
+      .select("mr_item_id, qty")
+      .in("mr_item_id", mrItemIds);
+    if (!bypassAllErr) {
+      for (const row of bypassAll || []) {
+        activeTotalByItem.set(
+          row.mr_item_id,
+          (activeTotalByItem.get(row.mr_item_id) || 0) + row.qty,
+        );
+      }
     }
 
     const requestedNowByItem = new Map<number, number>();
@@ -477,35 +519,39 @@ async function _validateAndApplyDeliveryItems(
     }
   }
 
-  // 2. Subtract Stock from Source (goods are now in transit; destination gets stock on finalizeDelivery)
-  for (const item of items) {
-    const { data: sourceStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", dariCabangId)
-      .maybeSingle();
-
-    if (sourceStock) {
-      const { error: sourceUpdateError } = await supabase
-        .from("stock")
-        .update({ qty: sourceStock.qty - item.qty_on_delivery })
-        .eq("id", sourceStock.id);
-
-      if (sourceUpdateError) {
-        return { error: sourceUpdateError.message };
+  // 2. Subtract Stock from Source (goods are now in transit; destination gets
+  // stock on finalizeDelivery). Atomik per part; kalau ada yang gagal (stok
+  // keburu dipakai proses lain), yang sudah terpotong dikembalikan.
+  const deducted: { part_id: number; qty: number }[] = [];
+  for (const [partId, qty] of neededByPart) {
+    const sample = items.find((i) => i.part_id === partId)!;
+    const res = await changeStockQty(
+      supabase,
+      { partId, cabangId: dariCabangId },
+      -qty,
+      { label: sample.part_number },
+    );
+    if (!res.ok) {
+      for (const d of deducted) {
+        await changeStockQty(supabase, { partId: d.part_id, cabangId: dariCabangId }, d.qty, {
+          allowNegative: true,
+        });
       }
-
-      await supabase.from("stock_movements").insert({
-        part_id: item.part_id,
-        cabang_id: dariCabangId,
-        qty_change: -item.qty_on_delivery,
-        type: "SS",
-        reference_id: dlvKode,
-        created_by: userId,
-        notes: `Delivery ${dlvKode}: ${item.part_number} ${item.part_name} keluar dari cabang ${dariCabangId} (dalam pengiriman)`,
-      });
+      await supabase.from("delivery_items").delete().eq("dlv_id", dlvId);
+      return { error: res.error };
     }
+    deducted.push({ part_id: partId, qty });
+  }
+  for (const item of items) {
+    await supabase.from("stock_movements").insert({
+      part_id: item.part_id,
+      cabang_id: dariCabangId,
+      qty_change: -item.qty_on_delivery,
+      type: "SS",
+      reference_id: dlvKode,
+      created_by: userId,
+      notes: `Delivery ${dlvKode}: ${item.part_number} ${item.part_name} keluar dari cabang ${dariCabangId} (dalam pengiriman)`,
+    });
   }
 
   // 3. Catat Barang dalam Pengiriman (barang akan masuk ke cabang tujuan).
@@ -597,26 +643,12 @@ async function _returnDeliveryStockToSource(
 ) {
   const { dariCabangId, dlvKode, items, userId, buildNote } = params;
   for (const item of items) {
-    const { data: srcStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", dariCabangId)
-      .maybeSingle();
-    if (srcStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: srcStock.qty + item.qty_on_delivery })
-        .eq("id", srcStock.id);
-    } else {
-      await supabase.from("stock").insert([
-        {
-          part_id: item.part_id,
-          cabang_id: dariCabangId,
-          qty: item.qty_on_delivery,
-        },
-      ]);
-    }
+    await changeStockQty(
+      supabase,
+      { partId: item.part_id, cabangId: dariCabangId },
+      item.qty_on_delivery,
+      { allowNegative: true, label: item.part_number },
+    );
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
       cabang_id: dariCabangId,
@@ -724,6 +756,7 @@ export async function createDelivery(data: {
     return { error: "Kode Delivery sudah digunakan. Gunakan kode lain." };
   }
 
+  let createdDlvId: number | null = null;
   const applyResult = await _validateAndApplyDeliveryItems(supabase, {
     dariCabangId: data.dari_cabang_id,
     keCabangId: data.ke_cabang_id,
@@ -775,10 +808,16 @@ export async function createDelivery(data: {
         .select()
         .single();
       if (dlvError) return { error: dlvError.message };
+      createdDlvId = dlv.id;
       return { dlvId: dlv.id, dlvKode: dlv.dlv_kode };
     },
   });
-  if ("error" in applyResult) return { error: applyResult.error };
+  if ("error" in applyResult) {
+    // Potong stok gagal setelah header dibuat -> jangan tinggalkan header
+    // delivery tanpa item.
+    if (createdDlvId) await supabase.from("deliveries").delete().eq("id", createdDlvId);
+    return { error: applyResult.error };
+  }
 
   revalidatePath("/deliveries");
   revalidatePath("/share-stock");
@@ -1048,29 +1087,42 @@ export async function finalizeDelivery(
   if (!dlvItems || dlvItems.length === 0)
     return { error: "Tidak ada item delivery" };
 
+  // Claim dulu (kondisional: belum ada tanda tangan penerima) SEBELUM stok
+  // ditambah, supaya dua klik / dua request bersamaan tidak menambah stok
+  // tujuan dua kali.
+  const { data: claimed, error: finalizeUpdateError } = await supabase
+    .from("deliveries")
+    .update({
+      signature_receiver_id: signatureId,
+      signed_by_receiver_at: new Date().toISOString(),
+      signature_receiver_image_url: sig.image_url,
+      signature_receiver_printed_name: sig.printed_name,
+      signature_receiver_label: sig.label,
+      uid_receiver: user.id,
+      status: "completed",
+      tracking_status: "completed",
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", deliveryId)
+    .is("signature_receiver_id", null)
+    .neq("status", "cancelled")
+    .select("id");
+
+  if (finalizeUpdateError) {
+    return { error: finalizeUpdateError.message };
+  }
+  if (!claimed || claimed.length === 0) {
+    return { success: true, alreadyFinalized: true };
+  }
+
   // Add stock to destination for each item
   for (const item of dlvItems) {
-    const { data: destStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", item.part_id)
-      .eq("cabang_id", delivery.ke_cabang_id)
-      .maybeSingle();
-
-    if (destStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: destStock.qty + item.qty_on_delivery })
-        .eq("id", destStock.id);
-    } else {
-      await supabase.from("stock").insert([
-        {
-          part_id: item.part_id,
-          cabang_id: delivery.ke_cabang_id,
-          qty: item.qty_on_delivery,
-        },
-      ]);
-    }
+    await changeStockQty(
+      supabase,
+      { partId: item.part_id, cabangId: delivery.ke_cabang_id },
+      item.qty_on_delivery,
+      { label: item.part_number },
+    );
 
     await supabase.from("stock_movements").insert({
       part_id: item.part_id,
@@ -1089,26 +1141,6 @@ export async function finalizeDelivery(
       .eq("id", item.id);
   }
 
-  // Update delivery: signature + status
-  const { error: finalizeUpdateError } = await supabase
-    .from("deliveries")
-    .update({
-      signature_receiver_id: signatureId,
-      signed_by_receiver_at: new Date().toISOString(),
-      signature_receiver_image_url: sig.image_url,
-      signature_receiver_printed_name: sig.printed_name,
-      signature_receiver_label: sig.label,
-      uid_receiver: user.id,
-      status: "completed",
-      tracking_status: "completed",
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", deliveryId);
-
-  if (finalizeUpdateError) {
-    return { error: finalizeUpdateError.message };
-  }
-
   // Sync share stock statuses
   const mrItemIds = Array.from(
     new Set(
@@ -1119,6 +1151,8 @@ export async function finalizeDelivery(
   );
   if (mrItemIds.length > 0) {
     await syncShareStockStatuses(mrItemIds);
+    // Share stock yang diterima = pemenuhan MR (qty_received / mr_status).
+    await recomputeMrItemsFulfillment(supabase, mrItemIds);
   }
 
   // Tutup saldo barang dalam pengiriman: barang sudah diterima di cabang tujuan.
@@ -1202,6 +1236,27 @@ export async function cancelDelivery(deliveryId: number, reason: string) {
     .select("part_id, part_number, part_name, qty_on_delivery, mr_item_id")
     .eq("dlv_id", deliveryId);
 
+  // Claim pembatalan dulu (kondisional) supaya dua request bersamaan tidak
+  // mengembalikan stok dua kali, dan tidak bentrok dengan finalize.
+  const { data: claimedCancel, error: updateError } = await supabase
+    .from("deliveries")
+    .update({
+      status: "cancelled",
+      cancel_reason: trimmedReason,
+      cancelled_by: user.id,
+      cancelled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", deliveryId)
+    .neq("status", "cancelled")
+    .neq("status", "completed")
+    .is("signature_receiver_id", null)
+    .select("id");
+  if (updateError) return { error: updateError.message };
+  if (!claimedCancel || claimedCancel.length === 0) {
+    return { error: "Delivery sudah dibatalkan atau sudah diterima." };
+  }
+
   // Kembalikan qty ke stok cabang sumber (saat createDelivery stok sumber dipotong).
   await _returnDeliveryStockToSource(supabase, {
     dariCabangId: delivery.dari_cabang_id,
@@ -1224,18 +1279,6 @@ export async function cancelDelivery(deliveryId: number, reason: string) {
       planningCancelError.message,
     );
   }
-
-  const { error: updateError } = await supabase
-    .from("deliveries")
-    .update({
-      status: "cancelled",
-      cancel_reason: trimmedReason,
-      cancelled_by: user.id,
-      cancelled_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", deliveryId);
-  if (updateError) return { error: updateError.message };
 
   // Recompute status share stock item terkait (alokasi kembali tersedia).
   const mrItemIds = Array.from(
@@ -1449,7 +1492,28 @@ export async function moderatorEditDelivery(
       userId: user.id,
       getDelivery: async () => ({ dlvId: delivery.id, dlvKode: delivery.dlv_kode }),
     });
-    if ("error" in applyResult) return { error: applyResult.error };
+    if ("error" in applyResult) {
+      // Item baru gagal -> terapkan ulang item LAMA supaya delivery & stok
+      // kembali persis seperti sebelum edit (tidak ada delivery tanpa item).
+      const oldMrInfo = await _resolveDeliveryItemsMrInfo(
+        supabase,
+        itemsBefore.map((i) => ({ ...i, mr_item_id: i.mr_item_id ?? undefined })),
+      );
+      const restore = await _validateAndApplyDeliveryItems(supabase, {
+        dariCabangId: delivery.dari_cabang_id,
+        keCabangId: delivery.ke_cabang_id,
+        items: itemsBefore.map((i) => ({ ...i, mr_item_id: i.mr_item_id ?? undefined })),
+        mrItemById: oldMrInfo.mrItemById,
+        userId: user.id,
+        getDelivery: async () => ({ dlvId: delivery.id, dlvKode: delivery.dlv_kode }),
+      });
+      if ("error" in restore) {
+        return {
+          error: `${applyResult.error} -- dan item lama GAGAL dipulihkan (${restore.error}). Cek delivery ${delivery.dlv_kode} secara manual.`,
+        };
+      }
+      return { error: applyResult.error };
+    }
 
     itemsAfterCount = payload.items.length;
 
@@ -1614,6 +1678,20 @@ export async function deleteDelivery(deliveryId: number, reason: string) {
     .eq("dlv_id", deliveryId);
 
   if (delivery.status !== "cancelled") {
+    // Claim (jadikan cancelled secara kondisional) sebelum stok dikembalikan,
+    // supaya request ganda / finalize bersamaan tidak membuat stok dobel.
+    const { data: claimedDel, error: claimErr } = await supabase
+      .from("deliveries")
+      .update({ status: "cancelled", updated_at: new Date().toISOString() })
+      .eq("id", deliveryId)
+      .neq("status", "cancelled")
+      .neq("status", "completed")
+      .is("signature_receiver_id", null)
+      .select("id");
+    if (claimErr) return { error: claimErr.message };
+    if (!claimedDel || claimedDel.length === 0) {
+      return { error: "Delivery baru saja berubah status (dibatalkan/diterima). Muat ulang halaman." };
+    }
     await _returnDeliveryStockToSource(supabase, {
       dariCabangId: delivery.dari_cabang_id,
       dlvKode: delivery.dlv_kode,
@@ -1682,6 +1760,18 @@ export async function bypassShareStockCompletion(mrItemId: number) {
   } = await supabase.auth.getUser();
   if (!user) return { error: "Session expired" };
 
+  const { data: bypassRoleRows } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  if (
+    !(bypassRoleRows || []).some((r: any) =>
+      ["moderator", "admin"].includes(r?.roles?.name),
+    )
+  ) {
+    return { error: "Hanya moderator/admin yang dapat melakukan bypass share stock." };
+  }
+
   // Get mr_item with mr.cabang_id (destination)
   const { data: mrItem } = await supabase
     .from("mr_items")
@@ -1729,17 +1819,27 @@ export async function bypassShareStockCompletion(mrItemId: number) {
   const remainResult = await computeShareStockRemaining(supabase, [mrItemId]);
   if (remainResult.error) return { error: remainResult.error };
 
+  // Alokasi dijumlah per gudang sumber (satu sumber bisa punya >1 baris).
+  const allocBySource = new Map<number, number>();
+  for (const alloc of allocations) {
+    allocBySource.set(
+      alloc.source_cabang_id,
+      (allocBySource.get(alloc.source_cabang_id) || 0) + Number(alloc.qty || 0),
+    );
+  }
   const remainingBySource = new Map<number, number>();
   let anyRemaining = false;
-  for (const alloc of allocations) {
+  for (const [srcId, allocQty] of allocBySource) {
     const raw = remainResult.missingMrItemColumn
-      ? alloc.qty
-      : (remainResult.remaining.get(mrItemId)?.get(alloc.source_cabang_id) ??
-        alloc.qty);
-    const remainingQty = Math.max(0, Math.min(raw, alloc.qty));
-    remainingBySource.set(alloc.source_cabang_id, remainingQty);
+      ? allocQty
+      : (remainResult.remaining.get(mrItemId)?.get(srcId) ?? allocQty);
+    const remainingQty = Math.max(0, Math.min(raw, allocQty));
+    remainingBySource.set(srcId, remainingQty);
     if (remainingQty > 0) anyRemaining = true;
   }
+  const sourceEntries = Array.from(allocBySource.entries()).map(
+    ([source_cabang_id, qty]) => ({ source_cabang_id, qty }),
+  );
   if (!anyRemaining) {
     return {
       error:
@@ -1749,75 +1849,119 @@ export async function bypassShareStockCompletion(mrItemId: number) {
 
   const bypassRef = `BYPASS-${(mrItem.mrs as any)?.mr_kode || mrItemId}`;
 
-  // Move stock from each source to destination (hanya sisa yang belum
-  // terkirim lewat delivery normal)
-  for (const alloc of allocations) {
+  // Validasi SEMUA sumber dulu: kalau ada satu gudang sumber yang stoknya
+  // kurang, bypass ditolak seluruhnya (tidak ada qty yang hilang diam-diam).
+  const shortages: string[] = [];
+  for (const alloc of sourceEntries) {
     const remainingQty = remainingBySource.get(alloc.source_cabang_id) || 0;
     if (remainingQty <= 0) continue;
-
     const { data: srcStock } = await supabase
       .from("stock")
-      .select("id, qty")
+      .select("qty, cabang(nama_cabang)")
       .eq("part_id", mrItem.part_id)
       .eq("cabang_id", alloc.source_cabang_id)
       .maybeSingle();
-
-    // Skip if source doesn't have enough (best-effort bypass)
-    if (!srcStock || srcStock.qty < remainingQty) continue;
-
-    await supabase
-      .from("stock")
-      .update({ qty: srcStock.qty - remainingQty })
-      .eq("id", srcStock.id);
-
-    await supabase.from("stock_movements").insert({
-      part_id: mrItem.part_id,
-      cabang_id: alloc.source_cabang_id,
-      qty_change: -remainingQty,
-      type: "SS",
-      reference_id: bypassRef,
-      created_by: user.id,
-      notes: `Bypass SS: ${mrItem.part_number} keluar dari cabang ${alloc.source_cabang_id} (sisa ${remainingQty} dari alokasi ${alloc.qty})`,
-    });
-
-    const { data: dstStock } = await supabase
-      .from("stock")
-      .select("id, qty")
-      .eq("part_id", mrItem.part_id)
-      .eq("cabang_id", destCabangId)
-      .maybeSingle();
-
-    if (dstStock) {
-      await supabase
-        .from("stock")
-        .update({ qty: dstStock.qty + remainingQty })
-        .eq("id", dstStock.id);
-    } else {
-      await supabase.from("stock").insert([
-        {
-          part_id: mrItem.part_id,
-          cabang_id: destCabangId,
-          qty: remainingQty,
-        },
-      ]);
+    const avail = srcStock?.qty ?? 0;
+    if (avail < remainingQty) {
+      const nama =
+        (Array.isArray((srcStock as any)?.cabang)
+          ? (srcStock as any).cabang[0]?.nama_cabang
+          : (srcStock as any)?.cabang?.nama_cabang) || `cabang ${alloc.source_cabang_id}`;
+      shortages.push(`${nama}: stok ${avail}, perlu ${remainingQty}`);
     }
-
-    await supabase.from("stock_movements").insert({
-      part_id: mrItem.part_id,
-      cabang_id: destCabangId,
-      qty_change: remainingQty,
-      type: "SS",
-      reference_id: bypassRef,
-      created_by: user.id,
-      notes: `Bypass SS: ${mrItem.part_number} masuk ke cabang ${destCabangId} (sisa ${remainingQty} dari alokasi ${alloc.qty})`,
-    });
+  }
+  if (shortages.length > 0) {
+    return {
+      error:
+        `Bypass ditolak, stok gudang sumber ${mrItem.part_number} tidak mencukupi:\n` +
+        shortages.join("\n"),
+    };
   }
 
-  // Mark item as closed
-  await supabase
+  // Claim: tutup item secara kondisional dulu supaya dua bypass bersamaan
+  // tidak sama-sama memindahkan stok.
+  const { data: claimed, error: claimErr } = await supabase
     .from("mr_items")
     .update({ ss_status: "closed", updated_at: new Date().toISOString() })
-    .eq("id", mrItemId);
+    .eq("id", mrItemId)
+    .neq("ss_status", "closed")
+    .select("id");
+  if (claimErr) return { error: claimErr.message };
+  if (!claimed || claimed.length === 0) {
+    return { error: "Item share stock ini sudah selesai / sedang di-bypass." };
+  }
+
+  const startedAt = new Date().toISOString();
+  const applied: { source_cabang_id: number; qty: number }[] = [];
+  const rollback = async (message: string) => {
+    for (const a of applied) {
+      await changeStockQty(supabase, { partId: mrItem.part_id, cabangId: a.source_cabang_id }, a.qty, { allowNegative: true });
+      await changeStockQty(supabase, { partId: mrItem.part_id, cabangId: destCabangId }, -a.qty, { allowNegative: true });
+    }
+    await supabase.from("mr_sharestock_bypasses").delete().eq("mr_item_id", mrItemId).eq("reference_id", bypassRef).gte("created_at", startedAt);
+    await syncShareStockStatuses([mrItemId]);
+    return { error: message };
+  };
+
+  // Move stock from each source to destination (hanya sisa yang belum
+  // terkirim lewat delivery normal / bypass sebelumnya)
+  for (const alloc of sourceEntries) {
+    const remainingQty = remainingBySource.get(alloc.source_cabang_id) || 0;
+    if (remainingQty <= 0) continue;
+
+    const out = await changeStockQty(
+      supabase,
+      { partId: mrItem.part_id, cabangId: alloc.source_cabang_id },
+      -remainingQty,
+      { label: mrItem.part_number },
+    );
+    if (!out.ok) return rollback(out.error);
+    const inn = await changeStockQty(
+      supabase,
+      { partId: mrItem.part_id, cabangId: destCabangId },
+      remainingQty,
+      { label: mrItem.part_number },
+    );
+    if (!inn.ok) {
+      await changeStockQty(supabase, { partId: mrItem.part_id, cabangId: alloc.source_cabang_id }, remainingQty, { allowNegative: true });
+      return rollback(inn.error);
+    }
+    applied.push({ source_cabang_id: alloc.source_cabang_id, qty: remainingQty });
+
+    // Jejak bypass: dihitung sebagai alokasi terkirim & pemenuhan MR.
+    const { error: recErr } = await supabase.from("mr_sharestock_bypasses").insert({
+      mr_item_id: mrItemId,
+      source_cabang_id: alloc.source_cabang_id,
+      qty: remainingQty,
+      reference_id: bypassRef,
+      created_by: user.id,
+    });
+    if (recErr) return rollback(`Gagal mencatat bypass: ${recErr.message}`);
+
+    await supabase.from("stock_movements").insert([
+      {
+        part_id: mrItem.part_id,
+        cabang_id: alloc.source_cabang_id,
+        qty_change: -remainingQty,
+        type: "SS",
+        reference_id: bypassRef,
+        created_by: user.id,
+        notes: `Bypass SS: ${mrItem.part_number} keluar dari cabang ${alloc.source_cabang_id} (sisa ${remainingQty} dari alokasi ${alloc.qty})`,
+      },
+      {
+        part_id: mrItem.part_id,
+        cabang_id: destCabangId,
+        qty_change: remainingQty,
+        type: "SS",
+        reference_id: bypassRef,
+        created_by: user.id,
+        notes: `Bypass SS: ${mrItem.part_number} masuk ke cabang ${destCabangId} (sisa ${remainingQty} dari alokasi ${alloc.qty})`,
+      },
+    ]);
+  }
+
+  // Qty bypass = pemenuhan MR.
+  await recomputeMrItemsFulfillment(supabase, [mrItemId]);
 
   revalidatePath("/share-stock");
   revalidatePath("/mr");
@@ -1841,7 +1985,43 @@ export async function updateDeliveryDocument(
   };
 
   if (updates.status) {
-    payload.status = toCompletedIfLegacy(updates.status);
+    // Status dokumen manual hanya boleh open <-> approved, oleh moderator/
+    // admin. "completed" WAJIB lewat finalizeDelivery (stok tujuan masuk &
+    // pemenuhan MR dihitung), dan delivery yang sudah completed/cancelled
+    // tidak boleh dibuka lagi (bisa di-cancel lalu stoknya balik dobel).
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { error: "Session expired" };
+    const { data: roleRows } = await supabase
+      .from("user_roles")
+      .select("roles(name)")
+      .eq("user_id", user.id);
+    const isModeratorOrAdmin = (roleRows || []).some((r: any) =>
+      ["moderator", "admin"].includes(r?.roles?.name),
+    );
+    if (!isModeratorOrAdmin) {
+      return { error: "Hanya moderator/admin yang dapat mengubah status dokumen delivery." };
+    }
+    const nextStatus = toCompletedIfLegacy(updates.status);
+    if (!["open", "approved"].includes(nextStatus)) {
+      return {
+        error: "Status completed hanya lewat konfirmasi penerimaan (finalize) oleh gudang tujuan.",
+      };
+    }
+    const { data: current } = await supabase
+      .from("deliveries")
+      .select("status, signature_receiver_id")
+      .eq("id", deliveryId)
+      .maybeSingle();
+    if (!current) return { error: "Delivery tidak ditemukan" };
+    if (
+      current.signature_receiver_id ||
+      !["open", "approved"].includes(current.status)
+    ) {
+      return { error: "Delivery yang sudah selesai/dibatalkan tidak bisa diubah statusnya." };
+    }
+    payload.status = nextStatus;
   }
 
   if (updates.no_resi !== undefined) {
@@ -1951,43 +2131,45 @@ export async function updateDeliveryReceiverSignature(
 
 export async function syncShareStockStatuses(mrItemIds: number[]) {
   const supabase = await createClient();
+  const ids = Array.from(new Set((mrItemIds || []).filter(Boolean)));
+  if (ids.length === 0) return;
 
   const { data: mrItems } = await supabase
     .from("mr_items")
     .select("id, qty_sharestock_total")
-    .in("id", mrItemIds);
+    .in("id", ids);
 
   if (!mrItems || mrItems.length === 0) {
     return;
   }
 
-  // Only count delivery_items from FINALIZED deliveries (receiver has signed)
-  const { data: finalizedDlvs } = await supabase
-    .from("deliveries")
-    .select("id")
-    .not("signature_receiver_id", "is", null);
-
-  const finalizedDlvIds = (finalizedDlvs || []).map((d) => d.id);
-
-  const { data: deliveredItems } =
-    finalizedDlvIds.length > 0
-      ? await supabase
-          .from("delivery_items")
-          .select("mr_item_id, qty_on_delivery")
-          .in("mr_item_id", mrItemIds)
-          .in("dlv_id", finalizedDlvIds)
-      : { data: [] };
+  // Hanya delivery yang sudah di-FINALIZE (penerima sudah tanda tangan),
+  // difilter langsung per item -- bukan ambil semua delivery finalized
+  // (terpotong batas 1000 baris PostgREST begitu datanya banyak).
+  const { data: deliveredItems } = await supabase
+    .from("delivery_items")
+    .select("mr_item_id, qty_on_delivery, deliveries!inner(signature_receiver_id, status)")
+    .in("mr_item_id", ids)
+    .not("deliveries.signature_receiver_id", "is", null)
+    .neq("deliveries.status", "cancelled");
 
   const deliveredMap = new Map<number, number>();
   for (const deliveredItem of deliveredItems || []) {
-    if (!deliveredItem.mr_item_id) {
-      continue;
-    }
-    const currentDelivered = deliveredMap.get(deliveredItem.mr_item_id) || 0;
+    if (!deliveredItem.mr_item_id) continue;
     deliveredMap.set(
       deliveredItem.mr_item_id,
-      currentDelivered + deliveredItem.qty_on_delivery,
+      (deliveredMap.get(deliveredItem.mr_item_id) || 0) + deliveredItem.qty_on_delivery,
     );
+  }
+  // Qty bypass ikut dihitung terkirim.
+  const { data: bypassRows, error: bypassErr } = await supabase
+    .from("mr_sharestock_bypasses")
+    .select("mr_item_id, qty")
+    .in("mr_item_id", ids);
+  if (!bypassErr) {
+    for (const b of bypassRows || []) {
+      deliveredMap.set(b.mr_item_id, (deliveredMap.get(b.mr_item_id) || 0) + b.qty);
+    }
   }
 
   await Promise.all(
