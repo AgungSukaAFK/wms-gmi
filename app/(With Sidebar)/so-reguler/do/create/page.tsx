@@ -184,7 +184,7 @@ function CreateDoRegulerForm() {
       let q = supabase
         .from("so_reguler")
         .select(
-          "id, so_kode, so_status, customer:customers!customer_id(customer_name), cabang:cabang!cabang_id(nama_cabang)",
+          "id, so_kode, so_status, customer:customers!customer_id(customer_name)",
         )
         .in("so_status", ["open", "partial"])
         .order("created_at", { ascending: false })
@@ -203,7 +203,7 @@ function CreateDoRegulerForm() {
     const { data: so } = await supabase
       .from("so_reguler")
       .select(
-        "id, so_kode, so_status, cabang_id, customer_id, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
+        "id, so_kode, so_status, customer_id, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
       )
       .eq("id", soId)
       .maybeSingle();
@@ -221,12 +221,12 @@ function CreateDoRegulerForm() {
       supabase,
       soItems.map((i) => i.id),
     );
-    // Gudang pengirim default = lokasi site SO (boleh diganti).
-    const cabangId = String(so.cabang_id);
+    // Gudang pengirim = pilihan saat ini (default gudang akun, boleh diganti).
+    // Qty awal diisi min(sisa SO, stok gudang tsb).
     const { data: stockRows } = await supabase
       .from("stock")
       .select("part_id, qty")
-      .eq("cabang_id", so.cabang_id)
+      .eq("cabang_id", Number(dariCabangId) || -1)
       .in(
         "part_id",
         soItems.map((i) => i.part_id),
@@ -259,7 +259,6 @@ function CreateDoRegulerForm() {
       ? so.customer[0]
       : so.customer;
     setCustomerName(soCustomer?.customer_name || "");
-    setDariCabangId(cabangId);
     setItems(nextItems);
     setSoLoading(false);
   };
@@ -671,7 +670,6 @@ function CreateDoRegulerForm() {
                           {so.so_kode}
                         </span>
                         <span className="text-[9px] text-muted-foreground uppercase">
-                          {so.cabang?.nama_cabang} →{" "}
                           {so.customer?.customer_name}
                         </span>
                       </button>

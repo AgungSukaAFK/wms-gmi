@@ -1,6 +1,8 @@
 // SO Reguler: Sales Order reguler ke customer, tanpa approval. Pemenuhan per
 // item dinamis & partial per qty -- sebagian langsung DO Reguler dari stok,
-// sebagian PO dulu (po_jenis 'so') lalu RI ke gudang site SO, baru di-DO.
+// sebagian PO dulu (po_jenis 'so') lalu RI ke gudang penerima PO tsb
+// (pos.cabang_id), baru di-DO. SO sendiri tidak punya lokasi/kategori sejak
+// revisi 2026-10-16 (so_reguler.cabang_id/kategori hanya terisi di SO lama).
 // Lihat supabase/migrations/20261014100000_so_reguler.sql.
 
 // Role yang boleh MEMBUAT SO Reguler (keputusan user 2026-10-14).
@@ -15,14 +17,6 @@ export function canCreateSO(roles: RoleLike[] | null | undefined): boolean {
     return name != null && SO_CREATE_ROLES.includes(name);
   });
 }
-
-// Kategori SO sengaja disamakan dengan kategori MR (keputusan user).
-export const SO_KATEGORI_OPTIONS = [
-  "New Item",
-  "Replace Item",
-  "Fix & Repair",
-  "Upgrade",
-];
 
 export type SoStatus = "open" | "partial" | "completed" | "cancelled";
 
@@ -42,9 +36,19 @@ export type SoItemFulfillment = {
   qtyDo: number;
   // Bagian qtyDo yang memakai barang hasil PO (do_reguler_items.qty_from_po)
   qtyDoFromPo: number;
+  // Per gudang (cabang_id): barang PO yang diterima di gudang itu & bagian DO
+  // dari gudang itu yang memakai barang PO. Dipakai poPoolAvailableAt.
+  poReceivedByCabang: Map<number, number>;
+  doFromPoByCabang: Map<number, number>;
   pos: { id: number; po_kode: string; qty: number; po_status: string }[];
   dos: { id: number; do_kode: string; qty: number; status: string }[];
 };
+
+function addTo(map: Map<number, number>, key: unknown, qty: number) {
+  if (key == null || !qty) return;
+  const k = Number(key);
+  map.set(k, (map.get(k) || 0) + qty);
+}
 
 function rel(row: any, key: string) {
   const v = row?.[key];
@@ -70,6 +74,8 @@ export async function fetchSoItemFulfillment(
       qtyPoReceived: 0,
       qtyDo: 0,
       qtyDoFromPo: 0,
+      poReceivedByCabang: new Map(),
+      doFromPoByCabang: new Map(),
       pos: [],
       dos: [],
     });
@@ -79,11 +85,11 @@ export async function fetchSoItemFulfillment(
   const [{ data: poRows }, { data: doRows }] = await Promise.all([
     supabase
       .from("po_items")
-      .select("so_item_id, qty, qty_received, pos!inner(id, po_kode, po_status)")
+      .select("so_item_id, qty, qty_received, pos!inner(id, po_kode, po_status, cabang_id)")
       .in("so_item_id", soItemIds),
     supabase
       .from("do_reguler_items")
-      .select("so_item_id, qty, qty_from_po, do_reguler!inner(id, do_kode, status)")
+      .select("so_item_id, qty, qty_from_po, do_reguler!inner(id, do_kode, status, dari_cabang_id)")
       .in("so_item_id", soItemIds),
   ]);
 
@@ -94,6 +100,7 @@ export async function fetchSoItemFulfillment(
     if (opts?.excludePoId && po.id === opts.excludePoId) continue;
     entry.qtyPo += Number(row.qty) || 0;
     entry.qtyPoReceived += Number(row.qty_received) || 0;
+    addTo(entry.poReceivedByCabang, po.cabang_id, Number(row.qty_received) || 0);
     entry.pos.push({
       id: po.id,
       po_kode: po.po_kode,
@@ -107,6 +114,7 @@ export async function fetchSoItemFulfillment(
     if (!d || !entry || d.status === "cancelled") continue;
     entry.qtyDo += Number(row.qty) || 0;
     entry.qtyDoFromPo += Number(row.qty_from_po) || 0;
+    addTo(entry.doFromPoByCabang, d.dari_cabang_id, Number(row.qty_from_po) || 0);
     entry.dos.push({
       id: d.id,
       do_kode: d.do_kode,
@@ -146,6 +154,23 @@ export function computeSoItemRemaining(
     sisaPo: Math.max(0, Math.min(sisaDo, qty - qtyPo - doFromStock)),
     poPoolAvailable: Math.max(0, qtyPoReceived - qtyDoFromPo),
   };
+}
+
+/**
+ * Barang hasil PO dari SO yang sudah diterima di gudang `cabangId` dan belum
+ * dipakai DO dari gudang itu. Barang PO hanya ada di gudang penerima PO-nya,
+ * jadi DO dari gudang lain tidak memakai pool ini. Dibatasi juga oleh pool
+ * total (computeSoItemRemaining.poPoolAvailable).
+ */
+export function poPoolAvailableAt(
+  f: SoItemFulfillment | undefined,
+  cabangId: number,
+  totalPool: number,
+) {
+  if (!f) return 0;
+  const received = f.poReceivedByCabang.get(Number(cabangId)) || 0;
+  const used = f.doFromPoByCabang.get(Number(cabangId)) || 0;
+  return Math.max(0, Math.min(totalPool, received - used));
 }
 
 /**

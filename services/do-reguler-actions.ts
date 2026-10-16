@@ -6,6 +6,7 @@ import type { KoliRow } from "@/lib/shipment";
 import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
 import {
   computeSoItemRemaining,
+  poPoolAvailableAt,
   fetchSoItemFulfillment,
   refreshSoStatus,
 } from "@/lib/so-reguler";
@@ -110,7 +111,7 @@ export async function createDoReguler(data: {
   if (soId) {
     const { data: so } = await supabase
       .from("so_reguler")
-      .select("id, so_kode, so_status, customer_id, cabang_id, so_reguler_items(id, qty, part_id, part_number, part_name, satuan)")
+      .select("id, so_kode, so_status, customer_id, so_reguler_items(id, qty, part_id, part_number, part_name, satuan)")
       .eq("id", soId)
       .maybeSingle();
     if (!so) return { error: "SO Reguler tidak ditemukan." };
@@ -140,9 +141,8 @@ export async function createDoReguler(data: {
     for (const item of data.items) {
       requestedBySoItem.set(item.so_item_id!, (requestedBySoItem.get(item.so_item_id!) || 0) + item.qty);
     }
-    // Barang hasil PO dari SO mendarat di gudang site SO -- hanya DO yang
-    // dikirim dari gudang itu yang memakai "pool" barang PO.
-    const shipsFromSoSite = Number(data.dari_cabang_id) === Number(so.cabang_id);
+    // Barang hasil PO dari SO mendarat di gudang penerima PO masing-masing --
+    // DO hanya memakai "pool" barang PO yang ada di gudang pengirimnya.
     const over: string[] = [];
     for (const [soItemId, requested] of requestedBySoItem) {
       const soItem = soItems.get(soItemId)!;
@@ -152,7 +152,12 @@ export async function createDoReguler(data: {
       );
       if (requested > sisaDo)
         over.push(`${soItem.part_number}: kirim ${requested}, sisa SO ${sisaDo}`);
-      qtyFromPo.set(soItemId, shipsFromSoSite ? Math.min(requested, poPoolAvailable) : 0);
+      const poolHere = poPoolAvailableAt(
+        fulfillment.get(soItemId),
+        Number(data.dari_cabang_id),
+        poPoolAvailable,
+      );
+      qtyFromPo.set(soItemId, Math.min(requested, poolHere));
     }
     if (over.length > 0)
       return { error: "Qty melebihi sisa SO:\n" + over.join("\n") };

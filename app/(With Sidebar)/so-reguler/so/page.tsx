@@ -21,9 +21,7 @@ import { useRouter } from "next/navigation";
 import {
   ReceiptText,
   Search,
-  MapPin,
   Plus,
-  ArrowRight,
   Calendar as CalendarIcon,
   ChevronRight,
   Clock,
@@ -45,24 +43,16 @@ export default function SoRegulerPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
-  const [availableCabang, setAvailableCabang] = useState<any[]>([]);
   const [canCreate, setCanCreate] = useState(false);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [debouncedSearch] = useDebounce(searchQuery, 500);
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
-  const [locationFilters, setLocationFilters] = useState<string[]>([]);
   const [sort, setSort] = useState("created_at_desc");
   const [page, setPage] = useState(1);
   const [limit, setLimit] = useState(25);
 
   useEffect(() => {
-    supabase
-      .from("cabang")
-      .select("id, nama_cabang")
-      .eq("is_active", true)
-      .order("nama_cabang")
-      .then(({ data }) => setAvailableCabang(data || []));
     supabase.auth.getUser().then(async ({ data: { user } }) => {
       if (!user) return;
       const { data } = await supabase
@@ -78,7 +68,7 @@ export default function SoRegulerPage() {
     let query = supabase
       .from("so_reguler")
       .select(
-        "*, cabang:cabang!cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so_reguler_items(count)",
+        "*, customer:customers!customer_id(customer_name), so_reguler_items(count)",
         { count: "exact" },
       );
 
@@ -88,8 +78,6 @@ export default function SoRegulerPage() {
       );
     }
     if (statusFilters.length > 0) query = query.in("so_status", statusFilters);
-    if (locationFilters.length > 0)
-      query = query.in("cabang_id", locationFilters);
 
     const [sortKeyRaw, sortDirRaw] = sort.split(/_(asc|desc)$/);
     const sortColumn = SORT_COLUMNS[sortKeyRaw];
@@ -110,7 +98,7 @@ export default function SoRegulerPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, statusFilters, locationFilters, sort, page, limit]);
+  }, [debouncedSearch, statusFilters, sort, page, limit]);
 
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
@@ -159,21 +147,6 @@ export default function SoRegulerPage() {
               }}
             />
           </div>
-          <MultiSelect
-            className="w-full sm:w-45"
-            placeholder="Semua Lokasi"
-            icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
-            searchable
-            selected={locationFilters}
-            onChange={(v) => {
-              setLocationFilters(v);
-              setPage(1);
-            }}
-            options={availableCabang.map((c) => ({
-              label: c.nama_cabang,
-              value: c.id.toString(),
-            }))}
-          />
           <MultiSelect
             className="w-full sm:w-44"
             placeholder="Semua Status"
@@ -265,18 +238,13 @@ export default function SoRegulerPage() {
                     <TableCell className="font-bold text-foreground uppercase text-sm">
                       {r.so_kode}
                       <span className="block text-[10px] font-medium text-muted-foreground normal-case">
-                        {r.kategori || "-"} ·{" "}
                         {r.so_reguler_items?.[0]?.count ?? 0} item ·{" "}
                         {r.so_pic || "-"}
                       </span>
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase">
-                        {r.cabang?.nama_cabang}
-                        <ArrowRight className="h-3.5 w-3.5 text-primary" />
-                        <span className="text-success">
-                          {r.customer?.customer_name}
-                        </span>
+                      <div className="text-xs font-bold uppercase text-success">
+                        {r.customer?.customer_name}
                       </div>
                     </TableCell>
                     <TableCell className="text-center">

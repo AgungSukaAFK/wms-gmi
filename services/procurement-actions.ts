@@ -1296,15 +1296,15 @@ export async function createReceive(data: {
       }
     }
   }
-  // PO dari SO: barang wajib mendarat di gudang site SO (pos.cabang_id), dari
-  // sana baru dikirim ke customer lewat DO Reguler.
+  // PO dari SO: barang wajib mendarat di gudang penerima PO (pos.cabang_id),
+  // dari sana baru dikirim ke customer lewat DO Reguler.
   if (
     poHeader?.po_jenis === "so" &&
     data.items.some(
       (i) => Number(i.cabang_penerima_id) !== Number(poHeader.cabang_id),
     )
   ) {
-    return { error: "Barang PO dari SO wajib diterima di gudang site SO." };
+    return { error: "Barang PO dari SO wajib diterima di gudang penerima PO." };
   }
   if (poHeader?.po_jenis === "non_pr") {
     const nonPrCabang = await resolveNonPrReceiveCabang(supabase);
@@ -1888,10 +1888,13 @@ export async function createPurchaseOrder(data: {
   // "non_pr": item dipilih bebas dari master barang (PN/satuan pembelian beda
   // dengan PR), PR cuma referensi teks di po_pr_referensi.
   // "so": item ditarik dari SO Reguler (so_id + so_item_id per item), barang
-  // nanti diterima di gudang site SO lalu dikirim ke customer via DO Reguler.
+  // nanti diterima di gudang penerima (so_cabang_id) lalu dikirim ke
+  // customer via DO Reguler.
   po_jenis?: "reguler" | "non_pr" | "so";
   po_pr_referensi?: string;
   so_id?: number | null;
+  // PO dari SO: gudang penerima barang (dipilih di form, default gudang akun).
+  so_cabang_id?: number | null;
   approvals?: any[];
   items: {
     part_id: number;
@@ -1921,16 +1924,19 @@ export async function createPurchaseOrder(data: {
     data.po_jenis === "non_pr" || data.po_jenis === "so"
       ? data.po_jenis
       : "reguler";
-  // PO dari SO: lokasi PO = lokasi site SO (gudang penerima RI dikunci ke sini).
+  // PO dari SO: lokasi PO = gudang penerima pilihan pembuat PO (RI dikunci ke
+  // sini). SO sendiri tidak punya lokasi sejak revisi 2026-10-16.
   let soCabangId: number | null = null;
   if (poJenis === "so") {
     if (!data.so_id) return { error: "PO dari SO wajib memilih SO Reguler." };
+    if (!data.so_cabang_id)
+      return { error: "PO dari SO wajib memilih gudang penerima." };
     if (data.items.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
       return { error: "PO dari SO tidak boleh berisi item dari PR." };
     }
     const { data: so } = await supabase
       .from("so_reguler")
-      .select("id, so_kode, so_status, cabang_id, so_reguler_items(id, qty)")
+      .select("id, so_kode, so_status, so_reguler_items(id, qty)")
       .eq("id", data.so_id)
       .maybeSingle();
     if (!so) return { error: "SO Reguler tidak ditemukan." };
@@ -1959,7 +1965,7 @@ export async function createPurchaseOrder(data: {
         };
       }
     }
-    soCabangId = Number(so.cabang_id);
+    soCabangId = Number(data.so_cabang_id);
   } else if (data.items.some((i) => i.so_item_id)) {
     return { error: "Item SO hanya bisa diproses lewat PO jenis SO." };
   } else if (poJenis === "non_pr") {
@@ -2112,7 +2118,7 @@ export async function createPurchaseOrder(data: {
         so_id: poJenis === "so" ? data.so_id : null,
         // Reguler: biarkan NULL -> trigger pos_fill_cabang_from_pr mengisi dari
         // PR (lokasi PO reguler = lokasi PR, seperti sebelumnya). Non-PR:
-        // lokasi pembuat PO. SO: lokasi site SO.
+        // lokasi pembuat PO. SO: gudang penerima yang dipilih.
         cabang_id:
           poJenis === "so"
             ? soCabangId

@@ -2,11 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import {
-  SO_KATEGORI_OPTIONS,
-  canCreateSO,
-  refreshSoStatus,
-} from "@/lib/so-reguler";
+import { canCreateSO, refreshSoStatus } from "@/lib/so-reguler";
 
 async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
   const { data: roleRows } = await supabase
@@ -23,16 +19,15 @@ async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
 /**
  * BUAT SO REGULER
  *
- * Tanpa approval. Wajib customer; lokasi site default cabang user tapi boleh
- * dipilih bebas. Tidak ada pergerakan stok -- stok baru keluar saat DO Reguler
- * dibuat dari SO ini.
+ * Tanpa approval. Wajib customer. Tanpa kategori & lokasi site (revisi
+ * 2026-10-16): gudang dipilih saat PO dari SO (gudang penerima) / DO by SO
+ * (gudang pengirim). Tidak ada pergerakan stok -- stok baru keluar saat DO
+ * Reguler dibuat dari SO ini.
  */
 export async function createSoReguler(data: {
   so_kode: string;
   so_tanggal: string;
   so_due_date: string;
-  kategori: string;
-  cabang_id: number;
   customer_id: number;
   remarks?: string;
   items: {
@@ -62,9 +57,6 @@ export async function createSoReguler(data: {
   if (!soKode) return { error: "Nomor SO wajib diisi." };
   if (!data.so_tanggal) return { error: "Tanggal SO wajib diisi." };
   if (!data.so_due_date) return { error: "Deadline wajib diisi." };
-  if (!SO_KATEGORI_OPTIONS.includes(data.kategori))
-    return { error: "Kategori SO wajib dipilih." };
-  if (!data.cabang_id) return { error: "Lokasi site wajib dipilih." };
   if (!data.customer_id) return { error: "Customer wajib dipilih." };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar barang tidak boleh kosong." };
@@ -96,8 +88,6 @@ export async function createSoReguler(data: {
         so_kode: soKode,
         so_tanggal: data.so_tanggal,
         so_due_date: data.so_due_date,
-        kategori: data.kategori,
-        cabang_id: data.cabang_id,
         customer_id: data.customer_id,
         so_pic: profile?.nama ?? null,
         so_pic_id: user.id,

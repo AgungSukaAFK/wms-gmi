@@ -30,7 +30,6 @@ import {
   Loader2,
   ShoppingCart,
   Truck,
-  Building2,
   UsersRound,
   Calendar as CalendarIcon,
   Clock,
@@ -87,7 +86,7 @@ export default function SoRegulerDetailPage({
     const { data } = await supabase
       .from("so_reguler")
       .select(
-        "*, cabang:cabang!cabang_id(nama_cabang), customer:customers!customer_id(customer_name, customer_no), so_reguler_items(*)",
+        "*, customer:customers!customer_id(customer_name, customer_no), so_reguler_items(*)",
       )
       .eq("id", soId)
       .maybeSingle();
@@ -189,7 +188,7 @@ export default function SoRegulerDetailPage({
                 <SoStatusBadge status={so.so_status} />
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-                SO Reguler · {so.kategori || "-"}
+                SO Reguler
               </p>
             </div>
           </div>
@@ -246,7 +245,7 @@ export default function SoRegulerDetailPage({
       </Content>
 
       <Content>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 text-xs">
           <div className="space-y-1">
             <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
               <UsersRound className="h-3 w-3" /> Customer
@@ -257,12 +256,6 @@ export default function SoRegulerDetailPage({
             <p className="text-[10px] text-muted-foreground">
               {so.customer?.customer_no}
             </p>
-          </div>
-          <div className="space-y-1">
-            <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
-              <Building2 className="h-3 w-3" /> Lokasi Site
-            </p>
-            <p className="font-bold uppercase">{so.cabang?.nama_cabang || "-"}</p>
           </div>
           <div className="space-y-1">
             <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
@@ -283,7 +276,7 @@ export default function SoRegulerDetailPage({
             <p className="font-bold">{so.so_pic || "-"}</p>
           </div>
           {so.remarks && (
-            <div className="sm:col-span-2 xl:col-span-4 rounded-md bg-muted/40 border border-border p-3">
+            <div className="sm:col-span-2 xl:col-span-3 rounded-md bg-muted/40 border border-border p-3">
               <p className="text-[10px] font-bold uppercase text-muted-foreground mb-1">
                 Keterangan
               </p>
@@ -291,7 +284,7 @@ export default function SoRegulerDetailPage({
             </div>
           )}
           {isClosed && (
-            <div className="sm:col-span-2 xl:col-span-4 rounded-md bg-destructive/10 border border-destructive/30 p-3 text-destructive">
+            <div className="sm:col-span-2 xl:col-span-3 rounded-md bg-destructive/10 border border-destructive/30 p-3 text-destructive">
               <p className="text-[10px] font-bold uppercase mb-1">
                 Dibatalkan
                 {so.cancelled_at ? ` · ${formatDate(so.cancelled_at)}` : ""}
@@ -305,8 +298,8 @@ export default function SoRegulerDetailPage({
       <Content title="Daftar Barang & Pemenuhan">
         <p className="text-[10px] text-muted-foreground font-medium mb-3">
           Tiap item bisa dipecah per qty: sebagian langsung DO dari stok,
-          sebagian di-PO dulu (diterima di gudang {so.cabang?.nama_cabang}) lalu
-          di-DO. &quot;Bisa di-PO&quot; = qty yang belum di-PO dan belum
+          sebagian di-PO dulu (diterima di gudang penerima yang dipilih saat
+          PO) lalu di-DO. &quot;Bisa di-PO&quot; = qty yang belum di-PO dan belum
           dikirim dari stok.
         </p>
         <div className="border rounded-lg overflow-hidden">

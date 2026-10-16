@@ -10,7 +10,6 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   ChevronLeft,
   Calendar as CalendarIcon,
-  Building2,
   Loader2,
   ReceiptText,
   Clock,
@@ -39,7 +38,7 @@ import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
-import { SO_KATEGORI_OPTIONS, canCreateSO } from "@/lib/so-reguler";
+import { canCreateSO } from "@/lib/so-reguler";
 
 const PRIORITY_COLOR: Record<string, string> = {
   P1: "text-destructive bg-destructive/10 border-destructive/30",
@@ -55,17 +54,12 @@ export default function CreateSoRegulerPage() {
   const [initialLoading, setInitialLoading] = useState(true);
 
   const [userProfile, setUserProfile] = useState<any>(null);
-  const [cabangs, setCabangs] = useState<{ id: number; nama_cabang: string }[]>(
-    [],
-  );
 
   // Form
   const [soKode, setSoKode] = useState("");
   const [soTanggal, setSoTanggal] = useState(toYmdLocal());
   const [soDueDate, setSoDueDate] = useState("");
   const [defaultPriority, setDefaultPriority] = useState("P3");
-  const [kategori, setKategori] = useState("");
-  const [cabangId, setCabangId] = useState<string>("");
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [remarks, setRemarks] = useState("");
@@ -104,14 +98,6 @@ export default function CreateSoRegulerPage() {
       }
 
       setUserProfile(profile);
-      if (profile?.cabang_id) setCabangId(String(profile.cabang_id));
-
-      const { data: cabangData } = await supabase
-        .from("cabang")
-        .select("id, nama_cabang")
-        .eq("is_active", true)
-        .order("nama_cabang");
-      setCabangs(cabangData || []);
       setInitialLoading(false);
     };
     init();
@@ -143,8 +129,6 @@ export default function CreateSoRegulerPage() {
     if (!soKode.trim()) return "Nomor Dokumen harus diisi";
     if (!soTanggal) return "Tanggal SO harus diisi";
     if (!soDueDate) return "Due Date harus diisi";
-    if (!kategori) return "Kategori SO harus dipilih";
-    if (!cabangId) return "Lokasi site harus dipilih";
     if (!customerId) return "Customer harus dipilih";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
     const zeroQtyItems = items.filter((item) => !item.qty || item.qty <= 0);
@@ -167,8 +151,6 @@ export default function CreateSoRegulerPage() {
         so_kode: soKode.trim(),
         so_tanggal: soTanggal,
         so_due_date: soDueDate,
-        kategori,
-        cabang_id: Number(cabangId),
         customer_id: customerId!,
         remarks: remarks || undefined,
         items: items.map((item) => ({
@@ -242,7 +224,7 @@ export default function CreateSoRegulerPage() {
       {/* Form + Items */}
       <Content>
         <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 xl:grid-cols-3">
-          {/* Column 1: PIC + Priority + Kategori */}
+          {/* Column 1: PIC + Priority */}
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground">
@@ -291,26 +273,9 @@ export default function CreateSoRegulerPage() {
                 Daftar Barang.
               </p>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                Kategori
-              </Label>
-              <Select value={kategori} onValueChange={setKategori}>
-                <SelectTrigger className="h-9 w-full rounded-md border-input bg-background text-xs font-semibold">
-                  <SelectValue placeholder="Pilih kategori..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {SO_KATEGORI_OPTIONS.map((k) => (
-                    <SelectItem key={k} value={k}>
-                      {k}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
           </div>
 
-          {/* Column 2: Customer + Lokasi */}
+          {/* Column 2: Customer */}
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
@@ -374,27 +339,10 @@ export default function CreateSoRegulerPage() {
                 </PopoverContent>
               </Popover>
             </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-                <Building2 className="h-3 w-3" /> Lokasi Site
-              </Label>
-              <Select value={cabangId} onValueChange={setCabangId}>
-                <SelectTrigger className="h-9 w-full text-xs font-semibold uppercase">
-                  <SelectValue placeholder="Pilih lokasi site..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {cabangs.map((c) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      {c.nama_cabang}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-[9px] text-muted-foreground italic">
-                Default lokasi Anda. Jadi gudang penerima PO dari SO ini dan
-                gudang pengirim default DO.
-              </p>
-            </div>
+            <p className="text-[9px] text-muted-foreground italic">
+              Gudang dipilih saat proses berikutnya: gudang penerima saat PO
+              dari SO, gudang pengirim saat DO.
+            </p>
           </div>
 
           {/* Column 3: Dates + Remarks */}

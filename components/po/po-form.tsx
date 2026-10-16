@@ -165,6 +165,11 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const [debouncedSoSearch] = useDebounce(soSearch, 300);
   const [soPopoverOpen, setSoPopoverOpen] = useState(false);
   const [soLoading, setSoLoading] = useState(false);
+  // Gudang penerima PO dari SO (SO tidak punya lokasi). Default gudang akun.
+  const [soCabangId, setSoCabangId] = useState("");
+  const [cabangOptions, setCabangOptions] = useState<
+    { id: number; nama_cabang: string }[]
+  >([]);
 
   // Step 1 — Select PR
   const [prs, setPrs] = useState<any[]>([]);
@@ -227,6 +232,12 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
 
   useEffect(() => {
     fetchUser();
+    supabase
+      .from("cabang")
+      .select("id, nama_cabang")
+      .eq("is_active", true)
+      .order("nama_cabang")
+      .then(({ data }) => setCabangOptions(data || []));
     if (editPoId) {
       loadEditPo(editPoId);
       return;
@@ -243,7 +254,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       let q = supabase
         .from("so_reguler")
         .select(
-          "id, so_kode, so_status, so_tanggal, customer:customers!customer_id(customer_name), cabang:cabang!cabang_id(nama_cabang)",
+          "id, so_kode, so_status, so_tanggal, customer:customers!customer_id(customer_name)",
         )
         .in("so_status", ["open", "partial"])
         .order("created_at", { ascending: false })
@@ -262,7 +273,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     const { data: so } = await supabase
       .from("so_reguler")
       .select(
-        "id, so_kode, so_status, cabang:cabang!cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
+        "id, so_kode, so_status, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
       )
       .eq("id", soId)
       .maybeSingle();
@@ -393,6 +404,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     if (!profile && isEdit) setEditAllowed(false);
     if (profile) {
       setUserProfile(profile);
+      if (profile.cabang_id)
+        setSoCabangId((prev) => prev || String(profile.cabang_id));
       // Edit/Revisi PO: moderator juga boleh mengubah harga (lihat
       // lib/po-revision.ts); buat PO baru tetap khusus purchasing.
       const revisable = canRevisePO(extractRoleNames(profile));
@@ -577,7 +590,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       const { data: po } = await supabase
         .from("pos")
         .select(
-          "*, cabang(nama_cabang), so_reguler(id, so_kode, so_status, cabang:cabang!cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty))",
+          "*, cabang(nama_cabang), so_reguler(id, so_kode, so_status, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty))",
         )
         .eq("id", poId)
         .maybeSingle();
@@ -597,6 +610,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
 
       // Header
       setPoJenis((po.po_jenis || "reguler") as PoJenis);
+      if (po.cabang_id) setSoCabangId(String(po.cabang_id));
       setPoKode(po.po_kode || "");
       setPoTanggal(po.po_tanggal || toYmdLocal());
       setPoEstimasi(po.po_estimasi || "");
@@ -797,6 +811,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     const chosen = poItems.filter((i) => i.selected && i.qty > 0);
     if (!poKode.trim()) return toast.error("Kode PO wajib diisi");
     if (isSo && !selectedSo) return toast.error("Pilih SO terlebih dahulu");
+    if (isSo && !isEdit && !soCabangId)
+      return toast.error("Pilih gudang penerima PO");
     if (poJenis === "reguler" && selectedPrs.length === 0)
       return toast.error("Pilih PR terlebih dahulu");
     if (chosen.length === 0)
@@ -947,6 +963,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         po_jenis: poJenis,
         po_pr_referensi: isNonPr ? prReferensi.trim() || undefined : undefined,
         so_id: isSo ? selectedSo?.id : undefined,
+        so_cabang_id: isSo ? Number(soCabangId) : undefined,
         approvals: approvalData,
         items: poItems
           .filter((i) => i.selected && i.qty > 0)
@@ -1164,8 +1181,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
               {isSo && (
                 <p className="text-[10px] text-muted-foreground font-medium leading-relaxed">
                   Untuk item SO Reguler yang stoknya belum ada. Barang diterima
-                  (Receive Item) di gudang lokasi site SO, lalu dikirim ke
-                  customer lewat DO Reguler dari SO yang sama. Qty dibatasi
+                  (Receive Item) di gudang penerima yang dipilih, lalu dikirim
+                  ke customer lewat DO Reguler dari SO yang sama. Qty dibatasi
                   sisa SO yang belum di-PO / dikirim.
                 </p>
               )}
@@ -1227,7 +1244,6 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                                     {so.so_kode}
                                   </p>
                                   <p className="text-[9px] text-muted-foreground font-medium uppercase">
-                                    {so.cabang?.nama_cabang} →{" "}
                                     {so.customer?.customer_name}
                                   </p>
                                 </div>
@@ -1246,17 +1262,47 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   </Popover>
                   {selectedSo && (
                     <p className="text-[10px] text-muted-foreground font-medium uppercase">
-                      Gudang penerima: {selectedSo.cabang?.nama_cabang} ·{" "}
                       {poItems.filter((i) => i.remaining > 0).length} item bisa
                       di-PO
                     </p>
                   )}
                 </div>
 
+                <div className="space-y-1.5">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                    <Building2 className="h-3 w-3" /> Gudang Penerima
+                  </Label>
+                  <Select
+                    value={soCabangId}
+                    onValueChange={setSoCabangId}
+                    disabled={isEdit}
+                  >
+                    <SelectTrigger className="h-10 w-full font-bold text-xs uppercase">
+                      <SelectValue placeholder="Pilih gudang penerima..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {cabangOptions.map((c) => (
+                        <SelectItem key={c.id} value={String(c.id)}>
+                          {c.nama_cabang}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[10px] text-muted-foreground font-medium">
+                    {isEdit
+                      ? "Gudang penerima PO tidak bisa diubah saat edit."
+                      : "Default gudang Anda. Receive Item PO ini dikunci ke gudang ini."}
+                  </p>
+                </div>
+
                 <div className="flex justify-end pt-2">
                   <Button
                     className="gap-2 font-bold text-xs uppercase"
-                    disabled={!selectedSo || poItems.length === 0}
+                    disabled={
+                      !selectedSo ||
+                      poItems.length === 0 ||
+                      (!isEdit && !soCabangId)
+                    }
                     onClick={() => setStep(2)}
                   >
                     Lanjut ke Vendor & Harga{" "}
@@ -1901,7 +1947,11 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-semibold text-foreground">
                     {(isEdit
                       ? editPo?.cabang?.nama_cabang
-                      : userProfile?.cabang?.nama_cabang) || "-"}
+                      : isSo
+                        ? cabangOptions.find(
+                            (c) => String(c.id) === soCabangId,
+                          )?.nama_cabang
+                        : userProfile?.cabang?.nama_cabang) || "-"}
                   </div>
                 </div>
               </div>

@@ -190,11 +190,11 @@ export default function CreateReceivePage() {
       }
       lockedCabangId = cabang.id;
     }
-    // PO dari SO Reguler: barang mendarat di gudang lokasi site SO (dikunci),
+    // PO dari SO Reguler: barang mendarat di gudang penerima PO (dikunci),
     // dari sana dikirim ke customer lewat DO Reguler.
     if (isSoPo(po)) {
       if (!po.cabang_id) {
-        toast.error("Lokasi site PO dari SO tidak diketahui.");
+        toast.error("Gudang penerima PO dari SO tidak diketahui.");
         setItems([]);
         return;
       }
@@ -580,7 +580,7 @@ export default function CreateReceivePage() {
                     {isNonPrPo(selectedPo) &&
                       " PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA, konversi ke PN PR lewat Job Costing."}
                     {isSoPo(selectedPo) &&
-                      ` PO dari SO Reguler: gudang penerima dikunci ke lokasi site SO (${selectedPo?.cabang?.nama_cabang || "-"}), lalu kirim ke customer lewat DO Reguler.`}
+                      ` PO dari SO Reguler: gudang penerima dikunci ke gudang penerima PO (${selectedPo?.cabang?.nama_cabang || "-"}), lalu kirim ke customer lewat DO Reguler.`}
                   </p>
                 </div>
 
