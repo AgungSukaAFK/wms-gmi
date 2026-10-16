@@ -21,7 +21,7 @@ function formatForInput(value: number, decimals: number): string {
 
 /**
  * Input nominal PO dengan prefix simbol mata uang. Format id-ID: titik =
- * ribuan, koma = desimal. IDR cuma angka bulat; USD/AUD boleh s/d 10 desimal.
+ * ribuan, koma = desimal. Semua mata uang (IDR/USD/AUD) boleh s/d 10 desimal.
  * Selama fokus, teks mentah disimpan lokal supaya "12," tidak langsung
  * hilang komanya sebelum user selesai ngetik desimal.
  */

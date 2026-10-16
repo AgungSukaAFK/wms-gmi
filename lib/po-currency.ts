@@ -14,7 +14,7 @@ export const PO_CURRENCY_OPTIONS: {
     label: "IDR — Rupiah",
     symbol: "Rp",
     decimals: 0,
-    maxDecimals: 0,
+    maxDecimals: 10,
   },
   {
     value: "USD",
@@ -67,8 +67,8 @@ export function getPoCurrencyMaxDecimals(
 /**
  * Format nominal PO sesuai mata uang dokumen. Tetap pakai locale id-ID
  * (titik = ribuan, koma = desimal) supaya konsisten dengan seluruh app.
- * IDR tanpa desimal; USD/AUD minimal 2, maksimal 10 desimal (harga valas
- * per unit bisa sangat presisi, mis. 0,0012345678).
+ * IDR minimal 0, USD/AUD minimal 2 desimal; semua maksimal 10 desimal
+ * (harga per unit bisa sangat presisi, mis. 0,0012345678).
  */
 export function formatPoMoney(
   value: number,

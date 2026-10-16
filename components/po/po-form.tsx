@@ -88,7 +88,6 @@ import {
 import {
   PO_CURRENCY_OPTIONS,
   formatPoMoney,
-  getPoCurrencyDecimals,
   getPoCurrencySymbol,
   type PoCurrency,
 } from "@/lib/po-currency";
@@ -999,16 +998,6 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
 
   const handleCurrencyChange = (next: PoCurrency) => {
     setPoCurrency(next);
-    // IDR tidak pakai desimal -> bulatkan nominal yang sudah terlanjur diisi.
-    if (getPoCurrencyDecimals(next) === 0) {
-      setPoItems((prev) =>
-        prev.map((it) => ({ ...it, harga: Math.round(it.harga) })),
-      );
-      setPpnAmountManual((v) => Math.round(v));
-      setPphAmountManual((v) => Math.round(v));
-      setOngkir((v) => Math.round(v));
-      if (diskonMode === "amount") setDiskonValue((v) => Math.round(v));
-    }
   };
 
   if (isEdit && (editLoading || editAllowed === null)) {
