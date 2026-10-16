@@ -27,7 +27,7 @@ async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
 export async function createSoReguler(data: {
   so_kode: string;
   so_tanggal: string;
-  so_due_date: string;
+  so_due_date?: string | null;
   customer_id: number;
   remarks?: string;
   items: {
@@ -36,7 +36,6 @@ export async function createSoReguler(data: {
     part_name: string;
     satuan: string;
     qty: number;
-    item_priority: string;
     remarks?: string;
   }[];
 }) {
@@ -56,7 +55,6 @@ export async function createSoReguler(data: {
   const soKode = data.so_kode?.trim();
   if (!soKode) return { error: "Nomor SO wajib diisi." };
   if (!data.so_tanggal) return { error: "Tanggal SO wajib diisi." };
-  if (!data.so_due_date) return { error: "Deadline wajib diisi." };
   if (!data.customer_id) return { error: "Customer wajib dipilih." };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar barang tidak boleh kosong." };
@@ -87,7 +85,7 @@ export async function createSoReguler(data: {
       {
         so_kode: soKode,
         so_tanggal: data.so_tanggal,
-        so_due_date: data.so_due_date,
+        so_due_date: data.so_due_date || null,
         customer_id: data.customer_id,
         so_pic: profile?.nama ?? null,
         so_pic_id: user.id,
@@ -108,9 +106,6 @@ export async function createSoReguler(data: {
       part_name: i.part_name,
       satuan: i.satuan,
       qty: i.qty,
-      item_priority: ["P1", "P2", "P3", "P4"].includes(i.item_priority)
-        ? i.item_priority
-        : "P3",
       remarks: i.remarks?.trim() || null,
     })),
   );

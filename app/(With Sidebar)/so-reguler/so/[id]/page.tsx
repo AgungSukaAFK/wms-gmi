@@ -50,13 +50,6 @@ import {
   syncSoRegulerStatus,
 } from "@/services/so-reguler-actions";
 
-const PRIORITY_COLOR: Record<string, string> = {
-  P1: "text-destructive bg-destructive/10 border-destructive/30",
-  P2: "text-warning bg-warning/10 border-warning/30",
-  P3: "text-primary bg-primary/10 border-primary/30",
-  P4: "text-muted-foreground bg-muted border-border",
-};
-
 export default function SoRegulerDetailPage({
   params,
 }: {
@@ -313,9 +306,6 @@ export default function SoRegulerDetailPage({
                   Barang
                 </TableHead>
                 <TableHead className="w-20 text-center text-[10px] font-black uppercase text-muted-foreground">
-                  Prioritas
-                </TableHead>
-                <TableHead className="w-20 text-center text-[10px] font-black uppercase text-muted-foreground">
                   Qty SO
                 </TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
@@ -348,14 +338,6 @@ export default function SoRegulerDetailPage({
                         {item.remarks}
                       </p>
                     )}
-                  </TableCell>
-                  <TableCell className="text-center">
-                    <Badge
-                      variant="outline"
-                      className={`text-[10px] font-bold ${PRIORITY_COLOR[item.item_priority] || ""}`}
-                    >
-                      {item.item_priority}
-                    </Badge>
                   </TableCell>
                   <TableCell className="text-center text-xs font-bold">
                     {item.qty}{" "}

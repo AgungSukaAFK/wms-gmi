@@ -14,7 +14,6 @@ import {
   ReceiptText,
   Clock,
   ArrowRight,
-  AlertTriangle,
   UsersRound,
   ShieldCheck,
 } from "lucide-react";
@@ -26,26 +25,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "sonner";
 import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { canCreateSO } from "@/lib/so-reguler";
-
-const PRIORITY_COLOR: Record<string, string> = {
-  P1: "text-destructive bg-destructive/10 border-destructive/30",
-  P2: "text-warning bg-warning/10 border-warning/30",
-  P3: "text-primary bg-primary/10 border-primary/30",
-  P4: "text-muted-foreground bg-muted border-border",
-};
 
 export default function CreateSoRegulerPage() {
   const router = useRouter();
@@ -59,7 +44,6 @@ export default function CreateSoRegulerPage() {
   const [soKode, setSoKode] = useState("");
   const [soTanggal, setSoTanggal] = useState(toYmdLocal());
   const [soDueDate, setSoDueDate] = useState("");
-  const [defaultPriority, setDefaultPriority] = useState("P3");
   const [customerId, setCustomerId] = useState<number | null>(null);
   const [customerName, setCustomerName] = useState("");
   const [remarks, setRemarks] = useState("");
@@ -128,7 +112,6 @@ export default function CreateSoRegulerPage() {
   const validateForm = () => {
     if (!soKode.trim()) return "Nomor Dokumen harus diisi";
     if (!soTanggal) return "Tanggal SO harus diisi";
-    if (!soDueDate) return "Due Date harus diisi";
     if (!customerId) return "Customer harus dipilih";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
     const zeroQtyItems = items.filter((item) => !item.qty || item.qty <= 0);
@@ -150,7 +133,7 @@ export default function CreateSoRegulerPage() {
       const result = await createSoReguler({
         so_kode: soKode.trim(),
         so_tanggal: soTanggal,
-        so_due_date: soDueDate,
+        so_due_date: soDueDate || null,
         customer_id: customerId!,
         remarks: remarks || undefined,
         items: items.map((item) => ({
@@ -159,7 +142,6 @@ export default function CreateSoRegulerPage() {
           part_name: item.part_name,
           satuan: item.satuan,
           qty: item.qty,
-          item_priority: item.item_priority,
           remarks: item.remarks?.trim() || undefined,
         })),
       });
@@ -224,7 +206,7 @@ export default function CreateSoRegulerPage() {
       {/* Form + Items */}
       <Content>
         <div className="grid grid-cols-1 gap-x-6 gap-y-6 md:grid-cols-2 xl:grid-cols-3">
-          {/* Column 1: PIC + Priority */}
+          {/* Column 1: PIC */}
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground">
@@ -238,40 +220,6 @@ export default function CreateSoRegulerPage() {
                   {userProfile?.email}
                 </p>
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-                <AlertTriangle className="h-3 w-3 text-warning" /> Prioritas
-                Default Item
-              </Label>
-              <Select value={defaultPriority} onValueChange={setDefaultPriority}>
-                <SelectTrigger
-                  className={`h-9 w-full rounded-md border-input bg-background text-xs font-semibold ${PRIORITY_COLOR[defaultPriority] || ""}`}
-                >
-                  <SelectValue placeholder="Pilih Prioritas" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="P1" className="text-destructive font-bold">
-                    P1 - EMERGENCY
-                  </SelectItem>
-                  <SelectItem value="P2" className="text-warning font-bold">
-                    P2 - HIGH
-                  </SelectItem>
-                  <SelectItem value="P3" className="text-primary font-bold">
-                    P3 - NORMAL
-                  </SelectItem>
-                  <SelectItem
-                    value="P4"
-                    className="text-muted-foreground font-bold"
-                  >
-                    P4 - LOW
-                  </SelectItem>
-                </SelectContent>
-              </Select>
-              <p className="text-[9px] text-muted-foreground italic">
-                Nilai awal tiap item baru, bisa diubah per barang di tabel
-                Daftar Barang.
-              </p>
             </div>
           </div>
 
@@ -369,8 +317,18 @@ export default function CreateSoRegulerPage() {
                   <div className="flex min-w-0 items-center gap-1.5">
                     <Clock className="h-3 w-3 text-destructive/60" />
                     <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                      Deadline
+                      Deadline{" "}
+                      <span className="normal-case font-medium">(opsional)</span>
                     </span>
+                    {soDueDate && (
+                      <button
+                        type="button"
+                        onClick={() => setSoDueDate("")}
+                        className="ml-auto text-[10px] font-semibold text-muted-foreground hover:text-foreground underline"
+                      >
+                        Kosongkan
+                      </button>
+                    )}
                   </div>
                   <DatePickerString
                     className="h-9 w-full rounded-md border-input bg-background px-2 text-xs font-semibold text-destructive"
@@ -403,7 +361,7 @@ export default function CreateSoRegulerPage() {
             items={items}
             onItemsChange={setItems}
             cabangId={null}
-            defaultPriority={defaultPriority}
+            hidePriority
           />
         </div>
       </Content>

@@ -87,6 +87,8 @@ interface MRItemSelectorProps {
   onCancelMR?: () => void;
   /** Prioritas default utk item baru — tiap item tetap bisa diubah sendiri. */
   defaultPriority?: string;
+  /** Sembunyikan kolom Prioritas (mis. SO Reguler yang tidak pakai prioritas). */
+  hidePriority?: boolean;
 }
 
 const PRIORITY_COLOR: Record<string, string> = {
@@ -102,6 +104,7 @@ export function MRItemSelector({
   cabangId,
   onCancelMR,
   defaultPriority,
+  hidePriority = false,
 }: MRItemSelectorProps) {
   const supabase = createClient();
   const [open, setOpen] = useState(false);
@@ -393,9 +396,11 @@ export function MRItemSelector({
               <TableHead className="w-35 font-semibold text-slate-500 text-xs text-center">
                 Quantity
               </TableHead>
-              <TableHead className="w-32 font-semibold text-slate-500 text-xs text-center">
-                Prioritas
-              </TableHead>
+              {!hidePriority && (
+                <TableHead className="w-32 font-semibold text-slate-500 text-xs text-center">
+                  Prioritas
+                </TableHead>
+              )}
               <TableHead className="font-semibold text-slate-500 text-xs">
                 Catatan (opsional)
               </TableHead>
@@ -464,26 +469,28 @@ export function MRItemSelector({
                         )}
                       </div>
                     </TableCell>
-                    <TableCell className="py-2">
-                      <Select
-                        value={item.item_priority}
-                        onValueChange={(v) =>
-                          updateItem(item.part_id, { item_priority: v })
-                        }
-                      >
-                        <SelectTrigger
-                          className={`h-8 text-xs font-semibold ${PRIORITY_COLOR[item.item_priority] || ""}`}
+                    {!hidePriority && (
+                      <TableCell className="py-2">
+                        <Select
+                          value={item.item_priority}
+                          onValueChange={(v) =>
+                            updateItem(item.part_id, { item_priority: v })
+                          }
                         >
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="P1">P1 - Emergency</SelectItem>
-                          <SelectItem value="P2">P2 - High</SelectItem>
-                          <SelectItem value="P3">P3 - Normal</SelectItem>
-                          <SelectItem value="P4">P4 - Low</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </TableCell>
+                          <SelectTrigger
+                            className={`h-8 text-xs font-semibold ${PRIORITY_COLOR[item.item_priority] || ""}`}
+                          >
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="P1">P1 - Emergency</SelectItem>
+                            <SelectItem value="P2">P2 - High</SelectItem>
+                            <SelectItem value="P3">P3 - Normal</SelectItem>
+                            <SelectItem value="P4">P4 - Low</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </TableCell>
+                    )}
                     <TableCell className="py-2">
                       <Input
                         placeholder="Catatan untuk item ini..."
@@ -509,7 +516,7 @@ export function MRItemSelector({
               })
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
-                <TableCell colSpan={7} className="text-center">
+                <TableCell colSpan={hidePriority ? 6 : 7} className="text-center">
                   <span className="text-xs font-medium text-slate-400 italic">
                     No items added yet.
                   </span>
