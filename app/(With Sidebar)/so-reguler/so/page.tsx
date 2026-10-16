@@ -29,6 +29,7 @@ import {
 import { formatDate } from "@/lib/utils";
 import { SO_STATUS_LABEL, canCreateSO } from "@/lib/so-reguler";
 import { SoStatusBadge } from "@/components/so-reguler/so-status-badge";
+import { CustomerInfoPopover } from "@/components/customers/customer-info-popover";
 
 const SORT_COLUMNS: Record<string, string> = {
   so_kode: "so_kode",
@@ -177,7 +178,7 @@ export default function SoRegulerPage() {
                   Kode SO
                 </SortableTableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
-                  Lokasi → Customer
+                  Customer
                 </TableHead>
                 <SortableTableHead
                   sortKey="so_tanggal"
@@ -243,9 +244,11 @@ export default function SoRegulerPage() {
                       </span>
                     </TableCell>
                     <TableCell>
-                      <div className="text-xs font-bold uppercase text-success">
-                        {r.customer?.customer_name}
-                      </div>
+                      <CustomerInfoPopover
+                        customerId={r.customer_id}
+                        customerName={r.customer?.customer_name}
+                        className="text-xs font-bold uppercase text-success"
+                      />
                     </TableCell>
                     <TableCell className="text-center">
                       <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-foreground uppercase">
