@@ -3,19 +3,10 @@
 import React, { useCallback, useEffect, useState } from "react";
 import {
   BarChart3,
-<<<<<<< Updated upstream
   LayoutDashboard,
   ListChecks,
   RefreshCw,
   Search,
-=======
-  FileSpreadsheet,
-  LayoutDashboard,
-  ListChecks,
-  PackageCheck,
-  Search,
-  Truck,
->>>>>>> Stashed changes
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
@@ -29,7 +20,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-<<<<<<< Updated upstream
 import { Button } from "@/components/ui/button";
 import {
   Select,
@@ -38,38 +28,16 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-=======
->>>>>>> Stashed changes
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { toast } from "sonner";
 import {
   getConsignmentDashboardReport,
   getConsignmentPerformanceReport,
-<<<<<<< Updated upstream
   type ConsignmentPerformanceData,
 } from "@/services/consignment-so-actions";
 import { formatDate } from "@/lib/utils";
 import { ConsignmentPerformanceTab } from "@/components/consignment/consignment-performance-tab";
-=======
-} from "@/services/consignment-so-actions";
-import { formatDate } from "@/lib/utils";
-import { ConsignmentTrendChart } from "@/components/dashboard/consignment-trend-chart";
-import { KpiDeltaTile } from "@/components/dashboard/kpi-delta-tile";
-
-type PerformanceData = {
-  trend: { bulan: string; so: number; ik: number }[];
-  kpi: {
-    so_this_month: number;
-    so_last_month: number;
-    ik_this_month: number;
-    ik_last_month: number;
-    qty_this_month: number;
-    qty_last_month: number;
-  };
-  error: string | null;
-};
->>>>>>> Stashed changes
 
 type DashboardRow = {
   so_id: number;
@@ -260,7 +228,6 @@ export default function DashboardConsignmentPage() {
   const [limit, setLimit] = useState(25);
 
   const [activeTab, setActiveTab] = useState("tracking");
-<<<<<<< Updated upstream
   const [perfMonths, setPerfMonths] = useState(6);
   const [perfLoading, setPerfLoading] = useState(false);
   const [perfData, setPerfData] = useState<ConsignmentPerformanceData | null>(
@@ -284,22 +251,6 @@ export default function DashboardConsignmentPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     loadPerformance(perfMonths);
   }, [activeTab, perfMonths, perfLoadedKey, perfLoading, loadPerformance]);
-=======
-  const [perfLoading, setPerfLoading] = useState(false);
-  const [perfData, setPerfData] = useState<PerformanceData | null>(null);
-
-  useEffect(() => {
-    if (activeTab !== "performance" || perfData || perfLoading) return;
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setPerfLoading(true);
-    getConsignmentPerformanceReport()
-      .then((res) => {
-        if (res.error) toast.error(res.error);
-        setPerfData(res);
-      })
-      .finally(() => setPerfLoading(false));
-  }, [activeTab, perfData, perfLoading]);
->>>>>>> Stashed changes
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -350,7 +301,6 @@ export default function DashboardConsignmentPage() {
         </div>
       </Content>
 
-<<<<<<< Updated upstream
       <Content>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -407,64 +357,6 @@ export default function DashboardConsignmentPage() {
 
       {activeTab === "performance" ? (
         <ConsignmentPerformanceTab data={perfData} loading={perfLoading} />
-=======
-      <Content size="xs">
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="h-9">
-            <TabsTrigger
-              value="tracking"
-              className="gap-1.5 text-xs font-bold uppercase"
-            >
-              <ListChecks className="h-3.5 w-3.5" /> Tracking
-            </TabsTrigger>
-            <TabsTrigger
-              value="performance"
-              className="gap-1.5 text-xs font-bold uppercase"
-            >
-              <BarChart3 className="h-3.5 w-3.5" /> Performance
-            </TabsTrigger>
-          </TabsList>
-        </Tabs>
-      </Content>
-
-      {activeTab === "performance" ? (
-        <>
-          <KpiDeltaTile
-            label="SO Consignment"
-            value={perfData?.kpi.so_this_month ?? 0}
-            previous={perfData?.kpi.so_last_month ?? 0}
-            icon={FileSpreadsheet}
-            iconClassName="bg-primary/10 text-primary"
-          />
-          <KpiDeltaTile
-            label="Item Konsinyasi Terkirim"
-            value={perfData?.kpi.ik_this_month ?? 0}
-            previous={perfData?.kpi.ik_last_month ?? 0}
-            icon={Truck}
-            iconClassName="bg-sky-500/10 text-sky-600"
-          />
-          <KpiDeltaTile
-            label="Total Qty Dikirim (IK)"
-            value={perfData?.kpi.qty_this_month ?? 0}
-            previous={perfData?.kpi.qty_last_month ?? 0}
-            icon={PackageCheck}
-            iconClassName="bg-emerald-500/10 text-emerald-600"
-          />
-
-          <Content
-            title="Tren Volume SO & IK"
-            description="Jumlah dokumen per bulan, 6 bulan terakhir"
-          >
-            {perfLoading ? (
-              <div className="flex h-70 items-center justify-center text-xs text-muted-foreground">
-                Memuat data performance...
-              </div>
-            ) : (
-              <ConsignmentTrendChart data={perfData?.trend ?? []} />
-            )}
-          </Content>
-        </>
->>>>>>> Stashed changes
       ) : (
         <>
           <Content>

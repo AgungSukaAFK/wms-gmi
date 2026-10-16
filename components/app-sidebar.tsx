@@ -61,14 +61,11 @@ import {
   CalendarRange,
   Warehouse,
   Factory,
-<<<<<<< Updated upstream
   Gauge,
   Snowflake,
   Wrench,
   Search,
   X,
-=======
->>>>>>> Stashed changes
 } from "lucide-react";
 
 // Update the menu data
