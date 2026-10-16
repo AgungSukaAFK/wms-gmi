@@ -107,6 +107,8 @@ interface POItem {
   part_number: string;
   part_name: string;
   satuan: string;
+  // Qty asli di PR (hanya item dari PR), untuk preview di langkah 1.
+  qty_pr?: number;
   remaining: number;
   selected: boolean;
   qty: number;
@@ -176,6 +178,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const [debouncedPrSearch] = useDebounce(prSearch, 300);
   const [prPopoverOpen, setPrPopoverOpen] = useState(false);
   const [selectedPrs, setSelectedPrs] = useState<any[]>([]);
+  // PR yang item-nya sedang dimuat, dan PR yang daftar item-nya dibuka.
+  const [loadingPrIds, setLoadingPrIds] = useState<number[]>([]);
+  const [expandedPrIds, setExpandedPrIds] = useState<number[]>([]);
 
   // Step 2 — Item & harga per item, vendor per dokumen (satu vendor untuk
   // seluruh PO, bukan per item).
@@ -345,6 +350,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     if (next === poJenis) return;
     setPoJenis(next);
     setSelectedPrs([]);
+    setExpandedPrIds([]);
     setSelectedSo(null);
     setPoItems([]);
   };
@@ -492,12 +498,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     vendorId?: number | null,
   ): Promise<POItem[]> => {
     // Note: pr_items has no harga column; user enters harga in step 2
-    const { data: items } = await supabase
+    const { data: items, error } = await supabase
       .from("pr_items")
       .select("id, mr_id, part_id, part_number, part_name, satuan, qty, status")
       .eq("pr_id", pr.id)
       .neq("status", "rejected")
       .order("created_at");
+    if (error) throw error;
 
     const prItemIds = (items || []).map((i: any) => i.id);
     const convertedMap = await fetchConvertedMap(prItemIds);
@@ -513,6 +520,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         part_number: item.part_number,
         part_name: item.part_name,
         satuan: item.satuan,
+        qty_pr: Number(item.qty) || 0,
         remaining,
         selected: remaining > 0,
         qty: remaining,
@@ -525,6 +533,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   };
 
   const handleTogglePR = async (pr: any) => {
+    // Item PR masih dimuat: abaikan klik supaya PR tidak dobel dan item
+    // tidak "yatim" (PR sudah dilepas tapi item-nya baru masuk).
+    if (loadingPrIds.includes(pr.id)) return;
     const isSelected = selectedPrs.some((p) => p.id === pr.id);
     if (isSelected) {
       const received = poItems.find(
@@ -541,15 +552,49 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       return;
     }
 
-    setSelectedPrs((prev) => [...prev, pr]);
-    const existingMap = new Map(
-      editExistingItems
-        .filter((e: any) => e.pr_item_id)
-        .map((e: any) => [e.pr_item_id, e]),
+    const unselect = () =>
+      setSelectedPrs((prev) => prev.filter((p) => p.id !== pr.id));
+    setSelectedPrs((prev) =>
+      prev.some((p) => p.id === pr.id) ? prev : [...prev, pr],
     );
-    const newItems = await loadPrItems(pr, existingMap);
-    setPoItems((prev) => [...prev, ...newItems]);
+    setLoadingPrIds((prev) => [...prev, pr.id]);
+    try {
+      const existingMap = new Map(
+        editExistingItems
+          .filter((e: any) => e.pr_item_id)
+          .map((e: any) => [e.pr_item_id, e]),
+      );
+      const newItems = await loadPrItems(pr, existingMap);
+      if (newItems.length === 0) {
+        unselect();
+        toast.error(
+          `PR ${pr.pr_kode} tidak punya item yang bisa di-PO (semua item ditolak approver).`,
+        );
+        return;
+      }
+      if (!newItems.some((i) => i.remaining > 0)) {
+        unselect();
+        toast.error(`Semua item PR ${pr.pr_kode} sudah di-PO penuh.`);
+        return;
+      }
+      setPoItems((prev) => [
+        ...prev.filter((i) => i.pr_id !== pr.id),
+        ...newItems,
+      ]);
+      setExpandedPrIds((prev) => [...prev, pr.id]);
+    } catch (err) {
+      console.error(err);
+      unselect();
+      toast.error(`Gagal memuat item PR ${pr.pr_kode}. Silakan coba lagi.`);
+    } finally {
+      setLoadingPrIds((prev) => prev.filter((id) => id !== pr.id));
+    }
   };
+
+  const togglePrExpanded = (prId: number) =>
+    setExpandedPrIds((prev) =>
+      prev.includes(prId) ? prev.filter((id) => id !== prId) : [...prev, prId],
+    );
 
   const mergeExistingItem = (base: POItem, existing: any): POItem => ({
     ...base,
@@ -805,6 +850,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const allItemsSelected =
     selectableItemCount > 0 &&
     poItems.filter((it) => it.remaining > 0).every((it) => it.selected);
+
+  // Alasan tombol "Lanjut" di langkah 1 (PO dari PR) belum aktif.
+  const prStep1Blocker =
+    loadingPrIds.length > 0
+      ? "Tunggu, item PR sedang dimuat..."
+      : selectedPrs.length === 0
+        ? "Pilih minimal satu PR."
+        : !poItems.some((i) => i.selected)
+          ? "Tidak ada item PR yang bisa di-PO."
+          : null;
 
   const handleSubmit = () => {
     const chosen = poItems.filter((i) => i.selected && i.qty > 0);
@@ -1440,7 +1495,10 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                       <Search className="h-4 w-4 text-muted-foreground" />
                       {selectedPrs.length > 0 ? (
                         <span className="text-foreground">
-                          {selectedPrs.length} PR Dipilih
+                          {selectedPrs.length} PR dipilih{" "}
+                          <span className="text-muted-foreground font-medium">
+                            — klik untuk tambah / lepas PR
+                          </span>
                         </span>
                       ) : (
                         <span className="text-muted-foreground">
@@ -1449,7 +1507,10 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                       )}
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-105 p-0" align="start">
+                  <PopoverContent
+                    className="w-(--radix-popover-trigger-width) min-w-80 max-w-xl p-0"
+                    align="start"
+                  >
                     <Command shouldFilter={false}>
                       <CommandInput
                         placeholder="Cari kode PR..."
@@ -1473,11 +1534,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                             return (
                               <CommandItem
                                 key={pr.id}
-                                value={pr.pr_kode}
+                                value={String(pr.id)}
                                 onSelect={() => handleTogglePR(pr)}
-                                className="gap-3 py-3"
+                                className={cn(
+                                  "gap-3 py-3",
+                                  isChecked && "bg-primary/5",
+                                )}
                               >
-                                {isChecked ? (
+                                {loadingPrIds.includes(pr.id) ? (
+                                  <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+                                ) : isChecked ? (
                                   <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
                                 ) : (
                                   <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -1508,35 +1574,207 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                         )}
                       </CommandList>
                     </Command>
+                    <div className="flex items-center justify-between gap-2 border-t border-border px-3 py-2">
+                      <span className="text-[10px] font-bold uppercase text-muted-foreground">
+                        {selectedPrs.length} PR dipilih
+                      </span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="h-7 text-[10px] font-bold uppercase"
+                        onClick={() => setPrPopoverOpen(false)}
+                      >
+                        Selesai
+                      </Button>
+                    </div>
                   </PopoverContent>
                 </Popover>
 
-                {selectedPrs.length > 0 && (
-                  <div className="flex flex-wrap gap-1.5">
-                    {selectedPrs.map((pr) => (
-                      <Badge
-                        key={pr.id}
-                        variant="outline"
-                        className="text-[10px] font-bold uppercase gap-1 pr-1"
-                      >
-                        {pr.pr_kode}
-                        <button
-                          type="button"
-                          onClick={() => handleTogglePR(pr)}
-                          className="rounded-sm p-0.5 text-muted-foreground hover:bg-muted hover:text-destructive"
-                          title={`Lepas ${pr.pr_kode}`}
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </Badge>
-                    ))}
+                {selectedPrs.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center">
+                    <FileText className="h-6 w-6 text-muted-foreground/60 mx-auto mb-2" />
+                    <p className="text-xs font-bold text-muted-foreground">
+                      Belum ada PR dipilih
+                    </p>
+                    <p className="text-[10px] text-muted-foreground font-medium mt-0.5">
+                      Cari kode PR di atas. Bisa pilih lebih dari satu PR untuk
+                      digabung dalam satu PO.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground">
+                        PR Terpilih ({selectedPrs.length})
+                      </p>
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground">
+                        Total {selectableItemCount} item siap di-PO
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      {selectedPrs.map((pr) => {
+                        const prItems = poItems.filter(
+                          (i) => i.pr_id === pr.id,
+                        );
+                        const isPrLoading = loadingPrIds.includes(pr.id);
+                        const readyCount = prItems.filter(
+                          (i) => i.remaining > 0,
+                        ).length;
+                        const doneCount = prItems.length - readyCount;
+                        const expanded =
+                          expandedPrIds.includes(pr.id) && !isPrLoading;
+                        return (
+                          <div key={pr.id}>
+                            <div className="flex items-center gap-3 px-3 py-2.5 bg-muted/20">
+                              <button
+                                type="button"
+                                onClick={() => togglePrExpanded(pr.id)}
+                                disabled={isPrLoading || prItems.length === 0}
+                                className="flex flex-1 min-w-0 items-center gap-2.5 text-left disabled:cursor-default"
+                                title={
+                                  expanded
+                                    ? "Sembunyikan item"
+                                    : "Lihat item PR"
+                                }
+                              >
+                                <ChevronRight
+                                  className={cn(
+                                    "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                                    expanded && "rotate-90",
+                                  )}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <span className="font-black text-xs uppercase">
+                                      {pr.pr_kode}
+                                    </span>
+                                    <PrConvertStatusBadge
+                                      status={pr.pr_convert_status}
+                                    />
+                                  </div>
+                                  <p className="text-[10px] text-muted-foreground font-medium uppercase truncate">
+                                    {[
+                                      pr.cabang?.nama_cabang,
+                                      pr.profiles?.nama,
+                                      pr.pr_tanggal
+                                        ? formatDate(pr.pr_tanggal)
+                                        : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" • ")}
+                                  </p>
+                                </div>
+                              </button>
+                              <div className="text-right shrink-0">
+                                {isPrLoading ? (
+                                  <span className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground">
+                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    Memuat item...
+                                  </span>
+                                ) : (
+                                  <>
+                                    <p className="text-[11px] font-black text-foreground">
+                                      {readyCount} item siap di-PO
+                                    </p>
+                                    {doneCount > 0 && (
+                                      <p className="text-[9px] font-medium text-muted-foreground">
+                                        {doneCount} item sudah di-PO penuh
+                                      </p>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                                disabled={isPrLoading}
+                                onClick={() => handleTogglePR(pr)}
+                                title={`Lepas ${pr.pr_kode}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            {expanded && prItems.length > 0 && (
+                              <Table containerClassName="max-h-64 overflow-y-auto">
+                                <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted">
+                                  <TableRow className="h-8 hover:bg-transparent">
+                                    <TableHead className="pl-10 text-[9px] font-black uppercase text-muted-foreground w-32">
+                                      Part No.
+                                    </TableHead>
+                                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground">
+                                      Nama Barang
+                                    </TableHead>
+                                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-right w-20">
+                                      Qty PR
+                                    </TableHead>
+                                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-right w-28 pr-4">
+                                      Sisa di-PO
+                                    </TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {prItems.map((item) => (
+                                    <TableRow
+                                      key={item.pr_item_id}
+                                      className={cn(
+                                        "border-b border-border/50",
+                                        item.remaining <= 0 && "opacity-50",
+                                      )}
+                                    >
+                                      <TableCell className="pl-10 py-2 text-[11px] font-black font-mono uppercase">
+                                        {item.part_number}
+                                      </TableCell>
+                                      <TableCell className="py-2 text-[10px] font-medium text-muted-foreground uppercase whitespace-normal">
+                                        {item.part_name}
+                                      </TableCell>
+                                      <TableCell className="py-2 text-right text-[11px] font-bold">
+                                        {item.qty_pr ?? "—"}{" "}
+                                        <span className="text-[9px] font-medium text-muted-foreground">
+                                          {item.satuan}
+                                        </span>
+                                      </TableCell>
+                                      <TableCell className="py-2 pr-4 text-right">
+                                        {item.remaining > 0 ? (
+                                          <span className="text-[11px] font-black text-foreground">
+                                            {item.remaining}
+                                          </span>
+                                        ) : (
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[9px] font-bold uppercase"
+                                          >
+                                            Sudah PO
+                                          </Badge>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 
-                <div className="flex justify-end pt-2">
+                <div className="flex items-center justify-end gap-3 pt-2">
+                  {prStep1Blocker && (
+                    <p className="text-[10px] font-medium text-muted-foreground flex items-center gap-1.5">
+                      {loadingPrIds.length > 0 ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <AlertCircle className="h-3.5 w-3.5" />
+                      )}
+                      {prStep1Blocker}
+                    </p>
+                  )}
                   <Button
                     className="gap-2 font-bold text-xs uppercase"
-                    disabled={selectedPrs.length === 0 || poItems.length === 0}
+                    disabled={Boolean(prStep1Blocker)}
                     onClick={() => setStep(2)}
                   >
                     Lanjut ke Vendor & Harga{" "}
