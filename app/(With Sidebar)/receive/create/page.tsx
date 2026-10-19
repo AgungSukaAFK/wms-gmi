@@ -72,6 +72,9 @@ interface ReceiveItem {
   qty_received: number;
   qty_sisa: number;
   mr_id: number | null;
+  // PO Outstanding: item belum terhubung ke PR = stok gudang saja, tidak
+  // memenuhi MR mana pun.
+  pr_item_id: number | null;
   vendor_name: string | null;
   qty_receive: number; // how many to receive in this RI
   cabang_penerima_id: number | null; // gudang tujuan fisik barang ini mendarat
@@ -158,7 +161,7 @@ export default function CreateReceivePage() {
     let query = supabase
       .from("pos")
       .select(
-        "id, po_kode, po_tanggal, po_receive_status, po_jenis, cabang_id, cabang(nama_cabang), prs(cabang_id, cabang(nama_cabang))",
+        "id, po_kode, po_tanggal, po_receive_status, po_jenis, po_is_outstanding, cabang_id, cabang(nama_cabang), prs(cabang_id, cabang(nama_cabang))",
       )
       .eq("po_status", "approved")
       .neq("po_receive_status", "complete")
@@ -205,7 +208,7 @@ export default function CreateReceivePage() {
     const { data: poItems } = await supabase
       .from("po_items")
       .select(
-        "id, part_id, part_number, part_name, satuan, qty, qty_received, mr_id, vendor_id, vendors(vendor_name)",
+        "id, part_id, part_number, part_name, satuan, qty, qty_received, mr_id, pr_item_id, vendor_id, vendors(vendor_name)",
       )
       .eq("po_id", po.id)
       .order("id");
@@ -242,13 +245,16 @@ export default function CreateReceivePage() {
           item.qty - (item.qty_received ?? 0) - (pendingByPoItem.get(item.id) || 0),
         ),
         mr_id: item.mr_id,
+        pr_item_id: item.pr_item_id ?? null,
         vendor_name: item.vendors?.vendor_name ?? null,
         qty_receive: Math.max(
           0,
           item.qty - (item.qty_received ?? 0) - (pendingByPoItem.get(item.id) || 0),
         ), // default to full remaining
-        // default: cabang PR, bisa diganti per baris (PO Non-PR: dikunci)
-        cabang_penerima_id: lockedCabangId ?? po.prs?.cabang_id ?? null,
+        // default: cabang PR (PO Outstanding tanpa PR: lokasi PO), bisa
+        // diganti per baris (PO Non-PR: dikunci)
+        cabang_penerima_id:
+          lockedCabangId ?? po.prs?.cabang_id ?? po.cabang_id ?? null,
       }))
       .filter((i: ReceiveItem) => i.qty_sisa > 0);
 
@@ -583,6 +589,24 @@ export default function CreateReceivePage() {
                       ` PO dari SO Reguler: gudang penerima dikunci ke gudang penerima PO (${selectedPo?.cabang?.nama_cabang || "-"}), lalu kirim ke customer lewat DO Reguler.`}
                   </p>
                 </div>
+                {selectedPo?.po_is_outstanding &&
+                  items.some((i) => !i.pr_item_id) && (
+                    <div className="flex items-start gap-2 p-3 bg-warning/10 border border-warning/40 rounded-lg">
+                      <AlertCircle className="h-4 w-4 text-warning shrink-0 mt-0.5" />
+                      <p className="text-[10px] font-bold text-warning uppercase leading-relaxed">
+                        PO Outstanding: {items.filter((i) => !i.pr_item_id).length}{" "}
+                        item belum terhubung ke PR (
+                        {items
+                          .filter((i) => !i.pr_item_id)
+                          .map((i) => i.part_number)
+                          .join(", ")}
+                        ). Item tersebut hanya menambah stok gudang penerima dan
+                        tidak memenuhi MR mana pun. Hubungkan dulu di detail PO
+                        bila barangnya untuk MR — setelah ada RI, link item
+                        dikunci.
+                      </p>
+                    </div>
+                  )}
 
                 <div className="rounded-xl border border-border overflow-hidden">
                   <Table containerClassName="max-h-[55vh] overflow-y-auto">

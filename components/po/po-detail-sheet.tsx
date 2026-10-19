@@ -148,7 +148,7 @@ export function PODetailSheet({
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
           po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
-          cabang(nama_cabang),
+          po_is_outstanding, cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -493,6 +493,14 @@ export function PODetailSheet({
                     </span>
                   </div>
                   <div className="flex items-center gap-2">
+                    {po?.po_is_outstanding && (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] font-black uppercase border-primary/40 bg-primary/10 text-primary"
+                      >
+                        Outstanding
+                      </Badge>
+                    )}
                     {po && getStatusBadge(po.po_status)}
                     {po && getReceiveBadge(po.po_receive_status)}
                   </div>
@@ -569,7 +577,8 @@ export function PODetailSheet({
                               {pr.pr_kode}
                             </Badge>
                           ))
-                        : po?.prs?.pr_kode || "-"}
+                        : po?.prs?.pr_kode ||
+                          (po?.po_is_outstanding ? "Outstanding · belum terhubung ke PR" : "-")}
                     </div>
                   </div>
                 </div>

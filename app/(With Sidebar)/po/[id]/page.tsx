@@ -70,6 +70,7 @@ import { Content } from "@/components/content";
 import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
+import { PoOutstandingPanel } from "@/components/po/po-outstanding-panel";
 
 export default function PODetailPage({
   params,
@@ -151,7 +152,7 @@ export default function PODetailPage({
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
           po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
-          cabang(nama_cabang),
+          po_is_outstanding, cabang_id, cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -534,6 +535,14 @@ export default function PODetailPage({
                     Rev. {po.po_revision}
                   </Badge>
                 )}
+                {po?.po_is_outstanding && (
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] font-black uppercase border-primary/40 bg-primary/10 text-primary"
+                  >
+                    Outstanding
+                  </Badge>
+                )}
                 {getStatusBadge(po?.po_status)}
                 {getReceiveBadge(po?.po_receive_status)}
               </div>
@@ -743,6 +752,18 @@ export default function PODetailPage({
             items={poItems}
             canLink={canViewPrice || isModerator}
             isModerator={isModerator}
+          />
+        </Content>
+      )}
+
+      {po?.po_is_outstanding && (
+        <Content title="PO Outstanding — Lokasi & Hubungkan ke PR">
+          <PoOutstandingPanel
+            poId={Number(poId)}
+            poStatus={po.po_status}
+            cabangId={po.cabang_id ?? null}
+            canEdit={canRevise}
+            onChanged={fetchDetails}
           />
         </Content>
       )}

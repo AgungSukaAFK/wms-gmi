@@ -183,6 +183,18 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     if (newItems.some((i) => !i.part_id)) {
       return { error: "Barang wajib dipilih untuk semua item." };
     }
+  } else if (po.po_is_outstanding) {
+    // PO Outstanding: item baru dari master barang, link ke PR lewat
+    // "Hubungkan ke PR" di detail PO (services/po-outstanding-actions.ts).
+    if (newItems.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
+      return {
+        error:
+          "Item baru PO Outstanding ditambah dari master barang. Hubungkan ke PR dari detail PO.",
+      };
+    }
+    if (newItems.some((i) => !i.part_id)) {
+      return { error: "Barang wajib dipilih untuk semua item." };
+    }
   } else if (newItems.some((i) => !i.pr_item_id || !i.mr_id)) {
     return { error: "Item PO reguler wajib berasal dari PR." };
   }
@@ -378,7 +390,8 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
   // pr_id header = PR pertama (referensi tampilan lama), sama seperti create.
   const firstPrId =
     poJenis === "reguler"
-      ? (afterItems.find((i: any) => i.pr_id)?.pr_id ?? po.pr_id)
+      ? (afterItems.find((i: any) => i.pr_id)?.pr_id ??
+        (po.po_is_outstanding ? null : po.pr_id))
       : po.pr_id;
 
   const nextRevision = num(po.po_revision) + 1;

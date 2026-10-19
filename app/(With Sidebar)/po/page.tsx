@@ -52,6 +52,10 @@ import { completedFilterStatuses } from "@/lib/document-status";
 import { summarizeApprovals } from "@/lib/approval-progress";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import {
+  OUTSTANDING_FILTER_OPTIONS,
+  type OutstandingFilter,
+} from "@/lib/po-outstanding";
 
 const PO_SORT_COLUMNS: Record<string, string> = {
   po_kode: "po_kode",
@@ -80,6 +84,14 @@ export default function POListPage() {
   const [dateFrom, setDateFrom] = useState<string>("");
   const [dateTo, setDateTo] = useState<string>("");
   const [sortOrder, setSortOrder] = useState<string>("newest");
+  // Filter PO Outstanding (import ERP). "unlinked"/"linked" butuh daftar PO
+  // yang masih punya item belum terhubung ke PR (dimuat terpisah).
+  const [outstandingFilter, setOutstandingFilter] = useState<
+    OutstandingFilter | "none"
+  >("none");
+  const [unlinkedOstPoIds, setUnlinkedOstPoIds] = useState<number[] | null>(
+    null,
+  );
 
   // Pagination
   const [page, setPage] = useState(1);
@@ -128,7 +140,7 @@ export default function POListPage() {
         id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
         po_pic, po_detail_status, po_payment_term, approvals, created_at,
         po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), cabang_id,
-        cabang(nama_cabang),
+        po_is_outstanding, cabang(nama_cabang),
         prs(
           id, pr_kode, cabang_id,
           cabang(nama_cabang),
@@ -163,10 +175,44 @@ export default function POListPage() {
     if (dateFrom) query = query.gte("po_tanggal", dateFrom);
     if (dateTo) query = query.lte("po_tanggal", dateTo);
 
+    if (outstandingFilter !== "none") {
+      query = query.eq("po_is_outstanding", true);
+      const ids = unlinkedOstPoIds || [];
+      if (outstandingFilter === "unlinked") {
+        query = query.in("id", ids.length > 0 ? ids : [-1]);
+      } else if (outstandingFilter === "linked" && ids.length > 0) {
+        query = query.not("id", "in", `(${ids.join(",")})`);
+      }
+    }
+
     return query;
   };
 
+  const needsUnlinkedIds =
+    outstandingFilter === "unlinked" || outstandingFilter === "linked";
+
+  const fetchUnlinkedOstPoIds = async () => {
+    const ids = new Set<number>();
+    const pageSize = 1000;
+    for (let from = 0; ; from += pageSize) {
+      const { data, error } = await supabase
+        .from("po_items")
+        .select("po_id, pos!inner(po_is_outstanding)")
+        .is("pr_item_id", null)
+        .eq("pos.po_is_outstanding", true)
+        .range(from, from + pageSize - 1);
+      if (error) {
+        toast.error(error.message);
+        break;
+      }
+      for (const row of data || []) ids.add(row.po_id);
+      if (!data || data.length < pageSize) break;
+    }
+    setUnlinkedOstPoIds(Array.from(ids));
+  };
+
   const fetchPOs = async () => {
+    if (needsUnlinkedIds && unlinkedOstPoIds === null) return;
     setLoading(true);
 
     const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
@@ -263,6 +309,7 @@ export default function POListPage() {
           ESTIMASI: toExcelDate(po.po_estimasi),
           STATUS: po.po_status || "-",
           "RECEIVE STATUS": po.po_receive_status || "-",
+          OUTSTANDING: po.po_is_outstanding ? "Ya" : "",
         };
       });
 
@@ -284,8 +331,15 @@ export default function POListPage() {
   }, []);
 
   useEffect(() => {
+    if (needsUnlinkedIds) fetchUnlinkedOstPoIds();
+    else setUnlinkedOstPoIds(null);
+  }, [outstandingFilter]);
+
+  useEffect(() => {
     fetchPOs();
   }, [
+    outstandingFilter,
+    unlinkedOstPoIds,
     debouncedSearch,
     statusFilters,
     receiveStatusFilters,
@@ -310,6 +364,7 @@ export default function POListPage() {
     setDateFrom("");
     setDateTo("");
     setSortOrder("newest");
+    setOutstandingFilter("none");
     setPage(1);
   };
 
@@ -331,6 +386,7 @@ export default function POListPage() {
     locationFilters.length > 0 ||
     dateFrom !== "" ||
     dateTo !== "" ||
+    outstandingFilter !== "none" ||
     sortOrder !== "newest";
 
   const getApprovalStatusBadge = (status: string) => {
@@ -521,6 +577,26 @@ export default function POListPage() {
             />
 
             <Select
+              value={outstandingFilter}
+              onValueChange={(val) => {
+                setOutstandingFilter(val as OutstandingFilter | "none");
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="h-9 w-full sm:w-56 border-input bg-background text-xs font-semibold text-foreground">
+                <SelectValue placeholder="PO Outstanding" />
+              </SelectTrigger>
+              <SelectContent className="rounded-md">
+                <SelectItem value="none">Semua PO</SelectItem>
+                {OUTSTANDING_FILTER_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.value} value={opt.value}>
+                    {opt.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Select
               value={sortOrder}
               onValueChange={(val) => {
                 setSortOrder(val);
@@ -680,9 +756,19 @@ export default function POListPage() {
                             <ShoppingCart className="h-4 w-4" />
                           </div>
                           <div>
-                            <span className="font-bold text-foreground tracking-tight uppercase text-sm">
-                              {po.po_kode}
-                            </span>
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-bold text-foreground tracking-tight uppercase text-sm">
+                                {po.po_kode}
+                              </span>
+                              {po.po_is_outstanding && (
+                                <Badge
+                                  variant="outline"
+                                  className="h-4 px-1 text-[8px] font-black uppercase border-primary/40 bg-primary/10 text-primary"
+                                >
+                                  Outstanding
+                                </Badge>
+                              )}
+                            </div>
                             {po.po_detail_status && (
                               <p className="text-[9px] text-muted-foreground font-medium mt-0.5">
                                 {po.po_detail_status}

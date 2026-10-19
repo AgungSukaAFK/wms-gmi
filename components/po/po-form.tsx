@@ -158,6 +158,11 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const [barangPopoverOpen, setBarangPopoverOpen] = useState(false);
   const isNonPr = poJenis === "non_pr";
   const isSo = poJenis === "so";
+  // Edit PO Outstanding (import ERP, lib/po-outstanding.ts): item dimuat apa
+  // adanya & barang bisa ditambah dari master seperti Non-PR; link ke PR
+  // dikelola dari detail PO, bukan di form ini.
+  const [isOutstanding, setIsOutstanding] = useState(false);
+  const isFreeItems = isNonPr || isOutstanding;
 
   // PO dari SO Reguler: 1 PO = 1 SO, item = sisa SO yang belum di-PO/DO.
   const [selectedSo, setSelectedSo] = useState<any | null>(null);
@@ -645,7 +650,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       const { data: rows } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, vendors(id, vendor_name, vendor_no), pr_items(id, pr_id)",
+          "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, vendors(id, vendor_name, vendor_no), pr_items(id, pr_id, prs(pr_kode))",
         )
         .eq("po_id", poId)
         .order("id");
@@ -654,6 +659,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
 
       // Header
       setPoJenis((po.po_jenis || "reguler") as PoJenis);
+      setIsOutstanding(Boolean(po.po_is_outstanding));
       if (po.cabang_id) setSoCabangId(String(po.cabang_id));
       setPoKode(po.po_kode || "");
       setPoTanggal(po.po_tanggal || toYmdLocal());
@@ -683,7 +689,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       // Item
       const jenis = po.po_jenis || "reguler";
       let nextItems: POItem[] = [];
-      if (jenis === "non_pr") {
+      if (po.po_is_outstanding) {
+        nextItems = existing.map((e: any) => {
+          const pri = Array.isArray(e.pr_items) ? e.pr_items[0] : e.pr_items;
+          const pr = Array.isArray(pri?.prs) ? pri.prs[0] : pri?.prs;
+          return existingToItem(e, pr?.pr_kode || "");
+        });
+      } else if (jenis === "non_pr") {
         nextItems = existing.map((e: any) => existingToItem(e));
       } else if (jenis === "so") {
         const so = Array.isArray(po.so_reguler) ? po.so_reguler[0] : po.so_reguler;
@@ -867,7 +879,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     if (isSo && !selectedSo) return toast.error("Pilih SO terlebih dahulu");
     if (isSo && !isEdit && !soCabangId)
       return toast.error("Pilih gudang penerima PO");
-    if (poJenis === "reguler" && selectedPrs.length === 0)
+    if (poJenis === "reguler" && !isOutstanding && selectedPrs.length === 0)
       return toast.error("Pilih PR terlebih dahulu");
     if (chosen.length === 0)
       return toast.error("Tidak ada item terpilih untuk diproses ke PO");
@@ -1110,7 +1122,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
               {step === 1
-                ? isNonPr
+                ? isOutstanding
+                  ? "Langkah 1 dari 3 — Item (PO Outstanding)"
+                  : isNonPr
                   ? "Langkah 1 dari 3 — Pilih Barang (PO Non-PR)"
                   : isSo
                     ? "Langkah 1 dari 3 — Pilih SO Reguler"
@@ -1144,7 +1158,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
           {[
             {
               n: 1,
-              label: isNonPr ? "Pilih Barang" : isSo ? "Pilih SO" : "Pilih PR",
+              label: isFreeItems ? "Pilih Barang" : isSo ? "Pilih SO" : "Pilih PR",
             },
             { n: 2, label: "Vendor & Harga" },
             { n: 3, label: "Informasi PO" },
@@ -1213,6 +1227,14 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   </button>
                 ))}
               </div>
+              {isOutstanding && (
+                <p className="text-[10px] text-primary font-semibold leading-relaxed">
+                  PO Outstanding (import ERP): item bisa ditambah dari master
+                  barang atau dihapus (selama belum ada barang diterima).
+                  Hubungkan item ke PR dari halaman detail PO. Item yang sudah
+                  terhubung ke PR tetap dibatasi sisa PR-nya.
+                </p>
+              )}
               {isNonPr && (
                 <p className="text-[10px] text-muted-foreground font-medium leading-relaxed">
                   Untuk barang yang PN/satuan belinya beda dengan PR (mis. PR
@@ -1354,19 +1376,21 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   </Button>
                 </div>
               </>
-            ) : isNonPr ? (
+            ) : isFreeItems ? (
               <>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                    Referensi PR
-                  </Label>
-                  <Input
-                    value={prReferensi}
-                    onChange={(e) => setPrReferensi(e.target.value)}
-                    placeholder="Mis. PR-PPIC-0123 — Pack of 100m Roll (boleh PR di luar WMS)"
-                    className="h-10 font-medium text-sm"
-                  />
-                </div>
+                {isNonPr && (
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                      Referensi PR
+                    </Label>
+                    <Input
+                      value={prReferensi}
+                      onChange={(e) => setPrReferensi(e.target.value)}
+                      placeholder="Mis. PR-PPIC-0123 — Pack of 100m Roll (boleh PR di luar WMS)"
+                      className="h-10 font-medium text-sm"
+                    />
+                  </div>
+                )}
 
                 <div className="space-y-1.5">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground">
@@ -1437,12 +1461,25 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   <div className="rounded-lg border border-border divide-y divide-border">
                     {poItems.map((item, idx) => (
                       <div
-                        key={item.part_id}
+                        key={item.po_item_id ?? `new-${item.part_id}`}
                         className="flex items-center gap-3 px-3 py-2"
                       >
                         <span className="text-[11px] font-black font-mono uppercase">
                           {item.part_number}
                         </span>
+                        {isOutstanding && (
+                          <Badge
+                            variant="outline"
+                            className={cn(
+                              "text-[9px] font-bold uppercase font-mono",
+                              item.pr_item_id
+                                ? "border-success/40 text-success"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            {item.pr_item_id ? item.pr_kode || "PR" : "Belum PR"}
+                          </Badge>
+                        )}
                         <span className="flex-1 min-w-0 truncate text-[10px] text-muted-foreground uppercase">
                           {item.part_name}
                         </span>
@@ -1800,7 +1837,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
               </div>
               <div className="flex items-center gap-1.5 text-[10px] font-bold text-muted-foreground uppercase flex-wrap justify-end">
                 <FileText className="h-3.5 w-3.5" />
-                {isNonPr
+                {isOutstanding
+                  ? "PO Outstanding"
+                  : isNonPr
                   ? `Non-PR${prReferensi.trim() ? ` — ${prReferensi.trim()}` : ""}`
                   : isSo
                     ? `SO ${selectedSo?.so_kode || ""}`
@@ -1954,7 +1993,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                         >
                           {item.so_item_id
                             ? selectedSo?.so_kode || "SO"
-                            : item.pr_kode || "Non-PR"}
+                            : item.pr_kode || (isOutstanding ? "Belum PR" : "Non-PR")}
                         </Badge>
                       </TableCell>
                       <TableCell className="py-3 align-top">
@@ -2593,10 +2632,12 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
             <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-2">
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                 <span>
-                  {isNonPr ? "Jenis PO" : isSo ? "Sumber SO" : "Sumber PR"}
+                  {isFreeItems ? "Jenis PO" : isSo ? "Sumber SO" : "Sumber PR"}
                 </span>
                 <span className="text-foreground font-mono text-right">
-                  {isNonPr
+                  {isOutstanding
+                    ? "PO Outstanding"
+                    : isNonPr
                     ? `Non-PR${prReferensi.trim() ? ` — Ref: ${prReferensi.trim()}` : ""}`
                     : isSo
                       ? `${selectedSo?.so_kode || "-"} — ${selectedSo?.customer?.customer_name || ""}`
