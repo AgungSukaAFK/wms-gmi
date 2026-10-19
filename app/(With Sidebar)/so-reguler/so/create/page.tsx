@@ -48,7 +48,7 @@ import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { cn, toYmdLocal } from "@/lib/utils";
-import { canCreateSO } from "@/lib/so-reguler";
+import { SO_KATEGORI_OPTIONS, canCreateSO } from "@/lib/so-reguler";
 import {
   SoItemTable,
   SoFormItem,
@@ -154,6 +154,8 @@ export default function CreateSoRegulerPage() {
 
   // Form
   const [soKode, setSoKode] = useState("");
+  const [customerPoNo, setCustomerPoNo] = useState("");
+  const [kategori, setKategori] = useState("");
   const [soTanggal, setSoTanggal] = useState(toYmdLocal());
   const [soDueDate, setSoDueDate] = useState("");
   const [customer, setCustomer] = useState<CustomerOption | null>(null);
@@ -286,7 +288,10 @@ export default function CreateSoRegulerPage() {
   }, [customer?.id]);
 
   const isDirty =
-    !!soKode.trim() || !!customer || items.length > 0 || !!remarks.trim();
+    !!soKode.trim() ||
+    !!customerPoNo.trim() ||
+    !!kategori ||
+    !!customer || items.length > 0 || !!remarks.trim();
 
   // Peringatan saat meninggalkan halaman dengan isian belum disimpan.
   useEffect(() => {
@@ -308,10 +313,12 @@ export default function CreateSoRegulerPage() {
     kode: !!soKode.trim() && kodeStatus !== "taken",
     customer: !!customer,
     tanggal: !!soTanggal && !dueBeforeDate,
+    kategori: !!kategori,
     items: items.length > 0 && invalidQtyItems.length === 0,
   };
   const doneCount = Object.values(checks).filter(Boolean).length;
-  const canSubmit = doneCount === 4 && kodeStatus !== "checking";
+  const totalChecks = Object.keys(checks).length;
+  const canSubmit = doneCount === totalChecks && kodeStatus !== "checking";
 
   const totalQty = items.reduce((s, i) => s + (i.qty > 0 ? i.qty : 0), 0);
   const coverage = items.reduce(
@@ -330,6 +337,7 @@ export default function CreateSoRegulerPage() {
       return "Nomor SO sudah digunakan. Gunakan nomor lain.";
     if (!soTanggal) return "Tanggal SO harus diisi";
     if (dueBeforeDate) return "Deadline tidak boleh sebelum tanggal SO";
+    if (!kategori) return "Kategori SO harus dipilih";
     if (!customer) return "Customer harus dipilih";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
     if (invalidQtyItems.length > 0)
@@ -356,6 +364,8 @@ export default function CreateSoRegulerPage() {
         so_kode: soKode.trim(),
         so_tanggal: soTanggal,
         so_due_date: soDueDate || null,
+        kategori,
+        customer_po_no: customerPoNo.trim() || undefined,
         customer_id: customer!.id,
         remarks: remarks.trim() || undefined,
         items: items.map((item) => ({
@@ -423,7 +433,7 @@ export default function CreateSoRegulerPage() {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-[11px] text-muted-foreground">
-              {doneCount}/4 langkah lengkap
+              {doneCount}/{totalChecks} isian wajib lengkap
             </span>
             <div className="flex gap-1">
               {Object.values(checks).map((ok, i) => (
@@ -447,7 +457,7 @@ export default function CreateSoRegulerPage() {
           <SectionTitle
             step={1}
             title="Informasi Dokumen"
-            done={checks.kode && checks.tanggal}
+            done={checks.kode && checks.tanggal && checks.kategori}
             hint="Nomor SO diisi manual, tidak boleh sama dengan SO lain."
           />
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -494,6 +504,24 @@ export default function CreateSoRegulerPage() {
                   </span>
                 </p>
               )}
+              <div className="space-y-1.5 pt-1">
+                <Label className="text-xs font-semibold">
+                  Nomor PO{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (opsional)
+                  </span>
+                </Label>
+                <Input
+                  placeholder="Nomor PO dari customer"
+                  className="h-9 font-semibold uppercase"
+                  value={customerPoNo}
+                  onChange={(e) => setCustomerPoNo(e.target.value.toUpperCase())}
+                  maxLength={100}
+                />
+                <p className="text-[10px] text-muted-foreground">
+                  Keterangan saja, tidak terhubung ke data PO.
+                </p>
+              </div>
             </div>
 
             <div className="space-y-1.5">
@@ -585,6 +613,32 @@ export default function CreateSoRegulerPage() {
                 </p>
               )}
             </div>
+          </div>
+          <div className="mt-4 space-y-1.5">
+            <Label className="text-xs font-semibold">
+              Kategori <span className="text-destructive">*</span>
+            </Label>
+            <div className="flex flex-wrap gap-2">
+              {SO_KATEGORI_OPTIONS.map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setKategori(k)}
+                  className={cn(
+                    "rounded-md border px-3 py-1.5 text-xs font-semibold transition-colors",
+                    kategori === k
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "text-muted-foreground hover:bg-muted",
+                    submitted && !kategori && "border-destructive",
+                  )}
+                >
+                  {k}
+                </button>
+              ))}
+            </div>
+            <FieldError show={submitted && !kategori}>
+              Kategori wajib dipilih
+            </FieldError>
           </div>
         </Content>
 
@@ -819,6 +873,11 @@ export default function CreateSoRegulerPage() {
                   value: formatLongDate(soTanggal),
                 },
                 {
+                  ok: checks.kategori,
+                  label: "Kategori",
+                  value: kategori || "-",
+                },
+                {
                   ok: checks.customer,
                   label: "Customer",
                   value: customer?.customer_name || "-",
@@ -845,6 +904,17 @@ export default function CreateSoRegulerPage() {
                   </span>
                 </li>
               ))}
+              {customerPoNo.trim() && (
+                <li className="flex items-start gap-2">
+                  <FileText className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                  <span className="w-16 shrink-0 text-muted-foreground">
+                    No. PO
+                  </span>
+                  <span className="min-w-0 flex-1 truncate text-right font-semibold">
+                    {customerPoNo.trim()}
+                  </span>
+                </li>
+              )}
               <li className="flex items-start gap-2">
                 <CalendarClock className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                 <span className="w-16 shrink-0 text-muted-foreground">
@@ -975,6 +1045,16 @@ export default function CreateSoRegulerPage() {
                 <p className="font-semibold">
                   {formatLongDate(soTanggal)} →{" "}
                   {soDueDate ? formatLongDate(soDueDate) : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground">Kategori</p>
+                <p className="font-semibold">{kategori}</p>
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground">Nomor PO</p>
+                <p className="font-semibold uppercase">
+                  {customerPoNo.trim() || "—"}
                 </p>
               </div>
             </div>

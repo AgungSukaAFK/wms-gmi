@@ -2,7 +2,11 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { canCreateSO, refreshSoStatus } from "@/lib/so-reguler";
+import {
+  SO_KATEGORI_OPTIONS,
+  canCreateSO,
+  refreshSoStatus,
+} from "@/lib/so-reguler";
 
 async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
   const { data: roleRows } = await supabase
@@ -19,7 +23,7 @@ async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
 /**
  * BUAT SO REGULER
  *
- * Tanpa approval. Wajib customer. Tanpa kategori & lokasi site (revisi
+ * Tanpa approval. Wajib customer & kategori. Tanpa lokasi site (revisi
  * 2026-10-16): gudang dipilih saat PO dari SO (gudang penerima) / DO by SO
  * (gudang pengirim). Tidak ada pergerakan stok -- stok baru keluar saat DO
  * Reguler dibuat dari SO ini.
@@ -28,6 +32,9 @@ export async function createSoReguler(data: {
   so_kode: string;
   so_tanggal: string;
   so_due_date?: string | null;
+  kategori: string;
+  // Nomor PO dari customer, keterangan saja (tidak terhubung ke tabel pos).
+  customer_po_no?: string;
   customer_id: number;
   remarks?: string;
   items: {
@@ -55,6 +62,8 @@ export async function createSoReguler(data: {
   const soKode = data.so_kode?.trim();
   if (!soKode) return { error: "Nomor SO wajib diisi." };
   if (!data.so_tanggal) return { error: "Tanggal SO wajib diisi." };
+  if (!SO_KATEGORI_OPTIONS.includes(data.kategori))
+    return { error: "Kategori SO wajib dipilih." };
   if (!data.customer_id) return { error: "Customer wajib dipilih." };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar barang tidak boleh kosong." };
@@ -86,6 +95,8 @@ export async function createSoReguler(data: {
         so_kode: soKode,
         so_tanggal: data.so_tanggal,
         so_due_date: data.so_due_date || null,
+        kategori: data.kategori,
+        customer_po_no: data.customer_po_no?.trim() || null,
         customer_id: data.customer_id,
         so_pic: profile?.nama ?? null,
         so_pic_id: user.id,

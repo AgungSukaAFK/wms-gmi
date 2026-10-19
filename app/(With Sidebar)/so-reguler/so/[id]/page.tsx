@@ -35,6 +35,7 @@ import {
   Clock,
   User,
   Ban,
+  FileText,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
@@ -181,7 +182,7 @@ export default function SoRegulerDetailPage({
                 <SoStatusBadge status={so.so_status} />
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-                SO Reguler
+                SO Reguler{so.kategori ? ` · ${so.kategori}` : ""}
               </p>
             </div>
           </div>
@@ -238,7 +239,7 @@ export default function SoRegulerDetailPage({
       </Content>
 
       <Content>
-        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4 text-xs">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 text-xs">
           <div className="space-y-1">
             <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
               <UsersRound className="h-3 w-3" /> Customer
@@ -268,8 +269,14 @@ export default function SoRegulerDetailPage({
             </p>
             <p className="font-bold">{so.so_pic || "-"}</p>
           </div>
+          <div className="space-y-1">
+            <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
+              <FileText className="h-3 w-3" /> Nomor PO
+            </p>
+            <p className="font-bold uppercase">{so.customer_po_no || "-"}</p>
+          </div>
           {so.remarks && (
-            <div className="sm:col-span-2 xl:col-span-3 rounded-md bg-muted/40 border border-border p-3">
+            <div className="sm:col-span-2 xl:col-span-4 rounded-md bg-muted/40 border border-border p-3">
               <p className="text-[10px] font-bold uppercase text-muted-foreground mb-1">
                 Keterangan
               </p>
@@ -277,7 +284,7 @@ export default function SoRegulerDetailPage({
             </div>
           )}
           {isClosed && (
-            <div className="sm:col-span-2 xl:col-span-3 rounded-md bg-destructive/10 border border-destructive/30 p-3 text-destructive">
+            <div className="sm:col-span-2 xl:col-span-4 rounded-md bg-destructive/10 border border-destructive/30 p-3 text-destructive">
               <p className="text-[10px] font-bold uppercase mb-1">
                 Dibatalkan
                 {so.cancelled_at ? ` · ${formatDate(so.cancelled_at)}` : ""}

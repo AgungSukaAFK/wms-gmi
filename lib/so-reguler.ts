@@ -1,8 +1,8 @@
 // SO Reguler: Sales Order reguler ke customer, tanpa approval. Pemenuhan per
 // item dinamis & partial per qty -- sebagian langsung DO Reguler dari stok,
 // sebagian PO dulu (po_jenis 'so') lalu RI ke gudang penerima PO tsb
-// (pos.cabang_id), baru di-DO. SO sendiri tidak punya lokasi/kategori sejak
-// revisi 2026-10-16 (so_reguler.cabang_id/kategori hanya terisi di SO lama).
+// (pos.cabang_id), baru di-DO. SO sendiri tidak punya lokasi sejak revisi
+// 2026-10-16 (so_reguler.cabang_id hanya terisi di SO lama).
 // Lihat supabase/migrations/20261014100000_so_reguler.sql.
 
 // Role yang boleh MEMBUAT SO Reguler (keputusan user 2026-10-14).
@@ -17,6 +17,15 @@ export function canCreateSO(roles: RoleLike[] | null | undefined): boolean {
     return name != null && SO_CREATE_ROLES.includes(name);
   });
 }
+
+// Kategori SO (keputusan user 2026-10-19). SO lama (s.d. 2026-10-16) bisa
+// berisi kategori gaya MR ('New Item', dst.) atau NULL -- cukup ditampilkan.
+export const SO_KATEGORI_OPTIONS = [
+  "Kontrak",
+  "Repeat Order",
+  "Quotation",
+  "Instalasi",
+];
 
 export type SoStatus = "open" | "partial" | "completed" | "cancelled";
 
