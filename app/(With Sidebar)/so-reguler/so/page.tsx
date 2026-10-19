@@ -75,7 +75,7 @@ export default function SoRegulerPage() {
 
     if (debouncedSearch) {
       query = query.or(
-        `so_kode.ilike.%${debouncedSearch}%,so_pic.ilike.%${debouncedSearch}%,customer_po_no.ilike.%${debouncedSearch}%`,
+        `so_kode.ilike.%${debouncedSearch}%,so_pic.ilike.%${debouncedSearch}%,customer_po_no.ilike.%${debouncedSearch}%,marketing_name.ilike.%${debouncedSearch}%`,
       );
     }
     if (statusFilters.length > 0) query = query.in("so_status", statusFilters);
@@ -242,7 +242,7 @@ export default function SoRegulerPage() {
                         {r.kategori ? `${r.kategori} · ` : ""}
                         {r.customer_po_no ? `PO ${r.customer_po_no} · ` : ""}
                         {r.so_reguler_items?.[0]?.count ?? 0} item ·{" "}
-                        {r.so_pic || "-"}
+                        {r.marketing_name || r.so_pic || "-"}
                       </span>
                     </TableCell>
                     <TableCell>

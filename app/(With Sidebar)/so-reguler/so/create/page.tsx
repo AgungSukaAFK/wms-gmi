@@ -155,6 +155,9 @@ export default function CreateSoRegulerPage() {
   // Form
   const [soKode, setSoKode] = useState("");
   const [customerPoNo, setCustomerPoNo] = useState("");
+  const [customerPoDate, setCustomerPoDate] = useState("");
+  const [customerPoReceivedDate, setCustomerPoReceivedDate] = useState("");
+  const [marketingName, setMarketingName] = useState("");
   const [kategori, setKategori] = useState("");
   const [soTanggal, setSoTanggal] = useState(toYmdLocal());
   const [soDueDate, setSoDueDate] = useState("");
@@ -290,6 +293,9 @@ export default function CreateSoRegulerPage() {
   const isDirty =
     !!soKode.trim() ||
     !!customerPoNo.trim() ||
+    !!customerPoDate ||
+    !!customerPoReceivedDate ||
+    !!marketingName.trim() ||
     !!kategori ||
     !!customer || items.length > 0 || !!remarks.trim();
 
@@ -308,11 +314,15 @@ export default function CreateSoRegulerPage() {
     (i) => !Number.isInteger(i.qty) || i.qty <= 0,
   );
   const dueBeforeDate = !!soDueDate && !!soTanggal && soDueDate < soTanggal;
+  const poReceivedBeforeCreated =
+    !!customerPoDate &&
+    !!customerPoReceivedDate &&
+    customerPoReceivedDate < customerPoDate;
 
   const checks = {
     kode: !!soKode.trim() && kodeStatus !== "taken",
     customer: !!customer,
-    tanggal: !!soTanggal && !dueBeforeDate,
+    tanggal: !!soTanggal && !dueBeforeDate && !poReceivedBeforeCreated,
     kategori: !!kategori,
     items: items.length > 0 && invalidQtyItems.length === 0,
   };
@@ -337,6 +347,8 @@ export default function CreateSoRegulerPage() {
       return "Nomor SO sudah digunakan. Gunakan nomor lain.";
     if (!soTanggal) return "Tanggal SO harus diisi";
     if (dueBeforeDate) return "Deadline tidak boleh sebelum tanggal SO";
+    if (poReceivedBeforeCreated)
+      return "Tanggal PO diterima tidak boleh sebelum tanggal PO dibuat";
     if (!kategori) return "Kategori SO harus dipilih";
     if (!customer) return "Customer harus dipilih";
     if (items.length === 0) return "Daftar barang tidak boleh kosong";
@@ -366,6 +378,9 @@ export default function CreateSoRegulerPage() {
         so_due_date: soDueDate || null,
         kategori,
         customer_po_no: customerPoNo.trim() || undefined,
+        customer_po_date: customerPoDate || null,
+        customer_po_received_date: customerPoReceivedDate || null,
+        marketing_name: marketingName.trim() || undefined,
         customer_id: customer!.id,
         remarks: remarks.trim() || undefined,
         items: items.map((item) => ({
@@ -612,6 +627,81 @@ export default function CreateSoRegulerPage() {
                       : `${dueInDays} hari lagi dari hari ini`}
                 </p>
               )}
+            </div>
+          </div>
+          <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label className="text-xs font-semibold">
+                Nama Marketing{" "}
+                <span className="font-normal text-muted-foreground">
+                  (opsional)
+                </span>
+              </Label>
+              <Input
+                placeholder="Nama marketing"
+                className="h-9 font-semibold uppercase"
+                value={marketingName}
+                onChange={(e) => setMarketingName(e.target.value.toUpperCase())}
+                maxLength={100}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">
+                  Tgl PO Dibuat Customer{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (opsional)
+                  </span>
+                </Label>
+                {customerPoDate && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomerPoDate("")}
+                    className="text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Kosongkan
+                  </button>
+                )}
+              </div>
+              <DatePickerString
+                className="h-9 w-full text-xs font-semibold"
+                value={customerPoDate}
+                onChange={setCustomerPoDate}
+                placeholder="Pilih tanggal"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label className="text-xs font-semibold">
+                  Tgl PO Diterima via Email{" "}
+                  <span className="font-normal text-muted-foreground">
+                    (opsional)
+                  </span>
+                </Label>
+                {customerPoReceivedDate && (
+                  <button
+                    type="button"
+                    onClick={() => setCustomerPoReceivedDate("")}
+                    className="text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Kosongkan
+                  </button>
+                )}
+              </div>
+              <DatePickerString
+                className={cn(
+                  "h-9 w-full text-xs font-semibold",
+                  poReceivedBeforeCreated && "border-destructive",
+                )}
+                value={customerPoReceivedDate}
+                onChange={setCustomerPoReceivedDate}
+                placeholder="Pilih tanggal"
+              />
+              <FieldError show={poReceivedBeforeCreated}>
+                Sebelum tanggal PO dibuat customer
+              </FieldError>
             </div>
           </div>
           <div className="mt-4 space-y-1.5">
@@ -1055,6 +1145,23 @@ export default function CreateSoRegulerPage() {
                 <p className="text-[10px] text-muted-foreground">Nomor PO</p>
                 <p className="font-semibold uppercase">
                   {customerPoNo.trim() || "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground">
+                  Tgl PO Dibuat / Diterima Email
+                </p>
+                <p className="font-semibold">
+                  {customerPoDate ? formatLongDate(customerPoDate) : "—"} /{" "}
+                  {customerPoReceivedDate
+                    ? formatLongDate(customerPoReceivedDate)
+                    : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-[10px] text-muted-foreground">Marketing</p>
+                <p className="font-semibold uppercase">
+                  {marketingName.trim() || "—"}
                 </p>
               </div>
             </div>

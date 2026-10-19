@@ -35,6 +35,9 @@ export async function createSoReguler(data: {
   kategori: string;
   // Nomor PO dari customer, keterangan saja (tidak terhubung ke tabel pos).
   customer_po_no?: string;
+  customer_po_date?: string | null;
+  customer_po_received_date?: string | null;
+  marketing_name?: string;
   customer_id: number;
   remarks?: string;
   items: {
@@ -65,6 +68,14 @@ export async function createSoReguler(data: {
   if (!SO_KATEGORI_OPTIONS.includes(data.kategori))
     return { error: "Kategori SO wajib dipilih." };
   if (!data.customer_id) return { error: "Customer wajib dipilih." };
+  if (
+    data.customer_po_date &&
+    data.customer_po_received_date &&
+    data.customer_po_received_date < data.customer_po_date
+  )
+    return {
+      error: "Tanggal PO diterima tidak boleh sebelum tanggal PO dibuat.",
+    };
   if (!data.items || data.items.length === 0)
     return { error: "Daftar barang tidak boleh kosong." };
   const badQty = data.items.filter(
@@ -97,6 +108,9 @@ export async function createSoReguler(data: {
         so_due_date: data.so_due_date || null,
         kategori: data.kategori,
         customer_po_no: data.customer_po_no?.trim() || null,
+        customer_po_date: data.customer_po_date || null,
+        customer_po_received_date: data.customer_po_received_date || null,
+        marketing_name: data.marketing_name?.trim().toUpperCase() || null,
         customer_id: data.customer_id,
         so_pic: profile?.nama ?? null,
         so_pic_id: user.id,

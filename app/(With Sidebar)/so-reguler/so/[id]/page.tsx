@@ -275,6 +275,30 @@ export default function SoRegulerDetailPage({
             </p>
             <p className="font-bold uppercase">{so.customer_po_no || "-"}</p>
           </div>
+          <div className="space-y-1">
+            <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
+              <User className="h-3 w-3" /> Marketing
+            </p>
+            <p className="font-bold uppercase">{so.marketing_name || "-"}</p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
+              <CalendarIcon className="h-3 w-3" /> Tgl PO Dibuat Customer
+            </p>
+            <p className="font-bold">
+              {so.customer_po_date ? formatDate(so.customer_po_date) : "-"}
+            </p>
+          </div>
+          <div className="space-y-1">
+            <p className="text-[10px] font-bold uppercase text-muted-foreground flex items-center gap-1.5">
+              <CalendarIcon className="h-3 w-3" /> Tgl PO Diterima via Email
+            </p>
+            <p className="font-bold">
+              {so.customer_po_received_date
+                ? formatDate(so.customer_po_received_date)
+                : "-"}
+            </p>
+          </div>
           {so.remarks && (
             <div className="sm:col-span-2 xl:col-span-4 rounded-md bg-muted/40 border border-border p-3">
               <p className="text-[10px] font-bold uppercase text-muted-foreground mb-1">

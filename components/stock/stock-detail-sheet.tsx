@@ -52,6 +52,8 @@ import { cn, formatDateTime } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
+import { resolveMovementDocs, type MovementDoc } from "@/lib/stock-movement-docs";
+import { StockMovementHistory } from "@/components/stock/stock-movement-history";
 
 interface StockDetailSheetProps {
   partId: string | number | null;
@@ -71,6 +73,9 @@ export function StockDetailSheet({
   const [part, setPart] = useState<any>(null);
   const [locations, setLocations] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
+  const [historyDocs, setHistoryDocs] = useState<Map<string, MovementDoc>>(
+    new Map(),
+  );
   const [loading, setLoading] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [editingStock, setEditingStock] = useState<any>(null);
@@ -115,7 +120,9 @@ export function StockDetailSheet({
           "id, part_id, cabang_id, qty_change, type, reference_id, notes, created_by, created_at, cabang(nama_cabang)",
         )
         .eq("part_id", normalizedPartId)
-        .order("created_at", { ascending: false });
+        .order("created_at", { ascending: false })
+        // Tie-breaker supaya saldo berjalan (dihitung mundur) stabil.
+        .order("id", { ascending: false });
 
       if (historyError) {
         console.error("Fetch stock_movements error:", historyError);
@@ -128,6 +135,15 @@ export function StockDetailSheet({
             .map((item: any) => item.created_by)
             .filter((id: string | null) => !!id),
         ),
+      );
+
+      // Dokumen sumber (tgl dibuat, tgl full approve) diambil paralel dengan
+      // nama user; gagal resolve tidak memblok tampilan riwayat.
+      const docsPromise = resolveMovementDocs(supabase, movements).catch(
+        (err) => {
+          console.error("Resolve stock movement docs error:", err);
+          return new Map<string, MovementDoc>();
+        },
       );
 
       let actorNameMap = new Map<string, string>();
@@ -160,6 +176,7 @@ export function StockDetailSheet({
             : "System",
         })),
       );
+      setHistoryDocs(await docsPromise);
     } catch (err) {
       console.error("Fetch Stock Details Error:", err);
     } finally {
@@ -207,7 +224,7 @@ export function StockDetailSheet({
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 shadow-2xl overflow-hidden">
+        <SheetContent className="w-full sm:max-w-2xl p-0 flex flex-col gap-0 border-l border-slate-200 shadow-2xl overflow-hidden">
           {loading && !part ? (
             <div className="flex-1 flex items-center justify-center bg-white">
               <SheetTitle className="sr-only">Memuat Detail Stok</SheetTitle>
@@ -315,61 +332,14 @@ export function StockDetailSheet({
                     ))}
                   </TabsContent>
 
-                  <TabsContent value="history" className="m-0 space-y-4">
-                    {history.length === 0 ? (
-                      <div className="py-12 text-center text-slate-400 text-xs italic">
-                        Belum ada riwayat mutasi.
-                      </div>
-                    ) : (
-                      <div className="space-y-4">
-                        {history.map((item) => (
-                          <div
-                            key={item.id}
-                            className="border-l-2 border-slate-100 pl-4 py-1 space-y-1 relative"
-                          >
-                            <div
-                              className={cn(
-                                "absolute -left-1.25 top-2 w-2 h-2 rounded-full",
-                                item.qty_change > 0
-                                  ? "bg-green-500"
-                                  : "bg-red-500",
-                              )}
-                            />
-                            <div className="flex items-center justify-between">
-                              <span
-                                className={cn(
-                                  "text-xs font-bold",
-                                  item.qty_change > 0
-                                    ? "text-green-600"
-                                    : "text-red-500",
-                                )}
-                              >
-                                {item.qty_change > 0 ? "+" : ""}
-                                {item.qty_change} {part?.part_satuan}
-                              </span>
-                              <span className="text-[10px] text-slate-400 uppercase font-bold">
-                                {item.type}
-                              </span>
-                            </div>
-                            <p className="text-[11px] text-slate-600 leading-tight">
-                              {item.notes}
-                            </p>
-                            <div className="flex items-center justify-between text-[9px] text-slate-400 mt-1 gap-2">
-                              <span className="truncate">
-                                {item.cabang?.nama_cabang}
-                              </span>
-                              <span className="shrink-0">
-                                {formatDateTime(item.created_at)}
-                              </span>
-                            </div>
-                            <div className="text-[9px] text-slate-400 mt-1">
-                              <span className="font-semibold">By:</span>{" "}
-                              {item.actor_name}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                  <TabsContent value="history" className="m-0">
+                    <StockMovementHistory
+                      key={String(partId)}
+                      movements={history}
+                      locations={locations}
+                      docs={historyDocs}
+                      satuan={part?.part_satuan}
+                    />
                   </TabsContent>
                 </div>
               </Tabs>
