@@ -263,12 +263,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       let q = supabase
         .from("so_reguler")
         .select(
-          "id, so_kode, so_status, so_tanggal, customer:customers!customer_id(customer_name)",
+          "id, so_kode, so_status, so_tanggal, customer_po_no, customer:customers!customer_id(customer_name)",
         )
         .in("so_status", ["open", "partial"])
         .order("created_at", { ascending: false })
         .limit(30);
-      if (debouncedSoSearch) q = q.ilike("so_kode", `%${debouncedSoSearch}%`);
+      // Cari utama by Nomor PO Customer, kode SO tetap ikut dicari.
+      // Karakter , ( ) dibuang karena memecah sintaks filter .or().
+      const term = debouncedSoSearch.replace(/[,()]/g, " ").trim();
+      if (term)
+        q = q.or(`customer_po_no.ilike.%${term}%,so_kode.ilike.%${term}%`);
       const { data } = await q;
       setSoResults(data || []);
     };
@@ -282,7 +286,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     const { data: so } = await supabase
       .from("so_reguler")
       .select(
-        "id, so_kode, so_status, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
+        "id, so_kode, so_status, customer_po_no, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
       )
       .eq("id", soId)
       .maybeSingle();
@@ -639,7 +643,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       const { data: po } = await supabase
         .from("pos")
         .select(
-          "*, cabang(nama_cabang), so_reguler(id, so_kode, so_status, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty))",
+          "*, cabang(nama_cabang), so_reguler(id, so_kode, so_status, customer_po_no, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty))",
         )
         .eq("id", poId)
         .maybeSingle();
@@ -1273,13 +1277,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                           <ReceiptText className="h-4 w-4 text-muted-foreground" />
                         )}
                         {selectedSo ? (
-                          <span className="text-foreground uppercase">
+                          <span className="text-foreground uppercase truncate">
+                            {selectedSo.customer_po_no
+                              ? `PO ${selectedSo.customer_po_no} · `
+                              : ""}
                             {selectedSo.so_kode} —{" "}
                             {selectedSo.customer?.customer_name}
                           </span>
                         ) : (
                           <span className="text-muted-foreground">
-                            Cari Kode SO...
+                            Cari Nomor PO Customer / Kode SO...
                           </span>
                         )}
                       </Button>
@@ -1287,14 +1294,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                     <PopoverContent className="w-105 p-0" align="start">
                       <Command shouldFilter={false}>
                         <CommandInput
-                          placeholder="Cari kode SO..."
+                          placeholder="Cari nomor PO customer / kode SO..."
                           value={soSearch}
                           onValueChange={setSoSearch}
                         />
                         <CommandList>
                           {soResults.length === 0 ? (
                             <CommandEmpty>
-                              Tidak ada SO open/partial.
+                              {debouncedSoSearch
+                                ? "Tidak ada SO open/partial yang cocok."
+                                : "Tidak ada SO open/partial."}
                             </CommandEmpty>
                           ) : (
                             soResults.map((so) => (
@@ -1306,11 +1315,17 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                               >
                                 <ReceiptText className="h-4 w-4 text-muted-foreground shrink-0" />
                                 <div className="flex-1 min-w-0">
-                                  <p className="font-bold text-xs uppercase">
-                                    {so.so_kode}
+                                  <p className="font-bold text-xs uppercase truncate">
+                                    {so.customer_po_no ? (
+                                      <>PO {so.customer_po_no}</>
+                                    ) : (
+                                      <span className="text-muted-foreground italic normal-case font-medium">
+                                        Tanpa No. PO customer
+                                      </span>
+                                    )}
                                   </p>
-                                  <p className="text-[9px] text-muted-foreground font-medium uppercase">
-                                    {so.customer?.customer_name}
+                                  <p className="text-[9px] text-muted-foreground font-medium uppercase truncate">
+                                    {so.so_kode} · {so.customer?.customer_name}
                                   </p>
                                 </div>
                                 <Badge
