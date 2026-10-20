@@ -36,16 +36,19 @@ import {
   User,
   Ban,
   FileText,
+  Pencil,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import {
+  canEditSO,
   computeSoItemRemaining,
   fetchSoItemFulfillment,
   pendingSoDos,
   type SoItemFulfillment,
 } from "@/lib/so-reguler";
 import { SoStatusBadge } from "@/components/so-reguler/so-status-badge";
+import { SoRevisionHistory } from "@/components/so-reguler/so-revision-history";
 import {
   cancelSoReguler,
   syncSoRegulerStatus,
@@ -68,6 +71,7 @@ export default function SoRegulerDetailPage({
     Map<number, SoItemFulfillment>
   >(new Map());
   const [isModerator, setIsModerator] = useState(false);
+  const [canEdit, setCanEdit] = useState(false);
 
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState("");
@@ -111,9 +115,9 @@ export default function SoRegulerDetailPage({
         .from("user_roles")
         .select("roles(name)")
         .eq("user_id", user.id);
-      setIsModerator(
-        (data || []).some((r: any) => r.roles?.name === "moderator"),
-      );
+      const roleNames = (data || []).map((r: any) => r.roles?.name);
+      setIsModerator(roleNames.includes("moderator"));
+      setCanEdit(canEditSO(roleNames));
     });
   }, [soId]);
 
@@ -180,6 +184,11 @@ export default function SoRegulerDetailPage({
                   {so.so_kode}
                 </h1>
                 <SoStatusBadge status={so.so_status} />
+                {so.so_revision > 0 && (
+                  <Badge variant="outline" className="text-[10px] font-bold">
+                    Rev. {so.so_revision}
+                  </Badge>
+                )}
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
                 SO Reguler{so.kategori ? ` · ${so.kategori}` : ""}
@@ -204,6 +213,15 @@ export default function SoRegulerDetailPage({
                 }
               >
                 <Truck className="h-4 w-4" /> Buat DO dari SO
+              </Button>
+            )}
+            {canEdit && !isClosed && (
+              <Button
+                variant="outline"
+                className="gap-2 font-bold text-xs h-9 uppercase"
+                onClick={() => router.push(`/so-reguler/so/${so.id}/edit`)}
+              >
+                <Pencil className="h-4 w-4" /> Edit
               </Button>
             )}
             {isModerator && !isClosed && (
@@ -424,6 +442,8 @@ export default function SoRegulerDetailPage({
           </Table>
         </div>
       </Content>
+
+      <SoRevisionHistory soId={soId} refreshKey={so.updated_at} />
 
       <Dialog open={cancelOpen} onOpenChange={setCancelOpen}>
         <DialogContent className="sm:max-w-md">

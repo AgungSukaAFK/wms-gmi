@@ -35,6 +35,8 @@ import {
 import { cn } from "@/lib/utils";
 
 export interface SoFormItem {
+  /** so_reguler_items.id -- hanya terisi untuk item lama saat Edit SO. */
+  id?: number;
   part_id: number;
   part_number: string;
   part_name: string;
@@ -57,6 +59,28 @@ export interface PartStock {
 }
 
 export type StockCoverage = "full" | "partial" | "none";
+
+/**
+ * Edit SO: batas per item lama yang sudah dipakai PO/DO (key = part_id).
+ * minQty = qty PO + qty DO dari stok (soItemMinQty); referenced = ada baris
+ * PO/DO mana pun (termasuk PO rejected / DO cancelled) -> tidak bisa dihapus.
+ */
+export interface SoItemLock {
+  minQty: number;
+  qtyPo: number;
+  qtyDo: number;
+  referenced: boolean;
+}
+
+/** Pesan error qty item (null = valid). */
+export function soItemQtyError(
+  item: Pick<SoFormItem, "qty">,
+  lock?: SoItemLock,
+): string | null {
+  if (!Number.isInteger(item.qty) || item.qty <= 0) return "Qty wajib > 0";
+  if (lock && item.qty < lock.minQty) return `Min ${lock.minQty}`;
+  return null;
+}
 
 /** Status pemenuhan indikatif: stok seluruh gudang aktif vs qty SO. */
 export function stockCoverage(
@@ -211,12 +235,15 @@ export function SoItemTable({
   onItemsChange,
   stock,
   showErrors,
+  locks,
 }: {
   items: SoFormItem[];
   onItemsChange: (items: SoFormItem[]) => void;
   stock: Record<number, PartStock>;
   /** Tandai qty yang tidak valid (setelah user mencoba menyimpan). */
   showErrors?: boolean;
+  /** Edit SO: batas item yang sudah dipakai PO/DO, key = part_id. */
+  locks?: Record<number, SoItemLock>;
 }) {
   const supabase = createClient();
   const [open, setOpen] = useState(false);
@@ -307,6 +334,7 @@ export function SoItemTable({
     );
 
   const removeItem = (partId: number) => {
+    if (locks?.[partId]?.referenced) return;
     const index = items.findIndex((i) => i.part_id === partId);
     const removed = items[index];
     if (!removed) return;
@@ -319,8 +347,10 @@ export function SoItemTable({
 
   const clearAll = () => {
     const before = items;
-    onItemsChange([]);
-    toast(`${before.length} barang dihapus`, {
+    // Item yang sudah dipakai PO/DO tetap tinggal.
+    const kept = items.filter((i) => locks?.[i.part_id]?.referenced);
+    onItemsChange(kept);
+    toast(`${before.length - kept.length} barang dihapus`, {
       action: { label: "Urungkan", onClick: () => onItemsChange(before) },
     });
   };
@@ -533,7 +563,12 @@ export function SoItemTable({
             </TableHeader>
             <TableBody>
               {visibleItems.map((item) => {
-                const invalid = !Number.isInteger(item.qty) || item.qty <= 0;
+                const lock = locks?.[item.part_id];
+                const minQty = Math.max(1, lock?.minQty ?? 1);
+                const qtyError = soItemQtyError(item, lock);
+                const invalid = qtyError !== null;
+                // Qty di bawah batas PO/DO langsung ditandai, tanpa tunggu submit.
+                const showQtyError = invalid && (showErrors || !!lock);
                 return (
                   <TableRow
                     key={item.part_id}
@@ -553,6 +588,15 @@ export function SoItemTable({
                         <span className="text-[11px] text-muted-foreground">
                           {item.part_name}
                         </span>
+                        {lock && (lock.qtyPo > 0 || lock.qtyDo > 0) && (
+                          <span
+                            className="mt-0.5 text-[9px] font-semibold text-primary"
+                            title="Qty tidak bisa diturunkan di bawah qty yang sudah di-PO / dikirim dari stok"
+                          >
+                            Sudah PO {fmt(lock.qtyPo)} · DO {fmt(lock.qtyDo)} ·
+                            min {fmt(lock.minQty)}
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell className="py-2">
@@ -563,10 +607,10 @@ export function SoItemTable({
                             variant="outline"
                             size="icon"
                             className="h-8 w-7 rounded-r-none"
-                            disabled={item.qty <= 1}
+                            disabled={item.qty <= minQty}
                             onClick={() =>
                               updateItem(item.part_id, {
-                                qty: Math.max(1, item.qty - 1),
+                                qty: Math.max(minQty, item.qty - 1),
                               })
                             }
                           >
@@ -574,7 +618,7 @@ export function SoItemTable({
                           </Button>
                           <Input
                             type="number"
-                            min={1}
+                            min={minQty}
                             step={1}
                             inputMode="numeric"
                             value={item.qty || ""}
@@ -586,8 +630,7 @@ export function SoItemTable({
                             }
                             className={cn(
                               "h-8 w-14 rounded-none border-x-0 px-1 text-center text-xs font-semibold [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none",
-                              invalid &&
-                                showErrors &&
+                              showQtyError &&
                                 "border-destructive ring-1 ring-destructive",
                             )}
                           />
@@ -608,14 +651,12 @@ export function SoItemTable({
                         <span
                           className={cn(
                             "text-[9px] uppercase",
-                            invalid && showErrors
+                            showQtyError
                               ? "font-semibold text-destructive"
                               : "text-muted-foreground",
                           )}
                         >
-                          {invalid && showErrors
-                            ? "Qty wajib > 0"
-                            : item.satuan}
+                          {showQtyError ? qtyError : item.satuan}
                         </span>
                       </div>
                     </TableCell>
@@ -644,8 +685,13 @@ export function SoItemTable({
                         variant="ghost"
                         size="icon"
                         onClick={() => removeItem(item.part_id)}
+                        disabled={lock?.referenced}
                         className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                        title="Hapus barang"
+                        title={
+                          lock?.referenced
+                            ? "Tidak bisa dihapus: sudah dipakai PO/DO"
+                            : "Hapus barang"
+                        }
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

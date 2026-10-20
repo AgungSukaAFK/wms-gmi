@@ -18,6 +18,18 @@ export function canCreateSO(roles: RoleLike[] | null | undefined): boolean {
   });
 }
 
+// Role yang boleh MENGEDIT SO Reguler (keputusan user 2026-10-20). Admin
+// sengaja tidak termasuk. Dicek juga di fungsi DB update_so_reguler.
+export const SO_EDIT_ROLES = ["marketing", "moderator"];
+
+export function canEditSO(roles: RoleLike[] | null | undefined): boolean {
+  if (!roles) return false;
+  return roles.some((r) => {
+    const name = typeof r === "string" ? r : r?.name;
+    return name != null && SO_EDIT_ROLES.includes(name);
+  });
+}
+
 // Kategori SO (keputusan user 2026-10-19). SO lama (s.d. 2026-10-16) bisa
 // berisi kategori gaya MR ('New Item', dst.) atau NULL -- cukup ditampilkan.
 export const SO_KATEGORI_OPTIONS = [
@@ -163,6 +175,19 @@ export function computeSoItemRemaining(
     sisaPo: Math.max(0, Math.min(sisaDo, qty - qtyPo - doFromStock)),
     poPoolAvailable: Math.max(0, qtyPoReceived - qtyDoFromPo),
   };
+}
+
+/**
+ * Qty minimum item SO saat Edit SO: qty yang sudah "terpakai" = qty PO
+ * (non-rejected) + qty DO dari stok biasa. Di bawah ini sisaPo/sisaDo jadi
+ * negatif (PO/DO melebihi SO). Mirror rumus di fungsi DB update_so_reguler.
+ */
+export function soItemMinQty(
+  f: Pick<SoItemFulfillment, "qtyPo" | "qtyDo" | "qtyDoFromPo"> | undefined,
+) {
+  const qtyPo = f?.qtyPo ?? 0;
+  const qtyDo = f?.qtyDo ?? 0;
+  return qtyPo + qtyDo - Math.min(f?.qtyDoFromPo ?? 0, qtyDo);
 }
 
 /**

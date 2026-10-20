@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import {
   SO_KATEGORI_OPTIONS,
   canCreateSO,
+  canEditSO,
   refreshSoStatus,
 } from "@/lib/so-reguler";
 
@@ -185,6 +186,88 @@ export async function cancelSoReguler(soId: number, reason: string) {
 
   revalidatePath("/so-reguler/so");
   return { success: true };
+}
+
+/**
+ * EDIT SO REGULER (marketing/moderator).
+ *
+ * Semua validasi distribusi qty (item terpakai PO/DO tidak bisa dihapus/
+ * diganti, qty >= qty terpakai, customer terkunci kalau sudah ada DO) dan
+ * penyimpanan + riwayat revisi dijalankan atomik di fungsi DB
+ * update_so_reguler. Setelah itu status SO dihitung ulang (mis. qty dinaikkan
+ * pada SO yang sudah selesai -> balik partial).
+ */
+export async function updateSoReguler(
+  soId: number,
+  data: {
+    expected_updated_at: string;
+    reason: string;
+    so_kode: string;
+    so_tanggal: string;
+    so_due_date?: string | null;
+    kategori: string | null;
+    customer_po_no?: string;
+    customer_po_date?: string | null;
+    customer_po_received_date?: string | null;
+    marketing_name?: string;
+    customer_id: number;
+    remarks?: string;
+    items: {
+      id?: number;
+      part_id: number;
+      part_number: string;
+      part_name: string;
+      satuan: string;
+      qty: number;
+      remarks?: string;
+    }[];
+  },
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Tidak terautentikasi." };
+
+  const roles = await getRoleNames(supabase, user.id);
+  if (!canEditSO(roles))
+    return {
+      error: "Akses ditolak. Hanya marketing/moderator yang bisa mengedit SO.",
+    };
+  if (!data.reason?.trim()) return { error: "Alasan perubahan wajib diisi." };
+
+  const { data: result, error } = await supabase.rpc("update_so_reguler", {
+    p_so_id: soId,
+    p_expected_updated_at: data.expected_updated_at,
+    p_reason: data.reason.trim(),
+    p_header: {
+      so_kode: data.so_kode,
+      so_tanggal: data.so_tanggal,
+      so_due_date: data.so_due_date || null,
+      kategori: data.kategori,
+      customer_id: data.customer_id,
+      customer_po_no: data.customer_po_no ?? null,
+      customer_po_date: data.customer_po_date || null,
+      customer_po_received_date: data.customer_po_received_date || null,
+      marketing_name: data.marketing_name ?? null,
+      remarks: data.remarks ?? null,
+    },
+    p_items: data.items.map((i) => ({
+      id: i.id ?? null,
+      part_id: i.part_id,
+      part_number: i.part_number,
+      part_name: i.part_name,
+      satuan: i.satuan,
+      qty: i.qty,
+      remarks: i.remarks ?? null,
+    })),
+  });
+  if (error) return { error: error.message };
+
+  await refreshSoStatus(supabase, soId);
+  revalidatePath("/so-reguler/so");
+  revalidatePath(`/so-reguler/so/${soId}`);
+  return { success: true, revision_no: (result as any)?.revision_no as number };
 }
 
 /** Segarkan status SO (dipanggil saat detail SO dibuka). */
