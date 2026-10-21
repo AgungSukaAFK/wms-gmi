@@ -430,6 +430,8 @@ export async function approveMR(
     qty_pr: number;
     qty_sharestock_total: number;
     sharestocks: { source_cabang_id: number; qty: number; deadline: string | null }[];
+    // Ditolak per item oleh approver terakhir (wajib keterangan).
+    reject_reason?: string;
   };
   const plans: ItemPlan[] = [];
 
@@ -458,6 +460,22 @@ export async function approveMR(
     for (const mrItemRow of mrItemRows || []) {
       const alloc = allocByItem.get(mrItemRow.id);
       const qtyRequest = Number(mrItemRow.qty_request) || 0;
+      if (alloc?.rejected) {
+        const reason = String(alloc.reject_reason || "").trim();
+        if (!reason) {
+          return {
+            error: `Keterangan penolakan item ${mrItemRow.part_number} wajib diisi.`,
+          };
+        }
+        plans.push({
+          mr_item_id: mrItemRow.id,
+          qty_pr: 0,
+          qty_sharestock_total: 0,
+          sharestocks: [],
+          reject_reason: reason,
+        });
+        continue;
+      }
       if (!alloc) {
         plans.push({
           mr_item_id: mrItemRow.id,
@@ -530,6 +548,13 @@ export async function approveMR(
         })),
       });
     }
+
+    if (
+      plans.length > 0 &&
+      plans.every((p) => p.reject_reason !== undefined)
+    ) {
+      return { error: "Semua item ditolak -- gunakan Tolak Request." };
+    }
   }
 
   // 4. Update MR -- conditional pada status 'open': di step terakhir status
@@ -560,6 +585,15 @@ export async function approveMR(
         .delete()
         .in("mr_item_id", plans.map((p) => p.mr_item_id));
       await supabase
+        .from("mr_items")
+        .update({
+          item_status: "active",
+          item_reject_reason: null,
+          item_rejected_by: null,
+          item_rejected_at: null,
+        })
+        .in("id", plans.map((p) => p.mr_item_id));
+      await supabase
         .from("mrs")
         .update({ approvals: originalApprovals, mr_status: "open" })
         .eq("id", mrId);
@@ -581,11 +615,16 @@ export async function approveMR(
         if (insErr) return rollback(insErr.message);
       }
 
+      const rejected = plan.reject_reason !== undefined;
       const { error: updErr } = await supabase
         .from("mr_items")
         .update({
           qty_pr: plan.qty_pr,
           qty_sharestock_total: plan.qty_sharestock_total,
+          item_status: rejected ? "rejected" : "active",
+          item_reject_reason: rejected ? plan.reject_reason : null,
+          item_rejected_by: rejected ? user.id : null,
+          item_rejected_at: rejected ? new Date().toISOString() : null,
         })
         .eq("id", plan.mr_item_id);
       if (updErr) return rollback(updErr.message);

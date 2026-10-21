@@ -426,7 +426,16 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
       if (!alloc) {
         const { error: defErr } = await supabase
           .from("mr_items")
-          .update({ qty_pr: freshItem?.qty_request ?? 0, qty_sharestock_total: 0 })
+          // Alokasi ulang oleh moderator = keputusan baru; tolak per item
+          // dari approval sebelumnya ikut di-reset.
+          .update({
+            qty_pr: freshItem?.qty_request ?? 0,
+            qty_sharestock_total: 0,
+            item_status: "active",
+            item_reject_reason: null,
+            item_rejected_by: null,
+            item_rejected_at: null,
+          })
           .eq("id", itemId);
         if (defErr) return { error: defErr.message };
         continue;
@@ -452,6 +461,10 @@ export async function moderatorEditMR(mrId: number, payload: ModeratorMrEditPayl
         .update({
           qty_pr: Math.max(0, (freshItem?.qty_request ?? 0) - shareTotal),
           qty_sharestock_total: shareTotal,
+          item_status: "active",
+          item_reject_reason: null,
+          item_rejected_by: null,
+          item_rejected_at: null,
         })
         .eq("id", itemId);
       if (updErr) return { error: updErr.message };
@@ -610,7 +623,7 @@ export async function moderatorEditShareStockAllocations(
 
   const { data: freshItems, error: freshItemsError } = await supabase
     .from("mr_items")
-    .select("id, part_number, qty_request, qty_pr, qty_sharestock_total")
+    .select("id, part_number, qty_request, qty_pr, qty_sharestock_total, item_status")
     .eq("mr_id", mrId)
     .in("id", itemIds);
   if (freshItemsError) return { error: freshItemsError.message };
@@ -618,6 +631,10 @@ export async function moderatorEditShareStockAllocations(
   for (const id of itemIds) {
     if (!freshById.has(id)) {
       return { error: `Item (id ${id}) tidak ditemukan di MR ini.` };
+    }
+    const fresh: any = freshById.get(id);
+    if (fresh.item_status === "rejected") {
+      return { error: `Item ${fresh.part_number} sudah ditolak approver, tidak bisa dialokasikan.` };
     }
   }
 

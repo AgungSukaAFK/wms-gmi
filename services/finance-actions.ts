@@ -695,7 +695,7 @@ async function validateFinishPartsToMr(
   const [{ data: mrItems }, { data: pendingRows }] = await Promise.all([
     supabase
       .from("mr_items")
-      .select("id, part_id, part_number, qty_request, qty_received, mrs!inner(mr_kode, mr_status, cabang_id)")
+      .select("id, part_id, part_number, qty_request, qty_received, item_status, mrs!inner(mr_kode, mr_status, cabang_id)")
       .in("id", ids),
     supabase
       .from("job_costing_finish_parts")
@@ -718,6 +718,9 @@ async function validateFinishPartsToMr(
     const mr = Array.isArray(mrItem.mrs) ? mrItem.mrs[0] : mrItem.mrs;
     if (mr?.mr_status !== "approved") {
       return { error: `MR ${mr?.mr_kode} tidak berstatus approved (status: ${mr?.mr_status}).` };
+    }
+    if (mrItem.item_status === "rejected") {
+      return { error: `Item ${mrItem.part_number} di MR ${mr?.mr_kode} sudah ditolak approver.` };
     }
     if (mrItem.part_id !== line.part_id) {
       return { error: `Finish part untuk MR ${mr?.mr_kode} harus part ${mrItem.part_number}.` };

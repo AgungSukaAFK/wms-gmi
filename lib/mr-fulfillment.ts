@@ -174,11 +174,13 @@ export async function recomputeMrStatus(supabase: any, mrId: number) {
     .maybeSingle();
   if (!mr || !MR_FULFILLED_STATUSES.includes(mr.mr_status)) return;
 
-  const { data: rows } = await supabase
+  const { data: allRows } = await supabase
     .from("mr_items")
-    .select("qty_request, qty_received")
+    .select("qty_request, qty_received, item_status")
     .eq("mr_id", mrId);
-  if (!rows || rows.length === 0) return;
+  // Item yang ditolak per-item oleh approver terakhir tidak dihitung.
+  const rows = (allRows || []).filter((i: any) => i.item_status !== "rejected");
+  if (rows.length === 0) return;
   const allFulfilled = rows.every(
     (i: any) => (Number(i.qty_received) || 0) >= (Number(i.qty_request) || 0),
   );

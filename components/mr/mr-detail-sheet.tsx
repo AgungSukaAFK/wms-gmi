@@ -396,6 +396,11 @@ export function MRDetailSheet({
                                   {item.remarks}
                                 </p>
                               )}
+                              {item.item_status === "rejected" && (
+                                <p className="text-[10px] font-bold text-destructive normal-case mt-0.5 whitespace-normal wrap-break-word">
+                                  Ditolak: {item.item_reject_reason}
+                                </p>
+                              )}
                             </TableCell>
                             <TableCell className="text-[11px] font-bold text-foreground text-right pr-4 py-2 whitespace-nowrap">
                               {item.qty_request}{" "}

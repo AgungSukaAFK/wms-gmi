@@ -277,6 +277,11 @@ export default function MRPrintPage() {
                           Catatan: {item.remarks}
                         </div>
                       )}
+                      {item.item_status === "rejected" && (
+                        <div className="mt-1 text-[10px] font-bold text-red-700">
+                          DITOLAK: {item.item_reject_reason}
+                        </div>
+                      )}
                     </td>
                     <td className="border border-slate-900 p-2 text-right font-bold">
                       {item.qty_request}

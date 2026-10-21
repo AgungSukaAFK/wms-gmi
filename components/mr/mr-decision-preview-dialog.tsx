@@ -29,6 +29,8 @@ interface Allocation {
   qty_sharestock_total: number;
   sharestocks: AllocationSharestock[];
   deadline?: string;
+  rejected?: boolean;
+  reject_reason?: string;
 }
 
 interface Cabang {
@@ -188,17 +190,33 @@ export function MrDecisionPreviewDialog({
                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                           {alloc.part_number}
                         </div>
+                        {alloc.rejected && (
+                          <div className="text-[10px] text-destructive font-semibold mt-1">
+                            Ditolak: {alloc.reject_reason}
+                          </div>
+                        )}
                       </td>
                       <td className="border border-slate-900 p-2 text-right font-bold">
                         {alloc.qty_request}{" "}
                         {satuanByItemId.get(alloc.mr_item_id) || ""}
                       </td>
-                      <td className="border border-slate-900 p-2 text-right font-bold text-primary">
-                        {alloc.qty_pr}
-                      </td>
-                      <td className="border border-slate-900 p-2 text-right font-bold text-success">
-                        {alloc.qty_sharestock_total}
-                      </td>
+                      {alloc.rejected ? (
+                        <td
+                          colSpan={2}
+                          className="border border-slate-900 p-2 text-center font-black uppercase text-destructive"
+                        >
+                          Ditolak
+                        </td>
+                      ) : (
+                        <>
+                          <td className="border border-slate-900 p-2 text-right font-bold text-primary">
+                            {alloc.qty_pr}
+                          </td>
+                          <td className="border border-slate-900 p-2 text-right font-bold text-success">
+                            {alloc.qty_sharestock_total}
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>

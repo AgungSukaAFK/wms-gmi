@@ -143,6 +143,7 @@ export function EditShareStockAllocationDialog({
         .from("mr_items")
         .select("id, part_id, part_number, part_name, qty_request")
         .eq("mr_id", mrId)
+        .neq("item_status", "rejected")
         .order("created_at");
 
       const itemIds = (itemsData || []).map((i: any) => i.id);

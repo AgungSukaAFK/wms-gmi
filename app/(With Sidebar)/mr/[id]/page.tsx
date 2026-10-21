@@ -317,6 +317,8 @@ export default function MRDetailPage({
         qty_pr: item.qty_pr || item.qty_request,
         sharestocks: [],
         deadline: "",
+        rejected: false,
+        reject_reason: "",
       }));
       setAllocations(initialAllocations);
 
@@ -741,6 +743,15 @@ export default function MRDetailPage({
     const mrDueDate = mr?.mr_due_date
       ? String(mr.mr_due_date).slice(0, 10)
       : "";
+    const missingReason = allocations.find(
+      (a) => a.rejected && !String(a.reject_reason || "").trim(),
+    );
+    if (missingReason) {
+      return `Keterangan penolakan item ${missingReason.part_number} wajib diisi.`;
+    }
+    if (allocations.length > 0 && allocations.every((a) => a.rejected)) {
+      return "Semua item ditolak -- gunakan tombol Tolak Request.";
+    }
     const missingDeadline = allocations.find(
       (a) => Number(a.qty_sharestock_total) > 0 && !a.deadline,
     );
@@ -821,6 +832,31 @@ export default function MRDetailPage({
         }
         return a;
       }),
+    );
+  };
+
+  // Tolak per item (khusus approver terakhir): item ditolak tidak masuk PR
+  // maupun Share Stock, jadi alokasinya dikosongkan.
+  const setItemRejected = (itemId: number, rejected: boolean) => {
+    setAllocations((prev) =>
+      prev.map((a) =>
+        a.mr_item_id === itemId
+          ? {
+              ...a,
+              rejected,
+              sharestocks: [],
+              qty_sharestock_total: 0,
+              qty_pr: rejected ? 0 : a.qty_request,
+              deadline: "",
+            }
+          : a,
+      ),
+    );
+  };
+
+  const updateRejectReason = (itemId: number, reject_reason: string) => {
+    setAllocations((prev) =>
+      prev.map((a) => (a.mr_item_id === itemId ? { ...a, reject_reason } : a)),
     );
   };
 
@@ -1387,6 +1423,18 @@ export default function MRDetailPage({
                                 {item.remarks}
                               </p>
                             )}
+                            {item.item_status === "rejected" && (
+                              <div className="mt-1 space-y-0.5">
+                                <Badge className="bg-destructive/10 text-destructive border-none text-[8px] h-4 font-black uppercase">
+                                  Item Ditolak
+                                </Badge>
+                                {item.item_reject_reason && (
+                                  <p className="text-[10px] font-medium text-destructive">
+                                    {item.item_reject_reason}
+                                  </p>
+                                )}
+                              </div>
+                            )}
                           </TableCell>
                           <TableCell className="text-center">
                             <Badge
@@ -1628,7 +1676,11 @@ export default function MRDetailPage({
                 {allocations.map((alloc) => (
                   <div
                     key={alloc.mr_item_id}
-                    className="border border-border rounded-xl overflow-hidden bg-background hover:border-primary/50 transition-all p-5 space-y-4 shadow-sm"
+                    className={`border rounded-xl overflow-hidden bg-background transition-all p-5 space-y-4 shadow-sm ${
+                      alloc.rejected
+                        ? "border-destructive/40 bg-destructive/5"
+                        : "border-border hover:border-primary/50"
+                    }`}
                   >
                     <div className="flex flex-col xl:flex-row xl:items-start xl:justify-between gap-4">
                       <div className="min-w-0">
@@ -1639,23 +1691,68 @@ export default function MRDetailPage({
                           <span className="rounded-md border border-border bg-muted/50 px-2 py-1 text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
                             Req Qty: {alloc.qty_request}
                           </span>
-                          <span className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1 text-[10px] font-bold text-primary uppercase tracking-widest">
-                            PR Plan: {alloc.qty_pr}
-                          </span>
-                          <span className="rounded-md border border-success/20 bg-success/5 px-2 py-1 text-[10px] font-bold text-success uppercase tracking-widest">
-                            Share Plan: {alloc.qty_sharestock_total}
-                          </span>
+                          {alloc.rejected ? (
+                            <span className="rounded-md border border-destructive/30 bg-destructive/10 px-2 py-1 text-[10px] font-bold text-destructive uppercase tracking-widest">
+                              Item Ditolak
+                            </span>
+                          ) : (
+                            <>
+                              <span className="rounded-md border border-primary/20 bg-primary/5 px-2 py-1 text-[10px] font-bold text-primary uppercase tracking-widest">
+                                PR Plan: {alloc.qty_pr}
+                              </span>
+                              <span className="rounded-md border border-success/20 bg-success/5 px-2 py-1 text-[10px] font-bold text-success uppercase tracking-widest">
+                                Share Plan: {alloc.qty_sharestock_total}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
-                      <Button
-                        size="sm"
-                        onClick={() => addShareStockLine(alloc.mr_item_id)}
-                        className="h-9 w-full xl:w-auto gap-2 bg-background text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground font-bold text-xs shadow-sm transition-all"
-                      >
-                        <PlusCircle className="h-3.5 w-3.5" /> Tambah Alokasi
-                        Stok
-                      </Button>
+                      <div className="flex flex-col sm:flex-row gap-2 w-full xl:w-auto">
+                        {!alloc.rejected && (
+                          <Button
+                            size="sm"
+                            onClick={() => addShareStockLine(alloc.mr_item_id)}
+                            className="h-9 w-full xl:w-auto gap-2 bg-background text-primary border border-primary/30 hover:bg-primary hover:text-primary-foreground font-bold text-xs shadow-sm transition-all"
+                          >
+                            <PlusCircle className="h-3.5 w-3.5" /> Tambah
+                            Alokasi Stok
+                          </Button>
+                        )}
+                        {!showModAllocationForm && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() =>
+                              setItemRejected(alloc.mr_item_id, !alloc.rejected)
+                            }
+                            className={`h-9 w-full xl:w-auto gap-2 font-bold text-xs shadow-sm transition-all ${
+                              alloc.rejected
+                                ? "border-border text-foreground"
+                                : "border-destructive/30 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                            }`}
+                          >
+                            <ThumbsDown className="h-3.5 w-3.5" />
+                            {alloc.rejected ? "Batal Tolak" : "Tolak Item"}
+                          </Button>
+                        )}
+                      </div>
                     </div>
+
+                    {alloc.rejected && (
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold text-destructive uppercase tracking-widest">
+                          Keterangan Penolakan *
+                        </Label>
+                        <Textarea
+                          placeholder="Alasan item ini ditolak..."
+                          className="min-h-20 text-xs bg-background"
+                          value={alloc.reject_reason || ""}
+                          onChange={(e) =>
+                            updateRejectReason(alloc.mr_item_id, e.target.value)
+                          }
+                        />
+                      </div>
+                    )}
 
                     {alloc.sharestocks.length > 0 && (
                       <div className="flex flex-col sm:flex-row sm:items-center gap-2 rounded-lg border border-warning/30 bg-warning/5 p-2.5">

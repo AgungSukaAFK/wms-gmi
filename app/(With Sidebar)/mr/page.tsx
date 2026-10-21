@@ -221,11 +221,12 @@ export default function MaterialRequestPage() {
 
     const { data: mrItemsData } = await supabase
       .from("mr_items")
-      .select("mr_id, qty_request, qty_received")
+      .select("mr_id, qty_request, qty_received, item_status")
       .in("mr_id", mrIds);
 
     const qtyByMr = new Map<number, { req: number; recv: number }>();
     for (const item of mrItemsData || []) {
+      if (item.item_status === "rejected") continue;
       const cur = qtyByMr.get(item.mr_id) || { req: 0, recv: 0 };
       cur.req += item.qty_request || 0;
       cur.recv += item.qty_received || 0;
@@ -416,6 +417,7 @@ export default function MaterialRequestPage() {
       // (Menunggu/Proses PO/Sudah PO) ditambah "Selesai" karena di sini kita
       // bisa lacak sampai barang diterima (GA tidak).
       const deriveStatusBarang = (item: any) => {
+        if (item.item_status === "rejected") return "Ditolak";
         if (!item.qty_request) return "-";
         const hasPr = (prCodesByMrItem.get(item.id) || []).length > 0;
         const hasPo = (poCodesByMrItem.get(item.id) || []).length > 0;
@@ -467,6 +469,7 @@ export default function MaterialRequestPage() {
           "QTY SHARE STOCK": item.qty_sharestock_total ?? 0,
           "STATUS BARANG": deriveStatusBarang(item),
           CATATAN: item.remarks || "-",
+          "KETERANGAN TOLAK": item.item_reject_reason || "-",
           "KODE PR": uniq(prCodesByMrItem.get(item.id) || []).join(", ") || "-",
           "KODE PO": uniq(poCodesByMrItem.get(item.id) || []).join(", ") || "-",
           "KODE DELIVERY":

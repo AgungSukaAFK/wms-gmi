@@ -183,7 +183,8 @@ export async function getMrForWo(mrId: number) {
   const { data: items, error: itemsError } = await supabase
     .from("mr_items")
     .select("id, part_id, part_number, part_name, satuan, qty_request, qty_wo")
-    .eq("mr_id", mrId);
+    .eq("mr_id", mrId)
+    .neq("item_status", "rejected");
   if (itemsError) return { data: null, error: itemsError.message };
 
   const itemsWithRemaining = await Promise.all(
@@ -257,11 +258,15 @@ export async function createWorkingOrder(data: {
 
     const { data: mrItem } = await supabase
       .from("mr_items")
-      .select("id, qty_request, mr_id, part_id")
+      .select("id, qty_request, mr_id, part_id, item_status")
       .eq("id", item.mr_item_id)
       .single();
     if (!mrItem || mrItem.mr_id !== data.mr_id) {
       violations.push(`${item.part_number}: item MR tidak valid.`);
+      continue;
+    }
+    if (mrItem.item_status === "rejected") {
+      violations.push(`${item.part_number}: item MR ini ditolak approver.`);
       continue;
     }
 

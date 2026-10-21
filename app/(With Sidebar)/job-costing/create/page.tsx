@@ -664,6 +664,7 @@ function JobCostingCreateForm() {
       )
       .eq("part_id", fp.part_id)
       .eq("mrs.mr_status", "approved")
+      .neq("item_status", "rejected")
       .order("id", { ascending: false })
       .limit(30);
     setMrOptions(
