@@ -67,7 +67,12 @@ import { canRevisePO } from "@/lib/po-revision";
 import { PoRevisionHistory } from "@/components/po/po-revision-history";
 import Link from "next/link";
 import { Content } from "@/components/content";
-import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
+import {
+  computePoTotalsFromRecord,
+  formatItemTax,
+  itemTaxFromRow,
+} from "@/lib/po-tax";
+import { PoTaxSummary } from "@/components/po/po-tax-summary";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 import { PoOutstandingPanel } from "@/components/po/po-outstanding-panel";
@@ -151,7 +156,7 @@ export default function PODetailPage({
           po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
+          po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
           po_is_outstanding, cabang_id, cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
@@ -168,7 +173,7 @@ export default function PODetailPage({
       const { data: items } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, mr_id, pr_item_id, vendors(vendor_name)",
+          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, mr_id, pr_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
         )
         .eq("po_id", poId)
         .order("vendor_id", { nullsFirst: false });
@@ -378,25 +383,7 @@ export default function PODetailPage({
     return Object.entries(map);
   }, [poItems]);
 
-  const poSubtotal = poItems.reduce(
-    (sum, it) => sum + it.qty * it.harga,
-    0,
-  );
-  const poTax = po
-    ? computePoTotals({
-        subtotal: poSubtotal,
-        diskonMode: po.po_diskon_mode || "percent",
-        diskonValue: po.po_diskon_value || 0,
-        hargaTermasukPajak: po.po_harga_termasuk_pajak || false,
-        ppnMode: po.po_ppn_mode || "percent",
-        ppnRate: po.po_ppn_rate || 0,
-        ppnAmountManual: po.po_ppn_amount || 0,
-        ongkir: po.po_ongkir || 0,
-        pphMode: po.po_pph_mode || "percent",
-        pphRate: po.po_pph_type ? po.po_pph_rate || 0 : 0,
-        pphAmountManual: po.po_pph_type ? po.po_pph_amount || 0 : 0,
-      })
-    : null;
+  const poTax = po ? computePoTotalsFromRecord(po, poItems) : null;
 
   const formatCurrency = (n: number) =>
     formatPoMoney(n, po?.po_currency);
@@ -945,99 +932,12 @@ export default function PODetailPage({
 
       {poTax && (
         <Content title="Ringkasan Pajak, Diskon & Ongkir">
-          <div className="p-4 bg-muted/40 border border-border rounded-xl space-y-1.5">
-            <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-              <span>Subtotal</span>
-              <span className="text-foreground">
-                {maskedPriceText(canViewPrice, formatCurrency(poTax.subtotal))}
-              </span>
-            </div>
-            {poTax.diskonAmount > 0 && (
-              <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-                <span>
-                  Diskon
-                  {po.po_diskon_mode === "percent"
-                    ? ` (${po.po_diskon_value}%)`
-                    : ""}
-                </span>
-                <span className="text-destructive">
-                  -{" "}
-                  {maskedPriceText(
-                    canViewPrice,
-                    formatCurrency(poTax.diskonAmount),
-                  )}
-                </span>
-              </div>
-            )}
-            {(po.po_ppn_mode === "amount"
-              ? po.po_ppn_amount > 0
-              : po.po_ppn_rate > 0) && (
-              <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-                <span>
-                  PPN (
-                  {po.po_ppn_mode === "amount"
-                    ? "nominal manual"
-                    : `${po.po_ppn_rate}%`}
-                  )
-                  {po.po_harga_termasuk_pajak
-                    ? " — sudah termasuk harga"
-                    : ""}
-                </span>
-                <span className="text-foreground">
-                  {po.po_harga_termasuk_pajak
-                    ? "-"
-                    : `+ ${maskedPriceText(canViewPrice, formatCurrency(poTax.ppnAmount))}`}
-                </span>
-              </div>
-            )}
-            {po.po_ongkir > 0 && (
-              <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
-                <span>Ongkos Kirim</span>
-                <span className="text-foreground">
-                  +{" "}
-                  {maskedPriceText(
-                    canViewPrice,
-                    formatCurrency(po.po_ongkir),
-                  )}
-                </span>
-              </div>
-            )}
-            <div className="flex items-center justify-between text-sm font-black uppercase pt-2 border-t border-border">
-              <span>Total PO</span>
-              <span className="text-primary">
-                {maskedPriceText(canViewPrice, formatCurrency(poTax.totalPo))}
-              </span>
-            </div>
-            {po.po_pph_type && (
-              <>
-                <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1">
-                  <span>
-                    PPh {getPphTypeLabel(po.po_pph_type)} (
-                    {po.po_pph_mode === "amount"
-                      ? "nominal manual"
-                      : `${po.po_pph_rate}%`}
-                    )
-                  </span>
-                  <span className="text-destructive">
-                    -{" "}
-                    {maskedPriceText(
-                      canViewPrice,
-                      formatCurrency(poTax.pphAmount),
-                    )}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-xs font-black uppercase pt-1.5 border-t border-dashed border-border">
-                  <span>Dibayar ke Vendor</span>
-                  <span className="text-foreground">
-                    {maskedPriceText(
-                      canViewPrice,
-                      formatCurrency(poTax.dibayarKeVendor),
-                    )}
-                  </span>
-                </div>
-              </>
-            )}
-          </div>
+          <PoTaxSummary
+            po={po}
+            poTax={poTax}
+            canViewPrice={canViewPrice}
+            formatCurrency={formatCurrency}
+          />
         </Content>
       )}
 
@@ -1128,6 +1028,11 @@ export default function PODetailPage({
                               {maskedPriceText(
                                 canViewPrice,
                                 `${formatCurrency(item.harga)} / ${item.satuan}`,
+                              )}
+                              {poTax?.taxMode === "item" && (
+                                <span className="ml-1 text-primary">
+                                  · {formatItemTax(itemTaxFromRow(item))}
+                                </span>
                               )}
                             </p>
                           </TableCell>

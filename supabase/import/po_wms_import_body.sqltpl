@@ -1,0 +1,424 @@
+-- ---------------------------------------------------------------------
+-- 0. Gudang wajib ada (nama persis di production)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_missing TEXT;
+BEGIN
+  SELECT string_agg(n, ', ') INTO v_missing
+  FROM (SELECT DISTINCT cabang AS n FROM wms_po
+        UNION SELECT DISTINCT cabang FROM wms_item WHERE cabang IS NOT NULL) x
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.cabang c WHERE upper(btrim(c.nama_cabang)) = upper(x.n)
+  );
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'Gudang tidak ditemukan di tabel cabang: %', v_missing;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Skip: nomor PO sudah dipakai PO non-outstanding / PO outstanding
+--    yang sudah ditolak
+-- ---------------------------------------------------------------------
+INSERT INTO wms_report (po_kode, kategori, detail)
+SELECT o.po_kode, 'SKIP: nomor PO dipakai PO non-outstanding',
+       'PO ' || p.po_jenis::text || ' status ' || p.po_status::text
+FROM wms_po o
+JOIN public.pos p ON btrim(p.po_kode) = o.po_kode
+WHERE NOT p.po_is_outstanding;
+
+INSERT INTO wms_report (po_kode, kategori, detail)
+SELECT o.po_kode, 'SKIP: PO outstanding sudah ditolak', NULL
+FROM wms_po o
+JOIN public.pos p ON btrim(p.po_kode) = o.po_kode
+WHERE p.po_is_outstanding AND p.po_status::text = 'rejected';
+
+DELETE FROM wms_item WHERE po_kode IN (SELECT po_kode FROM wms_report WHERE kategori LIKE 'SKIP:%');
+DELETE FROM wms_po WHERE po_kode IN (SELECT po_kode FROM wms_report WHERE kategori LIKE 'SKIP:%');
+
+-- ---------------------------------------------------------------------
+-- 2. Barang yang belum ada: buat otomatis (nama = part number, satuan dari
+--    Excel). Pencocokan tidak peka huruf besar/kecil.
+-- ---------------------------------------------------------------------
+WITH missing AS (
+  SELECT DISTINCT ON (upper(btrim(i.part_number)))
+         btrim(i.part_number) AS part_number, i.satuan
+  FROM wms_item i
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.barang b
+    WHERE upper(btrim(b.part_number)) = upper(btrim(i.part_number))
+  )
+  ORDER BY upper(btrim(i.part_number)), i.po_kode, i.line_no
+),
+ins AS (
+  INSERT INTO public.barang (part_number, part_name, part_satuan)
+  SELECT part_number, part_number, satuan FROM missing
+  ON CONFLICT (part_number) DO NOTHING
+  RETURNING part_number, part_satuan
+)
+INSERT INTO wms_report (po_kode, kategori, detail)
+SELECT NULL, 'Barang baru dibuat (lengkapi nama di halaman Barang)',
+       part_number || ' (' || part_satuan || ')'
+FROM ins;
+
+-- ---------------------------------------------------------------------
+-- 3. Vendor yang belum ada: buat baru (vendor_no GMI-211026NN)
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_name TEXT;
+  v_seq INT := 0;
+  v_no TEXT;
+BEGIN
+  FOR v_name IN
+    SELECT DISTINCT o.vendor_name
+    FROM wms_po o
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.vendors v
+      WHERE regexp_replace(lower(btrim(v.vendor_name)), '\s+', ' ', 'g')
+          = regexp_replace(lower(btrim(o.vendor_name)), '\s+', ' ', 'g')
+    )
+    ORDER BY o.vendor_name
+  LOOP
+    LOOP
+      v_seq := v_seq + 1;
+      v_no := 'GMI-211026' || lpad(v_seq::text, 2, '0');
+      EXIT WHEN NOT EXISTS (SELECT 1 FROM public.vendors WHERE vendor_no = v_no);
+    END LOOP;
+    INSERT INTO public.vendors (vendor_no, vendor_name, is_active)
+    VALUES (v_no, v_name, true);
+    INSERT INTO wms_report (po_kode, kategori, detail)
+    VALUES (NULL, 'Vendor baru dibuat', v_no || ' - ' || v_name);
+  END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 4. Header PO: update PO outstanding yang sudah ada, insert yang baru
+-- ---------------------------------------------------------------------
+INSERT INTO wms_report (po_kode, kategori, detail)
+SELECT o.po_kode, 'PO outstanding lama diupdate', 'status ' || p.po_status::text
+FROM wms_po o
+JOIN public.pos p ON btrim(p.po_kode) = o.po_kode AND p.po_is_outstanding;
+
+UPDATE public.pos p
+SET po_tanggal = o.po_tanggal,
+    po_keterangan = o.keterangan,
+    po_payment_term = o.payment_term,
+    po_currency = o.currency,
+    po_tax_mode = o.tax_mode,
+    po_harga_termasuk_pajak = o.harga_incl,
+    po_ppn_mode = 'percent',
+    po_ppn_rate = o.ppn_rate,
+    po_ppn_amount = 0,
+    po_pph_type = o.pph_type,
+    po_pph_mode = 'percent',
+    po_pph_rate = o.pph_rate,
+    po_pph_amount = 0,
+    cabang_id = COALESCE(p.cabang_id, c.id)
+FROM wms_po o
+JOIN public.cabang c ON upper(btrim(c.nama_cabang)) = upper(o.cabang)
+WHERE btrim(p.po_kode) = o.po_kode AND p.po_is_outstanding;
+
+INSERT INTO public.pos (
+  po_kode, pr_id, po_tanggal, po_keterangan, po_status, po_pic,
+  po_payment_term, po_receive_status, po_currency, po_jenis,
+  po_is_outstanding, approvals, cabang_id, po_tax_mode,
+  po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
+  po_diskon_mode, po_diskon_value, po_ongkir,
+  po_pph_type, po_pph_mode, po_pph_rate, po_pph_amount
+)
+SELECT o.po_kode, NULL, o.po_tanggal, o.keterangan, 'open', 'Import Data PO WMS (ERP)',
+       o.payment_term, 'pending', o.currency, 'reguler',
+       true, '[]'::jsonb, c.id, o.tax_mode,
+       o.harga_incl, 'percent', o.ppn_rate, 0,
+       'percent', 0, 0,
+       o.pph_type, 'percent', o.pph_rate, 0
+FROM wms_po o
+JOIN public.cabang c ON upper(btrim(c.nama_cabang)) = upper(o.cabang)
+WHERE NOT EXISTS (SELECT 1 FROM public.pos p WHERE btrim(p.po_kode) = o.po_kode);
+
+-- ---------------------------------------------------------------------
+-- 5. Item PO. Item lama dicocokkan per (PO, part number, urutan ke-n);
+--    link ke PR & qty diterima dipertahankan.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.wms_match;
+CREATE TEMP TABLE wms_match AS
+WITH s AS (
+  SELECT i.po_kode, i.line_no,
+         row_number() OVER (PARTITION BY i.po_kode, upper(btrim(i.part_number)) ORDER BY i.line_no) AS rn,
+         upper(btrim(i.part_number)) AS pkey
+  FROM wms_item i
+),
+e AS (
+  SELECT pi.id AS po_item_id, btrim(p.po_kode) AS po_kode,
+         row_number() OVER (PARTITION BY pi.po_id, upper(btrim(pi.part_number)) ORDER BY pi.id) AS rn,
+         upper(btrim(pi.part_number)) AS pkey
+  FROM public.po_items pi
+  JOIN public.pos p ON p.id = pi.po_id AND p.po_is_outstanding
+  WHERE btrim(p.po_kode) IN (SELECT po_kode FROM wms_po)
+)
+SELECT s.po_kode, s.line_no, e.po_item_id
+FROM s JOIN e ON e.po_kode = s.po_kode AND e.pkey = s.pkey AND e.rn = s.rn;
+
+DO $$
+DECLARE
+  r RECORD;
+  v_id BIGINT;
+BEGIN
+  FOR r IN
+    SELECT i.*, o.keterangan, p.id AS po_id, m.po_item_id AS existing_id,
+           b.id AS part_id, b.part_number AS b_part_number, b.part_name, b.part_satuan,
+           v.id AS vendor_id
+    FROM wms_item i
+    JOIN wms_po o ON o.po_kode = i.po_kode
+    JOIN public.pos p ON btrim(p.po_kode) = i.po_kode AND p.po_is_outstanding
+    LEFT JOIN wms_match m ON m.po_kode = i.po_kode AND m.line_no = i.line_no
+    JOIN LATERAL (
+      SELECT bb.id, bb.part_number, bb.part_name, bb.part_satuan
+      FROM public.barang bb
+      WHERE upper(btrim(bb.part_number)) = upper(btrim(i.part_number))
+      ORDER BY (bb.part_number = i.part_number) DESC, bb.id
+      LIMIT 1
+    ) b ON true
+    JOIN LATERAL (
+      SELECT vv.id
+      FROM public.vendors vv
+      WHERE regexp_replace(lower(btrim(vv.vendor_name)), '\s+', ' ', 'g')
+          = regexp_replace(lower(btrim(o.vendor_name)), '\s+', ' ', 'g')
+      ORDER BY vv.is_active DESC, vv.id
+      LIMIT 1
+    ) v ON true
+    ORDER BY i.po_kode, i.line_no
+  LOOP
+    IF r.existing_id IS NOT NULL THEN
+      UPDATE public.po_items pi
+      SET qty = GREATEST(r.qty, pi.qty_received),
+          harga = r.harga,
+          vendor_id = r.vendor_id,
+          item_ppn_rate = r.ppn_rate,
+          item_pph_type = r.pph_type,
+          item_pph_rate = r.pph_rate,
+          ost_pr_ref = r.pr_ref,
+          ost_keterangan = r.keterangan
+      WHERE pi.id = r.existing_id
+      RETURNING pi.id INTO v_id;
+      IF (SELECT qty_received FROM public.po_items WHERE id = v_id) > r.qty THEN
+        INSERT INTO wms_report (po_kode, kategori, detail)
+        VALUES (r.po_kode, 'Qty PO dipertahankan (WMS sudah terima > qty Excel)',
+                r.part_number || ': qty Excel ' || r.qty);
+      END IF;
+    ELSE
+      INSERT INTO public.po_items (
+        po_id, mr_id, pr_item_id, part_id, part_number, part_name, satuan,
+        qty, qty_received, harga, vendor_id,
+        item_ppn_rate, item_pph_type, item_pph_rate,
+        ost_pr_ref, ost_keterangan
+      ) VALUES (
+        r.po_id, NULL, NULL, r.part_id, r.b_part_number, r.part_name, r.part_satuan,
+        r.qty, 0, r.harga, r.vendor_id,
+        r.ppn_rate, r.pph_type, r.pph_rate,
+        r.pr_ref, r.keterangan
+      ) RETURNING id INTO v_id;
+    END IF;
+    INSERT INTO wms_map (po_kode, line_no, po_id, po_item_id)
+    VALUES (r.po_kode, r.line_no, r.po_id, v_id);
+  END LOOP;
+END $$;
+
+-- Item lama yang tidak ada lagi di Excel: hapus kalau belum dipakai apa pun,
+-- selain itu dipertahankan & dilaporkan.
+DROP TABLE IF EXISTS pg_temp.wms_orphan;
+CREATE TEMP TABLE wms_orphan AS
+SELECT pi.id, btrim(p.po_kode) AS po_kode, pi.part_number, pi.qty, pi.qty_received, pi.pr_item_id,
+       (pi.qty_received > 0
+        OR pi.pr_item_id IS NOT NULL
+        OR EXISTS (SELECT 1 FROM public.receive_items ri WHERE ri.po_item_id = pi.id)
+        OR EXISTS (SELECT 1 FROM public.job_costing_items j WHERE j.po_item_id = pi.id)
+        OR EXISTS (SELECT 1 FROM public.po_item_pr_links l WHERE l.po_item_id = pi.id)) AS in_use
+FROM public.po_items pi
+JOIN public.pos p ON p.id = pi.po_id AND p.po_is_outstanding
+WHERE btrim(p.po_kode) IN (SELECT po_kode FROM wms_po)
+  AND pi.id NOT IN (SELECT po_item_id FROM wms_map);
+
+INSERT INTO wms_report (po_kode, kategori, detail)
+SELECT po_kode,
+       CASE WHEN in_use THEN 'Item lama tidak ada di Excel, DIPERTAHANKAN (sudah dipakai)'
+            ELSE 'Item lama tidak ada di Excel, dihapus' END,
+       part_number || ' qty ' || qty || ' diterima ' || qty_received
+         || CASE WHEN pr_item_id IS NOT NULL THEN ' (ter-link PR)' ELSE '' END
+FROM wms_orphan;
+
+DELETE FROM public.po_items WHERE id IN (SELECT id FROM wms_orphan WHERE NOT in_use);
+
+-- ---------------------------------------------------------------------
+-- 6. RI import: selisih qty diterima Excel vs WMS (dikurangi RI lain yang
+--    masih menunggu approval).
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.wms_ri_line;
+CREATE TEMP TABLE wms_ri_line AS
+SELECT m.po_kode, m.po_id, pi.id AS po_item_id, pi.mr_id, pi.part_id, pi.part_number,
+       pi.part_name, pi.satuan, i.kts,
+       pi.qty_received,
+       COALESCE((
+         SELECT sum(ri.qty) FROM public.receive_items ri
+         JOIN public.receives rv ON rv.id = ri.ri_id
+         WHERE ri.po_item_id = pi.id AND rv.ri_status = 'open'
+       ), 0) AS pending_qty,
+       COALESCE(ci.id, cp.id) AS cabang_penerima_id
+FROM wms_map m
+JOIN wms_item i ON i.po_kode = m.po_kode AND i.line_no = m.line_no
+JOIN wms_po o ON o.po_kode = m.po_kode
+JOIN public.po_items pi ON pi.id = m.po_item_id
+LEFT JOIN public.cabang ci ON upper(btrim(ci.nama_cabang)) = upper(i.cabang)
+JOIN public.cabang cp ON upper(btrim(cp.nama_cabang)) = upper(o.cabang);
+
+ALTER TABLE wms_ri_line ADD COLUMN delta INT;
+UPDATE wms_ri_line SET delta = kts - qty_received - pending_qty;
+
+INSERT INTO wms_report (po_kode, kategori, detail)
+SELECT po_kode, 'Qty diterima di WMS sudah >= Excel (tidak dibuat RI)',
+       part_number || ': Excel ' || kts || ', WMS ' || qty_received
+         || CASE WHEN pending_qty > 0 THEN ' + RI pending ' || pending_qty ELSE '' END
+FROM wms_ri_line
+WHERE delta < 0;
+
+DO $$
+DECLARE
+  o RECORD;
+  v_kode TEXT;
+  v_n INT;
+  v_ri_id BIGINT;
+BEGIN
+  FOR o IN
+    SELECT w.po_kode, w.ri_kode, w.ri_tanggal, w.ri_keterangan, p.id AS po_id, c.id AS cabang_id
+    FROM wms_po w
+    JOIN public.pos p ON btrim(p.po_kode) = w.po_kode AND p.po_is_outstanding
+    JOIN public.cabang c ON upper(btrim(c.nama_cabang)) = upper(w.cabang)
+    WHERE w.ri_kode IS NOT NULL
+      AND EXISTS (SELECT 1 FROM wms_ri_line l WHERE l.po_kode = w.po_kode AND l.delta > 0)
+    ORDER BY w.po_kode
+  LOOP
+    v_kode := o.ri_kode;
+    v_n := 0;
+    WHILE EXISTS (SELECT 1 FROM public.receives WHERE ri_kode = v_kode) LOOP
+      v_n := v_n + 1;
+      v_kode := o.ri_kode || '-IMP' || CASE WHEN v_n > 1 THEN v_n::text ELSE '' END;
+    END LOOP;
+
+    INSERT INTO public.receives (
+      ri_kode, po_id, cabang_id, ri_pic, ri_tanggal, ri_keterangan,
+      approvals, ri_status, completed_at, ri_is_import
+    ) VALUES (
+      v_kode, o.po_id, o.cabang_id, 'Import Data PO WMS (ERP)', o.ri_tanggal, o.ri_keterangan,
+      '[]'::jsonb, 'completed', o.ri_tanggal::timestamptz, true
+    ) RETURNING id INTO v_ri_id;
+
+    INSERT INTO public.receive_items (
+      ri_id, po_id, mr_id, part_id, part_number, part_name, satuan, qty,
+      po_item_id, cabang_penerima_id
+    )
+    SELECT v_ri_id, l.po_id, l.mr_id, l.part_id, l.part_number, l.part_name, l.satuan, l.delta,
+           l.po_item_id, l.cabang_penerima_id
+    FROM wms_ri_line l
+    WHERE l.po_kode = o.po_kode AND l.delta > 0;
+
+    UPDATE public.po_items pi
+    SET qty_received = pi.qty_received + l.delta
+    FROM wms_ri_line l
+    WHERE l.po_item_id = pi.id AND l.po_kode = o.po_kode AND l.delta > 0;
+
+    INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, notes)
+    SELECT l.part_id, l.cabang_penerima_id, l.delta, 'RI', v_kode,
+           'STOK DITAMBAH via RI | Import ERP (Data PO WMS) | PO ' || o.po_kode
+             || ' | Part: ' || l.part_number || ' | Ref: ' || v_kode
+    FROM wms_ri_line l
+    WHERE l.po_kode = o.po_kode AND l.delta > 0;
+
+    INSERT INTO wms_report (po_kode, kategori, detail)
+    VALUES (o.po_kode, 'RI import dibuat', v_kode);
+  END LOOP;
+END $$;
+
+-- Stok gudang penerima (agregat per part+gudang). Baris delta > 0 selalu
+-- punya faktur, jadi semuanya sudah masuk RI di langkah atas.
+INSERT INTO public.stock (part_id, cabang_id, qty)
+SELECT l.part_id, l.cabang_penerima_id, sum(l.delta)
+FROM wms_ri_line l
+WHERE l.delta > 0
+GROUP BY l.part_id, l.cabang_penerima_id
+ON CONFLICT (part_id, cabang_id)
+DO UPDATE SET qty = public.stock.qty + EXCLUDED.qty, updated_at = now();
+
+-- ---------------------------------------------------------------------
+-- 7. Status penerimaan PO (sama seperti syncPoReceiveAndCompletion)
+-- ---------------------------------------------------------------------
+WITH agg AS (
+  SELECT pi.po_id,
+         bool_and(pi.qty_received >= pi.qty) AS all_received,
+         bool_or(pi.qty_received > 0) AS some_received
+  FROM public.po_items pi
+  WHERE pi.po_id IN (SELECT DISTINCT po_id FROM wms_map)
+  GROUP BY pi.po_id
+)
+UPDATE public.pos p
+SET po_receive_status = CASE WHEN a.all_received THEN 'complete'
+                             WHEN a.some_received THEN 'partial'
+                             ELSE 'pending' END,
+    po_status = CASE WHEN p.po_status::text = 'approved' AND a.all_received THEN 'completed'
+                     WHEN p.po_status::text = 'completed' AND NOT a.all_received THEN 'approved'
+                     ELSE p.po_status::text END::public.doc_status
+FROM agg a
+WHERE a.po_id = p.id;
+
+-- ---------------------------------------------------------------------
+-- 8. Sanity check -- gagal = seluruh import dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad TEXT;
+BEGIN
+  IF (SELECT count(*) FROM wms_map) <> (SELECT count(*) FROM wms_item) THEN
+    RAISE EXCEPTION 'Jumlah baris item tersinkron (%) <> sumber (%)',
+      (SELECT count(*) FROM wms_map), (SELECT count(*) FROM wms_item);
+  END IF;
+
+  SELECT string_agg(btrim(p.po_kode) || ':' || pi.part_number, ', ') INTO v_bad
+  FROM public.po_items pi
+  JOIN public.pos p ON p.id = pi.po_id
+  WHERE pi.po_id IN (SELECT DISTINCT po_id FROM wms_map)
+    AND pi.qty_received > pi.qty;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'qty_received > qty untuk: %', v_bad;
+  END IF;
+
+  SELECT string_agg(l.po_kode, ', ') INTO v_bad
+  FROM wms_ri_line l JOIN wms_po o ON o.po_kode = l.po_kode
+  WHERE l.delta > 0 AND o.ri_kode IS NULL;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Ada qty diterima tanpa faktur untuk PO: %', v_bad;
+  END IF;
+
+  -- Qty diterima WMS harus = Excel untuk baris yang tidak dilaporkan selisih.
+  SELECT string_agg(l.po_kode || ':' || l.part_number, ', ') INTO v_bad
+  FROM wms_ri_line l
+  JOIN public.po_items pi ON pi.id = l.po_item_id
+  WHERE l.delta >= 0 AND l.pending_qty = 0 AND pi.qty_received <> l.kts;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'qty_received tidak sama dengan Kts. Dikirim untuk: %', v_bad;
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ---------------------------------------------------------------------
+-- HASIL
+-- ---------------------------------------------------------------------
+SELECT kategori, count(*) AS jumlah
+FROM wms_report
+GROUP BY kategori
+ORDER BY kategori;
+
+SELECT kategori, po_kode, detail
+FROM wms_report
+WHERE kategori NOT IN ('RI import dibuat', 'PO outstanding lama diupdate')
+ORDER BY kategori, po_kode, detail;

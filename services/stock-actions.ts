@@ -319,7 +319,7 @@ export interface SohProblemReport {
  * di StockClient langsung stage -> apply (lebih cepat untuk ~190rb baris),
  * karena duplikat/pecahan pada dasarnya mustahil terjadi dari data yang
  * sudah di-dedupe di client, dan negatif/part baru sekarang ditangani oleh
- * applySohBatch sendiri (skip & auto-create, bukan pemblokir).
+ * applySohBatch sendiri (diterapkan & auto-create, bukan pemblokir).
  */
 export async function validateSohBatch(
   batchCode: string,
@@ -343,8 +343,9 @@ export async function validateSohBatch(
  * - Update qty riil untuk part yang sudah terdaftar.
  * - Default max_qty jadi 999999 untuk baris yang max-nya belum diset (masih 0).
  * - Auto-create barang baru (part_satuan default "UNIT") + stock row untuk
- *   part yang belum terdaftar, selama qty-nya valid (bukan negatif).
- * - Qty negatif di-skip per baris (dilaporkan, tidak memblokir batch).
+ *   part yang belum terdaftar.
+ * - Qty negatif diterapkan apa adanya -- stok boleh minus untuk keperluan
+ *   audit & stock opname (dilaporkan, tidak memblokir batch).
  * - Duplikat/qty pecahan tetap memblokir seluruh batch (raise exception) --
  *   ini seharusnya mustahil terjadi dari jalur upload web.
  */
@@ -362,7 +363,7 @@ export async function applySohBatch(batchCode: string): Promise<
       maxDefaultedRows: number;
       newPartsCreated: number;
       newStockRows: number;
-      skippedNegativeQty: number;
+      negativeQtyRows: number;
       negativeSamples: SohNegativeSample[];
     }
   | { success: false; error: string }
@@ -386,7 +387,7 @@ export async function applySohBatch(batchCode: string): Promise<
       maxDefaultedRows: Number(row?.max_defaulted_rows ?? 0),
       newPartsCreated: Number(row?.new_parts_created ?? 0),
       newStockRows: Number(row?.new_stock_rows ?? 0),
-      skippedNegativeQty: Number(row?.skipped_negative_qty ?? 0),
+      negativeQtyRows: Number(row?.negative_qty_rows ?? 0),
       negativeSamples: (row?.negative_samples ?? []) as SohNegativeSample[],
     };
   } catch (e: any) {

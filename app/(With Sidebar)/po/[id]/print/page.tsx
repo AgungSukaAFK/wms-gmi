@@ -8,7 +8,12 @@ import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { formatDateDocument, formatDateTime } from "@/lib/utils";
 import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
-import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
+import {
+  computePoTotalsFromRecord,
+  formatItemTax,
+  getPoTaxLines,
+  itemTaxFromRow,
+} from "@/lib/po-tax";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 
 export default function POPrintPage() {
@@ -54,7 +59,7 @@ export default function POPrintPage() {
         po_payment_term, po_pic, approvals,
         po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
         po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-        po_pph_rate, po_pph_amount, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
+        po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
         cabang(nama_cabang),
         prs(pr_kode, cabang(nama_cabang))
       `,
@@ -67,7 +72,7 @@ export default function POPrintPage() {
     let itemsQuery = supabase
       .from("po_items")
       .select(
-        "id, part_number, part_name, satuan, qty, harga, qty_received, vendor_id, vendors(vendor_name)",
+        "id, part_number, part_name, satuan, qty, harga, qty_received, vendor_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
       )
       .eq("po_id", id)
       .order("created_at");
@@ -130,24 +135,8 @@ export default function POPrintPage() {
     );
   }
 
-  const totalNominal = items.reduce(
-    (sum, item) => sum + Number(item.qty || 0) * Number(item.harga || 0),
-    0,
-  );
-
-  const poTax = computePoTotals({
-    subtotal: totalNominal,
-    diskonMode: po.po_diskon_mode || "percent",
-    diskonValue: po.po_diskon_value || 0,
-    hargaTermasukPajak: po.po_harga_termasuk_pajak || false,
-    ppnMode: po.po_ppn_mode || "percent",
-    ppnRate: po.po_ppn_rate || 0,
-    ppnAmountManual: po.po_ppn_amount || 0,
-    ongkir: po.po_ongkir || 0,
-    pphMode: po.po_pph_mode || "percent",
-    pphRate: po.po_pph_type ? po.po_pph_rate || 0 : 0,
-    pphAmountManual: po.po_pph_type ? po.po_pph_amount || 0 : 0,
-  });
+  const poTax = computePoTotalsFromRecord(po, items);
+  const { ppnLines, pphLines } = getPoTaxLines(po, poTax);
 
   const formatCurrency = (value: number) =>
     formatPoMoney(value, po?.po_currency);
@@ -324,6 +313,11 @@ export default function POPrintPage() {
                         <div className="text-[10px] text-slate-500 font-mono mt-0.5">
                           {item.part_number}
                         </div>
+                        {poTax.taxMode === "item" && (
+                          <div className="text-[9px] text-slate-600 mt-0.5">
+                            Pajak: {formatItemTax(itemTaxFromRow(item))}
+                          </div>
+                        )}
                       </td>
                       <td className="border border-slate-900 p-2 text-right font-bold">
                         {item.qty}
@@ -392,19 +386,13 @@ export default function POPrintPage() {
                     </td>
                   </tr>
                 )}
-                {(po.po_ppn_mode === "amount"
-                  ? po.po_ppn_amount > 0
-                  : po.po_ppn_rate > 0) && (
-                  <tr>
+                {ppnLines.map((l) => (
+                  <tr key={l.label}>
                     <td
                       className="border border-slate-900 p-2 text-right font-bold"
                       colSpan={5}
                     >
-                      PPN (
-                      {po.po_ppn_mode === "amount"
-                        ? "nominal manual"
-                        : `${po.po_ppn_rate}%`}
-                      )
+                      {l.label}
                       {po.po_harga_termasuk_pajak
                         ? " — sudah termasuk harga"
                         : ""}
@@ -412,10 +400,10 @@ export default function POPrintPage() {
                     <td className="border border-slate-900 p-2 text-right font-bold">
                       {po.po_harga_termasuk_pajak
                         ? "-"
-                        : `+ ${maskedPriceText(canViewPrice, formatCurrency(poTax.ppnAmount))}`}
+                        : `+ ${maskedPriceText(canViewPrice, formatCurrency(l.amount))}`}
                     </td>
                   </tr>
-                )}
+                ))}
                 {po.po_ongkir > 0 && (
                   <tr>
                     <td
@@ -447,27 +435,25 @@ export default function POPrintPage() {
                     )}
                   </td>
                 </tr>
-                {po.po_pph_type && (
+                {pphLines.length > 0 && (
                   <>
-                    <tr>
-                      <td
-                        className="border border-slate-900 p-2 text-right font-bold"
-                        colSpan={5}
-                      >
-                        PPh {getPphTypeLabel(po.po_pph_type)} (
-                        {po.po_pph_mode === "amount"
-                          ? "nominal manual"
-                          : `${po.po_pph_rate}%`}
-                        )
-                      </td>
-                      <td className="border border-slate-900 p-2 text-right font-bold">
-                        -{" "}
-                        {maskedPriceText(
-                          canViewPrice,
-                          formatCurrency(poTax.pphAmount),
-                        )}
-                      </td>
-                    </tr>
+                    {pphLines.map((l) => (
+                      <tr key={l.label}>
+                        <td
+                          className="border border-slate-900 p-2 text-right font-bold"
+                          colSpan={5}
+                        >
+                          {l.label}
+                        </td>
+                        <td className="border border-slate-900 p-2 text-right font-bold">
+                          -{" "}
+                          {maskedPriceText(
+                            canViewPrice,
+                            formatCurrency(l.amount),
+                          )}
+                        </td>
+                      </tr>
+                    ))}
                     <tr>
                       <td
                         className="border border-slate-900 p-2 text-right font-black"

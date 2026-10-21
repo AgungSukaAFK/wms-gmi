@@ -2,7 +2,13 @@
 // ditampilkan di "Riwayat PO". Modul biasa (bukan "use server") supaya bisa
 // dipakai server action maupun komponen client.
 
-import { computePoTotals, getPphTypeLabel } from "@/lib/po-tax";
+import {
+  computePoTotalsFromRecord,
+  formatItemTax,
+  getPphTypeLabel,
+  itemTaxFromRow,
+  normalizePoTaxMode,
+} from "@/lib/po-tax";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 
 export const PO_REVISION_ROLES = ["purchasing", "moderator"] as const;
@@ -26,6 +32,10 @@ export type PoRevisionItemSnapshot = {
   pr_item_id: number | null;
   pr_kode: string | null;
   so_item_id: number | null;
+  // Pajak per item (snapshot lama sebelum 2026-10-21 tidak punya -> 0/null).
+  item_ppn_rate?: number;
+  item_pph_type?: string | null;
+  item_pph_rate?: number;
 };
 
 export type PoRevisionSnapshot = {
@@ -35,6 +45,8 @@ export type PoRevisionSnapshot = {
   po_payment_term: string | null;
   po_keterangan: string | null;
   po_currency: string;
+  // 'document' | 'item'; snapshot lama tidak punya -> dianggap 'document'.
+  po_tax_mode?: string;
   po_harga_termasuk_pajak: boolean;
   po_ppn_mode: string;
   po_ppn_rate: number;
@@ -99,24 +111,15 @@ export function buildPoRevisionSnapshot(po: any, items: any[]): PoRevisionSnapsh
       pr_item_id: i.pr_item_id ?? null,
       pr_kode: i.pr_kode ?? null,
       so_item_id: i.so_item_id ?? null,
+      ...(() => {
+        const t = itemTaxFromRow(i);
+        return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
+      })(),
     }))
     .sort((a, b) => a.id - b.id);
 
-  const subtotal = itemSnaps.reduce((s, i) => s + i.qty * i.harga, 0);
   const pphType = po.po_pph_type || null;
-  const totals = computePoTotals({
-    subtotal,
-    diskonMode: po.po_diskon_mode === "amount" ? "amount" : "percent",
-    diskonValue: num(po.po_diskon_value),
-    hargaTermasukPajak: Boolean(po.po_harga_termasuk_pajak),
-    ppnMode: po.po_ppn_mode === "amount" ? "amount" : "percent",
-    ppnRate: num(po.po_ppn_rate),
-    ppnAmountManual: num(po.po_ppn_amount),
-    ongkir: num(po.po_ongkir),
-    pphMode: po.po_pph_mode === "amount" ? "amount" : "percent",
-    pphRate: pphType ? num(po.po_pph_rate) : 0,
-    pphAmountManual: pphType ? num(po.po_pph_amount) : 0,
-  });
+  const totals = computePoTotalsFromRecord(po, itemSnaps);
 
   return {
     po_kode: po.po_kode,
@@ -125,6 +128,7 @@ export function buildPoRevisionSnapshot(po: any, items: any[]): PoRevisionSnapsh
     po_payment_term: po.po_payment_term ?? null,
     po_keterangan: po.po_keterangan ?? null,
     po_currency: normalizePoCurrency(po.po_currency),
+    po_tax_mode: normalizePoTaxMode(po.po_tax_mode),
     po_harga_termasuk_pajak: Boolean(po.po_harga_termasuk_pajak),
     po_ppn_mode: po.po_ppn_mode || "percent",
     po_ppn_rate: num(po.po_ppn_rate),
@@ -154,6 +158,7 @@ function headerFields(s: PoRevisionSnapshot) {
   const money = (v: number) => formatPoMoney(v, s.po_currency as any);
   const rate = (mode: string, pct: number, amt: number) =>
     mode === "amount" ? money(amt) : `${pct}%`;
+  const itemMode = normalizePoTaxMode(s.po_tax_mode) === "item";
   return [
     { field: "po_kode", label: "Kode PO", value: text(s.po_kode), price: false },
     { field: "po_tanggal", label: "Tanggal PO", value: text(s.po_tanggal), price: false },
@@ -163,6 +168,12 @@ function headerFields(s: PoRevisionSnapshot) {
     { field: "po_pr_referensi", label: "Referensi PR", value: text(s.po_pr_referensi), price: false },
     { field: "po_currency", label: "Mata Uang", value: s.po_currency, price: true },
     {
+      field: "po_tax_mode",
+      label: "Mode Pajak",
+      value: itemMode ? "Per Item" : "Per Dokumen",
+      price: true,
+    },
+    {
       field: "po_harga_termasuk_pajak",
       label: "Harga Termasuk Pajak",
       value: s.po_harga_termasuk_pajak ? "Ya" : "Tidak",
@@ -171,7 +182,7 @@ function headerFields(s: PoRevisionSnapshot) {
     {
       field: "po_ppn",
       label: "PPN",
-      value: rate(s.po_ppn_mode, s.po_ppn_rate, s.po_ppn_amount),
+      value: itemMode ? "Per item" : rate(s.po_ppn_mode, s.po_ppn_rate, s.po_ppn_amount),
       price: true,
     },
     {
@@ -184,9 +195,11 @@ function headerFields(s: PoRevisionSnapshot) {
     {
       field: "po_pph",
       label: "PPh",
-      value: s.po_pph_type
-        ? `${getPphTypeLabel(s.po_pph_type)} — ${rate(s.po_pph_mode, s.po_pph_rate, s.po_pph_amount)}`
-        : "Tanpa PPh",
+      value: itemMode
+        ? "Per item"
+        : s.po_pph_type
+          ? `${getPphTypeLabel(s.po_pph_type)} — ${rate(s.po_pph_mode, s.po_pph_rate, s.po_pph_amount)}`
+          : "Tanpa PPh",
       price: true,
     },
     {
@@ -202,7 +215,7 @@ function headerFields(s: PoRevisionSnapshot) {
 
 /** Field header yang mengandung info harga — disembunyikan untuk non-purchasing. */
 export const PO_REVISION_PRICE_FIELDS = new Set(
-  ["po_currency", "po_harga_termasuk_pajak", "po_ppn", "po_diskon", "po_ongkir", "po_pph", "harga"],
+  ["po_currency", "po_tax_mode", "po_harga_termasuk_pajak", "po_ppn", "pajak", "po_diskon", "po_ongkir", "po_pph", "harga"],
 );
 
 // Kunci pencocokan item sebelum/sesudah: id po_items (item lama dipertahankan
@@ -238,6 +251,17 @@ export function diffPoRevision(
         label: "Harga",
         before: formatPoMoney(b.harga, before.po_currency as any),
         after: formatPoMoney(a.harga, after.po_currency as any),
+      });
+    const bTax = formatItemTax(itemTaxFromRow(b));
+    const aTax = formatItemTax(itemTaxFromRow(a));
+    if (bTax !== aTax)
+      changes.push({ field: "pajak", label: "Pajak", before: bTax, after: aTax });
+    if (b.vendor_id !== a.vendor_id)
+      changes.push({
+        field: "vendor",
+        label: "Vendor",
+        before: text(b.vendor_name),
+        after: text(a.vendor_name),
       });
     if (changes.length > 0) {
       changed.push({

@@ -172,7 +172,7 @@ export default function StockClient({
     maxDefaultedRows: number;
     newPartsCreated: number;
     newStockRows: number;
-    skippedNegativeQty: number;
+    negativeQtyRows: number;
     negativeSamples: {
       source_row: number;
       part_number: string;
@@ -598,9 +598,13 @@ export default function StockClient({
   const parseQtyCell = (v: unknown): number => {
     if (v === undefined || v === null || v === "") return 0;
     if (typeof v === "number") return Math.round(v);
-    const normalized = String(v).trim().replace(/\./g, "").replace(",", ".");
+    // Format akuntansi "(5)" = -5 (stok SOH boleh minus).
+    const raw = String(v).trim();
+    const negParen = /^\(.*\)$/.test(raw);
+    const normalized = raw.replace(/[()]/g, "").replace(/\./g, "").replace(",", ".");
     const n = parseFloat(normalized);
-    return Number.isFinite(n) ? Math.round(n) : 0;
+    if (!Number.isFinite(n)) return 0;
+    return Math.round(negParen ? -Math.abs(n) : n);
   };
 
   const handleSohUpload = async () => {
@@ -762,7 +766,7 @@ export default function StockClient({
         maxDefaultedRows: ap.maxDefaultedRows,
         newPartsCreated: ap.newPartsCreated,
         newStockRows: ap.newStockRows,
-        skippedNegativeQty: ap.skippedNegativeQty,
+        negativeQtyRows: ap.negativeQtyRows,
         negativeSamples: ap.negativeSamples,
       });
       toast.success(
@@ -1507,7 +1511,7 @@ export default function StockClient({
               yang belum pernah diset (masih 0) otomatis dibuat 999999, dan
               part yang belum terdaftar otomatis dibuat sebagai barang baru
               (satuan default &ldquo;UNIT&rdquo; — cek &amp; perbaiki manual di halaman
-              Barang kalau perlu). Baris qty negatif dilewati.
+              Barang kalau perlu). Qty negatif ikut diterapkan (stok boleh minus).
             </DialogDescription>
           </DialogHeader>
 
@@ -1579,16 +1583,17 @@ export default function StockClient({
                     {sohSummary.maxDefaultedRows} max stock di-default ke
                     999999 · {sohSummary.newPartsCreated} part baru dibuat
                     ({sohSummary.newStockRows} baris stock)
-                    {sohSummary.skippedNegativeQty > 0 &&
-                      ` · ${sohSummary.skippedNegativeQty} baris qty negatif dilewati`}
+                    {sohSummary.negativeQtyRows > 0 &&
+                      ` · ${sohSummary.negativeQtyRows} baris qty negatif diterapkan`}
                   </p>
                 </div>
 
                 {sohSummary.negativeSamples.length > 0 && (
                   <div className="max-h-40 overflow-y-auto rounded-lg border border-warning/30 bg-warning/5 p-3 text-[11px] leading-relaxed">
                     <p className="font-bold text-foreground">
-                      Baris qty negatif yang dilewati (
-                      {sohSummary.skippedNegativeQty}) — cek data sumbernya
+                      Baris qty negatif yang diterapkan (
+                      {sohSummary.negativeQtyRows}) — stok jadi minus, cek saat
+                      stock opname
                     </p>
                     <ul className="text-muted-foreground">
                       {sohSummary.negativeSamples.map((n, i) => (
@@ -1597,7 +1602,7 @@ export default function StockClient({
                           {n.nama_cabang} (qty {n.qty})
                         </li>
                       ))}
-                      {sohSummary.skippedNegativeQty >
+                      {sohSummary.negativeQtyRows >
                         sohSummary.negativeSamples.length && <li>…</li>}
                     </ul>
                   </div>
@@ -1620,7 +1625,8 @@ export default function StockClient({
             {!sohUpProgress && !sohSummary && !sohUploadError && (
               <div className="rounded-lg border border-warning/30 bg-warning/5 p-3 text-[11px] leading-relaxed text-muted-foreground">
                 Part yang belum terdaftar otomatis dibuat sebagai barang baru
-                (bukan pemblokir); baris qty negatif dilewati & dilaporkan.
+                (bukan pemblokir); qty negatif diterapkan apa adanya (stok jadi
+                minus) & dilaporkan.
                 Kalau ada duplikat part+cabang atau qty pecahan (seharusnya
                 tidak pernah terjadi), seluruh update dibatalkan.
               </div>

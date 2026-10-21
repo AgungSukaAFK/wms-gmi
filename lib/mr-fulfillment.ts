@@ -12,6 +12,8 @@
 //   6. RI yang gudang penerimanya = gudang MR itu sendiri (barang langsung
 //      mendarat di tujuan, tidak perlu IT). Dilacak lewat
 //      receive_items.po_item_id -> po_items.pr_item_id -> pr_items.mr_item_id.
+//      RI hasil import ERP (receives.ri_is_import) TIDAK dihitung -- keputusan
+//      user 2026-10-21: penerimaan historis tidak memenuhi MR.
 //   7. RI lama (pra-revisi 2026-09-24, cabang_penerima_id NULL) yang dulu
 //      langsung mengkredit MR lewat mr_id + part_id -- direkonstruksi persis
 //      supaya qty lama tidak hilang saat item itu di-recompute.
@@ -125,10 +127,11 @@ export async function computeMrItemsFulfilledQty(
     if (mrItemByPoItem.size > 0) {
       const { data: riRows } = await supabase
         .from("receive_items")
-        .select("po_item_id, qty, cabang_penerima_id, receives!inner(ri_status)")
+        .select("po_item_id, qty, cabang_penerima_id, receives!inner(ri_status, ri_is_import)")
         .in("po_item_id", Array.from(mrItemByPoItem.keys()))
         .not("cabang_penerima_id", "is", null)
-        .eq("receives.ri_status", "completed");
+        .eq("receives.ri_status", "completed")
+        .eq("receives.ri_is_import", false);
       for (const r of riRows || []) {
         const mrItemId = mrItemByPoItem.get(r.po_item_id);
         const mrItem: any = mrItemId ? mrItemById.get(mrItemId) : null;
@@ -249,7 +252,7 @@ export async function resolveReceiveItemsMrLineage(
 
   const { data: riRows } = await supabase
     .from("receive_items")
-    .select("id, ri_id, part_id, qty, mr_id, cabang_penerima_id, po_item_id, receives!inner(ri_status), po_items(pr_item_id, pr_items(mr_item_id))")
+    .select("id, ri_id, part_id, qty, mr_id, cabang_penerima_id, po_item_id, receives!inner(ri_status, ri_is_import), po_items(pr_item_id, pr_items(mr_item_id))")
     .in("id", ids);
 
   // Fallback mr_id + part_id untuk item tanpa lineage PR (data lama).
@@ -289,7 +292,9 @@ export async function resolveReceiveItemsMrLineage(
   for (const { r, mrItemId, viaPr } of draft) {
     const mrCabang = mrItemId ? (mrCabangById.get(mrItemId) ?? null) : null;
     // Hanya lineage lewat PR yang dihitung sumber #6 (RI langsung ke gudang MR).
+    // RI import ERP tidak pernah mengkredit MR.
     const credited =
+      !rel(r, "receives")?.ri_is_import &&
       viaPr &&
       !!mrItemId &&
       mrCabang != null &&

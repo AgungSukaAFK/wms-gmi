@@ -15,6 +15,7 @@ import {
   refreshSoStatus,
 } from "@/lib/so-reguler";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import { normalizeItemTax, normalizePoTaxMode } from "@/lib/po-tax";
 import {
   buildPoRevisionSnapshot,
   canRevisePO,
@@ -40,6 +41,10 @@ export type PoRevisionItemInput = {
   pr_item_id: number | null;
   pr_id: number | null;
   so_item_id?: number | null;
+  // Tarif pajak item (dipakai kalau po_tax_mode = 'item').
+  item_ppn_rate?: number;
+  item_pph_type?: string | null;
+  item_pph_rate?: number;
 };
 
 export type PoRevisionPayload = {
@@ -50,6 +55,7 @@ export type PoRevisionPayload = {
   po_payment_term?: string | null;
   po_keterangan?: string | null;
   po_currency?: "IDR" | "USD" | "AUD";
+  po_tax_mode?: "document" | "item";
   po_harga_termasuk_pajak?: boolean;
   po_ppn_mode?: "percent" | "amount";
   po_ppn_rate?: number;
@@ -66,8 +72,17 @@ export type PoRevisionPayload = {
   items: PoRevisionItemInput[];
 };
 
+function itemTaxColumns(i: PoRevisionItemInput) {
+  const t = normalizeItemTax({
+    ppnRate: i.item_ppn_rate,
+    pphType: i.item_pph_type,
+    pphRate: i.item_pph_rate,
+  });
+  return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
+}
+
 const PO_ITEM_SELECT =
-  "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, vendors(vendor_name), pr_items(pr_id, prs(pr_kode))";
+  "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name), pr_items(pr_id, prs(pr_kode))";
 
 function flattenPoItems(rows: any[]) {
   return (rows || []).map((r: any) => {
@@ -139,7 +154,9 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
 
   const items = payload.items || [];
   if (items.length === 0) return { error: "PO harus punya minimal 1 item." };
-  const incomplete = items.filter((i) => !i.vendor_id || !(i.harga > 0) || !(i.qty > 0));
+  // PO Outstanding (import ERP) boleh punya harga 0 apa adanya dari ERP.
+  const hargaOk = (h: number) => (po.po_is_outstanding ? h >= 0 : h > 0);
+  const incomplete = items.filter((i) => !i.vendor_id || !hargaOk(i.harga) || !(i.qty > 0));
   if (incomplete.length > 0) {
     return {
       error: `Vendor, qty, dan harga wajib diisi untuk semua item: ${incomplete
@@ -349,10 +366,19 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
   for (const i of items) {
     if (!i.po_item_id) continue;
     const cur = currentById.get(i.po_item_id);
-    if (num(cur.qty) === i.qty && num(cur.harga) === i.harga && cur.vendor_id === i.vendor_id) continue;
+    const tax = itemTaxColumns(i);
+    if (
+      num(cur.qty) === i.qty &&
+      num(cur.harga) === i.harga &&
+      cur.vendor_id === i.vendor_id &&
+      num(cur.item_ppn_rate) === tax.item_ppn_rate &&
+      (cur.item_pph_type || null) === tax.item_pph_type &&
+      num(cur.item_pph_rate) === tax.item_pph_rate
+    )
+      continue;
     const { error } = await supabase
       .from("po_items")
-      .update({ qty: i.qty, harga: i.harga, vendor_id: i.vendor_id })
+      .update({ qty: i.qty, harga: i.harga, vendor_id: i.vendor_id, ...tax })
       .eq("id", i.po_item_id)
       .eq("po_id", poId);
     if (error) return { error: `Gagal update item ${i.part_number}: ${error.message}` };
@@ -371,6 +397,7 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
         qty: i.qty,
         harga: i.harga,
         vendor_id: i.vendor_id,
+        ...itemTaxColumns(i),
         qty_received: 0,
       })),
     );
@@ -403,6 +430,7 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     po_payment_term: payload.po_payment_term || null,
     po_keterangan: payload.po_keterangan || null,
     po_currency: normalizePoCurrency(payload.po_currency),
+    po_tax_mode: normalizePoTaxMode(payload.po_tax_mode),
     po_harga_termasuk_pajak: payload.po_harga_termasuk_pajak ?? false,
     po_ppn_mode: payload.po_ppn_mode ?? "percent",
     po_ppn_rate: payload.po_ppn_rate ?? 0,

@@ -75,10 +75,17 @@ import { PrConvertStatusBadge } from "@/components/pr/pr-convert-status-badge";
 import {
   computePoTotals,
   getPphDefaultRate,
-  getPphTypeLabel,
+  getPoTaxLines,
+  itemTaxFromRow,
+  normalizeItemTax,
+  normalizePoTaxMode,
   PPH_TYPE_OPTIONS,
   PPN_RATE_OPTIONS,
+  type PoItemTax,
+  type PoTaxMode,
 } from "@/lib/po-tax";
+import { PoVendorPicker, type PoVendorOption } from "@/components/po/po-vendor-picker";
+import { PoItemTaxPicker } from "@/components/po/po-item-tax-picker";
 import { fetchPrItemConvertedQty } from "@/lib/pr-po-coverage";
 import type { PoJenis } from "@/lib/po-non-pr";
 import {
@@ -114,6 +121,12 @@ interface POItem {
   qty: number;
   harga: number;
   vendor_id: number | null;
+  // Vendor baris (untuk tampilan picker vendor per item).
+  vendor?: PoVendorOption | null;
+  // Tarif pajak item (dipakai kalau mode pajak = per item).
+  item_ppn_rate?: number;
+  item_pph_type?: string | null;
+  item_pph_rate?: number;
   // Edit/Revisi PO: id po_items untuk item lama (null = item baru) dan qty
   // yang sudah diterima (batas bawah qty, item tidak bisa dihapus bila > 0).
   po_item_id?: number | null;
@@ -187,14 +200,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const [loadingPrIds, setLoadingPrIds] = useState<number[]>([]);
   const [expandedPrIds, setExpandedPrIds] = useState<number[]>([]);
 
-  // Step 2 — Item & harga per item, vendor per dokumen (satu vendor untuk
-  // seluruh PO, bukan per item).
+  // Step 2 — Item & harga per item. Vendor default satu per dokumen; bisa
+  // dialihkan ke vendor per item (vendorMode "item"). Pajak default per
+  // dokumen; bisa per item (taxMode "item", tarif di tiap baris).
   const [poItems, setPoItems] = useState<POItem[]>([]);
-  const [vendorResults, setVendorResults] = useState<any[]>([]);
-  const [vendorLoading, setVendorLoading] = useState(false);
-  const [selectedVendor, setSelectedVendor] = useState<any | null>(null);
-  const [vendorSearch, setVendorSearch] = useState("");
-  const [vendorPopoverOpen, setVendorPopoverOpen] = useState(false);
+  const [selectedVendor, setSelectedVendor] = useState<PoVendorOption | null>(null);
+  const [vendorMode, setVendorMode] = useState<"single" | "item">("single");
+  const [taxMode, setTaxMode] = useState<PoTaxMode>("document");
 
   // Step 3 — PO Header
   const [poKode, setPoKode] = useState("");
@@ -319,6 +331,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         qty: sisaPo,
         harga: 0,
         vendor_id: selectedVendor?.id ?? null,
+        vendor: selectedVendor,
       };
     });
     setSoLoading(false);
@@ -387,6 +400,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         qty: 1,
         harga: 0,
         vendor_id: selectedVendor?.id ?? null,
+        vendor: selectedVendor,
       },
     ]);
   };
@@ -473,21 +487,6 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     const { data } = await query;
     setPrs(data || []);
     setLoading(false);
-  };
-
-  const searchVendors = async (query: string) => {
-    setVendorLoading(true);
-    let q = supabase
-      .from("vendors")
-      .select("id, vendor_name, vendor_no")
-      .order("vendor_name")
-      .limit(15);
-    if (query.trim()) {
-      q = q.or(`vendor_name.ilike.%${query}%,vendor_no.ilike.%${query}%`);
-    }
-    const { data } = await q;
-    setVendorResults(data || []);
-    setVendorLoading(false);
   };
 
   // Hitung qty yang sudah terpakai di PO lain (belum rejected) per pr_item,
@@ -605,6 +604,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       prev.includes(prId) ? prev.filter((id) => id !== prId) : [...prev, prId],
     );
 
+  const vendorOf = (row: any): PoVendorOption | null => {
+    const v = Array.isArray(row?.vendors) ? row.vendors[0] : row?.vendors;
+    return v ? { id: v.id ?? row.vendor_id, vendor_name: v.vendor_name, vendor_no: v.vendor_no } : null;
+  };
+
+  const itemTaxFields = (row: any) => {
+    const t = itemTaxFromRow(row);
+    return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
+  };
+
   const mergeExistingItem = (base: POItem, existing: any): POItem => ({
     ...base,
     po_item_id: existing.id,
@@ -613,6 +622,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     qty: Number(existing.qty) || 0,
     harga: Number(existing.harga) || 0,
     vendor_id: existing.vendor_id ?? base.vendor_id,
+    vendor: vendorOf(existing) ?? base.vendor ?? null,
+    ...itemTaxFields(existing),
     // Sisa sudah tidak menghitung PO ini sendiri; data legacy yang melebihi
     // sisa tetap boleh dipertahankan.
     remaining: Math.max(base.remaining, Number(existing.qty) || 0),
@@ -633,6 +644,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     qty: Number(existing.qty) || 0,
     harga: Number(existing.harga) || 0,
     vendor_id: existing.vendor_id ?? null,
+    vendor: vendorOf(existing),
+    ...itemTaxFields(existing),
     po_item_id: existing.id,
     qty_received: Number(existing.qty_received) || 0,
   });
@@ -654,7 +667,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       const { data: rows } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, vendors(id, vendor_name, vendor_no), pr_items(id, pr_id, prs(pr_kode))",
+          "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(id, vendor_name, vendor_no), pr_items(id, pr_id, prs(pr_kode))",
         )
         .eq("po_id", poId)
         .order("id");
@@ -674,6 +687,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       setPoKeterangan(po.po_keterangan || "");
       setPoCurrency((po.po_currency || "IDR") as PoCurrency);
       setPrReferensi(po.po_pr_referensi || "");
+      setTaxMode(normalizePoTaxMode(po.po_tax_mode));
       setHargaTermasukPajak(Boolean(po.po_harga_termasuk_pajak));
       setPpnMode(po.po_ppn_mode === "percent" ? "percent" : "amount");
       setPpnRate(Number(po.po_ppn_rate) || 0);
@@ -689,6 +703,10 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       const vendorRow = existing.find((i: any) => i.vendors)?.vendors;
       const vendor = Array.isArray(vendorRow) ? vendorRow[0] : vendorRow;
       if (vendor) setSelectedVendor(vendor);
+      const vendorIds = new Set(
+        existing.map((i: any) => i.vendor_id).filter((id: any) => id != null),
+      );
+      setVendorMode(vendorIds.size > 1 ? "item" : "single");
 
       // Item
       const jenis = po.po_jenis || "reguler";
@@ -836,12 +854,93 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     );
   };
 
-  const handleVendorSelect = (vendor: any) => {
+  // Vendor dokumen: mode satu vendor -> berlaku ke semua item; mode per item
+  // -> jadi vendor default item baru & item yang vendornya masih kosong.
+  const handleVendorSelect = (vendor: PoVendorOption) => {
     setSelectedVendor(vendor);
     setPoItems((prev) =>
-      prev.map((item) => ({ ...item, vendor_id: vendor.id })),
+      prev.map((item) =>
+        vendorMode === "single" || !item.vendor_id
+          ? { ...item, vendor_id: vendor.id, vendor }
+          : item,
+      ),
     );
-    setVendorPopoverOpen(false);
+  };
+
+  const applyVendorToAll = () => {
+    if (!selectedVendor) return;
+    setPoItems((prev) =>
+      prev.map((item) => ({ ...item, vendor_id: selectedVendor.id, vendor: selectedVendor })),
+    );
+    toast.success(`Vendor ${selectedVendor.vendor_name} diterapkan ke semua item.`);
+  };
+
+  const switchVendorMode = (next: "single" | "item") => {
+    if (next === vendorMode) return;
+    if (next === "single") {
+      const distinct = new Set(
+        poItems.filter((i) => i.selected && i.vendor_id).map((i) => i.vendor_id),
+      );
+      if (distinct.size > 1 && !window.confirm(
+        "Item punya vendor berbeda-beda. Kembali ke satu vendor akan menyamakan semua item ke vendor dokumen. Lanjutkan?",
+      )) return;
+      if (selectedVendor) {
+        setPoItems((prev) =>
+          prev.map((item) => ({ ...item, vendor_id: selectedVendor.id, vendor: selectedVendor })),
+        );
+      }
+    }
+    setVendorMode(next);
+  };
+
+  const updateItemVendor = (idx: number, vendor: PoVendorOption) =>
+    setPoItems((prev) =>
+      prev.map((item, i) => (i === idx ? { ...item, vendor_id: vendor.id, vendor } : item)),
+    );
+
+  const itemTaxOf = (item: POItem): PoItemTax =>
+    normalizeItemTax({
+      ppnRate: item.item_ppn_rate,
+      pphType: item.item_pph_type,
+      pphRate: item.item_pph_rate,
+    });
+
+  const withItemTax = (item: POItem, tax: PoItemTax): POItem => ({
+    ...item,
+    item_ppn_rate: tax.ppnRate,
+    item_pph_type: tax.pphType,
+    item_pph_rate: tax.pphRate,
+  });
+
+  const updateItemTax = (idx: number, tax: PoItemTax) =>
+    setPoItems((prev) => prev.map((item, i) => (i === idx ? withItemTax(item, tax) : item)));
+
+  // Atur pajak semua item terpilih sekaligus.
+  const applyTaxToSelected = (tax: PoItemTax) => {
+    setPoItems((prev) => prev.map((item) => (item.selected ? withItemTax(item, tax) : item)));
+    toast.success("Pajak diterapkan ke semua item terpilih.");
+  };
+
+  const switchTaxMode = (next: PoTaxMode) => {
+    if (next === taxMode) return;
+    // Pindah ke per item: tarif dokumen yang sudah diisi jadi titik awal tiap
+    // item yang belum punya pajak (supaya tidak mulai dari nol).
+    if (next === "item") {
+      const seed = normalizeItemTax({
+        ppnRate: ppnMode === "percent" ? ppnRate : 0,
+        pphType: pphType || null,
+        pphRate: pphMode === "percent" ? pphRate : 0,
+      });
+      if (seed.ppnRate > 0 || seed.pphType) {
+        setPoItems((prev) =>
+          prev.map((item) => {
+            const t = itemTaxOf(item);
+            return t.ppnRate > 0 || t.pphType ? item : withItemTax(item, seed);
+          }),
+        );
+      }
+    }
+    setTaxMode(next);
   };
 
   const totalNilai = poItems
@@ -849,6 +948,10 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     .reduce((sum, it) => sum + it.qty * it.harga, 0);
 
   const poTax = computePoTotals({
+    taxMode,
+    items: poItems
+      .filter((it) => it.selected)
+      .map((it) => ({ subtotal: it.qty * it.harga, ...itemTaxOf(it) })),
     subtotal: totalNilai,
     diskonMode,
     diskonValue,
@@ -861,6 +964,19 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     pphRate: pphType ? pphRate : 0,
     pphAmountManual: pphType ? pphAmountManual : 0,
   });
+
+  // Baris PPN/PPh di ringkasan langkah 3 (format sama dgn detail PO).
+  const { ppnLines: summaryPpnLines, pphLines: summaryPphLines } = getPoTaxLines(
+    {
+      po_ppn_mode: ppnMode,
+      po_ppn_rate: ppnRate,
+      po_ppn_amount: ppnAmountManual,
+      po_pph_type: pphType || null,
+      po_pph_mode: pphMode,
+      po_pph_rate: pphRate,
+    },
+    poTax,
+  );
 
   const selectableItemCount = poItems.filter((it) => it.remaining > 0).length;
   const allItemsSelected =
@@ -899,8 +1015,18 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     }
     if (isEdit && !revisionReason.trim())
       return toast.error("Alasan revisi wajib diisi");
-    if (!selectedVendor) return toast.error("Pilih vendor untuk PO ini.");
-    const incomplete = chosen.filter((item) => !(item.harga > 0));
+    if (vendorMode === "single" && !selectedVendor)
+      return toast.error("Pilih vendor untuk PO ini.");
+    const noVendor = chosen.filter((item) => !item.vendor_id);
+    if (noVendor.length > 0) {
+      return toast.error(
+        `Vendor wajib diisi untuk: ${noVendor.map((i) => i.part_number).join(", ")}`,
+      );
+    }
+    // PO Outstanding (import ERP) boleh mempertahankan harga 0 dari ERP.
+    const incomplete = chosen.filter((item) =>
+      isOutstanding ? item.harga < 0 : !(item.harga > 0),
+    );
     if (incomplete.length > 0) {
       return toast.error(
         `Harga wajib diisi untuk: ${incomplete
@@ -909,6 +1035,12 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       );
     }
     setIsSignatureOpen(true);
+  };
+
+  // Mode pajak dokumen: tarif item dikosongkan supaya data tidak menyesatkan.
+  const itemTaxPayload = (i: POItem) => {
+    const t = taxMode === "item" ? itemTaxOf(i) : normalizeItemTax(null);
+    return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
   };
 
   const handleConfirmSignature = async (signature: {
@@ -949,6 +1081,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     const headerPayload = {
       po_tanggal: poTanggal,
       po_currency: poCurrency,
+      po_tax_mode: taxMode,
       po_harga_termasuk_pajak: hargaTermasukPajak,
       po_ppn_mode: ppnMode,
       po_ppn_rate: ppnRate,
@@ -989,6 +1122,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
               qty: i.qty,
               harga: i.harga,
               vendor_id: i.vendor_id,
+              ...itemTaxPayload(i),
             })),
         });
         if (result.success) {
@@ -1019,6 +1153,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         po_payment_term: poPaymentTerm || undefined,
         po_keterangan: poKeterangan || undefined,
         po_currency: poCurrency,
+        po_tax_mode: taxMode,
         po_harga_termasuk_pajak: hargaTermasukPajak,
         po_ppn_mode: ppnMode,
         po_ppn_rate: ppnRate,
@@ -1049,6 +1184,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
             qty: i.qty,
             harga: i.harga,
             vendor_id: i.vendor_id,
+            ...itemTaxPayload(i),
           })),
       });
 
@@ -1866,67 +2002,39 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
           <Content>
             <div className="mb-4 flex flex-wrap items-start gap-4">
               <div className="space-y-1.5 w-full max-w-sm">
-                <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-                  <Building2 className="h-3 w-3" /> Vendor
-                </Label>
-                <Popover
-                  open={vendorPopoverOpen}
-                  onOpenChange={(val) => {
-                    setVendorPopoverOpen(val);
-                    if (val) searchVendors(vendorSearch);
-                  }}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      className="h-10 w-full max-w-sm justify-start gap-1.5 font-bold text-sm"
-                    >
-                      <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      {selectedVendor
-                        ? selectedVendor.vendor_name
-                        : "Pilih Vendor..."}
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent className="w-72 p-0" align="start">
-                    <Command shouldFilter={false}>
-                      <CommandInput
-                        placeholder="Cari vendor..."
-                        value={vendorSearch}
-                        onValueChange={(val) => {
-                          setVendorSearch(val);
-                          searchVendors(val);
-                        }}
-                      />
-                      <CommandList>
-                        {vendorLoading ? (
-                          <div className="py-6 flex items-center justify-center">
-                            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-                          </div>
-                        ) : vendorResults.length === 0 ? (
-                          <CommandEmpty>Vendor tidak ditemukan.</CommandEmpty>
-                        ) : (
-                          vendorResults.map((v) => (
-                            <CommandItem
-                              key={v.id}
-                              value={v.id.toString()}
-                              onSelect={() => handleVendorSelect(v)}
-                              className="text-xs font-bold"
-                            >
-                              {v.vendor_name}
-                              {v.vendor_no && (
-                                <span className="ml-2 text-[9px] text-muted-foreground font-mono">
-                                  {v.vendor_no}
-                                </span>
-                              )}
-                            </CommandItem>
-                          ))
-                        )}
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
+                <div className="flex items-center justify-between gap-2">
+                  <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                    <Building2 className="h-3 w-3" />
+                    {vendorMode === "single" ? "Vendor" : "Vendor Default"}
+                  </Label>
+                  <SegmentedToggle
+                    value={vendorMode}
+                    onChange={(v) => switchVendorMode(v as "single" | "item")}
+                    options={[
+                      { value: "single", label: "Satu Vendor" },
+                      { value: "item", label: "Per Item" },
+                    ]}
+                  />
+                </div>
+                <PoVendorPicker value={selectedVendor} onSelect={handleVendorSelect} />
                 <p className="text-[9px] text-muted-foreground font-medium">
-                  Vendor berlaku untuk semua item di PO ini.
+                  {vendorMode === "single" ? (
+                    "Vendor berlaku untuk semua item di PO ini."
+                  ) : (
+                    <>
+                      Vendor dipilih per baris di tabel. Vendor default dipakai
+                      untuk item baru / yang masih kosong.{" "}
+                      {selectedVendor && (
+                        <button
+                          type="button"
+                          onClick={applyVendorToAll}
+                          className="font-bold text-primary hover:underline"
+                        >
+                          Terapkan ke semua item
+                        </button>
+                      )}
+                    </>
+                  )}
                 </p>
               </div>
               <div className="space-y-1.5 w-full max-w-[14rem]">
@@ -1952,6 +2060,42 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 </Select>
                 <p className="text-[9px] text-muted-foreground font-medium">
                   Berlaku untuk harga, pajak, diskon & ongkir PO ini.
+                </p>
+              </div>
+              <div className="space-y-1.5 w-full max-w-xs">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
+                  <Percent className="h-3 w-3" /> Pajak (PPN / PPh)
+                </Label>
+                <div className="flex h-10 items-center gap-2">
+                  <SegmentedToggle
+                    size="md"
+                    value={taxMode}
+                    onChange={(v) => switchTaxMode(v as PoTaxMode)}
+                    options={[
+                      { value: "document", label: "Per Dokumen" },
+                      { value: "item", label: "Per Item" },
+                    ]}
+                  />
+                  {taxMode === "item" && (
+                    <PoItemTaxPicker
+                      value={normalizeItemTax(null)}
+                      onChange={applyTaxToSelected}
+                      trigger={
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-10 gap-1 px-2.5 text-[10px] font-bold uppercase"
+                        >
+                          Atur Semua
+                        </Button>
+                      }
+                    />
+                  )}
+                </div>
+                <p className="text-[9px] text-muted-foreground font-medium">
+                  {taxMode === "item"
+                    ? "Tarif pajak diatur di kolom Pajak tiap item."
+                    : "Tarif PPN & PPh diisi sekali untuk seluruh PO di langkah berikutnya."}
                 </p>
               </div>
             </div>
@@ -1980,6 +2124,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-36">
                     Harga Satuan
                   </TableHead>
+                  {vendorMode === "item" && (
+                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-44">
+                      Vendor
+                    </TableHead>
+                  )}
+                  {taxMode === "item" && (
+                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground w-40 pr-4">
+                      Pajak
+                    </TableHead>
+                  )}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -2065,6 +2219,33 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                           </div>
                         )}
                       </TableCell>
+                      {vendorMode === "item" && (
+                        <TableCell className="py-2 align-middle">
+                          <PoVendorPicker
+                            compact
+                            placeholder="Pilih vendor"
+                            value={
+                              item.vendor ??
+                              (item.vendor_id && item.vendor_id === selectedVendor?.id
+                                ? selectedVendor
+                                : null)
+                            }
+                            onSelect={(v) => updateItemVendor(idx, v)}
+                            className={cn(
+                              item.selected && !item.vendor_id && "border-destructive/60",
+                            )}
+                          />
+                        </TableCell>
+                      )}
+                      {taxMode === "item" && (
+                        <TableCell className="py-2 pr-4 align-middle">
+                          <PoItemTaxPicker
+                            value={itemTaxOf(item)}
+                            onChange={(t) => updateItemTax(idx, t)}
+                            disabled={!item.selected}
+                          />
+                        </TableCell>
+                      )}
                     </TableRow>
                   );
                 })}
@@ -2274,6 +2455,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 </div>
 
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+                  {taxMode === "document" && (
                   <div className="space-y-2">
                     <Label className="text-[10px] font-bold uppercase text-muted-foreground">
                       PPN
@@ -2335,7 +2517,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                       )}
                     </div>
                   </div>
-
+                  )}
                   <div className="space-y-2">
                     <Label className="text-[10px] font-bold uppercase text-muted-foreground">
                       Diskon
@@ -2396,6 +2578,42 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   </div>
                 </div>
 
+                {taxMode === "item" ? (
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] font-bold uppercase text-primary">
+                        PPN & PPh dihitung per item
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => setStep(2)}
+                        className="text-[10px] font-bold text-primary hover:underline"
+                      >
+                        Ubah di langkah 2
+                      </button>
+                    </div>
+                    {poTax.ppnBreakdown.length === 0 && poTax.pphBreakdown.length === 0 ? (
+                      <p className="text-[10px] text-muted-foreground">
+                        Belum ada item yang dikenai pajak.
+                      </p>
+                    ) : (
+                      [...poTax.ppnBreakdown, ...poTax.pphBreakdown].map((l) => (
+                        <div
+                          key={l.label}
+                          className="flex items-center justify-between text-[10px] font-semibold text-muted-foreground"
+                        >
+                          <span>
+                            {l.label} × DPP{" "}
+                            {maskedPriceText(canViewPrice, formatCurrency(l.dpp))}
+                          </span>
+                          <span className="text-foreground font-bold">
+                            {maskedPriceText(canViewPrice, formatCurrency(l.amount))}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                ) : (
                 <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                   <div className="space-y-2">
                     <Label className="text-[10px] font-bold uppercase text-muted-foreground">
@@ -2485,6 +2703,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                     </div>
                   )}
                 </div>
+                )}
 
                 <p className="text-[9px] text-muted-foreground font-medium">
                   PPh adalah pajak potong-pungut — dipotong dari pembayaran ke
@@ -2667,8 +2886,28 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                 <span>Vendor</span>
-                <span className="text-foreground">
-                  {selectedVendor?.vendor_name || "-"}
+                <span className="text-foreground text-right">
+                  {vendorMode === "item"
+                    ? (() => {
+                        const names = Array.from(
+                          new Set(
+                            poItems
+                              .filter((i) => i.selected)
+                              .map(
+                                (i) =>
+                                  i.vendor?.vendor_name ??
+                                  (i.vendor_id === selectedVendor?.id
+                                    ? selectedVendor?.vendor_name
+                                    : null),
+                              )
+                              .filter(Boolean),
+                          ),
+                        );
+                        return names.length > 1
+                          ? `${names.length} vendor`
+                          : names[0] || "-";
+                      })()
+                    : selectedVendor?.vendor_name || "-"}
                 </span>
               </div>
               <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
@@ -2701,22 +2940,22 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                     </span>
                   </div>
                 )}
-                {(ppnMode === "percent"
-                  ? ppnRate > 0
-                  : ppnAmountManual > 0) && (
-                  <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
+                {summaryPpnLines.map((l) => (
+                  <div
+                    key={l.label}
+                    className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground"
+                  >
                     <span>
-                      PPN (
-                      {ppnMode === "percent" ? `${ppnRate}%` : "nominal manual"}
-                      ){hargaTermasukPajak ? " — sudah termasuk harga" : ""}
+                      {l.label}
+                      {hargaTermasukPajak ? " — sudah termasuk harga" : ""}
                     </span>
                     <span className="text-foreground">
                       {hargaTermasukPajak
                         ? "-"
-                        : `+ ${maskedPriceText(canViewPrice, formatCurrency(poTax.ppnAmount))}`}
+                        : `+ ${maskedPriceText(canViewPrice, formatCurrency(l.amount))}`}
                     </span>
                   </div>
-                )}
+                ))}
                 {ongkir > 0 && (
                   <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground">
                     <span>Ongkos Kirim</span>
@@ -2734,22 +2973,19 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 </span>
               </div>
 
-              {pphType && (
+              {summaryPphLines.length > 0 && (
                 <>
-                  <div className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1">
-                    <span>
-                      PPh {getPphTypeLabel(pphType)} (
-                      {pphMode === "percent" ? `${pphRate}%` : "nominal manual"}
-                      )
-                    </span>
-                    <span className="text-destructive">
-                      -{" "}
-                      {maskedPriceText(
-                        canViewPrice,
-                        formatCurrency(poTax.pphAmount),
-                      )}
-                    </span>
-                  </div>
+                  {summaryPphLines.map((l) => (
+                    <div
+                      key={l.label}
+                      className="flex items-center justify-between text-[10px] font-bold uppercase text-muted-foreground pt-1"
+                    >
+                      <span>{l.label}</span>
+                      <span className="text-destructive">
+                        - {maskedPriceText(canViewPrice, formatCurrency(l.amount))}
+                      </span>
+                    </div>
+                  ))}
                   <div className="flex items-center justify-between text-xs font-black uppercase pt-1.5 border-t border-dashed border-border">
                     <span>Dibayar ke Vendor</span>
                     <span className="text-foreground">
@@ -2807,5 +3043,45 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         onConfirm={handleConfirmSignature}
       />
     </>
+  );
+}
+
+// Toggle 2 pilihan bergaya tombol nempel (dipakai mode vendor & mode pajak).
+function SegmentedToggle({
+  value,
+  onChange,
+  options,
+  size = "sm",
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+  size?: "sm" | "md";
+}) {
+  return (
+    <div
+      className={cn(
+        "flex shrink-0 overflow-hidden rounded-md border border-input",
+        size === "md" ? "h-10" : "h-6",
+      )}
+    >
+      {options.map((opt, i) => (
+        <button
+          key={opt.value}
+          type="button"
+          onClick={() => onChange(opt.value)}
+          className={cn(
+            "font-bold uppercase transition-colors",
+            size === "md" ? "px-3 text-[10px]" : "px-2 text-[9px]",
+            i > 0 && "border-l border-input",
+            value === opt.value
+              ? "bg-primary text-primary-foreground"
+              : "bg-background text-muted-foreground hover:bg-muted",
+          )}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
   );
 }

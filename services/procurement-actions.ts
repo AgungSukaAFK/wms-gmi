@@ -27,6 +27,7 @@ import {
 } from "@/services/notification-actions";
 import { evaluateMrFreeze, evaluateMrItemFreeze } from "@/services/freeze-actions";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import { normalizeItemTax, normalizePoTaxMode } from "@/lib/po-tax";
 import {
   computeSoItemRemaining,
   fetchSoItemFulfillment,
@@ -1874,6 +1875,7 @@ export async function createPurchaseOrder(data: {
   po_payment_term?: string;
   po_keterangan?: string;
   po_currency?: "IDR" | "USD" | "AUD";
+  po_tax_mode?: "document" | "item";
   po_harga_termasuk_pajak?: boolean;
   po_ppn_mode?: "percent" | "amount";
   po_ppn_rate?: number;
@@ -1908,6 +1910,9 @@ export async function createPurchaseOrder(data: {
     pr_item_id: number | null;
     pr_id: number | null;
     so_item_id?: number | null;
+    item_ppn_rate?: number;
+    item_pph_type?: string | null;
+    item_pph_rate?: number;
   }[];
 }) {
   const supabase = await createClient();
@@ -2132,6 +2137,7 @@ export async function createPurchaseOrder(data: {
         po_payment_term: data.po_payment_term ?? null,
         po_keterangan: data.po_keterangan ?? null,
         po_currency: normalizePoCurrency(data.po_currency),
+        po_tax_mode: normalizePoTaxMode(data.po_tax_mode),
         po_harga_termasuk_pajak: data.po_harga_termasuk_pajak ?? false,
         po_ppn_mode: data.po_ppn_mode ?? "percent",
         po_ppn_rate: data.po_ppn_rate ?? 0,
@@ -2166,6 +2172,14 @@ export async function createPurchaseOrder(data: {
     qty: item.qty,
     harga: item.harga,
     vendor_id: item.vendor_id,
+    ...(() => {
+      const t = normalizeItemTax({
+        ppnRate: item.item_ppn_rate,
+        pphType: item.item_pph_type,
+        pphRate: item.item_pph_rate,
+      });
+      return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
+    })(),
     qty_received: 0,
   }));
 
