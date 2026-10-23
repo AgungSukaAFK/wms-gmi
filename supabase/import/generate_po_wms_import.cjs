@@ -1,5 +1,6 @@
 // Generator SQL import "Data PO WMS.xlsx" (export ERP, update lanjutan dari
-// PO OST) -> supabase/import/po_wms_import.sql.
+// PO OST) -> supabase/import/po_wms_import.sql, plus query verifikasi pasca
+// import (read-only, bandingkan DB vs Excel) -> supabase/import/po_wms_verify.sql.
 //
 //   node supabase/import/generate_po_wms_import.cjs "Data PO WMS.xlsx"
 //
@@ -17,6 +18,7 @@ const XLSX = require(path.join(__dirname, "../../node_modules/xlsx"));
 
 const src = process.argv[2] || "Data PO WMS.xlsx";
 const out = path.join(__dirname, "po_wms_import.sql");
+const outVerify = path.join(__dirname, "po_wms_verify.sql");
 
 const AUD_VENDORS = ["JAS Oceania Melbourne", "Auto Electrical Imports Pty Ltd"];
 // Vendor luar negeri (selain AUD) = USD. Vendor lain = IDR (lokal).
@@ -241,10 +243,29 @@ let sql = `-- ==================================================================
 
 BEGIN;
 
-DROP TABLE IF EXISTS pg_temp.wms_po;
-DROP TABLE IF EXISTS pg_temp.wms_item;
 DROP TABLE IF EXISTS pg_temp.wms_report;
 DROP TABLE IF EXISTS pg_temp.wms_map;
+
+CREATE TEMP TABLE wms_report (
+  po_kode TEXT,
+  kategori TEXT NOT NULL,
+  detail TEXT
+);
+
+-- po_item hasil sinkron per baris sumber.
+CREATE TEMP TABLE wms_map (
+  po_kode TEXT NOT NULL,
+  line_no INT NOT NULL,
+  po_id BIGINT NOT NULL,
+  po_item_id BIGINT NOT NULL,
+  PRIMARY KEY (po_kode, line_no)
+);
+
+`;
+
+// Data Excel sebagai temp table -- dipakai bersama oleh import & verifikasi.
+let data = `DROP TABLE IF EXISTS pg_temp.wms_po;
+DROP TABLE IF EXISTS pg_temp.wms_item;
 
 CREATE TEMP TABLE wms_po (
   po_kode TEXT PRIMARY KEY,
@@ -282,21 +303,6 @@ CREATE TEMP TABLE wms_item (
   PRIMARY KEY (po_kode, line_no)
 );
 
-CREATE TEMP TABLE wms_report (
-  po_kode TEXT,
-  kategori TEXT NOT NULL,
-  detail TEXT
-);
-
--- po_item hasil sinkron per baris sumber.
-CREATE TEMP TABLE wms_map (
-  po_kode TEXT NOT NULL,
-  line_no INT NOT NULL,
-  po_id BIGINT NOT NULL,
-  po_item_id BIGINT NOT NULL,
-  PRIMARY KEY (po_kode, line_no)
-);
-
 `;
 
 const chunk = (arr, n) => {
@@ -306,33 +312,57 @@ const chunk = (arr, n) => {
 };
 
 for (const part of chunk(pos, 200)) {
-  sql += `INSERT INTO wms_po (po_kode, po_tanggal, vendor_name, currency, keterangan, payment_term, harga_incl, tax_mode, ppn_rate, pph_type, pph_rate, cabang, ri_kode, ri_tanggal, ri_keterangan, excel_status) VALUES\n`;
-  sql += part
+  data += `INSERT INTO wms_po (po_kode, po_tanggal, vendor_name, currency, keterangan, payment_term, harga_incl, tax_mode, ppn_rate, pph_type, pph_rate, cabang, ri_kode, ri_tanggal, ri_keterangan, excel_status) VALUES\n`;
+  data += part
     .map(
       (p) =>
         `  (${q(p.po_kode)}, DATE ${q(p.po_tanggal)}, ${q(p.vendor_name)}, ${q(p.currency)}, ${q(p.keterangan)}, ${q(p.payment_term)}, ${p.harga_incl}, ${q(p.tax_mode)}, ${p.ppn_rate}, ${q(p.pph_type)}, ${p.pph_rate}, ${q(p.cabang)}, ${q(p.ri_kode)}, ${p.ri_tanggal ? `DATE ${q(p.ri_tanggal)}` : "NULL"}, ${q(p.ri_keterangan)}, ${q(p.excel_status)})`,
     )
     .join(",\n");
-  sql += ";\n\n";
+  data += ";\n\n";
 }
 for (const part of chunk(items, 300)) {
-  sql += `INSERT INTO wms_item (po_kode, line_no, part_number, satuan, qty, harga, kts, ppn_rate, pph_type, pph_rate, cabang, pr_ref, excel_rows) VALUES\n`;
-  sql += part
+  data += `INSERT INTO wms_item (po_kode, line_no, part_number, satuan, qty, harga, kts, ppn_rate, pph_type, pph_rate, cabang, pr_ref, excel_rows) VALUES\n`;
+  data += part
     .map(
       (i) =>
         `  (${q(i.po_kode)}, ${i.line_no}, ${q(i.part_number)}, ${q(i.satuan)}, ${i.qty}, ${i.harga}, ${i.kts}, ${i.ppn_rate}, ${q(i.pph_type)}, ${i.pph_rate}, ${q(i.cabang)}, ${q(i.pr_ref)}, ${q(i.excel_rows)})`,
     )
     .join(",\n");
-  sql += ";\n\n";
+  data += ";\n\n";
 }
 
+sql += data;
 sql += fs.readFileSync(path.join(__dirname, "po_wms_import_body.sqltpl"), "utf8");
 
 fs.writeFileSync(out, sql);
+
+const verify = `-- =====================================================================
+-- VERIFIKASI IMPORT DATA PO WMS (pasca import, READ-ONLY)
+-- Generated: ${today}  |  sumber: ${path.basename(src)}  |  ${pos.length} PO, ${items.length} baris item
+-- Generator: supabase/import/generate_po_wms_import.cjs
+--
+-- Jalankan di Supabase VPS SETELAH po_wms_import.sql (file Excel harus sama
+-- dengan yang dipakai generate import). Hanya membuat temp table (hilang
+-- saat sesi selesai) -- tidak mengubah data apa pun.
+--
+-- Hasil = 1 tabel: status OK / FAIL / WARN / INFO per cek, plus contoh
+-- PO/barang yang bermasalah. FAIL = import tidak sesuai Excel, wajib dicek;
+-- WARN = beda tapi bisa wajar (mis. sudah di-RI di WMS); INFO = catatan.
+-- Jalankan sesegera mungkin setelah import: Edit PO / RI baru yang dibuat
+-- user setelahnya bisa (wajar) bikin beberapa cek berbeda.
+-- =====================================================================
+
+`;
+fs.writeFileSync(
+  outVerify,
+  verify + data + fs.readFileSync(path.join(__dirname, "po_wms_verify_body.sqltpl"), "utf8"),
+);
 console.log(
   JSON.stringify(
     {
       out,
+      outVerify,
       pos: pos.length,
       items: items.length,
       totalKts,

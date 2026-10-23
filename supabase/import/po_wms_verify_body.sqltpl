@@ -1,0 +1,619 @@
+-- Template ini butuh data Excel (wms_po/wms_item) yang ditambahkan generator
+-- di depannya: jalankan po_wms_verify.sql, bukan file .sqltpl ini.
+DO $$
+BEGIN
+  IF to_regclass('pg_temp.wms_po') IS NULL OR to_regclass('pg_temp.wms_item') IS NULL THEN
+    RAISE EXCEPTION 'Data Excel (wms_po/wms_item) tidak ada. Jalankan file supabase/import/po_wms_verify.sql hasil generator (seluruh isinya), bukan template po_wms_verify_body.sqltpl.';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- Pasangan Excel <-> DB
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.wms_v_result;
+DROP TABLE IF EXISTS pg_temp.wms_v_po;
+DROP TABLE IF EXISTS pg_temp.wms_v_item;
+DROP TABLE IF EXISTS pg_temp.wms_v_ri;
+
+CREATE TEMP TABLE wms_v_result (
+  no INT PRIMARY KEY,
+  kelompok TEXT NOT NULL,
+  cek TEXT NOT NULL,
+  expected TEXT,
+  actual TEXT,
+  ok BOOLEAN,         -- NULL = informasi saja
+  sev TEXT NOT NULL,  -- status kalau tidak ok: FAIL / WARN
+  contoh TEXT
+);
+
+-- Header: PO outstanding diutamakan kalau nomornya dobel (sama seperti import).
+-- ok_po = PO yang memang disinkron import (outstanding & tidak ditolak).
+CREATE TEMP TABLE wms_v_po AS
+WITH p AS (
+  SELECT p.*, btrim(p.po_kode) AS k,
+         row_number() OVER (PARTITION BY btrim(p.po_kode) ORDER BY p.po_is_outstanding DESC, p.id) AS rn,
+         count(*) OVER (PARTITION BY btrim(p.po_kode)) AS n
+  FROM public.pos p
+  WHERE btrim(p.po_kode) IN (SELECT po_kode FROM wms_po)
+)
+SELECT x.*,
+       p.id AS po_id,
+       p.n AS db_count,
+       p.po_is_outstanding AS db_outstanding,
+       p.po_status::text AS db_status,
+       p.po_jenis::text AS db_jenis,
+       p.po_tanggal AS db_tanggal,
+       p.po_keterangan AS db_keterangan,
+       p.po_payment_term AS db_payment_term,
+       p.po_currency::text AS db_currency,
+       p.po_tax_mode::text AS db_tax_mode,
+       p.po_harga_termasuk_pajak AS db_harga_incl,
+       p.po_ppn_mode::text AS db_ppn_mode,
+       p.po_ppn_rate AS db_ppn_rate,
+       p.po_pph_type::text AS db_pph_type,
+       p.po_pph_mode::text AS db_pph_mode,
+       p.po_pph_rate AS db_pph_rate,
+       p.po_receive_status::text AS db_receive_status,
+       p.approvals AS db_approvals,
+       c.nama_cabang AS db_cabang,
+       COALESCE(p.po_is_outstanding AND p.po_status::text <> 'rejected', false) AS ok_po
+FROM wms_po x
+LEFT JOIN p ON p.k = x.po_kode AND p.rn = 1
+LEFT JOIN public.cabang c ON c.id = p.cabang_id;
+
+-- Item: dicocokkan per (PO, part number, urutan ke-n) -- sama seperti import.
+CREATE TEMP TABLE wms_v_item AS
+WITH s AS (
+  SELECT i.*, upper(btrim(i.part_number)) AS pkey,
+         row_number() OVER (PARTITION BY i.po_kode, upper(btrim(i.part_number)) ORDER BY i.line_no) AS rn
+  FROM wms_item i
+  WHERE i.po_kode IN (SELECT po_kode FROM wms_v_po WHERE ok_po)
+),
+e AS (
+  SELECT pi.id, pi.po_id, v.po_kode, pi.part_id, pi.part_number, pi.qty, pi.qty_received, pi.harga,
+         pi.vendor_id, pi.item_ppn_rate, pi.item_pph_type::text AS item_pph_type, pi.item_pph_rate,
+         pi.ost_pr_ref, pi.pr_item_id,
+         upper(btrim(pi.part_number)) AS pkey,
+         row_number() OVER (PARTITION BY pi.po_id, upper(btrim(pi.part_number)) ORDER BY pi.id) AS rn
+  FROM public.po_items pi
+  JOIN wms_v_po v ON v.po_id = pi.po_id AND v.ok_po
+),
+rq AS (
+  SELECT ri.po_item_id,
+         sum(ri.qty) FILTER (WHERE rv.ri_status::text = 'completed') AS completed_qty,
+         sum(ri.qty) FILTER (WHERE rv.ri_status::text = 'open') AS pending_qty
+  FROM public.receive_items ri
+  JOIN public.receives rv ON rv.id = ri.ri_id
+  WHERE ri.po_item_id IN (SELECT id FROM e)
+  GROUP BY ri.po_item_id
+)
+SELECT COALESCE(s.po_kode, e.po_kode) AS po_kode,
+       COALESCE(s.part_number, e.part_number) AS part_number,
+       s.line_no, s.qty AS x_qty, s.harga AS x_harga, s.kts AS x_kts,
+       s.ppn_rate AS x_ppn_rate, s.pph_type AS x_pph_type, s.pph_rate AS x_pph_rate,
+       s.pr_ref AS x_pr_ref,
+       e.id AS po_item_id, e.po_id, e.part_id, e.qty, e.qty_received, e.harga, e.vendor_id,
+       e.item_ppn_rate, e.item_pph_type, e.item_pph_rate, e.ost_pr_ref, e.pr_item_id,
+       COALESCE(rq.completed_qty, 0) AS completed_qty,
+       COALESCE(rq.pending_qty, 0) AS pending_qty
+FROM s
+FULL JOIN e ON e.po_kode = s.po_kode AND e.pkey = s.pkey AND e.rn = s.rn
+LEFT JOIN rq ON rq.po_item_id = e.id;
+
+-- RI import (ri_is_import) milik PO-PO di Excel.
+CREATE TEMP TABLE wms_v_ri AS
+WITH r AS (
+  SELECT rv.id, rv.ri_kode, rv.ri_status::text AS ri_status, rv.approvals, rv.cabang_id,
+         v.po_kode, v.ri_keterangan AS x_ri_keterangan, v.cabang AS x_cabang
+  FROM public.receives rv
+  JOIN wms_v_po v ON v.po_id = rv.po_id AND v.ok_po
+  WHERE rv.ri_is_import
+),
+it AS (
+  SELECT ri.ri_id, sum(ri.qty) AS qty,
+         count(*) FILTER (WHERE ri.cabang_penerima_id IS NULL) AS no_gudang
+  FROM public.receive_items ri
+  WHERE ri.ri_id IN (SELECT id FROM r)
+  GROUP BY ri.ri_id
+),
+sm AS (
+  SELECT sm.reference_id, sum(sm.qty_change) AS qty
+  FROM public.stock_movements sm
+  WHERE sm.type = 'RI' AND sm.reference_id IN (SELECT ri_kode FROM r)
+  GROUP BY sm.reference_id
+)
+SELECT r.*, c.nama_cabang,
+       COALESCE(it.qty, 0) AS qty_ri,
+       COALESCE(it.no_gudang, 0) AS no_gudang,
+       COALESCE(sm.qty, 0) AS qty_sm
+FROM r
+LEFT JOIN it ON it.ri_id = r.id
+LEFT JOIN sm ON sm.reference_id = r.ri_kode
+LEFT JOIN public.cabang c ON c.id = r.cabang_id;
+
+-- ---------------------------------------------------------------------
+-- 1. Master barang & vendor
+-- ---------------------------------------------------------------------
+INSERT INTO wms_v_result
+SELECT 101, '1. Master', 'Part number Excel tidak ada di master barang', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(part_number, ', ' ORDER BY part_number), 400)
+FROM (
+  SELECT DISTINCT btrim(i.part_number) AS part_number
+  FROM wms_item i
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b
+                    WHERE upper(btrim(b.part_number)) = upper(btrim(i.part_number)))
+) t;
+
+INSERT INTO wms_v_result
+SELECT 102, '1. Master', 'Vendor Excel tidak ada di master vendor', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(vendor_name, ', ' ORDER BY vendor_name), 400)
+FROM (
+  SELECT DISTINCT o.vendor_name
+  FROM wms_po o
+  WHERE NOT EXISTS (
+    SELECT 1 FROM public.vendors v
+    WHERE regexp_replace(lower(btrim(v.vendor_name)), '\s+', ' ', 'g')
+        = regexp_replace(lower(btrim(o.vendor_name)), '\s+', ' ', 'g'))
+) t;
+
+INSERT INTO wms_v_result
+SELECT 103, '1. Master', 'Satuan barang tidak wajar (kosong / > 10 huruf / berisi "PR-")', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(part_number || ' = "' || COALESCE(part_satuan, '') || '"', ', ' ORDER BY part_number), 400)
+FROM public.barang b
+WHERE upper(btrim(b.part_number)) IN (SELECT upper(btrim(part_number)) FROM wms_item)
+  AND (COALESCE(btrim(b.part_satuan), '') = ''
+       OR length(btrim(b.part_satuan)) > 10
+       OR b.part_satuan ILIKE '%PR-%');
+
+INSERT INTO wms_v_result
+SELECT 104, '1. Master', 'Vendor baru dibuat import (vendor_no GMI-211026NN)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(vendor_no || ' ' || vendor_name, ', ' ORDER BY vendor_no), 400)
+FROM public.vendors
+WHERE vendor_no LIKE 'GMI-211026%';
+
+INSERT INTO wms_v_result
+SELECT 105, '1. Master', 'Barang yang namanya masih = part number (lengkapi di halaman Barang)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(part_number, ', ' ORDER BY part_number), 400)
+FROM public.barang b
+WHERE upper(btrim(b.part_number)) IN (SELECT upper(btrim(part_number)) FROM wms_item)
+  AND btrim(b.part_name) = btrim(b.part_number);
+
+-- ---------------------------------------------------------------------
+-- 2. Header PO
+-- ---------------------------------------------------------------------
+INSERT INTO wms_v_result
+SELECT 200, '2. Header PO', 'PO Excel yang tersinkron sbg PO Outstanding',
+       count(*)::text, count(*) FILTER (WHERE ok_po)::text, NULL, 'INFO', NULL
+FROM wms_v_po;
+
+INSERT INTO wms_v_result
+SELECT 201, '2. Header PO', 'PO Excel tidak ada di DB', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode, ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE po_id IS NULL;
+
+INSERT INTO wms_v_result
+SELECT 202, '2. Header PO', 'Nomor PO dipakai PO non-outstanding (sengaja di-skip import)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(po_kode || ' (' || db_jenis || ', ' || db_status || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE po_id IS NOT NULL AND NOT db_outstanding;
+
+INSERT INTO wms_v_result
+SELECT 203, '2. Header PO', 'PO Outstanding berstatus rejected (sengaja di-skip import)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(po_kode, ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE db_outstanding AND db_status = 'rejected';
+
+INSERT INTO wms_v_result
+SELECT 204, '2. Header PO', 'Nomor PO dobel di tabel pos', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' (' || db_count || 'x)', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE db_count > 1;
+
+INSERT INTO wms_v_result
+SELECT 205, '2. Header PO', 'Jenis PO bukan reguler', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' (' || db_jenis || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_jenis IS DISTINCT FROM 'reguler';
+
+INSERT INTO wms_v_result
+SELECT 206, '2. Header PO', 'Tanggal PO beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' (DB ' || COALESCE(db_tanggal::text, '-') || ' / Excel ' || po_tanggal || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_tanggal IS DISTINCT FROM po_tanggal;
+
+INSERT INTO wms_v_result
+SELECT 207, '2. Header PO', 'Mata uang beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' (DB ' || COALESCE(db_currency, '-') || ' / Excel ' || currency || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_currency IS DISTINCT FROM currency;
+
+INSERT INTO wms_v_result
+SELECT 208, '2. Header PO', 'Pajak header beda (mode / termasuk pajak / PPN / PPh)', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' (DB ' || COALESCE(db_tax_mode, '-') || ' ppn ' || COALESCE(db_ppn_rate::text, '-')
+                         || ' pph ' || COALESCE(db_pph_type, '-') || ' ' || COALESCE(db_pph_rate::text, '-')
+                         || ' / Excel ' || tax_mode || ' ppn ' || ppn_rate
+                         || ' pph ' || COALESCE(pph_type, '-') || ' ' || pph_rate || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po
+WHERE ok_po
+  AND (db_tax_mode IS DISTINCT FROM tax_mode
+       OR db_harga_incl IS DISTINCT FROM harga_incl
+       OR db_ppn_mode IS DISTINCT FROM 'percent'
+       OR db_ppn_rate IS DISTINCT FROM ppn_rate
+       OR db_pph_type IS DISTINCT FROM pph_type
+       OR db_pph_mode IS DISTINCT FROM 'percent'
+       OR db_pph_rate IS DISTINCT FROM pph_rate);
+
+INSERT INTO wms_v_result
+SELECT 209, '2. Header PO', 'Payment term beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' (DB ' || COALESCE(db_payment_term, '-') || ' / Excel ' || COALESCE(payment_term, '-') || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_payment_term IS DISTINCT FROM payment_term;
+
+INSERT INTO wms_v_result
+SELECT 210, '2. Header PO', 'Keterangan PO beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode, ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_keterangan IS DISTINCT FROM keterangan;
+
+INSERT INTO wms_v_result
+SELECT 211, '2. Header PO', 'Lokasi (cabang) PO kosong', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode, ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_cabang IS NULL;
+
+INSERT INTO wms_v_result
+SELECT 212, '2. Header PO', 'Lokasi PO beda dari gudang faktur Excel (PO OST lama: lokasi tidak ditimpa)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(po_kode || ' (DB ' || db_cabang || ' / Excel ' || cabang || ')', ', ' ORDER BY po_kode), 400)
+FROM wms_v_po WHERE ok_po AND db_cabang IS NOT NULL AND upper(btrim(db_cabang)) <> upper(cabang);
+
+-- ---------------------------------------------------------------------
+-- 3. Item PO
+-- ---------------------------------------------------------------------
+INSERT INTO wms_v_result
+SELECT 301, '3. Item PO', 'Jumlah baris item (PO tersinkron)',
+       count(*) FILTER (WHERE line_no IS NOT NULL)::text,
+       count(*) FILTER (WHERE po_item_id IS NOT NULL)::text,
+       count(*) FILTER (WHERE line_no IS NOT NULL) = count(*) FILTER (WHERE po_item_id IS NOT NULL),
+       'WARN', NULL
+FROM wms_v_item;
+
+INSERT INTO wms_v_result
+SELECT 302, '3. Item PO', 'Baris item Excel tidak ada di DB', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number, ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item WHERE po_item_id IS NULL;
+
+INSERT INTO wms_v_result
+SELECT 303, '3. Item PO', 'Item DB tidak ada di Excel (dipertahankan karena sudah dipakai)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(po_kode || ':' || part_number || ' qty ' || qty || ' diterima ' || qty_received
+                       || CASE WHEN pr_item_id IS NOT NULL THEN ' (ter-link PR)' ELSE '' END,
+                       ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item WHERE line_no IS NULL;
+
+INSERT INTO wms_v_result
+SELECT 304, '3. Item PO', 'Qty PO beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' (DB ' || qty || ' / Excel ' || x_qty || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL
+  AND qty <> x_qty
+  AND NOT (qty = qty_received AND qty_received > x_qty);
+
+INSERT INTO wms_v_result
+SELECT 305, '3. Item PO', 'Qty PO dipertahankan (WMS sudah terima > qty Excel)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(po_kode || ':' || part_number || ' (DB ' || qty || ' / Excel ' || x_qty || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL
+  AND qty <> x_qty AND qty = qty_received AND qty_received > x_qty;
+
+INSERT INTO wms_v_result
+SELECT 306, '3. Item PO', 'Harga satuan beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' (DB ' || harga || ' / Excel ' || x_harga || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL AND harga IS DISTINCT FROM x_harga;
+
+INSERT INTO wms_v_result
+SELECT 307, '3. Item PO', 'Vendor item kosong / beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(i.po_kode || ':' || i.part_number || ' (DB ' || COALESCE(v.vendor_name, '-') || ' / Excel ' || o.vendor_name || ')',
+                       ', ' ORDER BY i.po_kode, i.part_number), 400)
+FROM wms_v_item i
+JOIN wms_po o ON o.po_kode = i.po_kode
+LEFT JOIN public.vendors v ON v.id = i.vendor_id
+WHERE i.line_no IS NOT NULL AND i.po_item_id IS NOT NULL
+  AND (v.id IS NULL
+       OR regexp_replace(lower(btrim(v.vendor_name)), '\s+', ' ', 'g')
+          <> regexp_replace(lower(btrim(o.vendor_name)), '\s+', ' ', 'g'));
+
+INSERT INTO wms_v_result
+SELECT 308, '3. Item PO', 'Pajak per item beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number, ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL
+  AND (item_ppn_rate IS DISTINCT FROM x_ppn_rate
+       OR item_pph_type IS DISTINCT FROM x_pph_type
+       OR item_pph_rate IS DISTINCT FROM x_pph_rate);
+
+INSERT INTO wms_v_result
+SELECT 309, '3. Item PO', 'Referensi PR (ost_pr_ref) beda dengan Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' (DB ' || COALESCE(ost_pr_ref, '-') || ' / Excel ' || COALESCE(x_pr_ref, '-') || ')',
+                       ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL AND ost_pr_ref IS DISTINCT FROM x_pr_ref;
+
+INSERT INTO wms_v_result
+SELECT 310, '3. Item PO', 'Total qty dipesan (baris yang cocok)',
+       sum(x_qty)::text, sum(qty)::text, sum(x_qty) = sum(qty), 'WARN', NULL
+FROM wms_v_item WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------
+-- 4. Penerimaan (RI) & stok
+-- ---------------------------------------------------------------------
+INSERT INTO wms_v_result
+SELECT 401, '4. Penerimaan', 'Total qty diterima (Excel Kts. Dikirim vs po_items.qty_received)',
+       sum(x_kts)::text, sum(qty_received)::text, sum(x_kts) = sum(qty_received), 'WARN', NULL
+FROM wms_v_item WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL;
+
+INSERT INTO wms_v_result
+SELECT 402, '4. Penerimaan', 'Qty diterima KURANG dari Excel (di luar RI yang masih pending)', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' (DB ' || qty_received
+                       || CASE WHEN pending_qty > 0 THEN ' + pending ' || pending_qty ELSE '' END
+                       || ' / Excel ' || x_kts || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL AND qty_received + pending_qty < x_kts;
+
+INSERT INTO wms_v_result
+SELECT 403, '4. Penerimaan', 'Qty diterima LEBIH dari Excel (sudah di-RI di WMS)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(po_kode || ':' || part_number || ' (DB ' || qty_received || ' / Excel ' || x_kts || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item
+WHERE line_no IS NOT NULL AND po_item_id IS NOT NULL AND qty_received > x_kts;
+
+INSERT INTO wms_v_result
+SELECT 404, '4. Penerimaan', 'Qty diterima > qty PO', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' (' || qty_received || ' > ' || qty || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item WHERE po_item_id IS NOT NULL AND qty_received > qty;
+
+INSERT INTO wms_v_result
+SELECT 405, '4. Penerimaan', 'qty_received item != total qty RI completed', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' (item ' || qty_received || ' / RI ' || completed_qty || ')', ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_item WHERE po_item_id IS NOT NULL AND qty_received <> completed_qty;
+
+INSERT INTO wms_v_result
+SELECT 406, '4. Penerimaan', 'RI import (ri_is_import) untuk PO Excel (import ulang bisa tambah RI -IMP)',
+       (SELECT count(*) FROM wms_v_po WHERE ok_po AND ri_kode IS NOT NULL) || ' PO berfaktur',
+       count(*) || ' RI di ' || count(DISTINCT po_kode) || ' PO', NULL, 'INFO', NULL
+FROM wms_v_ri;
+
+INSERT INTO wms_v_result
+SELECT 407, '4. Penerimaan', 'RI import tidak completed / approvals tidak kosong', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(ri_kode || ' (' || ri_status || ')', ', ' ORDER BY ri_kode), 400)
+FROM wms_v_ri
+WHERE ri_status <> 'completed' OR COALESCE(approvals, '[]'::jsonb) <> '[]'::jsonb;
+
+INSERT INTO wms_v_result
+SELECT 408, '4. Penerimaan', 'Kode RI import bukan nomor faktur PO tsb', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ': ' || ri_kode, ', ' ORDER BY po_kode), 400)
+FROM wms_v_ri
+WHERE x_ri_keterangan IS NULL
+   OR position(regexp_replace(ri_kode, '-IMP[0-9]*$', '') IN x_ri_keterangan) = 0;
+
+INSERT INTO wms_v_result
+SELECT 409, '4. Penerimaan', 'Gudang RI import beda dengan gudang faktur Excel', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(ri_kode || ' (DB ' || COALESCE(nama_cabang, '-') || ' / Excel ' || x_cabang || ')', ', ' ORDER BY ri_kode), 400)
+FROM wms_v_ri
+WHERE nama_cabang IS NULL OR upper(btrim(nama_cabang)) <> upper(x_cabang);
+
+INSERT INTO wms_v_result
+SELECT 410, '4. Penerimaan', 'Item RI import tanpa gudang penerima', '0',
+       COALESCE(sum(no_gudang), 0)::text, COALESCE(sum(no_gudang), 0) = 0, 'FAIL',
+       left(string_agg(ri_kode, ', ' ORDER BY ri_kode) FILTER (WHERE no_gudang > 0), 400)
+FROM wms_v_ri;
+
+INSERT INTO wms_v_result
+SELECT 411, '4. Penerimaan', 'Stock movement (type RI) != qty RI import', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(ri_kode || ' (RI ' || qty_ri || ' / movement ' || qty_sm || ')', ', ' ORDER BY ri_kode), 400)
+FROM wms_v_ri WHERE qty_ri <> qty_sm;
+
+INSERT INTO wms_v_result
+SELECT 412, '4. Penerimaan', 'Barang x gudang dari RI import tidak punya baris di tabel stock', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(part_number, ', ' ORDER BY part_number), 400)
+FROM (
+  SELECT DISTINCT ri.part_id, ri.part_number, ri.cabang_penerima_id
+  FROM public.receive_items ri
+  WHERE ri.ri_id IN (SELECT id FROM wms_v_ri) AND ri.cabang_penerima_id IS NOT NULL
+) t
+WHERE NOT EXISTS (SELECT 1 FROM public.stock s
+                  WHERE s.part_id = t.part_id AND s.cabang_id = t.cabang_penerima_id);
+
+INSERT INTO wms_v_result
+SELECT 413, '4. Penerimaan', 'Total stok ditambah lewat RI import, per gudang', NULL,
+       COALESCE(string_agg(nama_cabang || ': ' || qty, ' | ' ORDER BY nama_cabang), '0'), NULL, 'INFO', NULL
+FROM (
+  SELECT c.nama_cabang, sum(ri.qty) AS qty
+  FROM public.receive_items ri
+  JOIN public.cabang c ON c.id = ri.cabang_penerima_id
+  WHERE ri.ri_id IN (SELECT id FROM wms_v_ri)
+  GROUP BY c.nama_cabang
+) t;
+
+-- ---------------------------------------------------------------------
+-- 5. Status PO
+-- ---------------------------------------------------------------------
+INSERT INTO wms_v_result
+SELECT 501, '5. Status PO', 'Status penerimaan PO tidak konsisten dengan qty item', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(v.po_kode || ' (DB ' || v.db_receive_status || ' / hitung ' || a.st || ')', ', ' ORDER BY v.po_kode), 400)
+FROM wms_v_po v
+JOIN (
+  SELECT po_id,
+         CASE WHEN bool_and(qty_received >= qty) THEN 'complete'
+              WHEN bool_or(qty_received > 0) THEN 'partial'
+              ELSE 'pending' END AS st
+  FROM public.po_items
+  WHERE po_id IN (SELECT po_id FROM wms_v_po WHERE ok_po)
+  GROUP BY po_id
+) a ON a.po_id = v.po_id
+WHERE v.ok_po AND v.db_receive_status IS DISTINCT FROM a.st;
+
+-- Status "seharusnya" dihitung dari Kts. Dikirim Excel (kolom Status ERP
+-- tidak dipakai: "Menunggu" juga dipakai untuk PO yang kirimannya masih 0).
+INSERT INTO wms_v_result
+SELECT 502, '5. Status PO', 'Status penerimaan beda dgn hitungan Kts. Dikirim Excel', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(v.po_kode || ' (Excel ' || x.st || ' / DB ' || v.db_receive_status || ')', ', ' ORDER BY v.po_kode), 400)
+FROM wms_v_po v
+JOIN (
+  SELECT po_kode,
+         CASE WHEN bool_and(kts >= qty) THEN 'complete'
+              WHEN bool_or(kts > 0) THEN 'partial'
+              ELSE 'pending' END AS st
+  FROM wms_item
+  GROUP BY po_kode
+) x ON x.po_kode = v.po_kode
+WHERE v.ok_po AND v.db_receive_status IS DISTINCT FROM x.st;
+
+INSERT INTO wms_v_result
+SELECT 503, '5. Status PO', 'Distribusi status penerimaan (complete / partial / pending)',
+       count(*) FILTER (WHERE x.st = 'complete') || ' / '
+         || count(*) FILTER (WHERE x.st = 'partial') || ' / '
+         || count(*) FILTER (WHERE x.st = 'pending'),
+       count(*) FILTER (WHERE v.db_receive_status = 'complete') || ' / '
+         || count(*) FILTER (WHERE v.db_receive_status = 'partial') || ' / '
+         || count(*) FILTER (WHERE v.db_receive_status = 'pending'),
+       NULL, 'INFO', NULL
+FROM wms_v_po v
+JOIN (
+  SELECT po_kode,
+         CASE WHEN bool_and(kts >= qty) THEN 'complete'
+              WHEN bool_or(kts > 0) THEN 'partial'
+              ELSE 'pending' END AS st
+  FROM wms_item
+  GROUP BY po_kode
+) x ON x.po_kode = v.po_kode
+WHERE v.ok_po;
+
+INSERT INTO wms_v_result
+SELECT 504, '5. Status PO', 'PO belum punya jalur approval (moderator terapkan template)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(po_kode, ', ' ORDER BY po_kode), 400)
+FROM wms_v_po
+WHERE ok_po AND COALESCE(db_approvals, '[]'::jsonb) = '[]'::jsonb;
+
+-- ---------------------------------------------------------------------
+-- 6. PO WMS asli yang di-skip import (nomor sama, dibuat langsung di WMS)
+--    Import tidak menyentuhnya, jadi penerimaan ERP harus di-RI di WMS.
+--    Dibandingkan per (PO, part number) karena baris PO WMS bisa beda pecahan.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.wms_v_skip;
+CREATE TEMP TABLE wms_v_skip AS
+WITH x AS (
+  SELECT i.po_kode, upper(btrim(i.part_number)) AS pkey, min(btrim(i.part_number)) AS part_number,
+         sum(i.qty) AS x_qty, sum(i.kts) AS x_kts, min(i.harga) AS x_harga_min, max(i.harga) AS x_harga_max
+  FROM wms_item i
+  WHERE i.po_kode IN (SELECT po_kode FROM wms_v_po WHERE po_id IS NOT NULL AND NOT db_outstanding)
+  GROUP BY 1, 2
+),
+d AS (
+  SELECT v.po_kode, upper(btrim(pi.part_number)) AS pkey, min(btrim(pi.part_number)) AS part_number,
+         sum(pi.qty) AS qty, sum(pi.qty_received) AS qty_received,
+         min(pi.harga) AS harga_min, max(pi.harga) AS harga_max
+  FROM public.po_items pi
+  JOIN wms_v_po v ON v.po_id = pi.po_id AND NOT v.db_outstanding
+  GROUP BY 1, 2
+)
+SELECT COALESCE(x.po_kode, d.po_kode) AS po_kode,
+       COALESCE(x.part_number, d.part_number) AS part_number,
+       COALESCE(x.x_qty, 0) AS x_qty, COALESCE(x.x_kts, 0) AS x_kts,
+       x.x_harga_min, x.x_harga_max,
+       COALESCE(d.qty, 0) AS qty, COALESCE(d.qty_received, 0) AS qty_received,
+       d.harga_min, d.harga_max
+FROM x
+FULL JOIN d ON d.po_kode = x.po_kode AND d.pkey = x.pkey;
+
+INSERT INTO wms_v_result
+SELECT 601, '6. PO WMS asli (di-skip)', 'PO di-skip per jenis & status WMS', NULL,
+       COALESCE(string_agg(k || ': ' || n, ' | ' ORDER BY k), '0'), NULL, 'INFO', NULL
+FROM (
+  SELECT db_jenis || ' ' || db_status AS k, count(*) AS n
+  FROM wms_v_po WHERE po_id IS NOT NULL AND NOT db_outstanding
+  GROUP BY 1
+) t;
+
+INSERT INTO wms_v_result
+SELECT 602, '6. PO WMS asli (di-skip)', 'Total qty diterima (Excel Kts. Dikirim vs WMS qty_received)',
+       sum(x_kts)::text, sum(qty_received)::text, sum(x_kts) = sum(qty_received), 'WARN', NULL
+FROM wms_v_skip;
+
+INSERT INTO wms_v_result
+SELECT 603, '6. PO WMS asli (di-skip)', 'Penerimaan WMS KURANG dari Excel (barang perlu di-RI di WMS)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(po_kode || ':' || part_number || ' (WMS ' || qty_received || ' / Excel ' || x_kts || ')',
+                       ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_skip WHERE qty_received < x_kts;
+
+INSERT INTO wms_v_result
+SELECT 604, '6. PO WMS asli (di-skip)', 'PO yang penerimaannya kurang dari Excel', '0',
+       count(DISTINCT po_kode)::text, count(*) = 0, 'WARN',
+       left(string_agg(DISTINCT po_kode, ', '), 400)
+FROM wms_v_skip WHERE qty_received < x_kts;
+
+INSERT INTO wms_v_result
+SELECT 605, '6. PO WMS asli (di-skip)', 'Penerimaan WMS LEBIH dari Excel', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(po_kode || ':' || part_number || ' (WMS ' || qty_received || ' / Excel ' || x_kts || ')',
+                       ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_skip WHERE qty_received > x_kts;
+
+INSERT INTO wms_v_result
+SELECT 606, '6. PO WMS asli (di-skip)', 'Qty dipesan / barang beda antara PO WMS & Excel', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(po_kode || ':' || part_number || ' (WMS ' || qty || ' / Excel ' || x_qty || ')',
+                       ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_skip WHERE qty <> x_qty;
+
+INSERT INTO wms_v_result
+SELECT 607, '6. PO WMS asli (di-skip)', 'Harga beda antara PO WMS & Excel', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(po_kode || ':' || part_number || ' (WMS ' || harga_min || ' / Excel ' || x_harga_min || ')',
+                       ', ' ORDER BY po_kode, part_number), 400)
+FROM wms_v_skip
+WHERE x_harga_min IS NOT NULL AND harga_min IS NOT NULL
+  AND (harga_min <> x_harga_min OR harga_max <> x_harga_max);
+
+-- ---------------------------------------------------------------------
+-- Ringkasan
+-- ---------------------------------------------------------------------
+INSERT INTO wms_v_result
+SELECT 0, '0. Ringkasan', 'Jumlah cek FAIL / WARN', '0 / 0',
+       count(*) FILTER (WHERE ok = false AND sev = 'FAIL') || ' / '
+         || count(*) FILTER (WHERE ok = false AND sev = 'WARN'),
+       count(*) FILTER (WHERE ok = false AND sev = 'FAIL') = 0, 'FAIL', NULL
+FROM wms_v_result;
+
+SELECT no,
+       CASE WHEN ok IS NULL THEN 'INFO' WHEN ok THEN 'OK' ELSE sev END AS status,
+       kelompok, cek, expected, actual, contoh
+FROM wms_v_result
+ORDER BY no;

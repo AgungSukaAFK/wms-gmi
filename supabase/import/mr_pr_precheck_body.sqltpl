@@ -1,0 +1,341 @@
+DO $$
+BEGIN
+  IF to_regclass('pg_temp.x_mr') IS NULL OR to_regclass('pg_temp.x_pr_item') IS NULL THEN
+    RAISE EXCEPTION 'Data Excel (x_mr/x_pr_item) tidak ada. Jalankan file supabase/import/mr_pr_precheck.sql hasil generator (seluruh isinya), bukan template .sqltpl.';
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_res;
+CREATE TEMP TABLE x_res (
+  no INT PRIMARY KEY,
+  kelompok TEXT NOT NULL,
+  cek TEXT NOT NULL,
+  nilai TEXT,
+  contoh TEXT
+);
+
+-- Kode dinormalisasi (huruf besar, tanpa spasi tepi) untuk pencocokan.
+DROP TABLE IF EXISTS pg_temp.x_mr_db;
+CREATE TEMP TABLE x_mr_db AS
+SELECT m.id, m.mr_kode, upper(btrim(m.mr_kode)) AS k, m.mr_tanggal, m.mr_status::text AS mr_status,
+       m.mr_type, m.cabang_id
+FROM public.mrs m;
+
+DROP TABLE IF EXISTS pg_temp.x_pr_db;
+CREATE TEMP TABLE x_pr_db AS
+SELECT p.id, p.pr_kode, upper(btrim(p.pr_kode)) AS k, p.pr_tanggal, p.pr_status::text AS pr_status
+FROM public.prs p;
+
+-- ---------------------------------------------------------------------
+-- 1. Gambaran MR & PR yang sudah ada di production
+-- ---------------------------------------------------------------------
+INSERT INTO x_res
+SELECT 101, '1. Prod', 'MR di prod (total / standard / scheduled)',
+       count(*) || ' / ' || count(*) FILTER (WHERE mr_type = 'standard') || ' / ' || count(*) FILTER (WHERE mr_type = 'scheduled'),
+       'mr_tanggal ' || COALESCE(min(mr_tanggal)::text, '-') || ' s/d ' || COALESCE(max(mr_tanggal)::text, '-')
+FROM x_mr_db;
+
+INSERT INTO x_res
+SELECT 102, '1. Prod', 'MR prod per bulan (mr_tanggal)', NULL,
+       string_agg(b || ': ' || n, ' | ' ORDER BY b)
+FROM (SELECT to_char(mr_tanggal, 'YYYY-MM') AS b, count(*) AS n FROM x_mr_db WHERE mr_tanggal IS NOT NULL GROUP BY 1) t;
+
+INSERT INTO x_res
+SELECT 103, '1. Prod', 'Pola kode MR prod (angka -> 9), 12 teratas', NULL,
+       string_agg(pola || ' = ' || n, ' | ' ORDER BY n DESC, pola)
+FROM (
+  SELECT pola, n FROM (
+    SELECT regexp_replace(mr_kode, '[0-9]+', '9', 'g') AS pola, count(*) AS n
+    FROM x_mr_db GROUP BY 1
+  ) a ORDER BY n DESC, pola LIMIT 12
+) t;
+
+INSERT INTO x_res
+SELECT 104, '1. Prod', 'Contoh 15 kode MR prod terbaru', NULL,
+       string_agg(mr_kode, ', ' ORDER BY id DESC)
+FROM (SELECT id, mr_kode FROM x_mr_db ORDER BY id DESC LIMIT 15) t;
+
+INSERT INTO x_res
+SELECT 105, '1. Prod', 'PR di prod (total)', count(*)::text,
+       'pr_tanggal ' || COALESCE(min(pr_tanggal)::text, '-') || ' s/d ' || COALESCE(max(pr_tanggal)::text, '-')
+FROM x_pr_db;
+
+INSERT INTO x_res
+SELECT 106, '1. Prod', 'Pola kode PR prod (angka -> 9), 12 teratas', NULL,
+       string_agg(pola || ' = ' || n, ' | ' ORDER BY n DESC, pola)
+FROM (
+  SELECT pola, n FROM (
+    SELECT regexp_replace(pr_kode, '[0-9]+', '9', 'g') AS pola, count(*) AS n
+    FROM x_pr_db GROUP BY 1
+  ) a ORDER BY n DESC, pola LIMIT 12
+) t;
+
+INSERT INTO x_res
+SELECT 107, '1. Prod', 'Contoh 15 kode PR prod terbaru', NULL,
+       string_agg(pr_kode, ', ' ORDER BY id DESC)
+FROM (SELECT id, pr_kode FROM x_pr_db ORDER BY id DESC LIMIT 15) t;
+
+-- ---------------------------------------------------------------------
+-- 2. MR Excel vs production
+-- ---------------------------------------------------------------------
+INSERT INTO x_res
+SELECT 200, '2. MR', 'MR di Excel: dokumen / baris barang', count(*) || ' / ' || sum(n_items),
+       'open ' || count(*) FILTER (WHERE grp = 'open') || ' | completed ' || count(*) FILTER (WHERE grp = 'completed')
+         || ' | closed ' || count(*) FILTER (WHERE grp = 'closed')
+         || ' | tanggal ' || min(mr_date) || ' s/d ' || max(mr_date)
+FROM x_mr;
+
+INSERT INTO x_res
+SELECT 201, '2. MR', 'Kode MR Excel yang SUDAH ADA di prod',
+       count(*) || ' dari ' || (SELECT count(*) FROM x_mr),
+       'open ' || count(*) FILTER (WHERE x.grp = 'open') || ' | completed ' || count(*) FILTER (WHERE x.grp = 'completed')
+         || ' | closed ' || count(*) FILTER (WHERE x.grp = 'closed')
+         || ' || contoh: ' || COALESCE(left(string_agg(x.mr_kode, ', ' ORDER BY x.mr_date DESC), 300), '-')
+FROM x_mr x
+WHERE EXISTS (SELECT 1 FROM x_mr_db d WHERE d.k = upper(btrim(x.mr_kode)));
+
+INSERT INTO x_res
+SELECT 202, '2. MR', 'Kode MR Excel yang ada di prod tapi beda huruf besar/spasi', count(*)::text,
+       left(string_agg(x.mr_kode || ' -> ' || d.mr_kode, ', ' ORDER BY x.mr_kode), 400)
+FROM x_mr x
+JOIN x_mr_db d ON d.k = upper(btrim(x.mr_kode)) AND d.mr_kode <> x.mr_kode;
+
+INSERT INTO x_res
+SELECT 203, '2. MR', 'Kode MR Excel yang BELUM ada di prod',
+       count(*) || ' dari ' || (SELECT count(*) FROM x_mr),
+       'open ' || count(*) FILTER (WHERE x.grp = 'open') || ' | completed ' || count(*) FILTER (WHERE x.grp = 'completed')
+         || ' | closed ' || count(*) FILTER (WHERE x.grp = 'closed')
+         || ' | tanggal ' || COALESCE(min(x.mr_date)::text, '-') || ' s/d ' || COALESCE(max(x.mr_date)::text, '-')
+FROM x_mr x
+WHERE NOT EXISTS (SELECT 1 FROM x_mr_db d WHERE d.k = upper(btrim(x.mr_kode)));
+
+INSERT INTO x_res
+SELECT 204, '2. MR', 'MR Excel belum ada di prod, per bulan MR', NULL,
+       string_agg(b || ': ' || n, ' | ' ORDER BY b)
+FROM (
+  SELECT to_char(x.mr_date, 'YYYY-MM') AS b, count(*) AS n
+  FROM x_mr x
+  WHERE NOT EXISTS (SELECT 1 FROM x_mr_db d WHERE d.k = upper(btrim(x.mr_kode)))
+  GROUP BY 1
+) t;
+
+INSERT INTO x_res
+SELECT 205, '2. MR', 'Baris barang MR (kode+part) yang sudah ada di prod mr_items',
+       count(*) FILTER (WHERE ada_item) || ' dari ' || count(*) || ' baris di MR yang sudah ada',
+       'barang belum ada di MR prod-nya: '
+         || COALESCE(left(string_agg(mr_kode || ':' || part_number, ', ' ORDER BY mr_kode, part_number) FILTER (WHERE NOT ada_item), 300), '-')
+FROM (
+  SELECT i.mr_kode, i.part_number,
+         EXISTS (SELECT 1 FROM public.mr_items mi
+                 WHERE mi.mr_id = d.id AND upper(btrim(mi.part_number)) = upper(btrim(i.part_number))) AS ada_item
+  FROM x_mr_item i
+  JOIN x_mr_db d ON d.k = upper(btrim(i.mr_kode))
+) t;
+
+INSERT INTO x_res
+SELECT 206, '2. MR', 'MR prod yang TIDAK ada di Excel (mr_tanggal >= tanggal MR Excel paling awal)',
+       count(*)::text,
+       left(string_agg(d.mr_kode, ', ' ORDER BY d.id DESC), 400)
+FROM x_mr_db d
+WHERE d.mr_tanggal >= (SELECT min(mr_date) FROM x_mr)
+  AND NOT EXISTS (SELECT 1 FROM x_mr x WHERE upper(btrim(x.mr_kode)) = d.k);
+
+INSERT INTO x_res
+SELECT 207, '2. MR', 'MR Excel yang tanggal/site-nya beda antar baris', count(*)::text,
+       left(string_agg(mr_kode, ', ' ORDER BY mr_kode), 400)
+FROM x_mr WHERE header_beda;
+
+INSERT INTO x_res
+SELECT 208, '2. MR', 'Barang dobel dalam 1 MR Excel (kode+part sama)', count(*)::text,
+       left(string_agg(mr_kode || ':' || part_number || ' (' || n || 'x)', ', ' ORDER BY mr_kode), 400)
+FROM (
+  SELECT mr_kode, upper(btrim(part_number)) AS part_number, count(*) AS n
+  FROM x_mr_item GROUP BY 1, 2 HAVING count(*) > 1
+) t;
+
+-- ---------------------------------------------------------------------
+-- 3. PR Excel vs production
+-- ---------------------------------------------------------------------
+INSERT INTO x_res
+SELECT 300, '3. PR', 'PR di Excel: dokumen / baris barang',
+       count(DISTINCT pr_kode) || ' / ' || count(*),
+       'pembuat: ' || string_agg(DISTINCT COALESCE(pembuat, '-'), ', ')
+         || ' | tanggal ' || min(pr_tanggal) || ' s/d ' || max(pr_tanggal)
+FROM x_pr_item;
+
+INSERT INTO x_res
+SELECT 301, '3. PR', 'Kode PR Excel yang SUDAH ADA di prod',
+       count(*) || ' dari ' || (SELECT count(DISTINCT pr_kode) FROM x_pr_item),
+       left(string_agg(pr_kode || ' (' || pr_status || ')', ', ' ORDER BY pr_kode), 400)
+FROM (
+  SELECT DISTINCT x.pr_kode, d.pr_status
+  FROM x_pr_item x JOIN x_pr_db d ON d.k = upper(btrim(x.pr_kode))
+) t;
+
+INSERT INTO x_res
+SELECT 302, '3. PR', 'Baris barang PR (kode+part) yang sudah ada di prod pr_items',
+       count(*) FILTER (WHERE ada_item) || ' dari ' || count(*) || ' baris di PR yang sudah ada',
+       'barang belum ada di PR prod-nya: '
+         || COALESCE(left(string_agg(pr_kode || ':' || part_number, ', ' ORDER BY pr_kode, part_number) FILTER (WHERE NOT ada_item), 300), '-')
+FROM (
+  SELECT i.pr_kode, i.part_number,
+         EXISTS (SELECT 1 FROM public.pr_items pi
+                 WHERE pi.pr_id = d.id AND upper(btrim(pi.part_number)) = upper(btrim(i.part_number))) AS ada_item
+  FROM x_pr_item i
+  JOIN x_pr_db d ON d.k = upper(btrim(i.pr_kode))
+) t;
+
+INSERT INTO x_res
+SELECT 303, '3. PR', 'Kode PR prod yang TIDAK ada di Excel (pr_tanggal >= tanggal PR Excel paling awal)',
+       count(*)::text,
+       left(string_agg(d.pr_kode, ', ' ORDER BY d.id DESC), 400)
+FROM x_pr_db d
+WHERE d.pr_tanggal >= (SELECT min(pr_tanggal) FROM x_pr_item)
+  AND NOT EXISTS (SELECT 1 FROM x_pr_item x WHERE upper(btrim(x.pr_kode)) = d.k);
+
+-- Referensi MR tiap baris PR: ketemu di MR prod / cuma di MR Excel / tidak ada.
+DROP TABLE IF EXISTS pg_temp.x_pr_ref;
+CREATE TEMP TABLE x_pr_ref AS
+SELECT i.*,
+       EXISTS (SELECT 1 FROM x_mr_db d WHERE d.k = upper(btrim(i.ref_mr))) AS mr_di_prod,
+       EXISTS (SELECT 1 FROM x_mr x WHERE upper(btrim(x.mr_kode)) = upper(btrim(i.ref_mr))) AS mr_di_excel,
+       EXISTS (SELECT 1 FROM x_mr_db d JOIN public.mr_items mi ON mi.mr_id = d.id
+               WHERE d.k = upper(btrim(i.ref_mr))
+                 AND upper(btrim(mi.part_number)) = upper(btrim(i.part_number))) AS item_di_prod,
+       EXISTS (SELECT 1 FROM x_mr_item x
+               WHERE upper(btrim(x.mr_kode)) = upper(btrim(i.ref_mr))
+                 AND upper(btrim(x.part_number)) = upper(btrim(i.part_number))) AS item_di_excel
+FROM x_pr_item i;
+
+INSERT INTO x_res
+SELECT 304, '3. PR', 'Referensi MR baris PR: di prod / hanya di MR Excel / tidak ketemu / kosong',
+       count(*) FILTER (WHERE mr_di_prod) || ' / '
+         || count(*) FILTER (WHERE NOT mr_di_prod AND mr_di_excel) || ' / '
+         || count(*) FILTER (WHERE ref_mr IS NOT NULL AND NOT mr_di_prod AND NOT mr_di_excel) || ' / '
+         || count(*) FILTER (WHERE ref_mr IS NULL),
+       'tidak ketemu: '
+         || COALESCE(left(string_agg(DISTINCT ref_mr, ', ') FILTER (WHERE ref_mr IS NOT NULL AND NOT mr_di_prod AND NOT mr_di_excel), 300), '-')
+FROM x_pr_ref;
+
+INSERT INTO x_res
+SELECT 305, '3. PR', 'Baris PR yang barangnya ada di MR rujukan (prod / Excel / tidak ada)',
+       count(*) FILTER (WHERE item_di_prod) || ' / '
+         || count(*) FILTER (WHERE NOT item_di_prod AND item_di_excel) || ' / '
+         || count(*) FILTER (WHERE ref_mr IS NOT NULL AND NOT item_di_prod AND NOT item_di_excel),
+       'MR ada tapi barangnya tidak: '
+         || COALESCE(left(string_agg(pr_kode || ':' || part_number || ' (MR ' || ref_mr || ')', ', ' ORDER BY pr_kode)
+              FILTER (WHERE (mr_di_prod OR mr_di_excel) AND NOT item_di_prod AND NOT item_di_excel), 300), '-')
+FROM x_pr_ref;
+
+INSERT INTO x_res
+SELECT 306, '3. PR', 'Baris PR tanpa Referensi MR, per Nama Proyek', count(*)::text,
+       left(string_agg(p || ': ' || n, ' | ' ORDER BY n DESC), 400)
+FROM (
+  SELECT COALESCE(proyek, '-') AS p, count(*) AS n
+  FROM x_pr_item WHERE ref_mr IS NULL GROUP BY 1
+) t;
+
+-- Kebalikannya: NO PR di sheet MR Monitoring.
+INSERT INTO x_res
+SELECT 307, '3. PR', 'NO PR di MR Excel: ada di PR Excel / ada di prod / tidak ada',
+       count(*) FILTER (WHERE di_excel) || ' / ' || count(*) FILTER (WHERE di_prod) || ' / '
+         || count(*) FILTER (WHERE NOT di_excel AND NOT di_prod),
+       'distinct NO PR: ' || count(*)
+FROM (
+  SELECT DISTINCT upper(btrim(no_pr)) AS k,
+         EXISTS (SELECT 1 FROM x_pr_item p WHERE upper(btrim(p.pr_kode)) = upper(btrim(i.no_pr))) AS di_excel,
+         EXISTS (SELECT 1 FROM x_pr_db d WHERE d.k = upper(btrim(i.no_pr))) AS di_prod
+  FROM x_mr_item i WHERE no_pr IS NOT NULL
+) t;
+
+-- ---------------------------------------------------------------------
+-- 4. Master: cabang, barang, user
+-- ---------------------------------------------------------------------
+INSERT INTO x_res
+SELECT 401, '4. Master', 'SITE MR -> cabang (kode_cabang = SITE atau nama = GMI-SITE)',
+       count(*) FILTER (WHERE cabang IS NULL) || ' SITE belum ketemu cabang',
+       string_agg(site || ' (' || n || ' MR) -> ' || COALESCE(cabang, '???'), ' | ' ORDER BY n DESC)
+FROM (
+  SELECT COALESCE(x.site, '-') AS site, count(*) AS n,
+         (SELECT string_agg(c.nama_cabang, ' / ')
+          FROM public.cabang c
+          WHERE upper(btrim(c.kode_cabang)) = upper(btrim(x.site))
+             OR upper(btrim(c.nama_cabang)) IN ('GMI-' || upper(btrim(x.site)), upper(btrim(x.site)))) AS cabang
+  FROM x_mr x GROUP BY x.site
+) t;
+
+INSERT INTO x_res
+SELECT 402, '4. Master', 'Daftar cabang di prod (nama / kode)', count(*)::text,
+       string_agg(nama_cabang || ' / ' || COALESCE(kode_cabang, '-'), ' | ' ORDER BY nama_cabang)
+FROM public.cabang;
+
+INSERT INTO x_res
+SELECT 403, '4. Master', 'Part number MR Excel tidak ada di master barang',
+       count(*)::text, left(string_agg(part_number, ', ' ORDER BY part_number), 400)
+FROM (
+  SELECT DISTINCT btrim(i.part_number) AS part_number FROM x_mr_item i
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(i.part_number)))
+) t;
+
+INSERT INTO x_res
+SELECT 404, '4. Master', 'Part number PR Excel tidak ada di master barang',
+       count(*)::text, left(string_agg(part_number, ', ' ORDER BY part_number), 400)
+FROM (
+  SELECT DISTINCT btrim(i.part_number) AS part_number FROM x_pr_item i
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(i.part_number)))
+) t;
+
+INSERT INTO x_res
+SELECT 405, '4. Master', 'User yang namanya cocok dengan Pembuat PR', count(*)::text,
+       string_agg(p.nama || ' <' || COALESCE(p.email, '-') || '> ' || COALESCE(r.roles, ''), ' | ' ORDER BY p.nama)
+FROM public.profiles p
+LEFT JOIN LATERAL (
+  SELECT string_agg(ro.name, ',' ORDER BY ro.name) AS roles
+  FROM public.user_roles ur JOIN public.roles ro ON ro.id = ur.role_id
+  WHERE ur.user_id = p.id
+) r ON true
+WHERE EXISTS (SELECT 1 FROM x_pr_item x
+              WHERE x.pembuat IS NOT NULL
+                AND lower(p.nama) LIKE '%' || lower(split_part(btrim(x.pembuat), ' ', 1)) || '%');
+
+INSERT INTO x_res
+SELECT 406, '4. Master', 'User ber-role ppic (calon PIC MR import)', count(*)::text,
+       string_agg(p.nama || ' <' || COALESCE(p.email, '-') || '>', ' | ' ORDER BY p.nama)
+FROM public.profiles p
+WHERE EXISTS (SELECT 1 FROM public.user_roles ur JOIN public.roles ro ON ro.id = ur.role_id
+              WHERE ur.user_id = p.id AND ro.name = 'ppic');
+
+-- ---------------------------------------------------------------------
+-- 5. Kaitan ke PO yang sudah diimport (PO Outstanding)
+-- ---------------------------------------------------------------------
+INSERT INTO x_res
+SELECT 501, '5. Link PO', 'NO PO di MR Excel yang ada di prod (outstanding / PO WMS asli / tidak ada)',
+       count(*) FILTER (WHERE o) || ' / ' || count(*) FILTER (WHERE a) || ' / ' || count(*) FILTER (WHERE NOT o AND NOT a),
+       'distinct NO PO: ' || count(*)
+FROM (
+  SELECT DISTINCT btrim(i.no_po) AS no_po,
+         EXISTS (SELECT 1 FROM public.pos p WHERE btrim(p.po_kode) = btrim(i.no_po) AND p.po_is_outstanding) AS o,
+         EXISTS (SELECT 1 FROM public.pos p WHERE btrim(p.po_kode) = btrim(i.no_po) AND NOT p.po_is_outstanding) AS a
+  FROM x_mr_item i WHERE i.no_po IS NOT NULL
+) t;
+
+INSERT INTO x_res
+SELECT 502, '5. Link PO', 'Item PO Outstanding belum ter-link PR, yang ost_pr_ref-nya ada di PR Excel (calon auto-link)',
+       count(*) || ' dari ' || (SELECT count(*) FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+                                  WHERE p.po_is_outstanding AND pi.pr_item_id IS NULL) || ' item',
+       'cocok PR + part: ' || count(*) FILTER (WHERE cocok_part)
+FROM (
+  SELECT pi.id,
+         EXISTS (SELECT 1 FROM x_pr_item x
+                 WHERE upper(btrim(x.pr_kode)) = ANY (string_to_array(upper(replace(pi.ost_pr_ref, ' ', '')), ','))
+                   AND upper(btrim(x.part_number)) = upper(btrim(pi.part_number))) AS cocok_part
+  FROM public.po_items pi
+  JOIN public.pos p ON p.id = pi.po_id
+  WHERE p.po_is_outstanding AND pi.pr_item_id IS NULL AND pi.ost_pr_ref IS NOT NULL
+    AND EXISTS (SELECT 1 FROM x_pr_item x
+                WHERE upper(btrim(x.pr_kode)) = ANY (string_to_array(upper(replace(pi.ost_pr_ref, ' ', '')), ',')))
+) t;
+
+SELECT no, kelompok, cek, nilai, contoh
+FROM x_res
+ORDER BY no;

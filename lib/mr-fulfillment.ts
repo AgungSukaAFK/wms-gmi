@@ -17,6 +17,8 @@
 //   7. RI lama (pra-revisi 2026-09-24, cabang_penerima_id NULL) yang dulu
 //      langsung mengkredit MR lewat mr_id + part_id -- direkonstruksi persis
 //      supaya qty lama tidak hilang saat item itu di-recompute.
+//   8. mr_items.qty_received_import -- qty yang sudah diterima sebelum MR
+//      diimport dari spreadsheet PPIC (tidak punya dokumen sumber di WMS).
 // Dipanggil setiap kali salah satu sumber berubah supaya tidak saling menimpa.
 
 export const MR_FULFILLED_STATUSES = ["approved", "completed", "done", "closed"];
@@ -55,6 +57,7 @@ export async function computeMrItemsFulfilledQty(
     bypassRes,
     { data: woRows },
     { data: prItemRows },
+    importRes,
   ] = await Promise.all([
     supabase
       .from("mr_items")
@@ -89,6 +92,11 @@ export async function computeMrItemsFulfilledQty(
       .from("pr_items")
       .select("id, mr_item_id")
       .in("mr_item_id", uniqueIds),
+    supabase
+      .from("mr_items")
+      .select("id, qty_received_import")
+      .in("id", uniqueIds)
+      .gt("qty_received_import", 0),
   ]);
 
   const mrItems = (mrItemRows || []).map((r: any) => ({
@@ -109,6 +117,13 @@ export async function computeMrItemsFulfilledQty(
     console.error("Gagal membaca mr_sharestock_bypasses:", bypassRes.error.message);
   }
   for (const r of woRows || []) add(r.mr_item_id, r.applied_qty);
+  // 8. Qty historis MR hasil import. Error "does not exist" = migration
+  // 20261023100000_mr_pr_import belum dijalankan -> belum ada qty import.
+  if (!importRes.error) {
+    for (const r of importRes.data || []) add(r.id, r.qty_received_import);
+  } else if (!isMissingTable(importRes.error)) {
+    console.error("Gagal membaca mr_items.qty_received_import:", importRes.error.message);
+  }
 
   // 6. RI langsung ke gudang MR.
   const mrItemByPrItem = new Map<number, number>(

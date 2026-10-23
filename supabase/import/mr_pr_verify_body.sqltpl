@@ -1,0 +1,346 @@
+DO $$
+BEGIN
+  IF to_regclass('pg_temp.x_mr') IS NULL OR to_regclass('pg_temp.x_pr_item') IS NULL THEN
+    RAISE EXCEPTION 'Data Excel (x_mr/x_pr_item) tidak ada. Jalankan file supabase/import/mr_pr_verify.sql hasil generator (seluruh isinya), bukan template .sqltpl.';
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_v_result;
+CREATE TEMP TABLE x_v_result (
+  no INT PRIMARY KEY,
+  kelompok TEXT NOT NULL,
+  cek TEXT NOT NULL,
+  expected TEXT,
+  actual TEXT,
+  ok BOOLEAN,         -- NULL = informasi saja
+  sev TEXT NOT NULL,  -- status kalau tidak ok: FAIL / WARN
+  contoh TEXT
+);
+
+-- MR Excel <-> MR DB. imp = MR ini memang dibuat oleh import.
+DROP TABLE IF EXISTS pg_temp.x_v_mr;
+CREATE TEMP TABLE x_v_mr AS
+SELECT x.*, m.id AS mr_id, COALESCE(m.mr_is_import, false) AS imp, m.mr_kode AS db_kode,
+       m.mr_status::text AS db_status, m.mr_tanggal AS db_tanggal, c.nama_cabang AS db_cabang,
+       m.mr_pic AS db_pic, m.approvals AS db_approvals, m.mr_convert_status AS db_convert
+FROM x_mr x
+LEFT JOIN public.mrs m ON upper(btrim(m.mr_kode)) = x.mr_key
+LEFT JOIN public.cabang c ON c.id = m.cabang_id;
+
+-- Barang MR import: pasangan (MR, urutan) Excel vs mr_items urut id.
+DROP TABLE IF EXISTS pg_temp.x_v_mi;
+CREATE TEMP TABLE x_v_mi AS
+WITH e AS (
+  SELECT v.mr_key, mi.*,
+         row_number() OVER (PARTITION BY mi.mr_id ORDER BY mi.id) AS rn
+  FROM public.mr_items mi
+  JOIN x_v_mr v ON v.mr_id = mi.mr_id AND v.imp
+)
+SELECT COALESCE(x.mr_key, e.mr_key) AS mr_key, x.line_no, x.part_number AS x_part,
+       x.qty_request AS x_qty, x.qty_received_import AS x_rec, x.qty_pr AS x_qty_pr,
+       x.qty_share AS x_share, x.alloc_cabang AS x_alloc, x.item_status AS x_status, x.priority AS x_priority,
+       e.id AS mr_item_id, e.part_number, e.qty_request, e.qty_received, e.qty_received_import,
+       e.qty_pr, e.qty_sharestock_total, e.item_status, e.item_priority
+FROM (SELECT * FROM x_mr_item WHERE mr_key IN (SELECT mr_key FROM x_v_mr WHERE imp)) x
+FULL JOIN e ON e.mr_key = x.mr_key AND e.rn = x.line_no;
+
+-- PR Excel <-> PR DB. Baris PR turunan NO PR milik MR yang sudah ada di prod
+-- sebelum import (bukan hasil import) memang di-skip import.
+DROP TABLE IF EXISTS pg_temp.x_v_pr;
+CREATE TEMP TABLE x_v_pr AS
+SELECT x.*, p.id AS pr_id, COALESCE(p.pr_is_import, false) AS imp, p.pr_status::text AS db_status,
+       p.pr_tanggal AS db_tanggal, c.nama_cabang AS db_cabang, p.accurate AS db_accurate, p.approvals AS db_approvals
+FROM x_pr x
+LEFT JOIN public.prs p ON upper(btrim(p.pr_kode)) = upper(btrim(x.pr_kode))
+LEFT JOIN public.cabang c ON c.id = p.cabang_id;
+
+DROP TABLE IF EXISTS pg_temp.x_v_pi;
+CREATE TEMP TABLE x_v_pi AS
+WITH x AS (
+  SELECT i.*, row_number() OVER (PARTITION BY i.pr_kode ORDER BY i.line_no) AS rn
+  FROM x_pr_item i
+  WHERE i.pr_kode IN (SELECT pr_kode FROM x_v_pr WHERE imp)
+    AND NOT (i.src = 'mr' AND i.mr_key IN (SELECT mr_key FROM x_v_mr WHERE mr_id IS NOT NULL AND NOT imp))
+),
+e AS (
+  SELECT v.pr_kode, pi.*, row_number() OVER (PARTITION BY pi.pr_id ORDER BY pi.id) AS rn
+  FROM public.pr_items pi
+  JOIN x_v_pr v ON v.pr_id = pi.pr_id AND v.imp
+)
+SELECT COALESCE(x.pr_kode, e.pr_kode) AS pr_kode, x.line_no, x.src, x.mr_key AS x_mr_key, x.mr_line AS x_mr_line,
+       x.part_number AS x_part, x.qty AS x_qty,
+       e.id AS pr_item_id, e.part_number, e.qty, e.mr_id, e.mr_item_id
+FROM x
+FULL JOIN e ON e.pr_kode = x.pr_kode AND e.rn = x.rn;
+
+-- ---------------------------------------------------------------------
+-- 1. MR
+-- ---------------------------------------------------------------------
+INSERT INTO x_v_result
+SELECT 100, '1. MR', 'MR Excel: tersinkron import / sudah ada di prod (di-skip)',
+       count(*)::text, count(*) FILTER (WHERE imp) || ' / ' || count(*) FILTER (WHERE mr_id IS NOT NULL AND NOT imp),
+       NULL, 'INFO', NULL
+FROM x_v_mr;
+
+INSERT INTO x_v_result
+SELECT 101, '1. MR', 'MR Excel tidak ada di DB', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_kode, ', ' ORDER BY mr_kode), 400)
+FROM x_v_mr WHERE mr_id IS NULL;
+
+INSERT INTO x_v_result
+SELECT 102, '1. MR', 'MR sudah ada di prod sebelum import (di-skip, barangnya tidak disentuh)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(mr_kode, ', ' ORDER BY mr_kode), 400)
+FROM x_v_mr WHERE mr_id IS NOT NULL AND NOT imp;
+
+INSERT INTO x_v_result
+SELECT 103, '1. MR', 'Lokasi MR beda dari pemetaan SITE', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_kode || ' (DB ' || COALESCE(db_cabang, '-') || ' / ' || cabang || ')', ', ' ORDER BY mr_kode), 400)
+FROM x_v_mr WHERE imp AND upper(btrim(COALESCE(db_cabang, ''))) <> upper(cabang);
+
+INSERT INTO x_v_result
+SELECT 104, '1. MR', 'Status MR beda dengan hitungan Excel', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_kode || ' (DB ' || db_status || ' / ' || mr_status || ')', ', ' ORDER BY mr_kode), 400)
+FROM x_v_mr WHERE imp AND db_status IS DISTINCT FROM mr_status;
+
+INSERT INTO x_v_result
+SELECT 105, '1. MR', 'Tanggal MR beda dengan Excel', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_kode, ', ' ORDER BY mr_kode), 400)
+FROM x_v_mr WHERE imp AND db_tanggal IS DISTINCT FROM mr_tanggal;
+
+INSERT INTO x_v_result
+SELECT 106, '1. MR', 'Distribusi status MR import (approved / completed / rejected)',
+       count(*) FILTER (WHERE mr_status = 'approved') || ' / ' || count(*) FILTER (WHERE mr_status = 'completed')
+         || ' / ' || count(*) FILTER (WHERE mr_status = 'rejected'),
+       count(*) FILTER (WHERE db_status = 'approved') || ' / ' || count(*) FILTER (WHERE db_status = 'completed')
+         || ' / ' || count(*) FILTER (WHERE db_status = 'rejected'),
+       NULL, 'INFO', 'PIC: ' || COALESCE(string_agg(DISTINCT db_pic, ', '), '-')
+FROM x_v_mr WHERE imp;
+
+INSERT INTO x_v_result
+SELECT 107, '1. MR', 'MR import per lokasi', NULL,
+       string_agg(c || ': ' || n, ' | ' ORDER BY n DESC), NULL, 'INFO', NULL
+FROM (SELECT db_cabang AS c, count(*) AS n FROM x_v_mr WHERE imp GROUP BY 1) t;
+
+-- ---------------------------------------------------------------------
+-- 2. Barang MR
+-- ---------------------------------------------------------------------
+INSERT INTO x_v_result
+SELECT 200, '2. Barang MR', 'Jumlah barang MR import',
+       count(*) FILTER (WHERE line_no IS NOT NULL)::text, count(*) FILTER (WHERE mr_item_id IS NOT NULL)::text,
+       count(*) FILTER (WHERE line_no IS NOT NULL) = count(*) FILTER (WHERE mr_item_id IS NOT NULL), 'FAIL', NULL
+FROM x_v_mi;
+
+INSERT INTO x_v_result
+SELECT 201, '2. Barang MR', 'Barang Excel tidak ada di DB / barang DB tidak ada di Excel', '0 / 0',
+       count(*) FILTER (WHERE mr_item_id IS NULL) || ' / ' || count(*) FILTER (WHERE line_no IS NULL),
+       count(*) FILTER (WHERE mr_item_id IS NULL OR line_no IS NULL) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || COALESCE(x_part, part_number), ', ' ORDER BY mr_key) FILTER (WHERE mr_item_id IS NULL OR line_no IS NULL), 400)
+FROM x_v_mi;
+
+INSERT INTO x_v_result
+SELECT 202, '2. Barang MR', 'Part number / qty MR beda dengan Excel', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || x_part || ' (DB ' || part_number || ' ' || qty_request || ' / ' || x_qty || ')', ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE line_no IS NOT NULL AND mr_item_id IS NOT NULL
+  AND (upper(btrim(part_number)) <> upper(btrim(x_part)) OR qty_request <> x_qty);
+
+INSERT INTO x_v_result
+SELECT 203, '2. Barang MR', 'Qty historis (qty_received_import) beda dengan Excel', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || x_part || ' (DB ' || qty_received_import || ' / ' || x_rec || ')', ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE line_no IS NOT NULL AND mr_item_id IS NOT NULL AND qty_received_import <> x_rec;
+
+INSERT INTO x_v_result
+SELECT 204, '2. Barang MR', 'Qty diterima < qty historis import (frontend lama sempat recompute?)', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || part_number || ' (diterima ' || qty_received || ' / import ' || qty_received_import || ')', ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE mr_item_id IS NOT NULL AND qty_received < LEAST(qty_received_import, qty_request);
+
+INSERT INTO x_v_result
+SELECT 205, '2. Barang MR', 'Status tolak / prioritas barang beda dengan Excel', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || x_part || ' (DB ' || item_status || ' ' || item_priority || ' / ' || x_status || ' ' || x_priority || ')', ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE line_no IS NOT NULL AND mr_item_id IS NOT NULL
+  AND (item_status IS DISTINCT FROM x_status OR item_priority IS DISTINCT FROM x_priority);
+
+INSERT INTO x_v_result
+SELECT 206, '2. Barang MR', 'Jatah PR / share stock beda dengan rencana import', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || x_part || ' (DB PR ' || qty_pr || ' SS ' || qty_sharestock_total || ' / PR ' || x_qty_pr || ' SS ' || x_share || ')', ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE line_no IS NOT NULL AND mr_item_id IS NOT NULL
+  AND (qty_pr <> x_qty_pr OR qty_sharestock_total <> x_share);
+
+INSERT INTO x_v_result
+SELECT 207, '2. Barang MR', 'Alokasi share stock (gudang sumber / qty) beda', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(i.mr_key || ':' || i.x_part || ' (DB ' || COALESCE(a.src, '-') || ' ' || COALESCE(a.qty, 0) || ' / ' || i.x_alloc || ' ' || i.x_share || ')', ', ' ORDER BY i.mr_key), 400)
+FROM x_v_mi i
+LEFT JOIN (
+  SELECT al.mr_item_id, string_agg(c.nama_cabang, ',') AS src, sum(al.qty) AS qty
+  FROM public.mr_sharestock_allocations al JOIN public.cabang c ON c.id = al.source_cabang_id
+  GROUP BY al.mr_item_id
+) a ON a.mr_item_id = i.mr_item_id
+WHERE i.line_no IS NOT NULL AND i.mr_item_id IS NOT NULL
+  AND (CASE WHEN i.x_alloc IS NULL THEN a.mr_item_id IS NOT NULL
+            ELSE upper(COALESCE(a.src, '')) <> upper(i.x_alloc) OR COALESCE(a.qty, 0) <> i.x_share END);
+
+INSERT INTO x_v_result
+SELECT 208, '2. Barang MR', 'Barang share stock tanpa gudang sumber (atur di Moderator Edit)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(mr_key || ':' || part_number || ' (' || qty_sharestock_total || ')', ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE mr_item_id IS NOT NULL AND qty_sharestock_total > 0
+  AND NOT EXISTS (SELECT 1 FROM public.mr_sharestock_allocations a WHERE a.mr_item_id = x_v_mi.mr_item_id);
+
+INSERT INTO x_v_result
+SELECT 209, '2. Barang MR', 'Qty diterima > qty MR / jatah PR + share stock > qty MR', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_key || ':' || part_number, ', ' ORDER BY mr_key), 400)
+FROM x_v_mi
+WHERE mr_item_id IS NOT NULL
+  AND (qty_received > qty_request OR qty_pr + qty_sharestock_total > qty_request);
+
+-- ---------------------------------------------------------------------
+-- 3. PR
+-- ---------------------------------------------------------------------
+INSERT INTO x_v_result
+SELECT 300, '3. PR', 'PR Excel: tersinkron import / sudah ada di prod (di-skip)',
+       count(*)::text, count(*) FILTER (WHERE imp) || ' / ' || count(*) FILTER (WHERE pr_id IS NOT NULL AND NOT imp),
+       NULL, 'INFO',
+       'approved ' || count(*) FILTER (WHERE imp AND pr_status = 'approved') || ' | closed ' || count(*) FILTER (WHERE imp AND pr_status = 'closed')
+FROM x_v_pr;
+
+INSERT INTO x_v_result
+SELECT 301, '3. PR', 'PR Excel tidak ada di DB', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(pr_kode, ', ' ORDER BY pr_kode), 400)
+FROM x_v_pr WHERE pr_id IS NULL;
+
+INSERT INTO x_v_result
+SELECT 302, '3. PR', 'PR sudah ada di prod sebelum import (di-skip; cek jatah PR barang MR-nya)', '0',
+       count(*)::text, count(*) = 0, 'WARN',
+       left(string_agg(pr_kode, ', ' ORDER BY pr_kode), 400)
+FROM x_v_pr WHERE pr_id IS NOT NULL AND NOT imp;
+
+INSERT INTO x_v_result
+SELECT 303, '3. PR', 'Status / tanggal / lokasi / flag PR beda', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(pr_kode || ' (DB ' || db_status || ' ' || db_tanggal || ' ' || COALESCE(db_cabang, '-') || ' / '
+                       || pr_status || ' ' || pr_tanggal || ')', ', ' ORDER BY pr_kode), 400)
+FROM x_v_pr
+WHERE imp
+  AND (db_status IS DISTINCT FROM pr_status
+       OR db_tanggal IS DISTINCT FROM pr_tanggal
+       OR upper(btrim(COALESCE(db_cabang, ''))) <> upper((SELECT value FROM x_cfg WHERE key = 'pr_cabang'))
+       OR NOT db_accurate
+       OR COALESCE(db_approvals, '[]'::jsonb) <> '[]'::jsonb);
+
+INSERT INTO x_v_result
+SELECT 304, '3. PR', 'Barang PR: Excel tidak ada di DB / DB tidak ada di Excel', '0 / 0',
+       count(*) FILTER (WHERE pr_item_id IS NULL) || ' / ' || count(*) FILTER (WHERE line_no IS NULL),
+       count(*) FILTER (WHERE pr_item_id IS NULL OR line_no IS NULL) = 0, 'FAIL',
+       left(string_agg(pr_kode || ':' || COALESCE(x_part, part_number), ', ' ORDER BY pr_kode) FILTER (WHERE pr_item_id IS NULL OR line_no IS NULL), 400)
+FROM x_v_pi;
+
+INSERT INTO x_v_result
+SELECT 305, '3. PR', 'Part number / qty barang PR beda dengan Excel', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(pr_kode || ':' || x_part || ' (DB ' || part_number || ' ' || qty || ' / ' || x_qty || ')', ', ' ORDER BY pr_kode), 400)
+FROM x_v_pi
+WHERE line_no IS NOT NULL AND pr_item_id IS NOT NULL
+  AND (upper(btrim(part_number)) <> upper(btrim(x_part)) OR qty <> x_qty);
+
+-- Baris PR yang rujukan MR-nya ikut diimport harus menempel ke barang MR yang
+-- sama (MR + urutan barang).
+INSERT INTO x_v_result
+SELECT 306, '3. PR', 'Barang PR menempel ke barang MR yang salah', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(p.pr_kode || ':' || p.x_part, ', ' ORDER BY p.pr_kode), 400)
+FROM x_v_pi p
+JOIN x_v_mi m ON m.mr_key = p.x_mr_key AND m.line_no = p.x_mr_line
+WHERE p.pr_item_id IS NOT NULL AND p.mr_item_id IS DISTINCT FROM m.mr_item_id;
+
+INSERT INTO x_v_result
+SELECT 307, '3. PR', 'Barang PR menempel ke: MR import / MR prod / MR penampung', NULL,
+       count(*) FILTER (WHERE m.mr_is_import AND m.mr_kode NOT LIKE '%-TANPA-MR') || ' / '
+         || count(*) FILTER (WHERE NOT m.mr_is_import) || ' / '
+         || count(*) FILTER (WHERE m.mr_kode LIKE '%-TANPA-MR'),
+       NULL, 'INFO', NULL
+FROM x_v_pi p JOIN public.mrs m ON m.id = p.mr_id
+WHERE p.pr_item_id IS NOT NULL;
+
+-- ---------------------------------------------------------------------
+-- 4. Konsistensi status turunan
+-- ---------------------------------------------------------------------
+INSERT INTO x_v_result
+SELECT 401, '4. Konsistensi', 'mr_convert_status tidak sesuai rumus (applyMrConversionStatus)', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_kode || ' (DB ' || db || ' / hitung ' || st || ')', ', ' ORDER BY mr_kode), 400)
+FROM (
+  SELECT m.mr_kode, m.mr_convert_status AS db,
+         CASE WHEN sum(LEAST(mi.qty_pr, COALESCE(c.q, 0))) <= 0 THEN 'pending'
+              WHEN sum(LEAST(mi.qty_pr, COALESCE(c.q, 0))) < sum(mi.qty_pr) THEN 'partial'
+              ELSE 'complete' END AS st
+  FROM public.mrs m
+  JOIN public.mr_items mi ON mi.mr_id = m.id AND mi.qty_pr > 0
+  LEFT JOIN (
+    SELECT pi.mr_item_id, sum(pi.qty) AS q
+    FROM public.pr_items pi JOIN public.prs p ON p.id = pi.pr_id
+    WHERE p.pr_status::text <> 'rejected' AND lower(COALESCE(pi.status::text, '')) <> 'rejected'
+    GROUP BY pi.mr_item_id
+  ) c ON c.mr_item_id = mi.id
+  WHERE m.mr_is_import
+  GROUP BY m.mr_kode, m.mr_convert_status
+) t
+WHERE db <> st;
+
+INSERT INTO x_v_result
+SELECT 402, '4. Konsistensi', 'Status MR approved/completed tidak sesuai qty barang (recomputeMrStatus)', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(mr_kode || ' (' || mr_status || ')', ', ' ORDER BY mr_kode), 400)
+FROM (
+  SELECT m.mr_kode, m.mr_status::text AS mr_status,
+         bool_and(mi.qty_received >= mi.qty_request) FILTER (WHERE mi.item_status <> 'rejected') AS terpenuhi
+  FROM public.mrs m JOIN public.mr_items mi ON mi.mr_id = m.id
+  WHERE m.mr_is_import AND m.mr_status::text IN ('approved', 'completed')
+  GROUP BY m.mr_kode, m.mr_status
+) t
+WHERE (mr_status = 'completed' AND terpenuhi IS NOT TRUE) OR (mr_status = 'approved' AND terpenuhi IS TRUE);
+
+INSERT INTO x_v_result
+SELECT 403, '4. Konsistensi', 'Barang MR import yang muncul di form Buat PR (jatah PR belum ter-PR)', NULL,
+       count(*) || ' barang, qty ' || COALESCE(sum(sisa), 0), NULL, 'INFO',
+       left(string_agg(mr_kode || ':' || part_number || ' (' || sisa || ')', ', ' ORDER BY mr_kode), 400)
+FROM (
+  SELECT m.mr_kode, mi.part_number, mi.qty_pr - COALESCE(c.q, 0) AS sisa
+  FROM public.mrs m
+  JOIN public.mr_items mi ON mi.mr_id = m.id
+  LEFT JOIN (
+    SELECT pi.mr_item_id, sum(pi.qty) AS q
+    FROM public.pr_items pi JOIN public.prs p ON p.id = pi.pr_id
+    WHERE p.pr_status::text <> 'rejected' AND lower(COALESCE(pi.status::text, '')) <> 'rejected'
+    GROUP BY pi.mr_item_id
+  ) c ON c.mr_item_id = mi.id
+  WHERE m.mr_is_import AND m.mr_status::text = 'approved' AND mi.item_status <> 'rejected'
+    AND NOT mi.is_item_frozen AND mi.qty_pr - COALESCE(c.q, 0) > 0
+) t;
+
+INSERT INTO x_v_result
+SELECT 404, '4. Konsistensi', 'Part number Excel yang belum ada di master barang', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(part_number, ', ' ORDER BY part_number), 400)
+FROM (
+  SELECT DISTINCT btrim(part_number) AS part_number FROM x_mr_item
+  UNION SELECT btrim(part_number) FROM x_pr_item
+) t
+WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(t.part_number));
+
+-- ---------------------------------------------------------------------
+-- Ringkasan
+-- ---------------------------------------------------------------------
+INSERT INTO x_v_result
+SELECT 0, '0. Ringkasan', 'Jumlah cek FAIL / WARN', '0 / 0',
+       count(*) FILTER (WHERE ok = false AND sev = 'FAIL') || ' / ' || count(*) FILTER (WHERE ok = false AND sev = 'WARN'),
+       count(*) FILTER (WHERE ok = false AND sev = 'FAIL') = 0, 'FAIL', NULL
+FROM x_v_result;
+
+SELECT no,
+       CASE WHEN ok IS NULL THEN 'INFO' WHEN ok THEN 'OK' ELSE sev END AS status,
+       kelompok, cek, expected, actual, contoh
+FROM x_v_result
+ORDER BY no;

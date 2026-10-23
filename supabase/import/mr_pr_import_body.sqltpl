@@ -1,0 +1,387 @@
+-- ---------------------------------------------------------------------
+-- 0. Prasyarat: migration, gudang, PIC
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_missing TEXT;
+  v_dup TEXT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'mr_items' AND column_name = 'qty_received_import') THEN
+    RAISE EXCEPTION 'Migration 20261023100000_mr_pr_import.sql belum dijalankan.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'mr_items' AND column_name = 'item_status') THEN
+    RAISE EXCEPTION 'Migration 20261021110000_mr_item_reject.sql belum dijalankan.';
+  END IF;
+
+  SELECT string_agg(n, ', ') INTO v_missing
+  FROM unnest(string_to_array((SELECT value FROM x_cfg WHERE key = 'cabang_names'), '|')) AS n
+  WHERE NOT EXISTS (SELECT 1 FROM public.cabang c WHERE upper(btrim(c.nama_cabang)) = upper(n));
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'Gudang tidak ditemukan di tabel cabang: %', v_missing;
+  END IF;
+
+  SELECT string_agg(n, ', ') INTO v_dup
+  FROM unnest(string_to_array((SELECT value FROM x_cfg WHERE key = 'cabang_names'), '|')) AS n
+  WHERE (SELECT count(*) FROM public.cabang c WHERE upper(btrim(c.nama_cabang)) = upper(n)) > 1;
+  IF v_dup IS NOT NULL THEN
+    RAISE EXCEPTION 'Nama gudang dobel di tabel cabang: %', v_dup;
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_cab;
+CREATE TEMP TABLE x_cab AS
+SELECT upper(btrim(c.nama_cabang)) AS nama, c.id
+FROM public.cabang c
+WHERE upper(btrim(c.nama_cabang)) IN (
+  SELECT upper(n) FROM unnest(string_to_array((SELECT value FROM x_cfg WHERE key = 'cabang_names'), '|')) AS n
+);
+
+-- PIC MR & PR import: --pic=<email>, atau user yang namanya = Pembuat PR.
+DROP TABLE IF EXISTS pg_temp.x_pic;
+CREATE TEMP TABLE x_pic (id UUID NOT NULL, nama TEXT NOT NULL);
+
+DO $$
+DECLARE
+  v_email TEXT := (SELECT value FROM x_cfg WHERE key = 'pic_email');
+  v_n INT;
+  v_list TEXT;
+BEGIN
+  IF v_email IS NOT NULL THEN
+    INSERT INTO x_pic
+    SELECT p.id, p.nama FROM public.profiles p WHERE lower(btrim(p.email)) = lower(btrim(v_email));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'User PIC dengan email % tidak ditemukan (ketemu % user).', v_email, v_n;
+    END IF;
+  ELSE
+    INSERT INTO x_pic
+    SELECT p.id, p.nama FROM public.profiles p
+    WHERE lower(btrim(p.nama)) IN (SELECT DISTINCT lower(btrim(pembuat)) FROM x_pr WHERE pembuat IS NOT NULL);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      SELECT string_agg(p.nama || ' <' || COALESCE(p.email, '-') || '>', ', ') INTO v_list
+      FROM public.profiles p
+      WHERE lower(btrim(p.nama)) IN (SELECT DISTINCT lower(btrim(pembuat)) FROM x_pr WHERE pembuat IS NOT NULL);
+      RAISE EXCEPTION 'PIC import tidak bisa ditentukan otomatis (% user bernama sama dengan Pembuat PR: %). Generate ulang dengan --pic=<email>.',
+        v_n, COALESCE(v_list, '-');
+    END IF;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Skip MR & PR yang kodenya sudah ada di prod
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_mr_skip;
+CREATE TEMP TABLE x_mr_skip AS
+SELECT m.mr_key, m.mr_kode, d.mr_kode AS db_kode
+FROM x_mr m
+JOIN public.mrs d ON upper(btrim(d.mr_kode)) = m.mr_key;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP MR: kode sudah ada di prod', mr_kode,
+       CASE WHEN db_kode <> mr_kode THEN 'di prod: ' || db_kode END
+FROM x_mr_skip;
+
+-- Baris PR turunan kolom NO PR milik MR yang di-skip: jejak PR MR itu sudah
+-- dikelola di WMS, jangan ditambah dobel. Baris PR OPEN tetap dicoba tautkan
+-- ke MR prod-nya (langkah 6).
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP baris PR dari MR Monitoring: MR-nya sudah ada di prod', p.pr_kode, p.mr_kode || ' : ' || p.part_number
+FROM x_pr_item p
+WHERE p.src = 'mr' AND p.mr_key IN (SELECT mr_key FROM x_mr_skip);
+
+DELETE FROM x_pr_item WHERE src = 'mr' AND mr_key IN (SELECT mr_key FROM x_mr_skip);
+UPDATE x_pr_item SET mr_key = NULL, mr_line = NULL WHERE mr_key IN (SELECT mr_key FROM x_mr_skip);
+DELETE FROM x_mr_item WHERE mr_key IN (SELECT mr_key FROM x_mr_skip);
+DELETE FROM x_mr WHERE mr_key IN (SELECT mr_key FROM x_mr_skip);
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP PR: kode sudah ada di prod (jatah PR barang MR-nya perlu dicek)', x.pr_kode,
+       count(i.*) || ' baris'
+FROM x_pr x
+JOIN public.prs d ON upper(btrim(d.pr_kode)) = upper(btrim(x.pr_kode))
+LEFT JOIN x_pr_item i ON i.pr_kode = x.pr_kode
+GROUP BY x.pr_kode;
+
+DELETE FROM x_pr_item WHERE pr_kode IN (
+  SELECT x.pr_kode FROM x_pr x JOIN public.prs d ON upper(btrim(d.pr_kode)) = upper(btrim(x.pr_kode)));
+DELETE FROM x_pr x WHERE NOT EXISTS (SELECT 1 FROM x_pr_item i WHERE i.pr_kode = x.pr_kode);
+
+-- ---------------------------------------------------------------------
+-- 2. Barang yang belum ada: buat otomatis (nama = deskripsi Excel)
+-- ---------------------------------------------------------------------
+WITH src AS (
+  SELECT btrim(part_number) AS part_number, part_name, satuan, 1 AS prio, excel_row FROM x_mr_item
+  UNION ALL
+  SELECT btrim(part_number), part_name, satuan, 2, excel_row FROM x_pr_item
+),
+missing AS (
+  SELECT DISTINCT ON (upper(s.part_number)) s.part_number,
+         COALESCE(NULLIF(btrim(s.part_name), ''), s.part_number) AS part_name,
+         COALESCE(NULLIF(btrim(s.satuan), ''), 'EA') AS satuan
+  FROM src s
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(s.part_number))
+  ORDER BY upper(s.part_number), (s.part_name IS NULL), s.prio, s.excel_row
+),
+ins AS (
+  INSERT INTO public.barang (part_number, part_name, part_satuan)
+  SELECT part_number, part_name, satuan FROM missing
+  ON CONFLICT (part_number) DO NOTHING
+  RETURNING part_number, part_name, part_satuan
+)
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang baru dibuat (cek nama & satuan di halaman Barang)', part_number, part_name || ' (' || part_satuan || ')'
+FROM ins;
+
+-- Barang master per part number (huruf besar/kecil diabaikan).
+DROP TABLE IF EXISTS pg_temp.x_part;
+CREATE TEMP TABLE x_part AS
+SELECT DISTINCT ON (k) k, b.id, b.part_number, b.part_name, b.part_satuan
+FROM (
+  SELECT upper(btrim(part_number)) AS k, part_number AS raw FROM x_mr_item
+  UNION SELECT upper(btrim(part_number)), part_number FROM x_pr_item
+) s
+JOIN public.barang b ON upper(btrim(b.part_number)) = s.k
+ORDER BY k, (b.part_number = s.raw) DESC, b.id;
+
+-- ---------------------------------------------------------------------
+-- 3. MR + barang + alokasi share stock
+-- ---------------------------------------------------------------------
+INSERT INTO public.mrs (
+  mr_kode, cabang_id, mr_pic, mr_pic_id, mr_tanggal, mr_status, approvals,
+  mr_remarks, rejection_reason, accurate, mr_type, mr_is_import, mr_convert_status
+)
+SELECT m.mr_kode, c.id, pic.nama, pic.id, m.mr_tanggal, m.mr_status::public.doc_status, '[]'::jsonb,
+       m.remarks, m.rejection_reason, false, 'standard', true, 'pending'
+FROM x_mr m
+JOIN x_cab c ON c.nama = upper(m.cabang)
+CROSS JOIN x_pic pic;
+
+DROP TABLE IF EXISTS pg_temp.x_mr_map;
+CREATE TEMP TABLE x_mr_map AS
+SELECT m.mr_key, d.id AS mr_id
+FROM x_mr m
+JOIN public.mrs d ON d.mr_kode = m.mr_kode AND d.mr_is_import;
+
+DROP TABLE IF EXISTS pg_temp.x_mr_item_map;
+CREATE TEMP TABLE x_mr_item_map (
+  mr_key TEXT NOT NULL,
+  line_no INT NOT NULL,
+  mr_id BIGINT NOT NULL,
+  mr_item_id BIGINT NOT NULL,
+  PRIMARY KEY (mr_key, line_no)
+);
+
+DO $$
+DECLARE
+  r RECORD;
+  v_id BIGINT;
+BEGIN
+  FOR r IN
+    SELECT i.*, mm.mr_id, p.id AS part_id, p.part_number AS b_part_number, p.part_name AS b_part_name, p.part_satuan
+    FROM x_mr_item i
+    JOIN x_mr_map mm ON mm.mr_key = i.mr_key
+    JOIN x_part p ON p.k = upper(btrim(i.part_number))
+    ORDER BY i.mr_key, i.line_no
+  LOOP
+    INSERT INTO public.mr_items (
+      mr_id, part_id, part_number, part_name, satuan,
+      qty_request, qty_received, qty_received_import, qty_pr, qty_sharestock_total,
+      item_priority, remarks, item_status, item_reject_reason, item_rejected_at
+    ) VALUES (
+      r.mr_id, r.part_id, r.b_part_number, r.b_part_name, r.part_satuan,
+      r.qty_request, r.qty_received_import, r.qty_received_import, r.qty_pr, r.qty_share,
+      r.priority, r.remarks, r.item_status, r.reject_reason,
+      CASE WHEN r.item_status = 'rejected' THEN now() END
+    ) RETURNING id INTO v_id;
+    INSERT INTO x_mr_item_map VALUES (r.mr_key, r.line_no, r.mr_id, v_id);
+  END LOOP;
+END $$;
+
+INSERT INTO public.mr_sharestock_allocations (mr_item_id, source_cabang_id, qty)
+SELECT im.mr_item_id, c.id, i.qty_share
+FROM x_mr_item i
+JOIN x_mr_item_map im ON im.mr_key = i.mr_key AND im.line_no = i.line_no
+JOIN x_cab c ON c.nama = upper(i.alloc_cabang)
+WHERE i.alloc_cabang IS NOT NULL AND i.qty_share > 0;
+
+-- ---------------------------------------------------------------------
+-- 4. Tautkan baris PR ke barang MR: MR import -> MR prod -> MR penampung
+-- ---------------------------------------------------------------------
+ALTER TABLE x_pr_item ADD COLUMN mr_id BIGINT, ADD COLUMN mr_item_id BIGINT, ADD COLUMN via TEXT;
+
+UPDATE x_pr_item p
+SET mr_id = im.mr_id, mr_item_id = im.mr_item_id, via = 'import'
+FROM x_mr_item_map im
+WHERE im.mr_key = p.mr_key AND im.line_no = p.mr_line;
+
+UPDATE x_pr_item p
+SET mr_id = t.mr_id, mr_item_id = t.id, via = 'prod'
+FROM (
+  SELECT DISTINCT ON (p2.pr_kode, p2.line_no) p2.pr_kode, p2.line_no, mi.mr_id, mi.id
+  FROM x_pr_item p2
+  JOIN public.mrs m ON upper(btrim(m.mr_kode)) = upper(btrim(p2.mr_kode))
+  JOIN public.mr_items mi ON mi.mr_id = m.id AND upper(btrim(mi.part_number)) = upper(btrim(p2.part_number))
+  WHERE p2.mr_item_id IS NULL AND p2.mr_kode IS NOT NULL
+  ORDER BY p2.pr_kode, p2.line_no, (mi.item_status = 'rejected'), mi.id
+) t
+WHERE t.pr_kode = p.pr_kode AND t.line_no = p.line_no;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Baris PR ditautkan ke MR yang sudah ada di prod', pr_kode, mr_kode || ' : ' || part_number
+FROM x_pr_item WHERE via = 'prod';
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Baris PR masuk MR penampung',
+       pr_kode,
+       part_number || ' qty ' || qty
+         || CASE WHEN mr_kode IS NULL THEN ' (tanpa Referensi MR)'
+                 ELSE ' (barang tidak ada di MR ' || mr_kode || ')' END
+FROM x_pr_item WHERE mr_item_id IS NULL;
+
+INSERT INTO public.mrs (
+  mr_kode, cabang_id, mr_pic, mr_pic_id, mr_tanggal, mr_status, approvals,
+  mr_remarks, accurate, mr_type, mr_is_import, mr_convert_status
+)
+SELECT x.pr_kode || '-TANPA-MR', c.id, pic.nama, pic.id, x.pr_tanggal, 'approved', '[]'::jsonb,
+       'MR penampung import untuk baris PR ' || x.pr_kode || ' yang tidak punya MR rujukan',
+       false, 'standard', true, 'pending'
+FROM x_pr x
+JOIN x_cab c ON c.nama = upper((SELECT value FROM x_cfg WHERE key = 'pr_cabang'))
+CROSS JOIN x_pic pic
+WHERE EXISTS (SELECT 1 FROM x_pr_item i WHERE i.pr_kode = x.pr_kode AND i.mr_item_id IS NULL)
+  AND NOT EXISTS (SELECT 1 FROM public.mrs d WHERE upper(btrim(d.mr_kode)) = upper(x.pr_kode || '-TANPA-MR'));
+
+DO $$
+DECLARE
+  r RECORD;
+  v_mr BIGINT;
+  v_id BIGINT;
+BEGIN
+  FOR r IN
+    SELECT i.*, p.id AS part_id, p.part_number AS b_part_number, p.part_name AS b_part_name, p.part_satuan
+    FROM x_pr_item i
+    JOIN x_part p ON p.k = upper(btrim(i.part_number))
+    WHERE i.mr_item_id IS NULL
+    ORDER BY i.pr_kode, i.line_no
+  LOOP
+    SELECT id INTO v_mr FROM public.mrs WHERE upper(btrim(mr_kode)) = upper(r.pr_kode || '-TANPA-MR');
+    INSERT INTO public.mr_items (
+      mr_id, part_id, part_number, part_name, satuan,
+      qty_request, qty_received, qty_pr, qty_sharestock_total, item_priority, remarks
+    ) VALUES (
+      v_mr, r.part_id, r.b_part_number, r.b_part_name, r.part_satuan,
+      r.qty, 0, r.qty, 0, 'P3',
+      'Penampung baris PR ' || r.pr_kode || COALESCE(' | ' || r.keterangan, '')
+    ) RETURNING id INTO v_id;
+    UPDATE x_pr_item SET mr_id = v_mr, mr_item_id = v_id, via = 'penampung'
+    WHERE pr_kode = r.pr_kode AND line_no = r.line_no;
+  END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 5. PR + barang PR
+-- ---------------------------------------------------------------------
+INSERT INTO public.prs (
+  pr_kode, cabang_id, pr_pic_id, pr_tanggal, pr_status, approvals,
+  mr_id, accurate, pr_convert_status, pr_is_import
+)
+SELECT x.pr_kode, c.id, pic.id, x.pr_tanggal, x.pr_status::public.doc_status, '[]'::jsonb,
+       (SELECT i.mr_id FROM x_pr_item i WHERE i.pr_kode = x.pr_kode ORDER BY i.line_no LIMIT 1),
+       true, 'pending', true
+FROM x_pr x
+JOIN x_cab c ON c.nama = upper((SELECT value FROM x_cfg WHERE key = 'pr_cabang'))
+CROSS JOIN x_pic pic;
+
+INSERT INTO public.pr_items (
+  pr_id, mr_id, mr_item_id, part_id, part_number, part_name, satuan, qty, over_mr_note
+)
+SELECT d.id, i.mr_id, i.mr_item_id, p.id, p.part_number, p.part_name, p.part_satuan, i.qty,
+       CASE WHEN i.qty > mi.qty_request THEN 'Import ERP: qty PR melebihi qty MR' END
+FROM x_pr_item i
+JOIN public.prs d ON d.pr_kode = i.pr_kode AND d.pr_is_import
+JOIN public.mr_items mi ON mi.id = i.mr_item_id
+JOIN x_part p ON p.k = upper(btrim(i.part_number))
+ORDER BY i.pr_kode, i.line_no;
+
+-- ---------------------------------------------------------------------
+-- 6. mrs.mr_convert_status (rumus = applyMrConversionStatus) untuk MR import,
+--    MR penampung, dan MR prod yang barangnya baru ditautkan PR import.
+-- ---------------------------------------------------------------------
+WITH touched AS (
+  SELECT mr_id FROM x_mr_map
+  UNION SELECT mr_id FROM x_pr_item WHERE mr_id IS NOT NULL
+),
+items AS (
+  SELECT mi.mr_id, mi.id, mi.qty_pr
+  FROM public.mr_items mi
+  WHERE mi.mr_id IN (SELECT mr_id FROM touched) AND mi.qty_pr > 0
+),
+conv AS (
+  SELECT pi.mr_item_id, sum(pi.qty) AS q
+  FROM public.pr_items pi
+  JOIN public.prs p ON p.id = pi.pr_id
+  WHERE p.pr_status::text <> 'rejected' AND lower(COALESCE(pi.status::text, '')) <> 'rejected'
+    AND pi.mr_item_id IN (SELECT id FROM items)
+  GROUP BY pi.mr_item_id
+),
+agg AS (
+  SELECT i.mr_id, sum(i.qty_pr) AS tot, sum(LEAST(i.qty_pr, COALESCE(c.q, 0))) AS cv
+  FROM items i LEFT JOIN conv c ON c.mr_item_id = i.id
+  GROUP BY i.mr_id
+)
+UPDATE public.mrs m
+SET mr_convert_status = CASE WHEN a.cv <= 0 THEN 'pending' WHEN a.cv < a.tot THEN 'partial' ELSE 'complete' END
+FROM agg a
+WHERE a.mr_id = m.id;
+
+-- ---------------------------------------------------------------------
+-- 7. Sanity check -- gagal = seluruh import dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad TEXT;
+BEGIN
+  IF (SELECT count(*) FROM x_mr_map) <> (SELECT count(*) FROM x_mr) THEN
+    RAISE EXCEPTION 'MR tersimpan (%) <> sumber (%)', (SELECT count(*) FROM x_mr_map), (SELECT count(*) FROM x_mr);
+  END IF;
+  IF (SELECT count(*) FROM x_mr_item_map) <> (SELECT count(*) FROM x_mr_item) THEN
+    RAISE EXCEPTION 'Barang MR tersimpan (%) <> sumber (%)', (SELECT count(*) FROM x_mr_item_map), (SELECT count(*) FROM x_mr_item);
+  END IF;
+  SELECT string_agg(pr_kode || ':' || part_number, ', ') INTO v_bad FROM x_pr_item WHERE mr_item_id IS NULL;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Baris PR tanpa barang MR: %', v_bad;
+  END IF;
+  IF (SELECT count(*) FROM public.pr_items pi JOIN public.prs d ON d.id = pi.pr_id
+      WHERE d.pr_is_import AND d.pr_kode IN (SELECT pr_kode FROM x_pr)) <> (SELECT count(*) FROM x_pr_item) THEN
+    RAISE EXCEPTION 'Barang PR tersimpan <> sumber (%)', (SELECT count(*) FROM x_pr_item);
+  END IF;
+  SELECT string_agg(m.mr_kode || ':' || mi.part_number, ', ') INTO v_bad
+  FROM public.mr_items mi JOIN public.mrs m ON m.id = mi.mr_id
+  WHERE mi.mr_id IN (SELECT mr_id FROM x_mr_map)
+    AND (mi.qty_received <> mi.qty_received_import
+         OR mi.qty_received_import > mi.qty_request
+         OR mi.qty_pr + mi.qty_sharestock_total > mi.qty_request);
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Qty barang MR tidak konsisten: %', v_bad;
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ---------------------------------------------------------------------
+-- HASIL
+-- ---------------------------------------------------------------------
+SELECT kategori, count(*) AS jumlah,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 600) AS contoh
+FROM (
+  SELECT kategori, ref, detail FROM x_report
+  UNION ALL SELECT 'MR dibuat (' || mr_status || ')', mr_kode, NULL FROM x_mr
+  UNION ALL SELECT 'PR dibuat (' || pr_status || ')', pr_kode, NULL FROM x_pr
+  UNION ALL SELECT 'MR penampung dibuat', pr_kode || '-TANPA-MR', NULL
+            FROM (SELECT DISTINCT pr_kode FROM x_pr_item WHERE via = 'penampung') t
+) r
+GROUP BY kategori
+ORDER BY kategori;
