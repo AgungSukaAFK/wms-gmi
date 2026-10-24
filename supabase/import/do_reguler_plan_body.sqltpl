@@ -1,0 +1,184 @@
+-- ---------------------------------------------------------------------
+-- 0. Prasyarat: gudang pengirim, PIC
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_gudang;
+CREATE TEMP TABLE x_gudang AS
+SELECT cb.id AS cabang_id, cb.nama_cabang
+FROM public.cabang cb
+WHERE upper(btrim(cb.nama_cabang)) = upper(btrim((SELECT value FROM x_cfg WHERE key = 'gudang')))
+ORDER BY cb.is_active DESC, cb.id
+LIMIT 1;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM x_gudang) THEN
+    RAISE EXCEPTION 'Gudang pengirim "%" tidak ada di master cabang (opsi --gudang).', (SELECT value FROM x_cfg WHERE key = 'gudang');
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_pic;
+CREATE TEMP TABLE x_pic (id UUID, nama TEXT NOT NULL);
+
+DO $$
+DECLARE
+  v_email TEXT := (SELECT value FROM x_cfg WHERE key = 'pic_email');
+  v_n INT;
+BEGIN
+  IF v_email IS NULL THEN
+    INSERT INTO x_pic VALUES (NULL, '(tanpa user)');
+  ELSE
+    INSERT INTO x_pic
+    SELECT p.id, COALESCE(NULLIF(btrim(p.nama), ''), p.email)
+    FROM public.profiles p WHERE lower(btrim(p.email)) = lower(btrim(v_email));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'User PIC dengan email % tidak ditemukan (ketemu % user).', v_email, v_n;
+    END IF;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Baris DO ERP -> SO Reguler & barang SO di WMS (data live)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_match;
+CREATE TEMP TABLE x_match AS
+SELECT l.*, s.id AS so_id, s.so_kode, s.so_status, s.so_is_import, s.customer_id,
+       c.customer_name AS customer_wms,
+       (SELECT si.id FROM public.so_reguler_items si
+        WHERE si.so_id = s.id AND upper(btrim(si.part_number)) = upper(btrim(l.part_number))
+        ORDER BY si.id LIMIT 1) AS so_item_id
+FROM x_do_line l
+LEFT JOIN public.so_reguler s ON upper(btrim(s.so_kode)) = l.so_key
+LEFT JOIN public.customers c ON c.id = s.customer_id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP baris DO: SO tidak ada di WMS', do_no, so_no || ' ' || part_number || ' qty ' || qty
+FROM x_match WHERE so_id IS NULL;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP baris DO: SO sudah dibatalkan di WMS', do_no, so_no || ' ' || part_number || ' qty ' || qty
+FROM x_match WHERE so_id IS NOT NULL AND so_status = 'cancelled';
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang DO tidak ada di SO WMS (di List Penawaran sudah terkirim, tidak jadi barang SO) -- dilewati', do_no,
+       so_no || ' ' || part_number || ' qty ' || qty || ' tgl ' || do_tanggal
+FROM x_match WHERE so_id IS NOT NULL AND so_status <> 'cancelled' AND so_item_id IS NULL;
+
+DELETE FROM x_match WHERE so_id IS NULL OR so_status = 'cancelled' OR so_item_id IS NULL;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Nama customer ERP beda dengan customer SO WMS (DO pakai customer SO)', so_no,
+       customer_erp || ' vs ' || customer_wms
+FROM (SELECT DISTINCT so_no, customer_erp, customer_wms FROM x_match) t
+WHERE regexp_replace(regexp_replace(upper(customer_erp), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g')
+   <> regexp_replace(regexp_replace(upper(customer_wms), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g');
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SO buatan form (bukan import List Penawaran) ikut dapat DO', so_kode, string_agg(DISTINCT do_no, ', ')
+FROM x_match WHERE NOT so_is_import
+GROUP BY so_kode;
+
+-- ---------------------------------------------------------------------
+-- 2. Header DO: 1 DO ERP per SO. Kode = No DO, atau "<No DO>/<No SO>"
+--    kalau DO ERP itu mencakup >1 SO WMS. Kode yang sudah ada di-skip.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_do;
+CREATE TEMP TABLE x_do AS
+SELECT m.do_no, m.so_id, min(m.so_kode) AS so_kode,
+       CASE WHEN (SELECT count(DISTINCT m2.so_id) FROM x_match m2 WHERE m2.do_no = m.do_no) > 1
+            THEN m.do_no || '/' || min(m.so_kode) ELSE m.do_no END AS do_kode,
+       min(m.do_tanggal) AS do_tanggal,
+       min(m.customer_id) AS customer_id,
+       string_agg(DISTINCT m.po_no, ' / ') AS kode_po,
+       string_agg(DISTINCT m.status_erp, '/') AS status_erp,
+       min(m.tgl_pesan) AS tgl_pesan,
+       string_agg(m.excel_rows, ', ' ORDER BY m.line_id) AS excel_rows
+FROM x_match m
+GROUP BY m.do_no, m.so_id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP DO: kode sudah ada di WMS', x.do_kode,
+       'SO ' || x.so_kode || CASE WHEN d.so_id IS DISTINCT FROM x.so_id THEN ' (DO WMS untuk SO lain!)' ELSE '' END
+FROM x_do x
+JOIN public.do_reguler d ON upper(btrim(d.do_kode)) = upper(btrim(x.do_kode));
+
+DELETE FROM x_match m
+USING x_do x
+WHERE x.do_no = m.do_no AND x.so_id = m.so_id
+  AND EXISTS (SELECT 1 FROM public.do_reguler d WHERE upper(btrim(d.do_kode)) = upper(btrim(x.do_kode)));
+DELETE FROM x_do x
+WHERE EXISTS (SELECT 1 FROM public.do_reguler d WHERE upper(btrim(d.do_kode)) = upper(btrim(x.do_kode)));
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT '1 DO ERP mencakup >1 SO WMS -> dipecah 1 DO per SO', do_no, string_agg(do_kode, ', ' ORDER BY do_kode)
+FROM x_do WHERE do_kode <> do_no
+GROUP BY do_no;
+
+-- ---------------------------------------------------------------------
+-- 3. Qty DO dibatasi sisa SO: qty SO - DO WMS yang sudah ada (bukan batal),
+--    dialokasikan urut tanggal DO.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_line;
+CREATE TEMP TABLE x_line AS
+SELECT m.*, si.qty AS so_qty, si.part_id, si.part_number AS so_part_number, si.part_name AS so_part_name, si.satuan,
+       COALESCE((SELECT sum(di.qty) FROM public.do_reguler_items di JOIN public.do_reguler d ON d.id = di.do_id
+                 WHERE di.so_item_id = si.id AND d.status <> 'cancelled'), 0) AS qty_do_wms,
+       0 AS qty_final
+FROM x_match m
+JOIN public.so_reguler_items si ON si.id = m.so_item_id;
+
+UPDATE x_line l
+SET qty_final = GREATEST(0, LEAST(l.qty, l.so_qty - l.qty_do_wms - c.qty_sebelum))
+FROM (
+  SELECT line_id,
+         COALESCE(sum(qty) OVER (PARTITION BY so_item_id ORDER BY do_tanggal, do_no, line_id
+                                 ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING), 0) AS qty_sebelum
+  FROM x_line
+) c
+WHERE c.line_id = l.line_id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Qty DO ERP melebihi sisa SO WMS -> dipotong', l.do_no,
+       l.so_no || ' ' || l.part_number || ': DO ' || l.qty || ', dipakai ' || l.qty_final
+         || ' (qty SO ' || l.so_qty || CASE WHEN l.qty_do_wms > 0 THEN ', DO WMS lain ' || l.qty_do_wms ELSE '' END || ')'
+FROM x_line l WHERE l.qty_final < l.qty;
+
+DELETE FROM x_line WHERE qty_final = 0;
+DELETE FROM x_do x WHERE NOT EXISTS (SELECT 1 FROM x_line l WHERE l.do_no = x.do_no AND l.so_id = x.so_id);
+
+-- Stok yang akan dipotong (opsi potong_stok).
+DROP TABLE IF EXISTS pg_temp.x_stok_plan;
+CREATE TEMP TABLE x_stok_plan AS
+SELECT l.part_id, g.cabang_id, min(l.so_part_number) AS part_number, sum(l.qty_final) AS qty_keluar,
+       COALESCE((SELECT st.qty FROM public.stock st WHERE st.part_id = l.part_id AND st.cabang_id = g.cabang_id), 0) AS qty_sebelum
+FROM x_line l
+CROSS JOIN x_gudang g
+WHERE (SELECT value FROM x_cfg WHERE key = 'potong_stok') = 'true'
+GROUP BY l.part_id, g.cabang_id;
+
+-- Status SO sesudah import (rumus sama dengan computeSoStatus/refreshSoStatus).
+DROP TABLE IF EXISTS pg_temp.x_so_after;
+CREATE TEMP TABLE x_so_after AS
+SELECT s.id AS so_id, s.so_kode, s.so_status AS status_sebelum,
+       CASE
+         WHEN count(si.id) > 0
+              AND bool_and(COALESCE(dw.qty, 0) + COALESCE(di.qty, 0) >= si.qty)
+              AND NOT bool_or(COALESCE(dw.pending, false)) THEN 'completed'
+         WHEN bool_or(COALESCE(dw.qty, 0) + COALESCE(di.qty, 0) > 0 OR COALESCE(po.qty, 0) > 0) THEN 'partial'
+         ELSE 'open'
+       END AS status_sesudah
+FROM public.so_reguler s
+JOIN public.so_reguler_items si ON si.so_id = s.id
+LEFT JOIN LATERAL (
+  SELECT sum(x.qty) AS qty, bool_or(d.status NOT IN ('completed', 'cancelled')) AS pending
+  FROM public.do_reguler_items x JOIN public.do_reguler d ON d.id = x.do_id
+  WHERE x.so_item_id = si.id AND d.status <> 'cancelled'
+) dw ON true
+LEFT JOIN LATERAL (SELECT sum(l.qty_final) AS qty FROM x_line l WHERE l.so_item_id = si.id) di ON true
+LEFT JOIN LATERAL (
+  SELECT sum(pi.qty) AS qty FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+  WHERE pi.so_item_id = si.id AND p.po_status::text <> 'rejected'
+) po ON true
+WHERE s.id IN (SELECT so_id FROM x_line) AND s.so_status <> 'cancelled'
+GROUP BY s.id, s.so_kode, s.so_status;
+

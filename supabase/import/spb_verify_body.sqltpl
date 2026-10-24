@@ -1,0 +1,240 @@
+-- ---------------------------------------------------------------------
+-- VERIFIKASI: SPB di DB vs Excel (x_spb / x_line / x_doc)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_chk;
+CREATE TEMP TABLE x_chk (no INT PRIMARY KEY, status TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+DROP TABLE IF EXISTS pg_temp.x_vs;
+CREATE TEMP TABLE x_vs AS
+SELECT x.*, g.id AS cabang_id, g.nama_cabang,
+       s.id AS spb_id, s.spb_tanggal, s.cabang_id AS db_cabang_id, s.spb_status, s.spb_is_import
+FROM x_spb x
+JOIN x_site si ON si.site = x.site
+JOIN public.cabang g ON upper(btrim(g.nama_cabang)) = upper(btrim(si.gudang))
+LEFT JOIN (SELECT DISTINCT ON (upper(btrim(spb_no))) upper(btrim(spb_no)) AS k, *
+           FROM public.spb ORDER BY upper(btrim(spb_no)), id) s ON s.k = upper(btrim(x.spb_no));
+CREATE INDEX ON x_vs (sid);
+CREATE INDEX ON x_vs (spb_id);
+
+INSERT INTO x_chk
+SELECT 101, 'INFO', 'SPB Excel / ada di DB (import / lewat form) / tidak ada',
+       count(*) || ' / ' || count(*) FILTER (WHERE spb_id IS NOT NULL AND spb_is_import) || ' / '
+         || count(*) FILTER (WHERE spb_id IS NOT NULL AND NOT spb_is_import) || ' / ' || count(*) FILTER (WHERE spb_id IS NULL),
+       NULL
+FROM x_vs;
+
+INSERT INTO x_chk
+SELECT 102, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END, 'SPB Excel tidak ada di DB', count(*)::text,
+       left(string_agg(spb_no, ', ' ORDER BY spb_no), 800)
+FROM x_vs WHERE spb_id IS NULL;
+
+INSERT INTO x_chk
+SELECT 201, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'SPB import beda dengan Excel (tanggal / gudang / CANCELLED)', count(*)::text,
+       left(string_agg(spb_no || ': ' || concat_ws('; ',
+              CASE WHEN spb_tanggal::date <> tgl THEN 'tgl ' || spb_tanggal::date || ' vs ' || tgl END,
+              CASE WHEN db_cabang_id <> cabang_id THEN 'gudang beda' END,
+              CASE WHEN cancel <> (spb_status = 'CANCELLED') THEN 'status ' || spb_status END), ' | '), 800)
+FROM x_vs
+WHERE spb_is_import AND (spb_tanggal::date <> tgl OR db_cabang_id <> cabang_id OR cancel <> (spb_status = 'CANCELLED'));
+
+-- Baris Excel -> spb_details (part number mirip + urutan kemunculan, sama dengan import).
+DROP TABLE IF EXISTS pg_temp.x_vl;
+CREATE TEMP TABLE x_vl AS
+SELECT l.*, s.spb_id, s.spb_no, s.spb_is_import, s.cancel AS spb_cancel, s.tgl AS spb_tgl, s.cabang_id,
+       regexp_replace(upper(l.pn), '[[:space:].-]', '', 'g') AS loose,
+       row_number() OVER (PARTITION BY l.sid, regexp_replace(upper(l.pn), '[[:space:].-]', '', 'g') ORDER BY l.seq) AS rn
+FROM x_line l JOIN x_vs s ON s.sid = l.sid
+WHERE s.spb_id IS NOT NULL;
+
+DROP TABLE IF EXISTS pg_temp.x_vd;
+CREATE TEMP TABLE x_vd AS
+SELECT d.id, d.spb_id, d.part_id, d.dtl_spb_qty,
+       regexp_replace(upper(d.dtl_spb_part_number), '[[:space:].-]', '', 'g') AS loose,
+       row_number() OVER (PARTITION BY d.spb_id, regexp_replace(upper(d.dtl_spb_part_number), '[[:space:].-]', '', 'g') ORDER BY d.id) AS rn
+FROM public.spb_details d
+WHERE d.spb_id IN (SELECT spb_id FROM x_vs WHERE spb_id IS NOT NULL);
+CREATE INDEX ON x_vd (spb_id, loose, rn);
+
+ALTER TABLE x_vl ADD COLUMN dtl_id BIGINT, ADD COLUMN db_qty INT;
+UPDATE x_vl l SET dtl_id = d.id, db_qty = d.dtl_spb_qty
+FROM x_vd d WHERE d.spb_id = l.spb_id AND d.loose = l.loose AND d.rn = l.rn;
+CREATE INDEX ON x_vl (dtl_id);
+
+INSERT INTO x_chk
+SELECT 202, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'SPB import: barang hilang / qty beda dengan Excel', count(*)::text,
+       left(string_agg(spb_no || ' ' || pn || ' DB ' || COALESCE(db_qty::text, '-') || ' vs Excel ' || qty, ', ' ORDER BY spb_no), 800)
+FROM x_vl WHERE spb_is_import AND (dtl_id IS NULL OR db_qty <> qty);
+
+INSERT INTO x_chk
+SELECT 203, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'SPB import: barang di DB yang tidak ada di Excel', count(*)::text,
+       left(string_agg(s.spb_no || ' ' || d.loose, ', '), 800)
+FROM x_vd d JOIN x_vs s ON s.spb_id = d.spb_id AND s.spb_is_import
+WHERE NOT EXISTS (SELECT 1 FROM x_vl l WHERE l.dtl_id = d.id);
+
+INSERT INTO x_chk
+SELECT 204, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'SPB lewat form: barang Excel tidak ada di SPB WMS (turunannya tidak diimport)', count(*)::text,
+       left(string_agg(spb_no || ' ' || pn, ', ' ORDER BY spb_no), 800)
+FROM x_vl WHERE NOT spb_is_import AND dtl_id IS NULL;
+
+-- Rantai dokumen per baris Excel (yang barangnya ketemu & bukan cancel).
+DROP TABLE IF EXISTS pg_temp.x_vpo;
+CREATE TEMP TABLE x_vpo AS
+SELECT pd.spb_dtl_id, string_agg(DISTINCT upper(btrim(p.po_no)), ',') AS db_po
+FROM public.spb_po_details pd JOIN public.spb_po p ON p.id = pd.spb_po_id
+WHERE pd.spb_dtl_id IN (SELECT dtl_id FROM x_vl)
+GROUP BY pd.spb_dtl_id;
+
+DROP TABLE IF EXISTS pg_temp.x_vdo;
+CREATE TEMP TABLE x_vdo AS
+SELECT pd.spb_dtl_id, string_agg(DISTINCT upper(btrim(d.do_no)), ',') AS db_do
+FROM public.spb_po_details pd
+JOIN public.spb_do_details dd ON dd.spb_po_dtl_id = pd.id
+JOIN public.spb_do d ON d.id = dd.spb_do_id
+WHERE pd.spb_dtl_id IN (SELECT dtl_id FROM x_vl)
+GROUP BY pd.spb_dtl_id;
+
+DROP TABLE IF EXISTS pg_temp.x_vinv;
+CREATE TEMP TABLE x_vinv AS
+SELECT pd.spb_dtl_id,
+       string_agg(DISTINCT upper(btrim(i.invoice_no)) || ':' || i.payment_status || ':' || COALESCE(idt.invoice_qty::text, '-'), ',') AS db_inv
+FROM public.spb_po_details pd
+JOIN public.spb_do_details dd ON dd.spb_po_dtl_id = pd.id
+JOIN public.spb_invoice_details idt ON idt.spb_do_dtl_id = dd.id
+JOIN public.spb_invoice i ON i.id = idt.spb_invoice_id
+WHERE pd.spb_dtl_id IN (SELECT dtl_id FROM x_vl)
+GROUP BY pd.spb_dtl_id;
+
+DROP TABLE IF EXISTS pg_temp.x_vc;
+CREATE TEMP TABLE x_vc AS
+SELECT l.lid, l.spb_no, l.pn, l.qty, l.dtl_id, c.*, vp.db_po, vd.db_do, vi.db_inv
+FROM x_vl l
+JOIN x_doc c ON c.cid = l.cid
+LEFT JOIN x_vpo vp ON vp.spb_dtl_id = l.dtl_id
+LEFT JOIN x_vdo vd ON vd.spb_dtl_id = l.dtl_id
+LEFT JOIN x_vinv vi ON vi.spb_dtl_id = l.dtl_id
+WHERE l.dtl_id IS NOT NULL AND NOT l.spb_cancel;
+
+INSERT INTO x_chk
+SELECT 301, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END, 'Baris Excel ber-PO tanpa SPB-PO yang sama di DB', count(*)::text,
+       left(string_agg(spb_no || ' ' || pn || ' PO ' || po_no || ' (DB ' || COALESCE(db_po, '-') || ')', ', '), 800)
+FROM x_vc WHERE db_po IS NULL OR db_po <> upper(btrim(po_no));
+
+INSERT INTO x_chk
+SELECT 302, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END, 'Baris Excel ber-DO tanpa SPB-DO yang sama di DB', count(*)::text,
+       left(string_agg(spb_no || ' ' || pn || ' DO ' || do_no || ' (DB ' || COALESCE(db_do, '-') || ')', ', '), 800)
+FROM x_vc WHERE do_no IS NOT NULL AND (db_do IS NULL OR db_do <> upper(btrim(do_no)));
+
+INSERT INTO x_chk
+SELECT 303, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Baris Excel ber-invoice: invoice / qty / status paid beda di DB', count(*)::text,
+       left(string_agg(spb_no || ' ' || pn || ' ' || inv_no || ':' || CASE WHEN paid THEN 'paid' ELSE 'unpaid' END || ':' || qty
+                       || ' (DB ' || COALESCE(db_inv, '-') || ')', ', '), 800)
+FROM x_vc
+WHERE inv_no IS NOT NULL
+  AND (db_inv IS NULL OR split_part(db_inv, ':', 1) <> upper(btrim(inv_no)) OR split_part(db_inv, ':', 3) <> qty::text
+       OR (paid AND split_part(db_inv, ':', 2) <> 'paid'));
+
+INSERT INTO x_chk
+SELECT 304, 'INFO', 'Baris Excel: ber-PO / ber-DO (DO penanda TANPA-DO) / ber-invoice (paid)',
+       count(*) || ' / ' || count(*) FILTER (WHERE do_no IS NOT NULL) || ' (' || count(*) FILTER (WHERE do_src = 'P') || ') / '
+         || count(*) FILTER (WHERE inv_no IS NOT NULL) || ' (' || count(*) FILTER (WHERE inv_no IS NOT NULL AND paid) || ')',
+       NULL
+FROM x_vc;
+
+INSERT INTO x_chk
+SELECT 305, 'INFO', 'Total di DB: SPB import / SPB-PO / SPB-DO / invoice (paid)',
+       (SELECT count(*) FROM public.spb WHERE spb_is_import) || ' / ' || (SELECT count(*) FROM public.spb_po) || ' / '
+         || (SELECT count(*) FROM public.spb_do) || ' / ' || (SELECT count(*) FROM public.spb_invoice)
+         || ' (' || (SELECT count(*) FROM public.spb_invoice WHERE payment_status = 'paid') || ')',
+       NULL;
+
+-- Status SPB = rumus refreshSpbStatus (semua SPB di Excel).
+DROP TABLE IF EXISTS pg_temp.x_vtahap;
+CREATE TEMP TABLE x_vtahap AS
+SELECT p.spb_id, max(CASE WHEN i.id IS NOT NULL THEN 3 WHEN d.id IS NOT NULL THEN 2 ELSE 1 END) AS tahap
+FROM public.spb_po p
+LEFT JOIN public.spb_do d ON d.spb_po_id = p.id
+LEFT JOIN public.spb_invoice i ON i.spb_do_id = d.id AND i.approval_status = 'completed'
+WHERE p.spb_id IN (SELECT spb_id FROM x_vs)
+GROUP BY p.spb_id;
+
+DROP TABLE IF EXISTS pg_temp.x_vret;
+CREATE TEMP TABLE x_vret AS
+SELECT d.spb_id FROM public.spb_details d
+WHERE d.spb_id IN (SELECT spb_id FROM x_vs)
+GROUP BY d.spb_id HAVING bool_and(d.dtl_spb_qty_returned >= d.dtl_spb_qty);
+
+DROP TABLE IF EXISTS pg_temp.x_vst;
+CREATE TEMP TABLE x_vst AS
+SELECT s.spb_no, s.spb_status,
+       CASE
+         WHEN s.spb_status = 'CANCELLED' THEN 'CANCELLED'
+         WHEN r.spb_id IS NOT NULL THEN 'Returned'
+         WHEN t.tahap = 3 THEN 'DONE QUOT'
+         WHEN t.tahap = 2 THEN 'DO_ATTACH'
+         WHEN t.tahap = 1 THEN 'PO_ATTACH'
+         ELSE 'DONE QUOT'
+       END AS status_hitung
+FROM x_vs s
+LEFT JOIN x_vtahap t ON t.spb_id = s.spb_id
+LEFT JOIN x_vret r ON r.spb_id = s.spb_id
+WHERE s.spb_id IS NOT NULL;
+
+INSERT INTO x_chk
+SELECT 401, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END, 'Status SPB beda dengan rumus refreshSpbStatus', count(*)::text,
+       left(string_agg(spb_no || ' ' || spb_status || ' vs ' || status_hitung, ', '), 800)
+FROM x_vst WHERE spb_status <> status_hitung;
+
+INSERT INTO x_chk
+SELECT 402, 'INFO', 'Status SPB Excel di DB', string_agg(spb_status || ' ' || n, ', ' ORDER BY spb_status), NULL
+FROM (SELECT spb_status, count(*) AS n FROM x_vst GROUP BY 1) t;
+
+-- Stok: SPB import >= stok_sejak (bukan cancel) punya SPB_OUT = qty per part; sebelum itu tidak ada.
+DROP TABLE IF EXISTS pg_temp.x_vmv;
+CREATE TEMP TABLE x_vmv AS
+SELECT reference_id, cabang_id, part_id, -sum(qty_change) AS cut
+FROM public.stock_movements
+WHERE type = 'SPB_OUT' AND reference_id IN (SELECT spb_no FROM x_vs WHERE spb_is_import)
+GROUP BY 1, 2, 3;
+
+DROP TABLE IF EXISTS pg_temp.x_vneed;
+CREATE TEMP TABLE x_vneed AS
+SELECT s.spb_no, s.cabang_id, d.part_id,
+       CASE WHEN NOT s.cancel AND s.tgl >= (SELECT value::date FROM x_cfg WHERE key = 'stok_sejak') THEN sum(d.dtl_spb_qty) ELSE 0 END AS need
+FROM x_vs s JOIN public.spb_details d ON d.spb_id = s.spb_id
+WHERE s.spb_is_import
+GROUP BY s.spb_no, s.cabang_id, d.part_id, s.cancel, s.tgl;
+
+INSERT INTO x_chk
+SELECT 501, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Stock movement SPB_OUT SPB import <> qty (SPB >= batas stok) / ada padahal sebelum batas', count(*)::text,
+       left(string_agg(COALESCE(n.spb_no, m.reference_id) || ' part ' || COALESCE(n.part_id, m.part_id) || ': mv ' || COALESCE(m.cut, 0) || ' vs ' || COALESCE(n.need, 0), ', '), 800)
+FROM x_vneed n
+FULL JOIN x_vmv m ON m.reference_id = n.spb_no AND m.cabang_id = n.cabang_id AND m.part_id = n.part_id
+WHERE COALESCE(m.cut, 0) <> COALESCE(n.need, 0);
+
+INSERT INTO x_chk
+SELECT 502, 'INFO', 'Stok minus gudang site sekarang (barang / total)',
+       string_agg(nama_cabang || ' ' || n || ' (' || tot || ')', ', ' ORDER BY nama_cabang), NULL
+FROM (SELECT cb.nama_cabang, count(*) AS n, sum(st.qty) AS tot
+      FROM public.stock st JOIN public.cabang cb ON cb.id = st.cabang_id
+      WHERE st.qty < 0 AND cb.id IN (SELECT cabang_id FROM x_vs)
+      GROUP BY cb.nama_cabang) t;
+
+-- Integritas: 1 barang SPB maksimal di 1 SPB-PO, 1 barang PO maksimal di 1 DO.
+INSERT INTO x_chk
+SELECT 601, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END, 'Barang SPB di >1 SPB-PO / barang PO di >1 SPB-DO', count(*)::text,
+       left(string_agg(k, ', '), 600)
+FROM (
+  SELECT 'dtl ' || spb_dtl_id AS k FROM public.spb_po_details GROUP BY spb_dtl_id HAVING count(*) > 1
+  UNION ALL
+  SELECT 'pod ' || spb_po_dtl_id FROM public.spb_do_details GROUP BY spb_po_dtl_id HAVING count(*) > 1
+) t;
+
+SELECT no, status, cek, nilai, contoh
+FROM x_chk
+ORDER BY no;

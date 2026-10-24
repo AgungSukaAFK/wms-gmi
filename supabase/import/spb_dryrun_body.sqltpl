@@ -1,0 +1,82 @@
+-- ---------------------------------------------------------------------
+-- DRY-RUN: ringkasan rencana import (tidak ada data yang ditulis)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_dry;
+CREATE TEMP TABLE x_dry (no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+INSERT INTO x_dry
+SELECT 0, '0. Dry-run', 'Tidak ada data yang diubah -- ini simulasi spb_import.sql', NULL,
+       'potong stok SPB baru sejak ' || (SELECT value FROM x_cfg WHERE key = 'stok_sejak') || '; pembuat ' || (SELECT nama FROM x_pic);
+
+INSERT INTO x_dry
+SELECT 101, '1. Barang', 'Part number Excel: persis / mirip / barang baru',
+       count(*) FILTER (WHERE how = 'persis') || ' / ' || count(*) FILTER (WHERE how = 'mirip') || ' / ' || count(*) FILTER (WHERE how = 'baru'),
+       left(string_agg(pn, ', ' ORDER BY pn) FILTER (WHERE how = 'baru'), 800)
+FROM x_part;
+
+INSERT INTO x_dry
+SELECT 200 + row_number() OVER (ORDER BY g.nama_cabang), '2. SPB per gudang',
+       g.nama_cabang || ': SPB Excel / sudah ada di WMS / baru (cancel)',
+       count(*) || ' / ' || count(*) FILTER (WHERE NOT s.is_new) || ' / ' || count(*) FILTER (WHERE s.is_new)
+         || ' (' || count(*) FILTER (WHERE s.is_new AND s.cancel) || ')',
+       min(s.tgl) || ' s/d ' || max(s.tgl)
+FROM x_s s JOIN x_gudang g ON g.site = s.site
+GROUP BY g.nama_cabang;
+
+INSERT INTO x_dry
+SELECT 300, '3. Dokumen', 'Baru: SPB / barang SPB / SPB-PO / barang PO / SPB-DO / barang DO / invoice / barang invoice',
+       (SELECT count(*) FROM x_s WHERE is_new) || ' / ' || (SELECT count(*) FROM x_l WHERE is_new) || ' / '
+         || (SELECT count(*) FROM x_po WHERE is_new) || ' / ' || (SELECT count(*) FROM x_pod WHERE is_new) || ' / '
+         || (SELECT count(*) FROM x_do WHERE is_new) || ' / ' || (SELECT count(*) FROM x_dod WHERE is_new) || ' / '
+         || (SELECT count(*) FROM x_inv WHERE is_new) || ' / ' || (SELECT count(*) FROM x_invd WHERE NOT exists_db),
+       'dipakai ulang: PO ' || (SELECT count(*) FROM x_po WHERE NOT is_new) || ', DO ' || (SELECT count(*) FROM x_do WHERE NOT is_new)
+         || ', invoice ' || (SELECT count(*) FROM x_inv WHERE NOT is_new);
+
+INSERT INTO x_dry
+SELECT 301, '3. Dokumen', 'Turunan untuk SPB yang sudah ada di WMS: SPB tersentuh / SPB-PO / SPB-DO / invoice baru',
+       count(DISTINCT p.spb_id) || ' / ' || count(DISTINCT p.po_id) FILTER (WHERE p.is_new) || ' / '
+         || (SELECT count(*) FROM x_do d JOIN x_po p2 ON p2.po_id = d.po_id JOIN x_s s2 ON s2.spb_id = p2.spb_id WHERE d.is_new AND NOT s2.is_new) || ' / '
+         || (SELECT count(*) FROM x_inv i JOIN x_do d ON d.do_id = i.do_id JOIN x_po p2 ON p2.po_id = d.po_id JOIN x_s s2 ON s2.spb_id = p2.spb_id WHERE i.is_new AND NOT s2.is_new),
+       NULL
+FROM x_po p JOIN x_s s ON s.spb_id = p.spb_id AND NOT s.is_new;
+
+INSERT INTO x_dry
+SELECT 302, '3. Dokumen', 'SPB-DO: dari Excel / dilengkapi dari DO ERP / penanda TANPA-DO',
+       count(*) FILTER (WHERE do_src = 'X') || ' / ' || count(*) FILTER (WHERE do_src = 'E') || ' / ' || count(*) FILTER (WHERE do_src = 'P'),
+       'DO ERP dipakai di >1 SPB-PO: ' || (SELECT count(*) FROM (SELECT do_key FROM x_do GROUP BY do_key HAVING count(*) > 1) t)
+FROM x_do WHERE is_new;
+
+INSERT INTO x_dry
+SELECT 303, '3. Dokumen', 'Invoice baru: paid / unpaid',
+       count(*) FILTER (WHERE paid) || ' / ' || count(*) FILTER (WHERE NOT paid),
+       'invoice dipakai di >1 SPB-DO: ' || (SELECT count(*) FROM (SELECT inv_key FROM x_inv GROUP BY inv_key HAVING count(*) > 1) t)
+FROM x_inv WHERE is_new;
+
+INSERT INTO x_dry
+SELECT 400 + row_number() OVER (ORDER BY status_sesudah), '4. Status SPB', 'Sesudah import: ' || status_sesudah,
+       count(*) || ' SPB (baru ' || count(*) FILTER (WHERE is_new) || ')',
+       CASE WHEN count(*) FILTER (WHERE NOT is_new AND status_sebelum IS DISTINCT FROM status_sesudah) > 0
+            THEN 'SPB WMS berubah status: ' || count(*) FILTER (WHERE NOT is_new AND status_sebelum IS DISTINCT FROM status_sesudah)
+                 || ' (' || string_agg(DISTINCT status_sebelum, ', ') FILTER (WHERE NOT is_new AND status_sebelum IS DISTINCT FROM status_sesudah) || ' -> ini)'
+       END
+FROM x_status
+GROUP BY status_sesudah;
+
+INSERT INTO x_dry
+SELECT 500 + row_number() OVER (ORDER BY g.nama_cabang), '5. Stok', 'Stok dipotong ' || g.nama_cabang || ' (SPB / barang / qty keluar)',
+       (SELECT count(DISTINCT m.spb_id) FROM x_stok_mv m WHERE m.cabang_id = g.id) || ' SPB, ' || count(*) || ' barang, qty ' || sum(p.qty_keluar),
+       'stok ' || sum(p.qty_sebelum) || ' -> ' || sum(p.qty_sebelum - p.qty_keluar) || '; jadi minus ' || count(*) FILTER (WHERE p.qty_sebelum - p.qty_keluar < 0)
+         || ' barang (total ' || COALESCE(sum(p.qty_sebelum - p.qty_keluar) FILTER (WHERE p.qty_sebelum - p.qty_keluar < 0), 0) || ')'
+FROM x_stok_plan p JOIN public.cabang g ON g.id = p.cabang_id
+GROUP BY g.id, g.nama_cabang;
+
+-- Semua catatan rencana (skip, penyesuaian, dll).
+INSERT INTO x_dry
+SELECT 600 + row_number() OVER (ORDER BY kategori), '6. Catatan', kategori, count(*)::text,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ' | ' ORDER BY ref, detail), 1500)
+FROM x_report
+GROUP BY kategori;
+
+SELECT no, kelompok, cek, nilai, contoh
+FROM x_dry
+ORDER BY no;

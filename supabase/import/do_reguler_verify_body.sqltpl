@@ -1,0 +1,132 @@
+-- ---------------------------------------------------------------------
+-- VERIFIKASI: DO Reguler import di DB vs baris DO ERP (x_do_line)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_chk;
+CREATE TEMP TABLE x_chk (no INT PRIMARY KEY, status TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+-- Baris ERP yang cocok ke barang SO WMS (sama dengan rencana import).
+DROP TABLE IF EXISTS pg_temp.x_v;
+CREATE TEMP TABLE x_v AS
+SELECT l.*, s.id AS so_id, s.so_kode, s.so_status,
+       (SELECT si.id FROM public.so_reguler_items si
+        WHERE si.so_id = s.id AND upper(btrim(si.part_number)) = upper(btrim(l.part_number))
+        ORDER BY si.id LIMIT 1) AS so_item_id
+FROM x_do_line l
+JOIN public.so_reguler s ON upper(btrim(s.so_kode)) = l.so_key AND s.so_status <> 'cancelled';
+DELETE FROM x_v WHERE so_item_id IS NULL;
+
+ALTER TABLE x_v ADD COLUMN do_kode TEXT;
+UPDATE x_v v
+SET do_kode = CASE WHEN (SELECT count(DISTINCT v2.so_id) FROM x_v v2 WHERE v2.do_no = v.do_no) > 1
+                   THEN v.do_no || '/' || v.so_kode ELSE v.do_no END;
+
+DROP TABLE IF EXISTS pg_temp.x_vdb;
+CREATE TEMP TABLE x_vdb AS
+SELECT v.*, d.id AS do_id, d.so_id AS db_so_id, d.do_tanggal AS db_tgl, d.status AS db_status,
+       d.remarks LIKE 'Import DO ERP%' AS db_import, d.stock_released,
+       (SELECT sum(di.qty) FROM public.do_reguler_items di WHERE di.do_id = d.id AND di.so_item_id = v.so_item_id) AS db_qty
+FROM x_v v
+LEFT JOIN public.do_reguler d ON upper(btrim(d.do_kode)) = upper(btrim(v.do_kode));
+
+INSERT INTO x_chk
+SELECT 101, 'INFO', 'Baris DO ERP yang cocok ke barang SO WMS / DO di DB (import / lewat form) / tidak ada',
+       count(*) || ' / ' || count(*) FILTER (WHERE do_id IS NOT NULL AND db_import) || ' / ' || count(*) FILTER (WHERE do_id IS NOT NULL AND NOT db_import)
+         || ' / ' || count(*) FILTER (WHERE do_id IS NULL),
+       NULL
+FROM x_vdb;
+
+INSERT INTO x_chk
+SELECT 102, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'Baris DO ERP tanpa DO di DB (import belum jalan / qty SO sudah habis)', count(*)::text,
+       left(string_agg(do_kode || ' ' || so_kode || ' ' || part_number || ' ' || qty, ', ' ORDER BY do_kode), 1000)
+FROM x_vdb WHERE do_id IS NULL;
+
+INSERT INTO x_chk
+SELECT 103, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'Kode DO ERP sudah dipakai DO buatan form (tidak dicek)', count(*)::text,
+       left(string_agg(DISTINCT do_kode, ', '), 1000)
+FROM x_vdb WHERE do_id IS NOT NULL AND NOT db_import;
+
+INSERT INTO x_chk
+SELECT 201, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'DO import beda dengan ERP (SO / tanggal / status bukan completed)', count(*)::text,
+       left(string_agg(do_kode || ': ' || concat_ws('; ',
+              CASE WHEN db_so_id <> so_id THEN 'SO beda' END,
+              CASE WHEN db_tgl <> do_tanggal THEN 'tgl ' || db_tgl || ' vs ' || do_tanggal END,
+              CASE WHEN db_status <> 'completed' THEN 'status ' || db_status END), ' | ' ORDER BY do_kode), 1000)
+FROM (SELECT DISTINCT ON (do_kode) * FROM x_vdb WHERE do_id IS NOT NULL AND db_import ORDER BY do_kode, do_tanggal) t
+WHERE db_so_id <> so_id OR db_tgl <> do_tanggal OR db_status <> 'completed';
+
+INSERT INTO x_chk
+SELECT 202, CASE WHEN count(*) FILTER (WHERE db_qty IS NULL OR db_qty > qty) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Qty barang DO import vs ERP: hilang/lebih (FAIL) / dipotong karena sisa SO (lihat contoh)',
+       count(*) FILTER (WHERE db_qty IS NULL OR db_qty > qty) || ' / ' || count(*) FILTER (WHERE db_qty < qty),
+       left(string_agg(do_kode || ' ' || part_number || ' DB ' || COALESCE(db_qty::text, '-') || ' vs ERP ' || qty, ', ' ORDER BY do_kode)
+            FILTER (WHERE db_qty IS DISTINCT FROM qty), 1000)
+FROM x_vdb WHERE do_id IS NOT NULL AND db_import;
+
+INSERT INTO x_chk
+SELECT 203, 'INFO', 'Total DO import & qty di DB',
+       (SELECT count(*) || ' DO' FROM public.do_reguler WHERE remarks LIKE 'Import DO ERP%'),
+       (SELECT count(*) || ' barang, qty ' || COALESCE(sum(di.qty), 0)
+        FROM public.do_reguler_items di JOIN public.do_reguler d ON d.id = di.do_id WHERE d.remarks LIKE 'Import DO ERP%');
+
+-- Status SO harus sama dengan rumus refreshSoStatus.
+DROP TABLE IF EXISTS pg_temp.x_so_calc;
+CREATE TEMP TABLE x_so_calc AS
+SELECT s.id, s.so_kode, s.so_status,
+       CASE
+         WHEN count(si.id) > 0 AND bool_and(COALESCE(dw.qty, 0) >= si.qty) AND NOT bool_or(COALESCE(dw.pending, false)) THEN 'completed'
+         WHEN bool_or(COALESCE(dw.qty, 0) > 0 OR COALESCE(po.qty, 0) > 0) THEN 'partial'
+         ELSE 'open'
+       END AS status_hitung,
+       bool_or(COALESCE(dw.qty, 0) > si.qty) AS over_do
+FROM public.so_reguler s
+JOIN public.so_reguler_items si ON si.so_id = s.id
+LEFT JOIN LATERAL (
+  SELECT sum(x.qty) AS qty, bool_or(d.status NOT IN ('completed', 'cancelled')) AS pending
+  FROM public.do_reguler_items x JOIN public.do_reguler d ON d.id = x.do_id
+  WHERE x.so_item_id = si.id AND d.status <> 'cancelled'
+) dw ON true
+LEFT JOIN LATERAL (
+  SELECT sum(pi.qty) AS qty FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+  WHERE pi.so_item_id = si.id AND p.po_status::text <> 'rejected'
+) po ON true
+WHERE s.so_status <> 'cancelled'
+GROUP BY s.id, s.so_kode, s.so_status;
+
+INSERT INTO x_chk
+SELECT 301, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Status SO Reguler beda dengan hitungan DO/PO (semua SO)', count(*)::text,
+       left(string_agg(so_kode || ' ' || so_status || ' vs ' || status_hitung, ', ' ORDER BY so_kode), 1000)
+FROM x_so_calc WHERE so_status <> status_hitung;
+
+INSERT INTO x_chk
+SELECT 302, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Barang SO dengan total DO melebihi qty SO', count(*)::text, left(string_agg(so_kode, ', '), 1000)
+FROM x_so_calc WHERE over_do;
+
+INSERT INTO x_chk
+SELECT 303, 'INFO', 'Status SO Reguler sekarang (open / partial / completed)',
+       count(*) FILTER (WHERE so_status = 'open') || ' / ' || count(*) FILTER (WHERE so_status = 'partial') || ' / '
+         || count(*) FILTER (WHERE so_status = 'completed'),
+       NULL
+FROM x_so_calc;
+
+-- Stok: DO import yang stock_released harus punya movement DO_REG = -qty.
+INSERT INTO x_chk
+SELECT 401, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Stock movement DO_REG per DO import = -qty DO (DO yang memotong stok) / DO tanpa potong stok tapi ada movement', count(*)::text,
+       left(string_agg(do_kode || ': movement ' || mv || ' vs DO ' || qty || CASE WHEN stock_released THEN '' ELSE ' (tanpa stok)' END, ', '), 1000)
+FROM (
+  SELECT d.do_kode, d.stock_released,
+         (SELECT COALESCE(sum(di.qty), 0) FROM public.do_reguler_items di WHERE di.do_id = d.id) AS qty,
+         (SELECT COALESCE(-sum(m.qty_change), 0) FROM public.stock_movements m WHERE m.type = 'DO_REG' AND m.reference_id = d.do_kode) AS mv
+  FROM public.do_reguler d
+  WHERE d.remarks LIKE 'Import DO ERP%'
+) t
+WHERE mv <> CASE WHEN stock_released THEN qty ELSE 0 END;
+
+SELECT no, status, cek, nilai, contoh
+FROM x_chk
+ORDER BY no;

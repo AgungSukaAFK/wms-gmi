@@ -1,0 +1,394 @@
+-- ---------------------------------------------------------------------
+-- ID baru dialokasikan dulu supaya baris Excel -> baris DB pasti. Mode
+-- import = sequence tabel asli; dry-run (user read-only tidak boleh
+-- nextval) = sequence temp mulai max(id)+1.
+-- ---------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION pg_temp.x_newid(p_tbl TEXT) RETURNS BIGINT
+LANGUAGE plpgsql AS $fn$
+DECLARE
+  v_seq TEXT := 'x_seq_' || p_tbl;
+  v_max BIGINT;
+BEGIN
+  IF (SELECT value FROM x_cfg WHERE key = 'mode') = 'import' THEN
+    RETURN nextval(pg_get_serial_sequence('public.' || p_tbl, 'id'));
+  END IF;
+  IF to_regclass('pg_temp.' || v_seq) IS NULL THEN
+    EXECUTE format('SELECT COALESCE(max(id), 0) FROM public.%I', p_tbl) INTO v_max;
+    EXECUTE format('CREATE TEMP SEQUENCE %I START %s', v_seq, v_max + 1);
+  END IF;
+  RETURN nextval(('pg_temp.' || v_seq)::regclass);
+END $fn$;
+
+-- ---------------------------------------------------------------------
+-- 0. Prasyarat: migration, gudang site, PIC
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'spb' AND column_name = 'spb_is_import') THEN
+    RAISE EXCEPTION 'Kolom spb.spb_is_import belum ada: jalankan migration 20261024120000_spb_import.sql dulu.';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_constraint WHERE conname IN ('spb_do_do_no_key', 'spb_invoice_invoice_no_key')) THEN
+    RAISE EXCEPTION 'No DO/invoice SPB masih unik global: jalankan migration 20261024120000_spb_import.sql dulu.';
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_gudang;
+CREATE TEMP TABLE x_gudang AS
+SELECT DISTINCT ON (s.site) s.site, cb.id AS cabang_id, cb.nama_cabang
+FROM x_site s
+JOIN public.cabang cb ON upper(btrim(cb.nama_cabang)) = upper(btrim(s.gudang))
+ORDER BY s.site, cb.is_active DESC, cb.id;
+
+DO $$
+DECLARE
+  v_missing TEXT;
+BEGIN
+  SELECT string_agg(s.site || ' -> ' || s.gudang, ', ') INTO v_missing
+  FROM x_site s WHERE NOT EXISTS (SELECT 1 FROM x_gudang g WHERE g.site = s.site);
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'Gudang site tidak ada di master cabang: %', v_missing;
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_pic;
+CREATE TEMP TABLE x_pic (id UUID, nama TEXT NOT NULL);
+
+DO $$
+DECLARE
+  v_email TEXT := (SELECT value FROM x_cfg WHERE key = 'pic_email');
+  v_n INT;
+BEGIN
+  IF v_email IS NULL THEN
+    INSERT INTO x_pic VALUES (NULL, 'Import SPB Monitoring');
+  ELSE
+    INSERT INTO x_pic
+    SELECT p.id, COALESCE(NULLIF(btrim(p.nama), ''), p.email)
+    FROM public.profiles p WHERE lower(btrim(p.email)) = lower(btrim(v_email));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'User PIC dengan email % tidak ditemukan (ketemu % user).', v_email, v_n;
+    END IF;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Barang: part number persis -> mirip (abaikan spasi/titik/strip, harus
+--    1 kandidat) -> barang baru.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_bar_loose;
+CREATE TEMP TABLE x_bar_loose AS
+SELECT regexp_replace(upper(part_number), '[[:space:].-]', '', 'g') AS loose, min(id) AS id, count(*) AS n
+FROM public.barang
+GROUP BY 1;
+CREATE INDEX ON x_bar_loose (loose);
+
+DROP TABLE IF EXISTS pg_temp.x_part;
+CREATE TEMP TABLE x_part AS
+SELECT p.pn, upper(btrim(p.pn)) AS pn_key, p.name AS excel_name, p.uom AS excel_uom,
+       ex.id AS exact_id,
+       CASE WHEN lo.n = 1 THEN lo.id END AS loose_id,
+       NULL::BIGINT AS part_id, NULL::TEXT AS how
+FROM x_pn p
+LEFT JOIN (SELECT DISTINCT ON (upper(btrim(part_number))) upper(btrim(part_number)) AS k, id
+           FROM public.barang ORDER BY upper(btrim(part_number)), id) ex ON ex.k = upper(btrim(p.pn))
+LEFT JOIN x_bar_loose lo ON lo.loose = regexp_replace(upper(p.pn), '[[:space:].-]', '', 'g');
+
+UPDATE x_part SET part_id = exact_id, how = 'persis' WHERE exact_id IS NOT NULL;
+UPDATE x_part SET part_id = loose_id, how = 'mirip' WHERE part_id IS NULL AND loose_id IS NOT NULL;
+UPDATE x_part SET part_id = pg_temp.x_newid('barang'), how = 'baru' WHERE part_id IS NULL;
+CREATE INDEX ON x_part (pn_key);
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang: part number Excel dicocokkan ke master yang mirip', x.pn, b.part_number || ' ' || b.part_name
+FROM x_part x JOIN public.barang b ON b.id = x.part_id WHERE x.how = 'mirip';
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang baru dibuat (belum ada di master)', pn, excel_name || COALESCE(' [' || excel_uom || ']', '')
+FROM x_part WHERE how = 'baru';
+
+-- ---------------------------------------------------------------------
+-- 2. SPB: sudah ada di WMS (dilengkapi turunannya) / baru
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_s;
+CREATE TEMP TABLE x_s AS
+SELECT x.*, g.cabang_id, g.nama_cabang,
+       s.id AS db_id, s.cabang_id AS db_cabang_id, s.spb_status AS db_status, s.spb_is_import AS db_import,
+       (s.id IS NULL) AS is_new,
+       NULL::BIGINT AS spb_id
+FROM x_spb x
+JOIN x_gudang g ON g.site = x.site
+LEFT JOIN (SELECT DISTINCT ON (upper(btrim(spb_no))) upper(btrim(spb_no)) AS k, *
+           FROM public.spb ORDER BY upper(btrim(spb_no)), id) s ON s.k = upper(btrim(x.spb_no));
+
+UPDATE x_s SET spb_id = db_id WHERE NOT is_new;
+UPDATE x_s SET spb_id = v.id
+FROM (SELECT sid, pg_temp.x_newid('spb') AS id
+      FROM (SELECT sid FROM x_s WHERE is_new ORDER BY tgl, sid) o) v
+WHERE v.sid = x_s.sid;
+CREATE UNIQUE INDEX ON x_s (sid);
+CREATE INDEX ON x_s (spb_id);
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SPB sudah ada di WMS -> SPB & barang tidak diubah, turunan dilengkapi'
+         || CASE WHEN db_import THEN ' (SPB import sebelumnya)' ELSE ' (dibuat lewat form)' END,
+       spb_no, 'status WMS ' || db_status
+FROM x_s WHERE NOT is_new;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SPB WMS ada di gudang lain dari file Excel (info)', x.spb_no,
+       'WMS ' || COALESCE(cb.nama_cabang, '-') || ' vs Excel ' || x.nama_cabang
+FROM x_s x LEFT JOIN public.cabang cb ON cb.id = x.db_cabang_id
+WHERE NOT x.is_new AND x.db_cabang_id IS DISTINCT FROM x.cabang_id;
+
+-- ---------------------------------------------------------------------
+-- 3. Barang SPB: baris Excel -> spb_details (baru: ID dialokasikan; SPB WMS:
+--    dicocokkan per part number mirip + urutan kemunculan)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_l;
+CREATE TEMP TABLE x_l AS
+SELECT l.*, s.spb_id, s.is_new, s.cancel AS spb_cancel, s.cabang_id, s.spb_no, s.tgl AS spb_tgl,
+       p.part_id, regexp_replace(upper(l.pn), '[[:space:].-]', '', 'g') AS loose,
+       NULL::BIGINT AS dtl_id
+FROM x_line l
+JOIN x_s s ON s.sid = l.sid
+JOIN x_part p ON p.pn_key = upper(btrim(l.pn));
+
+UPDATE x_l SET dtl_id = v.id
+FROM (SELECT lid, pg_temp.x_newid('spb_details') AS id
+      FROM (SELECT lid FROM x_l WHERE is_new ORDER BY spb_id, seq) o) v
+WHERE v.lid = x_l.lid;
+
+DROP TABLE IF EXISTS pg_temp.x_db_dtl;
+CREATE TEMP TABLE x_db_dtl AS
+SELECT d.id, d.spb_id, d.part_id, d.dtl_spb_part_number, d.dtl_spb_qty,
+       regexp_replace(upper(d.dtl_spb_part_number), '[[:space:].-]', '', 'g') AS loose,
+       row_number() OVER (PARTITION BY d.spb_id, regexp_replace(upper(d.dtl_spb_part_number), '[[:space:].-]', '', 'g') ORDER BY d.id) AS rn
+FROM public.spb_details d
+WHERE d.spb_id IN (SELECT spb_id FROM x_s WHERE NOT is_new);
+
+UPDATE x_l l SET dtl_id = m.id
+FROM (
+  SELECT x.lid, d.id
+  FROM (SELECT lid, spb_id, loose, row_number() OVER (PARTITION BY spb_id, loose ORDER BY seq) AS rn
+        FROM x_l WHERE NOT is_new) x
+  JOIN x_db_dtl d ON d.spb_id = x.spb_id AND d.loose = x.loose AND d.rn = x.rn
+) m
+WHERE m.lid = l.lid;
+CREATE INDEX ON x_l (dtl_id);
+CREATE INDEX ON x_l (cid);
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SPB WMS: barang Excel tidak ada di SPB WMS -> turunan baris ini dilewati', spb_no, pn || ' qty ' || qty || ' (' || ref || ')'
+FROM x_l WHERE NOT is_new AND dtl_id IS NULL;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SPB WMS: qty barang beda dengan Excel (dipakai qty WMS)', l.spb_no,
+       l.pn || ' WMS ' || d.dtl_spb_qty || ' vs Excel ' || l.qty
+FROM x_l l JOIN public.spb_details d ON d.id = l.dtl_id
+WHERE NOT l.is_new AND d.dtl_spb_qty <> l.qty;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SPB WMS: barang WMS tidak ada di Excel (info)', s.spb_no, d.dtl_spb_part_number || ' qty ' || d.dtl_spb_qty
+FROM x_db_dtl d JOIN x_s s ON s.spb_id = d.spb_id AND NOT s.is_new
+WHERE NOT EXISTS (SELECT 1 FROM x_l l WHERE l.dtl_id = d.id);
+
+-- ---------------------------------------------------------------------
+-- 4. Turunan: SPB-PO -> SPB-DO -> Invoice (dokumen yang sudah ada di WMS
+--    dengan nomor sama dipakai ulang; ID baru dialokasikan dulu)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_ld;
+CREATE TEMP TABLE x_ld AS
+SELECT l.lid, l.sid, l.seq, l.spb_id, l.spb_no, l.spb_tgl, l.dtl_id, l.qty, l.is_new, c.*,
+       upper(btrim(c.po_no)) AS po_key, upper(btrim(c.do_no)) AS do_key, upper(btrim(c.inv_no)) AS inv_key
+FROM x_l l
+JOIN x_doc c ON c.cid = l.cid
+WHERE l.dtl_id IS NOT NULL AND NOT l.spb_cancel;
+
+-- SPB-PO
+DROP TABLE IF EXISTS pg_temp.x_po;
+CREATE TEMP TABLE x_po AS
+SELECT spb_id, po_key, min(po_no) AS po_no,
+       (array_agg(so_no ORDER BY lid) FILTER (WHERE so_no IS NOT NULL))[1] AS so_no,
+       min(tgl_so) AS so_date,
+       COALESCE(min(tgl_so), min(spb_tgl)) AS tgl_dibuat,
+       NULL::BIGINT AS po_id, false AS is_new
+FROM x_ld GROUP BY spb_id, po_key;
+
+UPDATE x_po x SET po_id = p.id
+FROM public.spb_po p WHERE p.spb_id = x.spb_id AND upper(btrim(p.po_no)) = x.po_key;
+UPDATE x_po SET is_new = true WHERE po_id IS NULL;
+UPDATE x_po SET po_id = v.id
+FROM (SELECT spb_id, po_key, pg_temp.x_newid('spb_po') AS id
+      FROM (SELECT spb_id, po_key FROM x_po WHERE is_new ORDER BY tgl_dibuat, spb_id, po_key) o) v
+WHERE v.spb_id = x_po.spb_id AND v.po_key = x_po.po_key;
+CREATE INDEX ON x_po (spb_id, po_key);
+
+-- Barang SPB-PO (1 barang SPB = 1 baris PO)
+DROP TABLE IF EXISTS pg_temp.x_pod;
+CREATE TEMP TABLE x_pod AS
+SELECT DISTINCT ON (l.dtl_id) l.dtl_id, p.po_id, l.lid, NULL::BIGINT AS pod_id, false AS is_new
+FROM x_ld l JOIN x_po p ON p.spb_id = l.spb_id AND p.po_key = l.po_key
+ORDER BY l.dtl_id, l.lid;
+
+UPDATE x_pod x SET pod_id = d.id
+FROM public.spb_po_details d WHERE d.spb_po_id = x.po_id AND d.spb_dtl_id = x.dtl_id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SPB WMS: barang sudah masuk SPB-PO lain di WMS -> PO Excel dilewati', s.spb_no,
+       d.dtl_spb_part_number || ': WMS PO ' || (SELECT string_agg(p.po_no, ', ') FROM public.spb_po_details pd JOIN public.spb_po p ON p.id = pd.spb_po_id WHERE pd.spb_dtl_id = x.dtl_id)
+         || ' vs Excel ' || po.po_no
+FROM x_pod x
+JOIN public.spb_details d ON d.id = x.dtl_id
+JOIN x_s s ON s.spb_id = d.spb_id
+JOIN x_po po ON po.po_id = x.po_id
+WHERE x.pod_id IS NULL AND EXISTS (SELECT 1 FROM public.spb_po_details pd WHERE pd.spb_dtl_id = x.dtl_id);
+DELETE FROM x_pod x WHERE x.pod_id IS NULL AND EXISTS (SELECT 1 FROM public.spb_po_details pd WHERE pd.spb_dtl_id = x.dtl_id);
+
+UPDATE x_pod SET is_new = true WHERE pod_id IS NULL;
+UPDATE x_pod SET pod_id = v.id
+FROM (SELECT dtl_id, pg_temp.x_newid('spb_po_details') AS id
+      FROM (SELECT dtl_id FROM x_pod WHERE is_new ORDER BY po_id, lid) o) v
+WHERE v.dtl_id = x_pod.dtl_id;
+CREATE UNIQUE INDEX ON x_pod (dtl_id);
+
+-- SPB-DO per (SPB-PO, No DO)
+DROP TABLE IF EXISTS pg_temp.x_do;
+CREATE TEMP TABLE x_do AS
+SELECT pd.po_id, l.do_key, min(l.do_no) AS do_no, min(l.do_src) AS do_src, min(l.tgl_do) AS do_date,
+       COALESCE(min(l.tgl_do), min(l.tgl_inv), max(po.tgl_dibuat)) AS tgl_dibuat,
+       NULL::BIGINT AS do_id, false AS is_new
+FROM x_ld l
+JOIN x_pod pd ON pd.dtl_id = l.dtl_id
+JOIN x_po po ON po.po_id = pd.po_id
+WHERE l.do_key IS NOT NULL
+GROUP BY pd.po_id, l.do_key;
+
+UPDATE x_do x SET do_id = d.id
+FROM public.spb_do d WHERE d.spb_po_id = x.po_id AND upper(btrim(d.do_no)) = x.do_key;
+UPDATE x_do SET is_new = true WHERE do_id IS NULL;
+UPDATE x_do SET do_id = v.id
+FROM (SELECT po_id, do_key, pg_temp.x_newid('spb_do') AS id
+      FROM (SELECT po_id, do_key FROM x_do WHERE is_new ORDER BY tgl_dibuat, po_id, do_key) o) v
+WHERE v.po_id = x_do.po_id AND v.do_key = x_do.do_key;
+CREATE INDEX ON x_do (po_id, do_key);
+
+DROP TABLE IF EXISTS pg_temp.x_dod;
+CREATE TEMP TABLE x_dod AS
+SELECT DISTINCT ON (pd.pod_id) pd.pod_id, d.do_id, l.lid, l.dtl_id, NULL::BIGINT AS dod_id, false AS is_new
+FROM x_ld l
+JOIN x_pod pd ON pd.dtl_id = l.dtl_id
+JOIN x_do d ON d.po_id = pd.po_id AND d.do_key = l.do_key
+ORDER BY pd.pod_id, l.lid;
+
+UPDATE x_dod x SET dod_id = d.id
+FROM public.spb_do_details d WHERE d.spb_do_id = x.do_id AND d.spb_po_dtl_id = x.pod_id;
+DELETE FROM x_dod x WHERE x.dod_id IS NULL AND EXISTS (SELECT 1 FROM public.spb_do_details d WHERE d.spb_po_dtl_id = x.pod_id);
+UPDATE x_dod SET is_new = true WHERE dod_id IS NULL;
+UPDATE x_dod SET dod_id = v.id
+FROM (SELECT pod_id, pg_temp.x_newid('spb_do_details') AS id
+      FROM (SELECT pod_id FROM x_dod WHERE is_new ORDER BY do_id, lid) o) v
+WHERE v.pod_id = x_dod.pod_id;
+CREATE UNIQUE INDEX ON x_dod (pod_id);
+
+-- Invoice per (SPB-DO, No Invoice)
+DROP TABLE IF EXISTS pg_temp.x_inv;
+CREATE TEMP TABLE x_inv AS
+SELECT dd.do_id, l.inv_key, min(l.inv_no) AS inv_no, min(l.tgl_inv) AS inv_date, min(l.tgl_email) AS email_date,
+       bool_or(l.paid) AS paid, bool_and(l.paid) AS paid_all,
+       COALESCE(min(l.tgl_inv), min(l.tgl_email), max(d.tgl_dibuat)) AS tgl_dibuat,
+       NULL::BIGINT AS inv_id, false AS is_new
+FROM x_ld l
+JOIN x_pod pd ON pd.dtl_id = l.dtl_id
+JOIN x_dod dd ON dd.pod_id = pd.pod_id
+JOIN x_do d ON d.do_id = dd.do_id
+WHERE l.inv_key IS NOT NULL
+GROUP BY dd.do_id, l.inv_key;
+
+UPDATE x_inv x SET inv_id = i.id
+FROM public.spb_invoice i WHERE i.spb_do_id = x.do_id AND upper(btrim(i.invoice_no)) = x.inv_key;
+UPDATE x_inv SET is_new = true WHERE inv_id IS NULL;
+UPDATE x_inv SET inv_id = v.id
+FROM (SELECT do_id, inv_key, pg_temp.x_newid('spb_invoice') AS id
+      FROM (SELECT do_id, inv_key FROM x_inv WHERE is_new ORDER BY tgl_dibuat, do_id, inv_key) o) v
+WHERE v.do_id = x_inv.do_id AND v.inv_key = x_inv.inv_key;
+CREATE INDEX ON x_inv (do_id, inv_key);
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Invoice: status payment beda antar baris -> dianggap paid', i.inv_no, count(*) || ' DO'
+FROM x_inv i WHERE i.paid AND NOT i.paid_all
+GROUP BY i.inv_no;
+
+DROP TABLE IF EXISTS pg_temp.x_invd;
+CREATE TEMP TABLE x_invd AS
+SELECT DISTINCT ON (dd.dod_id) dd.dod_id, i.inv_id, l.lid, l.qty, false AS exists_db
+FROM x_ld l
+JOIN x_pod pd ON pd.dtl_id = l.dtl_id
+JOIN x_dod dd ON dd.pod_id = pd.pod_id
+JOIN x_inv i ON i.do_id = dd.do_id AND i.inv_key = l.inv_key
+ORDER BY dd.dod_id, l.lid;
+
+UPDATE x_invd x SET exists_db = true
+FROM public.spb_invoice_details d WHERE d.spb_invoice_id = x.inv_id AND d.spb_do_dtl_id = x.dod_id;
+
+-- ---------------------------------------------------------------------
+-- 5. Status SPB sesudah import (rumus refreshSpbStatus)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_tahap;
+CREATE TEMP TABLE x_tahap AS
+SELECT spb_id, max(tahap) AS tahap
+FROM (
+  SELECT p.spb_id, CASE WHEN i.do_id IS NOT NULL THEN 3 WHEN d.po_id IS NOT NULL THEN 2 ELSE 1 END AS tahap
+  FROM x_po p LEFT JOIN x_do d ON d.po_id = p.po_id LEFT JOIN x_inv i ON i.do_id = d.do_id
+  UNION ALL
+  SELECT p.spb_id, CASE WHEN i.id IS NOT NULL THEN 3 WHEN d.id IS NOT NULL THEN 2 ELSE 1 END
+  FROM public.spb_po p
+  LEFT JOIN public.spb_do d ON d.spb_po_id = p.id
+  LEFT JOIN public.spb_invoice i ON i.spb_do_id = d.id AND i.approval_status = 'completed'
+  WHERE p.spb_id IN (SELECT spb_id FROM x_s WHERE NOT is_new)
+) t
+GROUP BY spb_id;
+CREATE UNIQUE INDEX ON x_tahap (spb_id);
+
+DROP TABLE IF EXISTS pg_temp.x_returned;
+CREATE TEMP TABLE x_returned AS
+SELECT d.spb_id
+FROM public.spb_details d
+WHERE d.spb_id IN (SELECT spb_id FROM x_s WHERE NOT is_new)
+GROUP BY d.spb_id
+HAVING bool_and(d.dtl_spb_qty_returned >= d.dtl_spb_qty);
+
+DROP TABLE IF EXISTS pg_temp.x_status;
+CREATE TEMP TABLE x_status AS
+SELECT s.sid, s.spb_id, s.spb_no, s.is_new, s.db_status AS status_sebelum,
+       CASE
+         WHEN s.cancel AND s.is_new THEN 'CANCELLED'
+         WHEN s.db_status = 'CANCELLED' THEN 'CANCELLED'
+         WHEN r.spb_id IS NOT NULL THEN 'Returned'
+         WHEN t.tahap = 3 THEN 'DONE QUOT'
+         WHEN t.tahap = 2 THEN 'DO_ATTACH'
+         WHEN t.tahap = 1 THEN 'PO_ATTACH'
+         ELSE 'DONE QUOT'
+       END AS status_sesudah
+FROM x_s s
+LEFT JOIN x_tahap t ON t.spb_id = s.spb_id
+LEFT JOIN x_returned r ON r.spb_id = s.spb_id AND NOT s.is_new;
+
+-- ---------------------------------------------------------------------
+-- 6. Stok: SPB baru (bukan cancel) bertanggal >= stok_sejak dipotong dari
+--    gudang site (per part per SPB, boleh minus)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_stok_mv;
+CREATE TEMP TABLE x_stok_mv AS
+SELECT l.spb_id, l.spb_no, l.cabang_id, l.part_id, sum(l.qty) AS qty
+FROM x_l l
+WHERE l.is_new AND NOT l.spb_cancel AND l.spb_tgl >= (SELECT value::date FROM x_cfg WHERE key = 'stok_sejak')
+GROUP BY l.spb_id, l.spb_no, l.cabang_id, l.part_id;
+
+DROP TABLE IF EXISTS pg_temp.x_stok_plan;
+CREATE TEMP TABLE x_stok_plan AS
+SELECT m.cabang_id, m.part_id, sum(m.qty) AS qty_keluar,
+       COALESCE((SELECT st.qty FROM public.stock st WHERE st.part_id = m.part_id AND st.cabang_id = m.cabang_id), 0) AS qty_sebelum
+FROM x_stok_mv m
+GROUP BY m.cabang_id, m.part_id;
+

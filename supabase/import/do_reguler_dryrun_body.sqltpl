@@ -1,0 +1,77 @@
+-- ---------------------------------------------------------------------
+-- DRY-RUN: ringkasan rencana import (tidak ada data yang ditulis)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_dry;
+CREATE TEMP TABLE x_dry (no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+INSERT INTO x_dry
+SELECT 0, '0. Dry-run', 'Tidak ada data yang diubah -- ini simulasi do_reguler_import.sql', NULL, NULL;
+
+INSERT INTO x_dry
+SELECT 101, '1. Master', 'Gudang pengirim / potong stok / pembuat',
+       (SELECT nama_cabang FROM x_gudang) || ' / ' || (SELECT value FROM x_cfg WHERE key = 'potong_stok'),
+       (SELECT nama || COALESCE(' ' || id::text, '') FROM x_pic);
+
+INSERT INTO x_dry
+SELECT 201, '2. DO', 'DO Reguler akan dibuat / barang DO / total qty',
+       count(*) || ' DO', (SELECT count(*) || ' barang, qty ' || COALESCE(sum(qty_final), 0) FROM x_line)
+FROM x_do;
+
+INSERT INTO x_dry
+SELECT 202, '2. DO', 'SO yang dapat DO: SO import / SO buatan form',
+       count(DISTINCT so_id) FILTER (WHERE so_is_import) || ' / ' || count(DISTINCT so_id) FILTER (WHERE NOT so_is_import),
+       left(string_agg(DISTINCT so_kode, ', '), 1000)
+FROM x_line;
+
+INSERT INTO x_dry
+SELECT 203, '2. DO', 'DO per bulan', NULL, string_agg(bln || ': ' || n, ' | ' ORDER BY bln)
+FROM (SELECT to_char(do_tanggal, 'YYYY-MM') AS bln, count(*) AS n FROM x_do GROUP BY 1) t;
+
+INSERT INTO x_dry
+SELECT 301, '3. SO', 'Status SO sesudah import (open / partial / completed)',
+       count(*) FILTER (WHERE status_sesudah = 'open') || ' / ' || count(*) FILTER (WHERE status_sesudah = 'partial') || ' / '
+         || count(*) FILTER (WHERE status_sesudah = 'completed'),
+       'dari ' || count(*) || ' SO yang dapat DO (sebelumnya: ' || string_agg(DISTINCT status_sebelum, ', ') || ')'
+FROM x_so_after;
+
+INSERT INTO x_dry
+SELECT 302, '3. SO', 'SO jadi completed', count(*)::text, left(string_agg(so_kode, ', ' ORDER BY so_kode), 1000)
+FROM x_so_after WHERE status_sesudah = 'completed';
+
+INSERT INTO x_dry
+SELECT 303, '3. SO', 'SO jadi partial (masih ada sisa belum di-DO)', count(*)::text,
+       left(string_agg(so_kode, ', ' ORDER BY so_kode), 1000)
+FROM x_so_after WHERE status_sesudah = 'partial';
+
+INSERT INTO x_dry
+SELECT 401, '4. Stok', 'Stok dipotong: ' || g.nama_cabang || ' (barang / qty keluar / stok sebelum -> sesudah)',
+       count(p.*) || ' barang, qty ' || COALESCE(sum(p.qty_keluar), 0),
+       COALESCE(sum(p.qty_sebelum), 0) || ' -> ' || COALESCE(sum(p.qty_sebelum - p.qty_keluar), 0) || '; jadi minus '
+         || count(*) FILTER (WHERE p.qty_sebelum - p.qty_keluar < 0) || ' barang: '
+         || COALESCE(left(string_agg(CASE WHEN p.qty_sebelum - p.qty_keluar < 0
+                       THEN p.part_number || ' ' || p.qty_sebelum || '-' || p.qty_keluar || '=' || (p.qty_sebelum - p.qty_keluar) END, ', '), 800), '-')
+FROM x_gudang g
+LEFT JOIN x_stok_plan p ON p.cabang_id = g.cabang_id
+GROUP BY g.nama_cabang;
+
+-- Semua catatan rencana (skip, pemotongan qty, dll).
+INSERT INTO x_dry
+SELECT 500 + row_number() OVER (ORDER BY kategori), '5. Catatan', kategori, count(*)::text,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 2000)
+FROM x_report
+GROUP BY kategori;
+
+-- Daftar DO yang akan dibuat.
+INSERT INTO x_dry
+SELECT 1000 + row_number() OVER (ORDER BY x.do_tanggal, x.do_kode), '6. Daftar DO',
+       x.do_kode || ' | ' || x.do_tanggal || ' | SO ' || x.so_kode,
+       count(l.*) || ' barang, qty ' || sum(l.qty_final),
+       left(string_agg(l.so_part_number || ' x' || l.qty_final || CASE WHEN l.qty_final < l.qty THEN ' (ERP ' || l.qty || ')' ELSE '' END,
+                       ', ' ORDER BY l.line_id), 600)
+FROM x_do x
+JOIN x_line l ON l.do_no = x.do_no AND l.so_id = x.so_id
+GROUP BY x.do_kode, x.do_tanggal, x.so_kode;
+
+SELECT no, kelompok, cek, nilai, contoh
+FROM x_dry
+ORDER BY no;

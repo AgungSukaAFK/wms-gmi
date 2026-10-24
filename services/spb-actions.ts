@@ -489,6 +489,8 @@ export async function getSpbList(params?: {
   } else {
     query = query.order("created_at", { ascending: false });
   }
+  // Tiebreaker: SPB hasil import punya created_at kembar -> pagination stabil.
+  query = query.order("id", { ascending: false });
 
   if (params?.search) {
     query = query.or(
@@ -785,6 +787,8 @@ export async function getSpbPoList(params?: {
   } else {
     query = query.order("created_at", { ascending: false });
   }
+  // Tiebreaker: SPB hasil import punya created_at kembar -> pagination stabil.
+  query = query.order("id", { ascending: false });
 
   if (params?.search) {
     query = query.or(
@@ -918,6 +922,8 @@ export async function getSpbDoList(params?: {
   } else {
     query = query.order("created_at", { ascending: false });
   }
+  // Tiebreaker: SPB hasil import punya created_at kembar -> pagination stabil.
+  query = query.order("id", { ascending: false });
 
   if (params?.search) {
     query = query.or(
@@ -1057,6 +1063,8 @@ export async function getSpbInvoiceList(params?: {
   } else {
     query = query.order("created_at", { ascending: false });
   }
+  // Tiebreaker: SPB hasil import punya created_at kembar -> pagination stabil.
+  query = query.order("id", { ascending: false });
 
   if (params?.search) {
     query = query.or(`invoice_no.ilike.%${params.search}%`);
@@ -1190,6 +1198,8 @@ export async function getReturnSpbList(params?: {
   } else {
     query = query.order("created_at", { ascending: false });
   }
+  // Tiebreaker: SPB hasil import punya created_at kembar -> pagination stabil.
+  query = query.order("id", { ascending: false });
 
   if (params?.search) {
     query = query.or(`rtn_kode.ilike.%${params.search}%`);
@@ -1723,6 +1733,8 @@ export async function getSpbReport(params?: {
   } else {
     query = query.order("spb_created_at", { ascending: false });
   }
+  // Tiebreaker: banyak baris (barang SPB / SPB import) punya tanggal kembar.
+  query = query.order("spb_id", { ascending: false }).order("spb_dtl_id", { ascending: true });
 
   if (params?.search) {
     query = query.or(
@@ -1838,6 +1850,7 @@ export async function getSpbOptionsForPo(params?: {
     .eq("spb_is_deleted", false)
     .in("spb_status", ["DONE QUOT", "PO_ATTACH", "DO_ATTACH"])
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
 
   if (params?.search) {
@@ -1873,6 +1886,7 @@ export async function getSpbPoOptionsForDo(params?: {
     .from("spb_po")
     .select("id, po_no, spb:spb_id(spb_no)")
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
 
   if (params?.search) {
@@ -1908,6 +1922,7 @@ export async function getSpbDoOptionsForInvoice(params?: {
     .from("spb_do")
     .select("id, do_no, po:spb_po_id(po_no, spb:spb_id(spb_no))")
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
 
   if (params?.search) {
@@ -1946,6 +1961,7 @@ export async function getSpbOptionsForReturn(params?: {
     // SPB yang dibatalkan stoknya sudah dikembalikan semua.
     .neq("spb_status", "CANCELLED")
     .order("created_at", { ascending: false })
+    .order("id", { ascending: false })
     .limit(limit);
 
   if (params?.search) {

@@ -1,0 +1,164 @@
+DO $$
+BEGIN
+  IF (SELECT value FROM x_cfg WHERE key = 'mode') IS DISTINCT FROM 'import' THEN
+    RAISE EXCEPTION 'x_cfg mode harus import (ID dialokasikan dari sequence tabel asli).';
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 7. Barang baru
+-- ---------------------------------------------------------------------
+INSERT INTO public.barang (id, part_number, part_name, part_satuan)
+SELECT part_id, btrim(pn), COALESCE(NULLIF(btrim(excel_name), ''), btrim(pn)), COALESCE(NULLIF(btrim(excel_uom), ''), 'PCS')
+FROM x_part WHERE how = 'baru'
+ORDER BY part_id;
+
+-- ---------------------------------------------------------------------
+-- 8. SPB baru + barang SPB
+-- ---------------------------------------------------------------------
+INSERT INTO public.spb (
+  id, spb_no, spb_tanggal, spb_no_wo, spb_section, spb_pic_gmi, spb_pic_ppa, spb_kode_unit, spb_tipe_unit,
+  spb_brand, spb_hm, spb_problem_remark, spb_status, spb_gudang, cabang_id, spb_pic, created_by, created_at,
+  approval_template_id, approvals, approval_status, completed_at, cancelled_at, cancel_reason, spb_is_import
+)
+SELECT s.spb_id, s.spb_no, s.tgl::timestamptz, s.no_wo, s.section, s.pic_gmi, s.pic_cust, s.kode_unit, s.tipe_unit,
+       s.brand, s.hm, s.remark, st.status_sesudah, s.nama_cabang, s.cabang_id, pic.nama, pic.id, s.tgl::timestamptz,
+       NULL, '[]'::jsonb, 'completed', s.tgl::timestamptz,
+       CASE WHEN s.cancel THEN s.tgl::timestamptz END,
+       CASE WHEN s.cancel THEN 'CANCEL di SPB Monitoring Excel (import)' END,
+       true
+FROM x_s s
+JOIN x_status st ON st.sid = s.sid
+CROSS JOIN x_pic pic
+WHERE s.is_new
+ORDER BY s.spb_id;
+
+INSERT INTO public.spb_details (id, spb_id, part_id, dtl_spb_part_number, dtl_spb_part_name, dtl_spb_part_satuan, dtl_spb_qty, created_at)
+SELECT l.dtl_id, l.spb_id, l.part_id, b.part_number, b.part_name,
+       COALESCE(NULLIF(btrim(l.uom), ''), NULLIF(btrim(b.part_satuan), ''), 'PCS'), l.qty, l.spb_tgl::timestamptz
+FROM x_l l
+JOIN public.barang b ON b.id = l.part_id
+WHERE l.is_new
+ORDER BY l.dtl_id;
+
+-- ---------------------------------------------------------------------
+-- 9. SPB-PO / DO / Invoice (tanpa approval digital, langsung completed)
+-- ---------------------------------------------------------------------
+INSERT INTO public.spb_po (id, spb_id, po_no, so_no, so_date, created_at, approvals, approval_status, completed_at)
+SELECT po_id, spb_id, po_no, so_no, so_date::timestamptz, tgl_dibuat::timestamptz, '[]'::jsonb, 'completed', tgl_dibuat::timestamptz
+FROM x_po WHERE is_new
+ORDER BY po_id;
+
+INSERT INTO public.spb_po_details (id, spb_po_id, spb_dtl_id, created_at)
+SELECT pd.pod_id, pd.po_id, pd.dtl_id, po.tgl_dibuat::timestamptz
+FROM x_pod pd JOIN x_po po ON po.po_id = pd.po_id
+WHERE pd.is_new
+ORDER BY pd.pod_id;
+
+INSERT INTO public.spb_do (id, spb_po_id, do_no, do_date, do_status_part, do_pic, created_at, approvals, approval_status, completed_at)
+SELECT do_id, po_id, do_no, do_date::timestamptz, 'DELIVERED', NULL, tgl_dibuat::timestamptz, '[]'::jsonb, 'completed', tgl_dibuat::timestamptz
+FROM x_do WHERE is_new
+ORDER BY do_id;
+
+INSERT INTO public.spb_do_details (id, spb_do_id, spb_po_dtl_id, created_at)
+SELECT dd.dod_id, dd.do_id, dd.pod_id, d.tgl_dibuat::timestamptz
+FROM x_dod dd JOIN x_do d ON d.do_id = dd.do_id
+WHERE dd.is_new
+ORDER BY dd.dod_id;
+
+INSERT INTO public.spb_invoice (id, spb_do_id, invoice_no, invoice_date, invoice_email_date, created_at,
+                                approvals, approval_status, completed_at, payment_status)
+SELECT inv_id, do_id, inv_no, inv_date::timestamptz, email_date::timestamptz, tgl_dibuat::timestamptz,
+       '[]'::jsonb, 'completed', tgl_dibuat::timestamptz, CASE WHEN paid THEN 'paid' ELSE 'unpaid' END
+FROM x_inv WHERE is_new
+ORDER BY inv_id;
+
+INSERT INTO public.spb_invoice_details (spb_invoice_id, spb_do_dtl_id, invoice_qty, created_at)
+SELECT x.inv_id, x.dod_id, x.qty, i.tgl_dibuat::timestamptz
+FROM x_invd x JOIN x_inv i ON i.inv_id = x.inv_id
+WHERE NOT x.exists_db
+ORDER BY x.inv_id, x.dod_id;
+
+-- ---------------------------------------------------------------------
+-- 10. Status SPB yang sudah ada di WMS (rumus refreshSpbStatus)
+-- ---------------------------------------------------------------------
+UPDATE public.spb s
+SET spb_status = st.status_sesudah, updated_at = now()
+FROM x_status st
+WHERE st.spb_id = s.id AND NOT st.is_new
+  AND s.spb_status <> 'CANCELLED' AND s.spb_status IS DISTINCT FROM st.status_sesudah;
+
+-- ---------------------------------------------------------------------
+-- 11. Stok gudang site + stock_movements SPB_OUT (pola postSpbStockOut:
+--     1 movement per part per SPB)
+-- ---------------------------------------------------------------------
+INSERT INTO public.stock (part_id, cabang_id, qty)
+SELECT part_id, cabang_id, -qty_keluar
+FROM x_stok_plan
+ON CONFLICT (part_id, cabang_id)
+DO UPDATE SET qty = public.stock.qty + EXCLUDED.qty, updated_at = now();
+
+INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, notes, created_by)
+SELECT m.part_id, m.cabang_id, -m.qty, 'SPB_OUT', m.spb_no,
+       'Stock out dari SPB ' || m.spb_no || ' (import SPB Monitoring, tgl ' || s.tgl || ')',
+       (SELECT id FROM x_pic)
+FROM x_stok_mv m
+JOIN x_s s ON s.spb_id = m.spb_id
+ORDER BY s.tgl, m.spb_id, m.part_id;
+
+-- ---------------------------------------------------------------------
+-- 12. Sanity check -- gagal = seluruh import dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_n BIGINT;
+  v_e BIGINT;
+BEGIN
+  SELECT count(*) INTO v_n FROM public.spb s JOIN x_s x ON x.spb_id = s.id AND x.is_new;
+  SELECT count(*) INTO v_e FROM x_s WHERE is_new;
+  IF v_n <> v_e THEN RAISE EXCEPTION 'SPB tersimpan (%) <> rencana (%)', v_n, v_e; END IF;
+
+  SELECT count(*) INTO v_n FROM public.spb_details d JOIN x_l l ON l.dtl_id = d.id AND l.is_new;
+  SELECT count(*) INTO v_e FROM x_l WHERE is_new;
+  IF v_n <> v_e THEN RAISE EXCEPTION 'Barang SPB tersimpan (%) <> rencana (%)', v_n, v_e; END IF;
+
+  SELECT count(*) INTO v_n FROM public.spb_po_details d JOIN x_pod x ON x.pod_id = d.id;
+  SELECT count(*) INTO v_e FROM x_pod;
+  IF v_n <> v_e THEN RAISE EXCEPTION 'Barang SPB-PO tersimpan (%) <> rencana (%)', v_n, v_e; END IF;
+
+  SELECT count(*) INTO v_n FROM public.spb_do_details d JOIN x_dod x ON x.dod_id = d.id;
+  SELECT count(*) INTO v_e FROM x_dod;
+  IF v_n <> v_e THEN RAISE EXCEPTION 'Barang SPB-DO tersimpan (%) <> rencana (%)', v_n, v_e; END IF;
+
+  SELECT count(*) INTO v_n FROM public.spb_invoice_details d JOIN x_invd x ON x.inv_id = d.spb_invoice_id AND x.dod_id = d.spb_do_dtl_id;
+  SELECT count(*) INTO v_e FROM x_invd;
+  IF v_n <> v_e THEN RAISE EXCEPTION 'Barang invoice tersimpan (%) <> rencana (%)', v_n, v_e; END IF;
+
+  SELECT -COALESCE(sum(m.qty_change), 0) INTO v_n
+  FROM public.stock_movements m
+  WHERE m.type = 'SPB_OUT' AND m.created_at = now() AND m.reference_id IN (SELECT spb_no FROM x_s WHERE is_new);
+  SELECT COALESCE(sum(qty), 0) INTO v_e FROM x_stok_mv;
+  IF v_n <> v_e THEN RAISE EXCEPTION 'Stock movement SPB_OUT SPB import (%) <> rencana (%)', v_n, v_e; END IF;
+END $$;
+
+COMMIT;
+
+-- ---------------------------------------------------------------------
+-- HASIL
+-- ---------------------------------------------------------------------
+SELECT kategori, count(*) AS jumlah,
+       left(string_agg(NULLIF(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ''), ', ' ORDER BY ref, detail), 600) AS contoh
+FROM (
+  SELECT kategori, ref, detail FROM x_report
+  UNION ALL SELECT 'SPB baru dibuat' || CASE WHEN cancel THEN ' (CANCELLED)' ELSE '' END, nama_cabang, NULL FROM x_s WHERE is_new
+  UNION ALL SELECT 'Barang SPB baru', NULL, NULL FROM x_l WHERE is_new
+  UNION ALL SELECT 'SPB-PO baru', NULL, NULL FROM x_po WHERE is_new
+  UNION ALL SELECT 'SPB-DO baru', NULL, NULL FROM x_do WHERE is_new
+  UNION ALL SELECT 'Invoice baru (' || CASE WHEN paid THEN 'paid' ELSE 'unpaid' END || ')', NULL, NULL FROM x_inv WHERE is_new
+  UNION ALL SELECT 'Status SPB sesudah import: ' || status_sesudah, NULL, NULL FROM x_status
+  UNION ALL SELECT 'Stok dipotong: ' || g.nama_cabang, NULL,
+                   count(*) || ' barang, qty ' || sum(p.qty_keluar) || '; jadi minus ' || count(*) FILTER (WHERE p.qty_sebelum - p.qty_keluar < 0)
+            FROM x_stok_plan p JOIN public.cabang g ON g.id = p.cabang_id GROUP BY g.nama_cabang
+) r
+GROUP BY kategori
+ORDER BY kategori;

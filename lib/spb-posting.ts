@@ -167,7 +167,10 @@ export async function postSpbStockOut(supabase: any, spbId: number, actorId: str
 
 /**
  * Kembalikan stok SPB yang belum diretur (dipakai cancel/hapus SPB). Qty
- * yang sudah balik lewat Return SPB tidak dikembalikan lagi.
+ * yang sudah balik lewat Return SPB tidak dikembalikan lagi. Per part
+ * dibatasi stok yang benar-benar dipotong SPB ini (net movement SPB_OUT /
+ * SPB_CANCEL / SPB_ROLLBACK) -- SPB hasil import riwayat Excel yang tidak
+ * memotong stok tidak menambah stok saat dibatalkan.
  */
 export async function returnSpbOutstandingStock(
   supabase: any,
@@ -178,17 +181,38 @@ export async function returnSpbOutstandingStock(
     .from("spb_details")
     .select("part_id, dtl_spb_part_number, dtl_spb_qty, dtl_spb_qty_returned")
     .eq("spb_id", params.spbId);
+  const { data: moves } = await supabase
+    .from("stock_movements")
+    .select("part_id, qty_change")
+    .eq("reference_id", params.spbNo)
+    .eq("cabang_id", params.cabangId)
+    .in("type", ["SPB_OUT", "SPB_CANCEL", "SPB_ROLLBACK"]);
+  const cut = new Map<number, number>();
+  for (const m of moves || []) {
+    cut.set(m.part_id, (cut.get(m.part_id) || 0) - (Number(m.qty_change) || 0));
+  }
+
+  const byPart = new Map<number, { outstanding: number; returned: number; pn: string }>();
   for (const item of items || []) {
-    const qty = (Number(item.dtl_spb_qty) || 0) - (Number(item.dtl_spb_qty_returned) || 0);
-    if (qty <= 0 || !item.part_id) continue;
+    if (!item.part_id) continue;
+    const cur = byPart.get(item.part_id) || { outstanding: 0, returned: 0, pn: item.dtl_spb_part_number };
+    const returned = Number(item.dtl_spb_qty_returned) || 0;
+    cur.outstanding += Math.max(0, (Number(item.dtl_spb_qty) || 0) - returned);
+    cur.returned += returned;
+    byPart.set(item.part_id, cur);
+  }
+
+  for (const [partId, { outstanding, returned, pn }] of byPart) {
+    const qty = Math.min(outstanding, Math.max(0, (cut.get(partId) || 0) - returned));
+    if (qty <= 0) continue;
     await changeStockQty(
       supabase,
-      { partId: item.part_id, cabangId: params.cabangId },
+      { partId, cabangId: params.cabangId },
       qty,
-      { allowNegative: true, label: item.dtl_spb_part_number },
+      { allowNegative: true, label: pn },
     );
     await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
+      part_id: partId,
       cabang_id: params.cabangId,
       qty_change: qty,
       type: params.type,

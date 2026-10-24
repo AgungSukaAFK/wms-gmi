@@ -1,0 +1,115 @@
+-- ---------------------------------------------------------------------
+-- 4. DO Reguler + barang DO (ID dialokasikan dulu)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_do_map;
+CREATE TEMP TABLE x_do_map AS
+SELECT do_no, so_id, nextval(pg_get_serial_sequence('public.do_reguler', 'id')) AS do_id
+FROM (SELECT do_no, so_id FROM x_do ORDER BY do_tanggal, do_kode) s;
+
+INSERT INTO public.do_reguler (
+  id, do_kode, do_tanggal, dari_cabang_id, customer_id, so_id, kode_po,
+  shipment_type, jumlah_koli, estimasi_hari, remarks,
+  uid_requester, created_by, status, tracking_status, stock_released
+)
+SELECT m.do_id, x.do_kode, x.do_tanggal, g.cabang_id, x.customer_id, x.so_id, x.kode_po,
+       'ekspedisi', 1, 1,
+       'Import DO ERP (' || (SELECT value FROM x_cfg WHERE key = 'sumber') || ') | No DO ERP ' || x.do_no
+         || COALESCE(' | Tgl pesan ' || x.tgl_pesan, '') || COALESCE(' | Status SO ERP: ' || x.status_erp, '')
+         || ' | baris ' || x.excel_rows,
+       pic.id, pic.id, 'completed', 'delivered',
+       (SELECT value FROM x_cfg WHERE key = 'potong_stok') = 'true'
+FROM x_do x
+JOIN x_do_map m ON m.do_no = x.do_no AND m.so_id = x.so_id
+CROSS JOIN x_gudang g
+CROSS JOIN x_pic pic
+ORDER BY m.do_id;
+
+INSERT INTO public.do_reguler_items (do_id, part_id, part_number, part_name, satuan, qty, so_item_id, qty_from_po)
+SELECT m.do_id, l.part_id, l.so_part_number, l.so_part_name, l.satuan, l.qty_final, l.so_item_id, 0
+FROM x_line l
+JOIN x_do_map m ON m.do_no = l.do_no AND m.so_id = l.so_id
+ORDER BY m.do_id, l.line_id;
+
+-- ---------------------------------------------------------------------
+-- 5. Stok gudang pengirim (opsi potong_stok) + stock_movements DO_REG
+--    per barang DO (pola sama dengan createDoReguler).
+-- ---------------------------------------------------------------------
+INSERT INTO public.stock (part_id, cabang_id, qty)
+SELECT part_id, cabang_id, -qty_keluar
+FROM x_stok_plan
+ON CONFLICT (part_id, cabang_id)
+DO UPDATE SET qty = public.stock.qty + EXCLUDED.qty, updated_at = now();
+
+INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, notes, created_by)
+SELECT l.part_id, g.cabang_id, -l.qty_final, 'DO_REG', x.do_kode,
+       'DO Reguler ' || x.do_kode || ' (import DO ERP, tgl ' || x.do_tanggal || '): ' || l.so_part_number || ' ' || l.so_part_name
+         || ' keluar dari ' || g.nama_cabang || ' (kirim ke customer, SO ' || x.so_kode || ')',
+       (SELECT id FROM x_pic)
+FROM x_line l
+JOIN x_do x ON x.do_no = l.do_no AND x.so_id = l.so_id
+CROSS JOIN x_gudang g
+WHERE (SELECT value FROM x_cfg WHERE key = 'potong_stok') = 'true'
+ORDER BY x.do_tanggal, x.do_kode, l.line_id;
+
+-- ---------------------------------------------------------------------
+-- 6. Status SO (sama dengan refreshSoStatus)
+-- ---------------------------------------------------------------------
+UPDATE public.so_reguler s
+SET so_status = a.status_sesudah, updated_at = now()
+FROM x_so_after a
+WHERE a.so_id = s.id AND s.so_status <> 'cancelled' AND s.so_status IS DISTINCT FROM a.status_sesudah;
+
+-- ---------------------------------------------------------------------
+-- 7. Sanity check -- gagal = seluruh import dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_n BIGINT;
+  v_bad TEXT;
+BEGIN
+  SELECT count(*) INTO v_n FROM public.do_reguler d JOIN x_do_map m ON m.do_id = d.id;
+  IF v_n <> (SELECT count(*) FROM x_do) THEN
+    RAISE EXCEPTION 'DO tersimpan (%) <> rencana (%)', v_n, (SELECT count(*) FROM x_do);
+  END IF;
+  SELECT count(*) INTO v_n FROM public.do_reguler_items di JOIN x_do_map m ON m.do_id = di.do_id;
+  IF v_n <> (SELECT count(*) FROM x_line) THEN
+    RAISE EXCEPTION 'Barang DO tersimpan (%) <> rencana (%)', v_n, (SELECT count(*) FROM x_line);
+  END IF;
+  -- Tidak boleh ada barang SO yang total DO-nya melebihi qty SO.
+  SELECT string_agg(s.so_kode || ':' || si.part_number, ', ') INTO v_bad
+  FROM public.so_reguler_items si
+  JOIN public.so_reguler s ON s.id = si.so_id
+  WHERE si.id IN (SELECT so_item_id FROM x_line)
+    AND (SELECT COALESCE(sum(di.qty), 0) FROM public.do_reguler_items di JOIN public.do_reguler d ON d.id = di.do_id
+         WHERE di.so_item_id = si.id AND d.status <> 'cancelled') > si.qty;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Qty DO melebihi qty SO: %', v_bad;
+  END IF;
+  IF (SELECT value FROM x_cfg WHERE key = 'potong_stok') = 'true' THEN
+    SELECT -COALESCE(sum(qty_change), 0) INTO v_n
+    FROM public.stock_movements
+    WHERE type = 'DO_REG' AND reference_id IN (SELECT do_kode FROM x_do);
+    IF v_n <> (SELECT COALESCE(sum(qty_final), 0) FROM x_line) THEN
+      RAISE EXCEPTION 'Stock movement DO_REG (%) <> qty DO (%)', v_n, (SELECT sum(qty_final) FROM x_line);
+    END IF;
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ---------------------------------------------------------------------
+-- HASIL
+-- ---------------------------------------------------------------------
+SELECT kategori, count(*) AS jumlah,
+       left(string_agg(NULLIF(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ''), ', ' ORDER BY ref, detail), 1000) AS contoh
+FROM (
+  SELECT kategori, ref, detail FROM x_report
+  UNION ALL SELECT 'DO Reguler dibuat', x.do_kode, 'SO ' || x.so_kode FROM x_do x
+  UNION ALL SELECT 'Barang DO dibuat', NULL, NULL FROM x_line
+  UNION ALL SELECT 'Status SO: ' || a.status_sebelum || ' -> ' || a.status_sesudah, a.so_kode, NULL FROM x_so_after a
+  UNION ALL SELECT 'Stok dipotong: ' || g.nama_cabang, NULL,
+                   count(*) || ' barang, qty ' || sum(p.qty_keluar) || '; jadi minus ' || count(*) FILTER (WHERE p.qty_sebelum - p.qty_keluar < 0)
+            FROM x_stok_plan p CROSS JOIN x_gudang g GROUP BY g.nama_cabang
+) r
+GROUP BY kategori
+ORDER BY kategori;
