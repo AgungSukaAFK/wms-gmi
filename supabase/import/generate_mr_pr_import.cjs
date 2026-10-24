@@ -1,6 +1,7 @@
 // Generator SQL import MR & PR dari "PR WMS <tgl>.xlsx" (sheet "MR Monitoring"
 // spreadsheet PPIC + sheet "PR OPEN WMS") -> supabase/import/mr_pr_import.sql,
-// plus query verifikasi pasca import -> supabase/import/mr_pr_verify.sql.
+// simulasi read-only sebelum import -> supabase/import/mr_pr_dryrun.sql, dan
+// query verifikasi pasca import -> supabase/import/mr_pr_verify.sql.
 //
 //   node supabase/import/generate_mr_pr_import.cjs "Import 23 Oktober/PR/PR WMS 21102026.xlsx" [--pic=email]
 //
@@ -18,6 +19,7 @@ const src = args.find((a) => !a.startsWith("--")) || "Import 23 Oktober/PR/PR WM
 const picEmail = (args.find((a) => a.startsWith("--pic=")) || "").slice("--pic=".length) || null;
 const out = path.join(__dirname, "mr_pr_import.sql");
 const outVerify = path.join(__dirname, "mr_pr_verify.sql");
+const outDryrun = path.join(__dirname, "mr_pr_dryrun.sql");
 
 // SITE MR -> nama cabang. Selain yang terdaftar: "GMI-<SITE>".
 const SITE_CABANG = {
@@ -76,6 +78,11 @@ for (const doc of docs.values()) {
     const qty = r.qty_mr;
     if (qty === null || !Number.isInteger(qty) || qty <= 0) {
       report.push(["SKIP baris MR: qty MR kosong/tidak valid", doc.mr_kode, `${r.part_number} baris ${r.excel_row} qty ${r.qty_mr}`]);
+      continue;
+    }
+    // Salah ketik di sheet: kolom NO. BARANG berisi kode MR / 1-2 huruf.
+    if (K(r.part_number) === doc.key || r.part_number.length < 3) {
+      report.push(["SKIP baris MR: part number tidak valid", doc.mr_kode, `"${r.part_number}" baris ${r.excel_row} qty ${qty}`]);
       continue;
     }
     const g = mrGroup(r.indicator);
@@ -270,17 +277,13 @@ const stat = {
 const today = new Date().toISOString().slice(0, 10);
 
 // Data Excel sebagai temp table -- dipakai bersama oleh import & verifikasi.
-let data = `DROP TABLE IF EXISTS pg_temp.x_cfg;
+const dataDdl = `DROP TABLE IF EXISTS pg_temp.x_cfg;
 DROP TABLE IF EXISTS pg_temp.x_mr;
 DROP TABLE IF EXISTS pg_temp.x_mr_item;
 DROP TABLE IF EXISTS pg_temp.x_pr;
 DROP TABLE IF EXISTS pg_temp.x_pr_item;
 
 CREATE TEMP TABLE x_cfg (key TEXT PRIMARY KEY, value TEXT);
-INSERT INTO x_cfg (key, value) VALUES
-  ('pic_email', ${q(picEmail)}),
-  ('pr_cabang', ${q(PR_CABANG)}),
-  ('cabang_names', ${q(cabangNames.join("|"))});
 
 CREATE TEMP TABLE x_mr (
   mr_key TEXT PRIMARY KEY,
@@ -336,34 +339,42 @@ CREATE TEMP TABLE x_pr_item (
 
 `;
 
+let dataIns = `INSERT INTO x_cfg (key, value) VALUES
+  ('pic_email', ${q(picEmail)}),
+  ('pr_cabang', ${q(PR_CABANG)}),
+  ('cabang_names', ${q(cabangNames.join("|"))});
+
+`;
 for (const part of chunk(docList, 300)) {
-  data += "INSERT INTO x_mr (mr_key, mr_kode, cabang, mr_tanggal, mr_status, rejection_reason, remarks) VALUES\n";
-  data += part
+  dataIns += "INSERT INTO x_mr (mr_key, mr_kode, cabang, mr_tanggal, mr_status, rejection_reason, remarks) VALUES\n";
+  dataIns += part
     .map((x) => `  (${q(x.key)}, ${q(x.mr_kode)}, ${q(x.cabang)}, ${d(x.mr_tanggal)}, ${q(x.mr_status)}, ${q(x.rejection_reason)}, ${q(x.remarks)})`)
     .join(",\n");
-  data += ";\n\n";
+  dataIns += ";\n\n";
 }
 for (const part of chunk(mrItemRows, 300)) {
-  data += "INSERT INTO x_mr_item (mr_key, line_no, excel_row, part_number, part_name, satuan, qty_request, qty_received_import, qty_pr, qty_share, alloc_cabang, item_status, reject_reason, priority, remarks) VALUES\n";
-  data += part
+  dataIns += "INSERT INTO x_mr_item (mr_key, line_no, excel_row, part_number, part_name, satuan, qty_request, qty_received_import, qty_pr, qty_share, alloc_cabang, item_status, reject_reason, priority, remarks) VALUES\n";
+  dataIns += part
     .map(({ doc, it }) =>
       `  (${q(doc.key)}, ${it.line_no}, ${it.row.excel_row}, ${q(it.part_number)}, ${q(it.row.description)}, ${q(it.row.uom)}, ${it.qty}, ${it.rec}, ${it.qty_pr}, ${it.qty_share}, ${q(it.alloc)}, ${q(it.rejected ? "rejected" : "active")}, ${q(it.reject_reason || null)}, ${q(it.priority)}, ${q(it.remarks)})`)
     .join(",\n");
-  data += ";\n\n";
+  dataIns += ";\n\n";
 }
 for (const part of chunk(prList, 300)) {
-  data += "INSERT INTO x_pr (pr_kode, pr_tanggal, pr_status, pembuat) VALUES\n";
-  data += part.map((p) => `  (${q(p.pr_kode)}, ${d(p.pr_tanggal)}, ${q(p.pr_status)}, ${q(p.pembuat)})`).join(",\n");
-  data += ";\n\n";
+  dataIns += "INSERT INTO x_pr (pr_kode, pr_tanggal, pr_status, pembuat) VALUES\n";
+  dataIns += part.map((p) => `  (${q(p.pr_kode)}, ${d(p.pr_tanggal)}, ${q(p.pr_status)}, ${q(p.pembuat)})`).join(",\n");
+  dataIns += ";\n\n";
 }
 for (const part of chunk(prItemRows, 300)) {
-  data += "INSERT INTO x_pr_item (pr_kode, line_no, src, excel_row, mr_kode, mr_key, mr_line, part_number, part_name, satuan, qty, keterangan) VALUES\n";
-  data += part
+  dataIns += "INSERT INTO x_pr_item (pr_kode, line_no, src, excel_row, mr_kode, mr_key, mr_line, part_number, part_name, satuan, qty, keterangan) VALUES\n";
+  dataIns += part
     .map((i) =>
       `  (${q(i.pr_kode)}, ${i.line_no}, ${q(i.src)}, ${i.excel_row}, ${q(i.mr_kode)}, ${q(i.mr_key)}, ${i.mr_line ?? "NULL"}, ${q(i.part_number)}, ${q(i.part_name)}, ${q(i.satuan)}, ${i.qty}, ${q(i.keterangan)})`)
     .join(",\n");
-  data += ";\n\n";
+  dataIns += ";\n\n";
 }
+
+const data = dataDdl + dataIns;
 
 let sql = `-- =====================================================================
 -- IMPORT MR & PR ("${path.basename(src)}": sheet MR Monitoring + PR OPEN WMS)
@@ -374,6 +385,7 @@ let sql = `-- ==================================================================
 -- SETELAH migration 20261023100000_mr_pr_import.sql DAN frontend versi
 -- terbaru (lib/mr-fulfillment.ts menghitung qty_received_import) ter-deploy.
 -- Aman dijalankan ulang: MR/PR yang kodenya sudah ada di-skip.
+-- Cek dulu hasilnya lewat mr_pr_dryrun.sql (aturan sama, read-only).
 --
 -- Aturan (keputusan user 2026-10-23):
 --   - MR yang diimport: yang masih punya barang open di MR Monitoring + MR
@@ -396,23 +408,45 @@ let sql = `-- ==================================================================
 --     kosong. Baris PR tanpa MR yang bisa dirujuk -> MR penampung per PR
 --     (<No PR>-TANPA-MR, approved). Link PO Outstanding -> PR dikerjakan di
 --     langkah terpisah.
+--   - PR yang kodenya sudah ada di prod di-skip utuh; barang MR import yang
+--     PR-nya ternyata sudah ada di prod tidak bisa ditautkan, jadi jatah
+--     PR-nya dikurangi qty baris PR itu (tidak ditawarkan lagi di form PR).
+--   - Baris PR OPEN yang MR-nya sudah ada di prod ditautkan ke barang MR prod
+--     (part number sama); yang tidak ketemu -> MR penampung.
+--   - Baris MR dengan QTY MR 0 / part number tidak valid di-skip.
 --   - Barang yang belum ada di master dibuat otomatis (nama = deskripsi Excel).
 -- =====================================================================
 
-BEGIN;
+`;
 
-DROP TABLE IF EXISTS pg_temp.x_report;
+const xReport = `DROP TABLE IF EXISTS pg_temp.x_report;
 CREATE TEMP TABLE x_report (kategori TEXT NOT NULL, ref TEXT, detail TEXT);
 
 `;
-sql += data;
+let reportSql = "";
 for (const part of chunk(report, 300)) {
-  sql += "INSERT INTO x_report (kategori, ref, detail) VALUES\n";
-  sql += part.map(([k, r, dt]) => `  (${q(k)}, ${q(r)}, ${q(dt)})`).join(",\n");
-  sql += ";\n\n";
+  reportSql += "INSERT INTO x_report (kategori, ref, detail) VALUES\n";
+  reportSql += part.map(([k, r, dt]) => `  (${q(k)}, ${q(r)}, ${q(dt)})`).join(",\n");
+  reportSql += ";\n\n";
 }
-sql += fs.readFileSync(path.join(__dirname, "mr_pr_import_body.sqltpl"), "utf8");
+const readTpl = (f) => fs.readFileSync(path.join(__dirname, f), "utf8");
+const plan = readTpl("mr_pr_plan_body.sqltpl");
+
+sql += "BEGIN;\n\n" + xReport + data + reportSql + plan + readTpl("mr_pr_import_body.sqltpl");
 fs.writeFileSync(out, sql);
+
+const dryrun = `-- =====================================================================
+-- DRY-RUN IMPORT MR & PR (READ-ONLY) -- simulasi mr_pr_import.sql
+-- Generated: ${today}  |  sumber: ${path.basename(src)}
+-- Generator: supabase/import/generate_mr_pr_import.cjs
+--
+-- Jalankan seluruh isi file di Supabase VPS SEBELUM mr_pr_import.sql.
+-- Menjalankan aturan skip / tautan / penyesuaian yang sama persis dengan
+-- import terhadap data prod, tapi hanya di temp table. Hasil = 1 tabel.
+-- =====================================================================
+
+`;
+fs.writeFileSync(outDryrun, dryrun + xReport + data + reportSql + plan + readTpl("mr_pr_dryrun_body.sqltpl"));
 
 const verifyBody = path.join(__dirname, "mr_pr_verify_body.sqltpl");
 if (fs.existsSync(verifyBody)) {
@@ -430,4 +464,82 @@ if (fs.existsSync(verifyBody)) {
   fs.writeFileSync(outVerify, verify + data + fs.readFileSync(verifyBody, "utf8"));
 }
 
-console.log(JSON.stringify({ out, outVerify, picEmail, ...stat, reportRows: report.length }, null, 2));
+
+// ---------------------------------------------------------------------
+// Versi Supabase SQL Editor (batas ukuran query): data Excel dimuat dulu ke
+// schema staging import_mrpr lewat beberapa file kecil, lalu dry-run /
+// import / verify menyalinnya ke temp table yang sama.
+// ---------------------------------------------------------------------
+const STAGE = "import_mrpr";
+const STUDIO_MAX = 400 * 1024;
+const studioFile = (name) => path.join(__dirname, `mr_pr_studio_${name}.sql`);
+for (const f of fs.readdirSync(__dirname)) {
+  if (/^mr_pr_studio_.*\.sql$/.test(f)) fs.unlinkSync(path.join(__dirname, f));
+}
+
+const stageDdl =
+  `CREATE SCHEMA IF NOT EXISTS ${STAGE};\n\n` +
+  dataDdl
+    .replace(/DROP TABLE IF EXISTS pg_temp\.x_/g, `DROP TABLE IF EXISTS ${STAGE}.x_`)
+    .replace(/CREATE TEMP TABLE x_/g, `CREATE TABLE ${STAGE}.x_`) +
+  `DROP TABLE IF EXISTS ${STAGE}.x_report_seed;\nCREATE TABLE ${STAGE}.x_report_seed (kategori TEXT NOT NULL, ref TEXT, detail TEXT);\n\n`;
+const stageStmts = (dataIns + reportSql)
+  .split(";\n\n")
+  .filter((st) => st.trim())
+  .map((st) => {
+    // Pengaman: potongan yang tidak diawali INSERT = ada teks Excel berisi ";\n\n".
+    if (!/^INSERT INTO x_/.test(st.trimStart())) throw new Error(`Gagal memecah statement staging: ${st.slice(0, 80)}`);
+    return st.replace(/^INSERT INTO x_report /m, `INSERT INTO ${STAGE}.x_report_seed `).replace(/^INSERT INTO x_/m, `INSERT INTO ${STAGE}.x_`) + ";\n\n";
+  });
+const stageParts = [];
+let cur = stageDdl;
+for (const st of stageStmts) {
+  if (cur.length + st.length > STUDIO_MAX && cur !== stageDdl) {
+    stageParts.push(cur);
+    cur = "";
+  }
+  cur += st;
+}
+stageParts.push(cur);
+stageParts.forEach((body, i) => {
+  const head = `-- MR/PR import via SQL Editor -- STAGING bagian ${i + 1} dari ${stageParts.length}
+-- Generated: ${today}  |  sumber: ${path.basename(src)}
+-- Jalankan berurutan bagian 1 s/d ${stageParts.length}, masing-masing SEKALI (bagian 1
+-- mengosongkan & membuat ulang schema ${STAGE}). Lalu mr_pr_studio_2_dryrun.sql.
+
+`;
+  fs.writeFileSync(studioFile(`1_stage_${i + 1}`), head + body);
+});
+
+const expect = { x_cfg: 3, x_mr: docList.length, x_mr_item: mrItemRows.length, x_pr: prList.length, x_pr_item: prItemRows.length, x_report_seed: report.length };
+const copyFromStage = `DO $$
+DECLARE
+  v_n BIGINT;
+  r RECORD;
+BEGIN
+  FOR r IN SELECT * FROM (VALUES ${Object.entries(expect).map(([t, n]) => `('${t}', ${n})`).join(", ")}) v(t, n) LOOP
+    IF to_regclass('${STAGE}.' || r.t) IS NULL THEN
+      RAISE EXCEPTION 'Tabel staging ${STAGE}.% belum ada: jalankan semua mr_pr_studio_1_stage_*.sql dulu.', r.t;
+    END IF;
+    EXECUTE format('SELECT count(*) FROM ${STAGE}.%I', r.t) INTO v_n;
+    IF v_n <> r.n THEN
+      RAISE EXCEPTION 'Staging ${STAGE}.% berisi % baris, seharusnya %: jalankan ulang semua mr_pr_studio_1_stage_*.sql dari bagian 1.', r.t, v_n, r.n;
+    END IF;
+  END LOOP;
+END $$;
+
+${["x_cfg", "x_mr", "x_mr_item", "x_pr", "x_pr_item"].map((t) => `DROP TABLE IF EXISTS pg_temp.${t};\nCREATE TEMP TABLE ${t} AS SELECT * FROM ${STAGE}.${t};`).join("\n")}
+
+`;
+const reportFromStage = xReport + `INSERT INTO x_report SELECT * FROM ${STAGE}.x_report_seed;\n\n`;
+const studioNote = (judul) => `-- MR/PR import via SQL Editor -- ${judul}
+-- Generated: ${today}  |  sumber: ${path.basename(src)}
+-- Data Excel dibaca dari schema staging ${STAGE} (mr_pr_studio_1_stage_*.sql).
+
+`;
+fs.writeFileSync(studioFile("2_dryrun"), studioNote("DRY-RUN (read-only)") + copyFromStage + reportFromStage + plan + readTpl("mr_pr_dryrun_body.sqltpl"));
+fs.writeFileSync(studioFile("3_import"), studioNote("IMPORT (menulis data)") + "BEGIN;\n\n" + copyFromStage + reportFromStage + plan + readTpl("mr_pr_import_body.sqltpl"));
+fs.writeFileSync(studioFile("4_verify"), studioNote("VERIFIKASI (read-only)") + copyFromStage + readTpl("mr_pr_verify_body.sqltpl"));
+fs.writeFileSync(studioFile("5_drop_stage"), studioNote("BERSIHKAN staging (jalankan setelah verifikasi selesai)") + `DROP SCHEMA IF EXISTS ${STAGE} CASCADE;\n`);
+
+console.log(JSON.stringify({ out, outDryrun, outVerify, studioStageParts: stageParts.length, picEmail, ...stat, reportRows: report.length }, null, 2));

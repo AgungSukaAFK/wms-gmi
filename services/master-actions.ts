@@ -838,9 +838,9 @@ export async function upsertCustomer(formData: FormData) {
 /**
  * CUSTOMER SITES
  *
- * Master site per customer. Dipakai Consignment: dropdown Site di SO dan
- * Gudang Tujuan di IK (via cabang_id) hanya menampilkan site milik customer
- * yang dipilih.
+ * Master site per customer (= gudang customer). Dipakai Consignment:
+ * dropdown Site di SO dan Site Tujuan di IK hanya menampilkan site milik
+ * customer yang dipilih. cabang_id = kolom lama, tidak dipakai IK lagi.
  */
 type CustomerSitePayload = {
   site_name: string;

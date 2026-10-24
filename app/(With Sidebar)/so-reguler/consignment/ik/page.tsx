@@ -49,6 +49,9 @@ import {
   deleteConsignmentIk,
 } from "@/services/consignment-ik-actions";
 
+// Tujuan IK: site customer (IK baru) atau gudang cabang (IK lama).
+const tujuanIk = (ik: any) => ik?.ke_site_name || ik?.cabang_tujuan?.nama_cabang || "-";
+
 export default function ConsignmentIkPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -108,7 +111,7 @@ export default function ConsignmentIkPage() {
     const res = await deleteConsignmentIk(deleteTarget.id);
     setDeleting(false);
     if (res.success) {
-      toast.success("IK berhasil dihapus, stok sudah dikembalikan.");
+      toast.success("IK berhasil dihapus, pergerakan stoknya sudah dibalik.");
       setDeleteTarget(null);
       load();
     } else {
@@ -129,7 +132,7 @@ export default function ConsignmentIkPage() {
                 Item Konsinyasi
               </h1>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-                Pengiriman fisik barang Consignment antar gudang
+                Pengiriman fisik barang Consignment ke site customer
               </p>
             </div>
           </div>
@@ -161,7 +164,7 @@ export default function ConsignmentIkPage() {
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode IK</TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Tgl IK</TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">No. SO</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Gudang</TableHead>
+                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Asal → Tujuan</TableHead>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">No. AWB</TableHead>
                 <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Item</TableHead>
                 <TableHead className="w-24 text-[10px] font-black uppercase text-muted-foreground" />
@@ -186,7 +189,14 @@ export default function ConsignmentIkPage() {
               ) : (
                 filtered.map((ik) => (
                   <TableRow key={ik.id}>
-                    <TableCell className="font-bold text-xs">{ik.ik_kode}</TableCell>
+                    <TableCell className="font-bold text-xs">
+                      {ik.ik_kode}
+                      {ik.ik_is_import && (
+                        <Badge variant="secondary" className="ml-1.5 text-[9px] font-bold">
+                          Import ERP
+                        </Badge>
+                      )}
+                    </TableCell>
                     <TableCell className="text-xs whitespace-nowrap">
                       {ik.ik_tanggal ? formatDate(ik.ik_tanggal) : "-"}
                     </TableCell>
@@ -195,7 +205,7 @@ export default function ConsignmentIkPage() {
                       <span className="flex items-center gap-1">
                         {ik.cabang_asal?.nama_cabang || "-"}
                         <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                        {ik.cabang_tujuan?.nama_cabang || "-"}
+                        {tujuanIk(ik)}
                       </span>
                     </TableCell>
                     <TableCell className="text-xs">{ik.no_awb || "-"}</TableCell>
@@ -239,7 +249,7 @@ export default function ConsignmentIkPage() {
           <DialogHeader>
             <DialogTitle>{detailIk?.ik_kode}</DialogTitle>
             <DialogDescription>
-              {detailIk?.cabang_asal?.nama_cabang} → {detailIk?.cabang_tujuan?.nama_cabang}
+              {detailIk?.cabang_asal?.nama_cabang} → {tujuanIk(detailIk)}
               {detailIk?.no_awb ? ` · AWB: ${detailIk.no_awb}` : ""}
             </DialogDescription>
           </DialogHeader>
@@ -274,9 +284,8 @@ export default function ConsignmentIkPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Hapus Item Konsinyasi {deleteTarget?.ik_kode}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Stok akan dikembalikan ke gudang asal dan dikurangi dari gudang
-              tujuan (membalikkan pergerakan stok IK ini). Tindakan ini tidak
-              bisa dibatalkan.
+              Pergerakan stok IK ini akan dibalik (stok dikembalikan ke gudang
+              asal). Tindakan ini tidak bisa dibatalkan.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

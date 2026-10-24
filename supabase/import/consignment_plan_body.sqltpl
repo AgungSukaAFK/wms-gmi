@@ -1,0 +1,277 @@
+-- ---------------------------------------------------------------------
+-- 0. Prasyarat: migration, PIC
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'consignment_ik' AND column_name = 'ke_site_id')
+     OR NOT EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public' AND table_name = 'consignment_so' AND column_name = 'so_is_import') THEN
+    RAISE EXCEPTION 'Migration 20261024110000_consignment_ik_site_tujuan.sql belum dijalankan.';
+  END IF;
+END $$;
+
+-- Pembuat SO & IK import: --pic=<email>, atau tanpa user.
+DROP TABLE IF EXISTS pg_temp.x_pic;
+CREATE TEMP TABLE x_pic (id UUID, nama TEXT NOT NULL);
+
+DO $$
+DECLARE
+  v_email TEXT := (SELECT value FROM x_cfg WHERE key = 'pic_email');
+  v_n INT;
+BEGIN
+  IF v_email IS NULL THEN
+    INSERT INTO x_pic VALUES (NULL, '(tanpa user)');
+  ELSE
+    INSERT INTO x_pic
+    SELECT p.id, COALESCE(NULLIF(btrim(p.nama), ''), p.email)
+    FROM public.profiles p WHERE lower(btrim(p.email)) = lower(btrim(v_email));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'User PIC dengan email % tidak ditemukan (ketemu % user).', v_email, v_n;
+    END IF;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Skip SO yang nomornya sudah ada di prod (termasuk hasil import
+--    sebelumnya) -- IK Excel milik SO itu ikut di-skip.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_so_skip;
+CREATE TEMP TABLE x_so_skip AS
+SELECT DISTINCT ON (x.so_key) x.so_key, x.so_no, d.so_no AS db_no, d.so_is_import AS db_import,
+       (SELECT count(*) FROM consignment_so_items di WHERE di.so_id = d.id) AS n_db,
+       (SELECT sum(di.qty) FROM consignment_so_items di WHERE di.so_id = d.id) AS qty_db,
+       (SELECT count(*) FROM x_so_item i WHERE i.so_key = x.so_key) AS n_excel,
+       (SELECT sum(i.qty) FROM x_so_item i WHERE i.so_key = x.so_key) AS qty_excel,
+       (SELECT count(*) FROM x_ik k WHERE k.so_key = x.so_key) AS n_ik_excel,
+       (SELECT count(*) FROM public.consignment_ik k WHERE k.so_id = d.id) AS n_ik_db
+FROM x_so x
+JOIN public.consignment_so d ON upper(btrim(d.so_no)) = x.so_key
+ORDER BY x.so_key, (d.so_no = x.so_no) DESC, d.id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT CASE WHEN db_import THEN 'SKIP SO: sudah pernah diimport' ELSE 'SKIP SO: nomor sudah ada di prod (dibuat lewat form)' END,
+       so_no,
+       'prod ' || n_db || ' barang qty ' || COALESCE(qty_db, 0) || ', ' || n_ik_db || ' IK | Excel ' || n_excel || ' barang qty ' || qty_excel
+         || ', ' || n_ik_excel || ' IK' || CASE WHEN db_no <> so_no THEN ', di prod: ' || db_no ELSE '' END
+FROM x_so_skip;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP IK: SO-nya sudah ada di prod (IK Excel tidak diimport, cek manual)', k.ik_kode,
+       s.so_no || ' tgl ' || k.ik_tanggal || ', qty ' || (SELECT sum(qty) FROM x_ik_item i WHERE i.ik_key = k.ik_key)
+FROM x_ik k JOIN x_so_skip s ON s.so_key = k.so_key AND NOT s.db_import;
+
+DELETE FROM x_ik_item WHERE ik_key IN (SELECT ik_key FROM x_ik WHERE so_key IN (SELECT so_key FROM x_so_skip));
+DELETE FROM x_ik WHERE so_key IN (SELECT so_key FROM x_so_skip);
+DELETE FROM x_so_item WHERE so_key IN (SELECT so_key FROM x_so_skip);
+DELETE FROM x_so WHERE so_key IN (SELECT so_key FROM x_so_skip);
+
+-- IK yang kodenya sudah ada (mis. dibuat manual) -> SO-nya tetap dibuat,
+-- IK itu tidak (barangnya akan tampil belum terkirim -- cek manual).
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP IK: kode IK sudah ada di prod (cek manual)', k.ik_kode, 'SO ' || x.so_no
+FROM x_ik k
+JOIN x_so x ON x.so_key = k.so_key
+WHERE EXISTS (SELECT 1 FROM public.consignment_ik d WHERE upper(btrim(d.ik_kode)) = upper(btrim(k.ik_kode)));
+DELETE FROM x_ik_item WHERE ik_key IN (
+  SELECT k.ik_key FROM x_ik k
+  WHERE EXISTS (SELECT 1 FROM public.consignment_ik d WHERE upper(btrim(d.ik_kode)) = upper(btrim(k.ik_kode)))
+);
+DELETE FROM x_ik k
+WHERE EXISTS (SELECT 1 FROM public.consignment_ik d WHERE upper(btrim(d.ik_kode)) = upper(btrim(k.ik_kode)));
+
+-- Kemungkinan dobel dengan SO buatan form yang nomornya ditulis beda.
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Cek dobel: SO Consignment prod dengan No PO sama', x.so_no,
+       'PO ' || x.no_po || ' -> ' || string_agg(DISTINCT d.so_no, ', ')
+FROM x_so x
+JOIN public.consignment_so d ON NOT d.so_is_import AND upper(btrim(d.no_po)) = upper(btrim(x.no_po))
+GROUP BY x.so_no, x.no_po;
+
+-- ---------------------------------------------------------------------
+-- 2. Customer: CUSTOMER_MAP, lalu nama persis, lalu nama mirip (tanpa
+--    PT/CV/Tbk & tanda baca) -- customer aktif tipe consignment/both dulu.
+--    Tingkat pertama yang ketemu tepat 1 customer dipakai; >1 = ambigu.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_cust;
+CREATE TEMP TABLE x_cust (
+  customer_name TEXT PRIMARY KEY,
+  customer_id BIGINT,
+  customer_no TEXT,
+  db_name TEXT,
+  db_type TEXT,
+  cara TEXT,
+  kandidat TEXT
+);
+INSERT INTO x_cust (customer_name) SELECT DISTINCT customer_name FROM x_so;
+
+DROP TABLE IF EXISTS pg_temp.x_cust_all;
+CREATE TEMP TABLE x_cust_all AS
+SELECT c.id, c.customer_no, c.customer_name, c.customer_type, c.is_active,
+       upper(btrim(c.customer_name)) AS nama_k,
+       regexp_replace(regexp_replace(upper(c.customer_name), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g') AS nama_n
+FROM public.customers c;
+
+DO $$
+DECLARE
+  r RECORD;
+  v_ids BIGINT[];
+  v_cara TEXT;
+  v_k TEXT;
+  v_n TEXT;
+  lvl INT;
+BEGIN
+  FOR r IN
+    SELECT c.customer_name, m.customer_no AS map_no
+    FROM x_cust c
+    LEFT JOIN x_cust_map m ON m.customer_name = upper(btrim(c.customer_name))
+  LOOP
+    v_ids := NULL;
+    v_k := upper(btrim(r.customer_name));
+    v_n := regexp_replace(regexp_replace(upper(r.customer_name), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g');
+    IF r.map_no IS NOT NULL THEN
+      SELECT array_agg(id ORDER BY id) INTO v_ids FROM x_cust_all WHERE btrim(customer_no) = btrim(r.map_no);
+      v_cara := 'CUSTOMER_MAP';
+    ELSE
+      FOR lvl IN 1..4 LOOP
+        SELECT array_agg(id ORDER BY id) INTO v_ids
+        FROM x_cust_all a
+        WHERE a.is_active
+          AND CASE WHEN lvl <= 2 THEN a.nama_k = v_k ELSE a.nama_n = v_n AND v_n <> '' END
+          AND (lvl IN (2, 4) OR a.customer_type IN ('consignment', 'both'));
+        v_cara := CASE lvl WHEN 1 THEN 'nama persis' WHEN 2 THEN 'nama persis, tipe non-consignment'
+                           WHEN 3 THEN 'nama mirip' ELSE 'nama mirip, tipe non-consignment' END;
+        EXIT WHEN v_ids IS NOT NULL;
+      END LOOP;
+    END IF;
+
+    IF array_length(v_ids, 1) = 1 THEN
+      UPDATE x_cust x
+      SET customer_id = a.id, customer_no = a.customer_no, db_name = a.customer_name, db_type = a.customer_type, cara = v_cara
+      FROM x_cust_all a
+      WHERE a.id = v_ids[1] AND x.customer_name = r.customer_name;
+    ELSE
+      UPDATE x_cust
+      SET cara = CASE WHEN v_ids IS NOT NULL THEN 'ambigu (' || v_cara || ')'
+                      WHEN r.map_no IS NOT NULL THEN 'CUSTOMER_MAP: customer_no ' || r.map_no || ' tidak ada'
+                      ELSE 'tidak ketemu' END,
+          kandidat = (SELECT string_agg(a.customer_no || ' = ' || a.customer_name || CASE WHEN a.is_active THEN '' ELSE ' (nonaktif)' END,
+                                        ' || ' ORDER BY a.customer_no)
+                      FROM x_cust_all a WHERE a.id = ANY (v_ids) OR (v_ids IS NULL AND a.nama_n = v_n AND v_n <> ''))
+      WHERE customer_name = r.customer_name;
+    END IF;
+  END LOOP;
+END $$;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Customer: nama Excel -> customer prod', c.customer_name,
+       c.customer_no || ' = ' || c.db_name || ' [' || c.cara || ', ' || count(x.*) || ' SO]'
+FROM x_cust c
+JOIN x_so x ON x.customer_name = c.customer_name
+WHERE c.customer_id IS NOT NULL
+GROUP BY c.customer_name, c.customer_no, c.db_name, c.cara;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Customer tipe non-consignment (tidak muncul di picker SO Consignment)', c.customer_name, c.customer_no || ' = ' || c.db_name
+FROM x_cust c
+WHERE c.customer_id IS NOT NULL AND c.db_type NOT IN ('consignment', 'both');
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP SO: customer ' || c.cara || ' (isi CUSTOMER_MAP di generator)', x.so_no,
+       c.customer_name || COALESCE(' -> kandidat: ' || c.kandidat, '')
+FROM x_so x
+JOIN x_cust c ON c.customer_name = x.customer_name
+WHERE c.customer_id IS NULL;
+
+DELETE FROM x_ik_item WHERE ik_key IN (
+  SELECT k.ik_key FROM x_ik k JOIN x_so x ON x.so_key = k.so_key JOIN x_cust c ON c.customer_name = x.customer_name
+  WHERE c.customer_id IS NULL
+);
+DELETE FROM x_ik WHERE so_key IN (
+  SELECT x.so_key FROM x_so x JOIN x_cust c ON c.customer_name = x.customer_name WHERE c.customer_id IS NULL
+);
+DELETE FROM x_so_item WHERE so_key IN (
+  SELECT x.so_key FROM x_so x JOIN x_cust c ON c.customer_name = x.customer_name WHERE c.customer_id IS NULL
+);
+DELETE FROM x_so WHERE customer_name IN (SELECT customer_name FROM x_cust WHERE customer_id IS NULL);
+
+-- ---------------------------------------------------------------------
+-- 3. Site SO = customer_sites aktif milik customer itu: SITE_MAP, lalu kata
+--    pertama nama site ("PSF" = "PSF (BALIKPAPAN)", "(IBP)" = "IBP (TABANG)").
+--    Tidak ketemu / ambigu -> site teks Excel tanpa site_id.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_site;
+CREATE TEMP TABLE x_site AS
+SELECT x.so_key, x.site_code,
+       s.id AS site_id,
+       COALESCE(s.site_name, upper(btrim(x.site_code))) AS site_name,
+       s.n AS n_kandidat,
+       s.kandidat
+FROM x_so x
+JOIN x_cust c ON c.customer_name = x.customer_name
+LEFT JOIN LATERAL (
+  SELECT CASE WHEN count(*) = 1 THEN min(cs.id) END AS id,
+         CASE WHEN count(*) = 1 THEN min(cs.site_name) END AS site_name,
+         count(*) AS n,
+         string_agg(cs.site_name, ' | ' ORDER BY cs.site_name) AS kandidat
+  FROM public.customer_sites cs
+  LEFT JOIN x_site_map m ON m.site_code = upper(btrim(x.site_code))
+  WHERE cs.customer_id = c.customer_id AND cs.is_active
+    AND CASE WHEN m.site_name IS NOT NULL THEN upper(cs.site_name) = upper(btrim(m.site_name))
+             ELSE split_part(btrim(regexp_replace(upper(cs.site_name), '[()]', ' ', 'g')), ' ', 1)
+                  = split_part(btrim(regexp_replace(upper(x.site_code), '[()]', ' ', 'g')), ' ', 1)
+        END
+  HAVING count(*) > 0
+) s ON true;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Site: kode Excel -> site customer', site_code, site_name || ' [' || count(*) || ' SO]'
+FROM x_site WHERE site_id IS NOT NULL
+GROUP BY site_code, site_name;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Site tidak ketemu di master site customer (site teks saja, isi SITE_MAP di generator kalau perlu)',
+       COALESCE(s.site_code, '(kosong)'),
+       count(*) || ' SO: ' || string_agg(x.so_no, ', ' ORDER BY x.so_no) || COALESCE(' | kandidat: ' || min(s.kandidat), '')
+FROM x_site s JOIN x_so x ON x.so_key = s.so_key
+WHERE s.site_id IS NULL
+GROUP BY s.site_code;
+
+-- ---------------------------------------------------------------------
+-- 4. Gudang asal IK -> cabang
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad TEXT;
+BEGIN
+  SELECT string_agg(DISTINCT k.gudang, ', ') INTO v_bad
+  FROM x_ik k
+  WHERE NOT EXISTS (SELECT 1 FROM public.cabang cb WHERE upper(btrim(cb.nama_cabang)) = upper(btrim(k.gudang)));
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Gudang asal IK tidak ada di master cabang: % (perbaiki GUDANG_MAP di generator)', v_bad;
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_gudang;
+CREATE TEMP TABLE x_gudang AS
+SELECT DISTINCT ON (upper(btrim(k.gudang))) upper(btrim(k.gudang)) AS gudang_k, cb.id AS cabang_id, cb.nama_cabang
+FROM x_ik k
+JOIN public.cabang cb ON upper(btrim(cb.nama_cabang)) = upper(btrim(k.gudang))
+ORDER BY upper(btrim(k.gudang)), cb.is_active DESC, cb.id;
+
+-- IK yang memotong stok (opsi --stok-sejak).
+DROP TABLE IF EXISTS pg_temp.x_ik_stok;
+CREATE TEMP TABLE x_ik_stok AS
+SELECT k.ik_key
+FROM x_ik k
+WHERE (SELECT value FROM x_cfg WHERE key = 'stok_sejak') IS NULL
+   OR k.ik_tanggal >= (SELECT value::date FROM x_cfg WHERE key = 'stok_sejak');
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'IK sebelum --stok-sejak: dicatat saja, stok tidak dipotong', min(k.ik_tanggal) || ' s/d ' || max(k.ik_tanggal),
+       count(*) || ' IK, qty ' || (SELECT sum(i.qty) FROM x_ik_item i WHERE i.ik_key IN (SELECT ik_key FROM x_ik WHERE ik_key NOT IN (SELECT ik_key FROM x_ik_stok)))
+FROM x_ik k
+WHERE k.ik_key NOT IN (SELECT ik_key FROM x_ik_stok)
+HAVING count(*) > 0;
+

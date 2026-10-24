@@ -1,0 +1,144 @@
+-- ---------------------------------------------------------------------
+-- VERIFIKASI link PO Outstanding -> PR (read-only). Rencana di atas
+-- dijalankan ulang: setelah apply, seharusnya tidak ada lagi yang bisa di-link.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.l_v;
+CREATE TEMP TABLE l_v (
+  no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL,
+  expected TEXT, actual TEXT, ok BOOLEAN, sev TEXT NOT NULL, contoh TEXT
+);
+
+DROP TABLE IF EXISTS pg_temp.l_lnk;
+CREATE TEMP TABLE l_lnk AS
+SELECT pi.id, pi.po_id, btrim(p.po_kode) AS po_kode, pi.part_id, pi.part_number, pi.qty, pi.mr_id,
+       pi.pr_item_id, pri.pr_id, pri.part_id AS pr_part_id, pri.mr_id AS pr_mr_id, pr.pr_kode, p.pr_id AS po_pr_id
+FROM public.po_items pi
+JOIN public.pos p ON p.id = pi.po_id AND p.po_is_outstanding
+JOIN public.pr_items pri ON pri.id = pi.pr_item_id
+JOIN public.prs pr ON pr.id = pri.pr_id;
+
+INSERT INTO l_v
+SELECT 100, '1. Link', 'Item PO Outstanding: total / ter-link PR / belum', NULL,
+       count(*) || ' / ' || count(*) FILTER (WHERE pi.pr_item_id IS NOT NULL) || ' / ' || count(*) FILTER (WHERE pi.pr_item_id IS NULL),
+       NULL, 'INFO', NULL
+FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+WHERE p.po_is_outstanding AND p.po_status::text <> 'rejected';
+
+INSERT INTO l_v
+SELECT 101, '1. Link', 'Item ter-link dengan part number beda dari item PR', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number || ' -> ' || pr_kode, ', ' ORDER BY po_kode), 200)
+FROM l_lnk WHERE part_id <> pr_part_id;
+
+INSERT INTO l_v
+SELECT 102, '1. Link', 'mr_id item PO beda dengan mr_id item PR', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ':' || part_number, ', ' ORDER BY po_kode), 200)
+FROM l_lnk WHERE mr_id IS DISTINCT FROM pr_mr_id;
+
+INSERT INTO l_v
+SELECT 103, '1. Link', 'Satu item PR ter-link ke >1 item di PO yang sama', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode || ' -> ' || pr_kode, ', ' ORDER BY po_kode), 200)
+FROM (SELECT po_kode, pr_kode, pr_item_id FROM l_lnk GROUP BY 1, 2, 3 HAVING count(*) > 1) t;
+
+INSERT INTO l_v
+SELECT 104, '1. Link', 'PO punya item ter-link tapi pos.pr_id kosong / bukan salah satu PR-nya', '0',
+       count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(po_kode, ', ' ORDER BY po_kode), 200)
+FROM (
+  SELECT po_kode FROM l_lnk GROUP BY po_kode, po_pr_id
+  HAVING po_pr_id IS NULL OR NOT bool_or(pr_id = po_pr_id)
+) t;
+
+INSERT INTO l_v
+SELECT 105, '1. Link', 'Item PR ter-PO melebihi qty PR (item diterima di-link utuh)', NULL,
+       count(*)::text, NULL, 'INFO',
+       left(string_agg(pr_kode || ':' || part_number || ' (' || conv || '/' || qty || ')', ', ' ORDER BY pr_kode), 200)
+FROM (
+  SELECT pr.pr_kode, pri.part_number, pri.qty, sum(pi.qty) AS conv
+  FROM public.pr_items pri
+  JOIN public.prs pr ON pr.id = pri.pr_id
+  JOIN public.po_items pi ON pi.pr_item_id = pri.id
+  JOIN public.pos p ON p.id = pi.po_id AND p.po_status::text <> 'rejected'
+  WHERE pri.id IN (SELECT pr_item_id FROM l_lnk)
+  GROUP BY pr.pr_kode, pri.id, pri.part_number, pri.qty
+  HAVING sum(pi.qty) > pri.qty
+) t;
+
+-- Status PR (rumus = applyPrConversionStatus + applyPrCompletionStatus) untuk
+-- semua PR yang punya link ke PO Outstanding.
+DROP TABLE IF EXISTS pg_temp.l_vs;
+CREATE TEMP TABLE l_vs AS
+WITH touched AS (SELECT DISTINCT pr_id FROM l_lnk),
+items AS (
+  SELECT pri.pr_id, pri.id, pri.qty
+  FROM public.pr_items pri
+  WHERE pri.pr_id IN (SELECT pr_id FROM touched) AND lower(COALESCE(pri.status::text, '')) <> 'rejected'
+),
+cov AS (
+  SELECT pi.pr_item_id, pi.po_id, pi.qty
+  FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+  WHERE pi.pr_item_id IN (SELECT id FROM items) AND p.po_status::text <> 'rejected'
+  UNION ALL
+  SELECT l.pr_item_id, pi.po_id, l.qty_pr
+  FROM public.po_item_pr_links l
+  JOIN public.po_items pi ON pi.id = l.po_item_id
+  JOIN public.pos p ON p.id = pi.po_id
+  WHERE l.pr_item_id IN (SELECT id FROM items) AND p.po_status::text <> 'rejected'
+),
+per_item AS (
+  SELECT i.pr_id, i.id, i.qty, COALESCE((SELECT sum(c.qty) FROM cov c WHERE c.pr_item_id = i.id), 0) AS conv
+  FROM items i
+)
+SELECT t.pr_id, pr.pr_kode, pr.pr_status::text AS pr_status, pr.pr_convert_status,
+       CASE WHEN COALESCE(sum(LEAST(pi.qty, pi.conv)), 0) <= 0 THEN 'pending'
+            WHEN sum(LEAST(pi.qty, pi.conv)) < sum(pi.qty) THEN 'partial'
+            ELSE 'complete' END AS convert_status,
+       COALESCE(bool_and(pi.conv >= pi.qty), false)
+         AND EXISTS (SELECT 1 FROM cov c JOIN items i ON i.id = c.pr_item_id WHERE i.pr_id = t.pr_id)
+         AND NOT EXISTS (SELECT 1 FROM cov c JOIN items i ON i.id = c.pr_item_id
+                         JOIN public.pos p ON p.id = c.po_id
+                         WHERE i.pr_id = t.pr_id AND p.po_receive_status <> 'complete') AS done
+FROM touched t
+JOIN public.prs pr ON pr.id = t.pr_id
+LEFT JOIN per_item pi ON pi.pr_id = t.pr_id
+GROUP BY t.pr_id, pr.pr_kode, pr.pr_status, pr.pr_convert_status;
+
+INSERT INTO l_v
+SELECT 201, '2. Status PR', 'pr_convert_status tidak sesuai rumus', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(pr_kode || ' (DB ' || pr_convert_status || ' / ' || convert_status || ')', ', ' ORDER BY pr_kode), 200)
+FROM l_vs WHERE pr_convert_status IS DISTINCT FROM convert_status;
+
+INSERT INTO l_v
+SELECT 202, '2. Status PR', 'Status PR approved/completed tidak sesuai rumus', '0', count(*)::text, count(*) = 0, 'FAIL',
+       left(string_agg(pr_kode || ' (' || pr_status || ')', ', ' ORDER BY pr_kode), 200)
+FROM l_vs
+WHERE pr_status IN ('approved', 'completed')
+  AND pr_status <> CASE WHEN done THEN 'completed' ELSE 'approved' END;
+
+INSERT INTO l_v
+SELECT 203, '2. Status PR', 'PR ter-link ke PO Outstanding per status konversi (pending / partial / complete)', NULL,
+       count(*) FILTER (WHERE pr_convert_status = 'pending') || ' / ' || count(*) FILTER (WHERE pr_convert_status = 'partial')
+         || ' / ' || count(*) FILTER (WHERE pr_convert_status = 'complete'),
+       NULL, 'INFO', NULL
+FROM l_vs;
+
+INSERT INTO l_v
+SELECT 301, '3. Sisa', 'Item yang masih bisa di-link (rencana dijalankan ulang)', '0',
+       count(DISTINCT po_item_id)::text, count(*) = 0, 'WARN', NULL
+FROM l_plan;
+
+INSERT INTO l_v
+SELECT 302 + row_number() OVER (ORDER BY kategori), '3. Sisa', kategori, NULL, count(*)::text, NULL, 'INFO',
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 200)
+FROM l_report
+WHERE kategori LIKE 'Tidak di-link:%'
+GROUP BY kategori;
+
+INSERT INTO l_v
+SELECT 0, '0. Ringkasan', 'Jumlah cek FAIL / WARN', '0 / 0',
+       count(*) FILTER (WHERE ok = false AND sev = 'FAIL') || ' / ' || count(*) FILTER (WHERE ok = false AND sev = 'WARN'),
+       count(*) FILTER (WHERE ok = false AND sev = 'FAIL') = 0, 'FAIL', NULL
+FROM l_v;
+
+SELECT no, CASE WHEN ok IS NULL THEN 'INFO' WHEN ok THEN 'OK' ELSE sev END AS status,
+       kelompok, cek, expected, actual, contoh
+FROM l_v ORDER BY no;

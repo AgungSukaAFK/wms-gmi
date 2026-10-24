@@ -175,7 +175,7 @@ const COLUMNS: Column[] = [
   { key: "pic_tarik_ik", label: "PIC Tarik IK", render: DASH },
   {
     key: "gudang_terakhir",
-    label: "Gudang",
+    label: "Asal → Tujuan",
     render: (r) => r.gudang_terakhir || <DASH />,
   },
   {

@@ -251,7 +251,7 @@ export default function CreateConsignmentPenerimaanPage() {
                       <div className="flex flex-col">
                         <span className="font-bold text-xs uppercase">{ik.ik_kode}</span>
                         <span className="text-[9px] opacity-60">
-                          {ik.so?.customer?.customer_name || "-"} · {ik.cabang_tujuan?.nama_cabang || "-"}
+                          {ik.so?.customer?.customer_name || "-"} · {ik.ke_site_name || ik.cabang_tujuan?.nama_cabang || "-"}
                           {ik.no_awb ? ` · AWB: ${ik.no_awb}` : ""}
                         </span>
                       </div>
@@ -388,9 +388,9 @@ export default function CreateConsignmentPenerimaanPage() {
       <Content>
         <div className="flex flex-col lg:flex-row justify-between gap-6 lg:items-center">
           <p className="text-[11px] text-muted-foreground font-medium max-w-125">
-            Qty terima langsung dipindahkan ke stok gudang customer (dikurangi
-            dari stok gudang tujuan IK). Selisih qty kirim - qty terima tetap
-            jadi stok gudang tujuan, ditindaklanjuti manual.
+            Qty terima langsung masuk ke stok customer. Selisih qty kirim -
+            qty terima tidak masuk stok mana pun (stok gudang asal sudah
+            dipotong saat IK) — ditindaklanjuti manual lewat komplain.
           </p>
           <Button
             className="h-10 lg:w-70 font-bold text-sm uppercase"

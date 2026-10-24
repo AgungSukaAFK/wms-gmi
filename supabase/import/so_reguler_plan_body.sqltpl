@@ -1,0 +1,184 @@
+-- ---------------------------------------------------------------------
+-- 0. Prasyarat: migration, PIC
+-- ---------------------------------------------------------------------
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'so_reguler' AND column_name = 'so_is_import') THEN
+    RAISE EXCEPTION 'Migration 20261024100000_so_reguler_import.sql belum dijalankan.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'so_reguler' AND column_name = 'customer_po_received_date') THEN
+    RAISE EXCEPTION 'Migration 20261019140000_so_reguler_marketing_po_dates.sql belum dijalankan.';
+  END IF;
+END $$;
+
+-- Pembuat SO import: --pic=<email>, atau tanpa user (so_pic teks saja).
+DROP TABLE IF EXISTS pg_temp.x_pic;
+CREATE TEMP TABLE x_pic (id UUID, nama TEXT NOT NULL);
+
+DO $$
+DECLARE
+  v_email TEXT := (SELECT value FROM x_cfg WHERE key = 'pic_email');
+  v_n INT;
+BEGIN
+  IF v_email IS NULL THEN
+    INSERT INTO x_pic VALUES (NULL, 'IMPORT LIST PENAWARAN');
+  ELSE
+    INSERT INTO x_pic
+    SELECT p.id, COALESCE(NULLIF(btrim(p.nama), ''), p.email)
+    FROM public.profiles p WHERE lower(btrim(p.email)) = lower(btrim(v_email));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'User PIC dengan email % tidak ditemukan (ketemu % user).', v_email, v_n;
+    END IF;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Skip SO yang kodenya sudah ada di prod (termasuk hasil import sebelumnya)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_so_skip;
+CREATE TEMP TABLE x_so_skip AS
+SELECT DISTINCT ON (x.so_key) x.so_key, x.so_kode, d.so_kode AS db_kode, d.so_status AS db_status, d.so_is_import AS db_import,
+       (SELECT count(*) FROM x_so_item i WHERE i.so_key = x.so_key) AS n_item
+FROM x_so x
+JOIN public.so_reguler d ON upper(btrim(d.so_kode)) = x.so_key
+ORDER BY x.so_key, (d.so_kode = x.so_kode) DESC, d.id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT CASE WHEN db_import THEN 'SKIP SO: sudah pernah diimport' ELSE 'SKIP SO: kode sudah ada di prod (dibuat lewat form)' END,
+       so_kode,
+       'status prod ' || db_status || ', ' || n_item || ' barang Excel'
+         || CASE WHEN db_kode <> so_kode THEN ', di prod: ' || db_kode ELSE '' END
+FROM x_so_skip;
+
+DELETE FROM x_so_item WHERE so_key IN (SELECT so_key FROM x_so_skip);
+DELETE FROM x_so WHERE so_key IN (SELECT so_key FROM x_so_skip);
+
+-- Kemungkinan dobel dengan SO buatan form yang nomornya ditulis beda
+-- (mis. "SO-52380") atau Nomor PO customer-nya sama -- cek manual.
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Cek dobel: SO prod dengan nomor mirip', x.so_kode,
+       string_agg(DISTINCT d.so_kode || ' (' || d.so_status || ')', ', ')
+FROM x_so x
+JOIN public.so_reguler d
+  ON NOT d.so_is_import
+ AND regexp_replace(d.so_kode, '\D', '', 'g') = regexp_replace(x.so_kode, '\D', '', 'g')
+ AND regexp_replace(x.so_kode, '\D', '', 'g') <> ''
+GROUP BY x.so_kode;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Cek dobel: SO prod dengan Nomor PO customer sama', x.so_kode,
+       'PO ' || x.customer_po_no || ' -> ' || string_agg(DISTINCT d.so_kode || ' (' || d.so_status || ')', ', ')
+FROM x_so x
+JOIN public.so_reguler d
+  ON NOT d.so_is_import
+ AND upper(btrim(d.customer_po_no)) = upper(btrim(x.customer_po_no))
+GROUP BY x.so_kode, x.customer_po_no;
+
+-- ---------------------------------------------------------------------
+-- 2. Customer: nama Excel -> customers (aktif). Urutan: CUSTOMER_MAP,
+--    nama persis (tipe reguler), nama persis (tipe apa pun), nama mirip
+--    (tanpa PT/CV/Tbk & tanda baca; tipe reguler), nama mirip (tipe apa pun).
+--    Tingkat pertama yang ketemu 1 customer dipakai; ketemu >1 = ambigu.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_cust;
+CREATE TEMP TABLE x_cust (
+  customer_name TEXT PRIMARY KEY,
+  customer_id BIGINT,
+  customer_no TEXT,
+  db_name TEXT,
+  db_type TEXT,
+  cara TEXT,
+  kandidat TEXT
+);
+INSERT INTO x_cust (customer_name) SELECT DISTINCT customer_name FROM x_so;
+
+DROP TABLE IF EXISTS pg_temp.x_cust_all;
+CREATE TEMP TABLE x_cust_all AS
+SELECT c.id, c.customer_no, c.customer_name, c.customer_type, c.is_active,
+       upper(btrim(c.customer_name)) AS nama_k,
+       regexp_replace(regexp_replace(upper(c.customer_name), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g') AS nama_n
+FROM public.customers c;
+
+DO $$
+DECLARE
+  r RECORD;
+  v_ids BIGINT[];
+  v_cara TEXT;
+  v_k TEXT;
+  v_n TEXT;
+  lvl INT;
+BEGIN
+  FOR r IN
+    SELECT c.customer_name, m.customer_no AS map_no
+    FROM x_cust c
+    LEFT JOIN x_cust_map m ON m.customer_name = upper(btrim(c.customer_name))
+  LOOP
+    v_ids := NULL;
+    v_k := upper(btrim(r.customer_name));
+    v_n := regexp_replace(regexp_replace(upper(r.customer_name), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g');
+    IF r.map_no IS NOT NULL THEN
+      SELECT array_agg(id ORDER BY id) INTO v_ids FROM x_cust_all WHERE btrim(customer_no) = btrim(r.map_no);
+      v_cara := 'CUSTOMER_MAP';
+    ELSE
+      FOR lvl IN 1..4 LOOP
+        SELECT array_agg(id ORDER BY id) INTO v_ids
+        FROM x_cust_all a
+        WHERE a.is_active
+          AND CASE WHEN lvl <= 2 THEN a.nama_k = v_k ELSE a.nama_n = v_n AND v_n <> '' END
+          AND (lvl IN (2, 4) OR a.customer_type IN ('non_consignment', 'both'));
+        v_cara := CASE lvl WHEN 1 THEN 'nama persis' WHEN 2 THEN 'nama persis, tipe consignment'
+                           WHEN 3 THEN 'nama mirip' ELSE 'nama mirip, tipe consignment' END;
+        EXIT WHEN v_ids IS NOT NULL;
+      END LOOP;
+    END IF;
+
+    IF array_length(v_ids, 1) = 1 THEN
+      UPDATE x_cust x
+      SET customer_id = a.id, customer_no = a.customer_no, db_name = a.customer_name, db_type = a.customer_type, cara = v_cara
+      FROM x_cust_all a
+      WHERE a.id = v_ids[1] AND x.customer_name = r.customer_name;
+    ELSIF v_ids IS NOT NULL THEN
+      UPDATE x_cust
+      SET cara = 'ambigu (' || v_cara || ')',
+          kandidat = (SELECT string_agg(a.customer_no || ' = ' || a.customer_name, ' || ' ORDER BY a.customer_no)
+                      FROM x_cust_all a WHERE a.id = ANY (v_ids))
+      WHERE customer_name = r.customer_name;
+    ELSE
+      UPDATE x_cust
+      SET cara = CASE WHEN r.map_no IS NOT NULL THEN 'CUSTOMER_MAP: customer_no ' || r.map_no || ' tidak ada' ELSE 'tidak ketemu' END,
+          kandidat = (SELECT string_agg(a.customer_no || ' = ' || a.customer_name || CASE WHEN a.is_active THEN '' ELSE ' (nonaktif)' END,
+                                        ' || ' ORDER BY a.customer_no)
+                      FROM x_cust_all a WHERE a.nama_n = v_n AND v_n <> '')
+      WHERE customer_name = r.customer_name;
+    END IF;
+  END LOOP;
+END $$;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Customer: nama Excel -> customer prod', c.customer_name,
+       c.customer_no || ' = ' || c.db_name || ' [' || c.cara || ', ' || count(x.*) || ' SO]'
+FROM x_cust c
+JOIN x_so x ON x.customer_name = c.customer_name
+WHERE c.customer_id IS NOT NULL
+GROUP BY c.customer_name, c.customer_no, c.db_name, c.cara;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Customer tipe consignment saja (tidak muncul di picker SO Reguler)', c.customer_name, c.customer_no || ' = ' || c.db_name
+FROM x_cust c
+WHERE c.customer_id IS NOT NULL AND c.db_type NOT IN ('non_consignment', 'both');
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP SO: customer ' || c.cara || ' (isi CUSTOMER_MAP di generator)', x.so_kode,
+       c.customer_name || COALESCE(' -> kandidat: ' || c.kandidat, '')
+FROM x_so x
+JOIN x_cust c ON c.customer_name = x.customer_name
+WHERE c.customer_id IS NULL;
+
+DELETE FROM x_so_item WHERE so_key IN (
+  SELECT x.so_key FROM x_so x JOIN x_cust c ON c.customer_name = x.customer_name WHERE c.customer_id IS NULL
+);
+DELETE FROM x_so WHERE customer_name IN (SELECT customer_name FROM x_cust WHERE customer_id IS NULL);
+

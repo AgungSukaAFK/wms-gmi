@@ -73,6 +73,8 @@ export default function ConsignmentSoPage() {
       .order(sortColumn || "created_at", {
         ascending: sortColumn ? sortDirRaw === "asc" : false,
       })
+      // Pemecah seri: SO hasil import punya created_at sama.
+      .order("id", { ascending: false })
       .range(from, from + limit - 1);
 
     if (!error) {

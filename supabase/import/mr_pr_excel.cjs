@@ -154,13 +154,14 @@ function readPrWms(file) {
 // tulisan. Format yang muncul: "PR-GMI-3451", "PR GMI-3663", "pr-gmi-3822",
 // "3550", "PR-GMI-3601, PR-GMI-3890", "PR-GMI-3573 > PR-GMI-3819" (revisi),
 // "PR-GMI-3680 & PR-GMI-3944 (WHS)", "PR-GMI-3601 / 3602". Teks tanpa nomor
-// ("WO", "Revisi PR", "IKUT MR HO ...") -> [].
+// ("WO", "Revisi PR", "IKUT MR HO ...") -> []. Nomor PR selalu 4 digit;
+// angka 5 digit seperti "46316" = tanggal Excel yang salah ketik -> [].
 function normalizePrCodes(v) {
   const s = clean(v);
   if (!s) return [];
-  if (/^\d{3,5}$/.test(s)) return [`PR-GMI-${s}`];
+  if (/^\d{4}$/.test(s)) return [`PR-GMI-${s}`];
   if (!/PR/i.test(s)) return [];
-  const nums = s.match(/\b\d{3,5}\b/g) || [];
+  const nums = s.match(/\b\d{4}\b/g) || [];
   return [...new Set(nums.map((n) => `PR-GMI-${n}`))];
 }
 

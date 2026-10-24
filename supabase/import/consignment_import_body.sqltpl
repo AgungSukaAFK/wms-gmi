@@ -1,0 +1,199 @@
+-- ---------------------------------------------------------------------
+-- 5. Barang yang belum ada: buat otomatis (nama = Deskripsi Barang Excel)
+-- ---------------------------------------------------------------------
+WITH missing AS (
+  SELECT DISTINCT ON (upper(btrim(s.part_number))) btrim(s.part_number) AS part_number,
+         COALESCE(NULLIF(btrim(s.part_name), ''), btrim(s.part_number)) AS part_name,
+         COALESCE(NULLIF(btrim(s.satuan), ''), 'EA') AS satuan
+  FROM x_so_item s
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(s.part_number)))
+  ORDER BY upper(btrim(s.part_number)), (s.part_name IS NULL), s.excel_row
+),
+ins AS (
+  INSERT INTO public.barang (part_number, part_name, part_satuan)
+  SELECT part_number, part_name, satuan FROM missing
+  ON CONFLICT (part_number) DO NOTHING
+  RETURNING part_number, part_name, part_satuan
+)
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang baru dibuat (cek nama & satuan di halaman Barang)', part_number, part_name || ' (' || part_satuan || ')'
+FROM ins;
+
+-- Barang master per part number (huruf besar/kecil diabaikan).
+DROP TABLE IF EXISTS pg_temp.x_part;
+CREATE TEMP TABLE x_part AS
+SELECT DISTINCT ON (k) k, b.id, b.part_number, b.part_name, b.part_satuan
+FROM (SELECT DISTINCT upper(btrim(part_number)) AS k, part_number AS raw FROM x_so_item) s
+JOIN public.barang b ON upper(btrim(b.part_number)) = s.k
+ORDER BY k, (b.part_number = s.raw) DESC, b.id;
+
+-- ---------------------------------------------------------------------
+-- 6. ID dialokasikan dulu -> baris Excel terhubung pasti ke barang SO & IK
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_so_map;
+CREATE TEMP TABLE x_so_map AS
+SELECT so_key, nextval(pg_get_serial_sequence('public.consignment_so', 'id')) AS so_id
+FROM (SELECT so_key FROM x_so ORDER BY so_tanggal_input, so_no) s;
+
+DROP TABLE IF EXISTS pg_temp.x_item_map;
+CREATE TEMP TABLE x_item_map AS
+SELECT excel_row, nextval(pg_get_serial_sequence('public.consignment_so_items', 'id')) AS item_id
+FROM (SELECT i.excel_row FROM x_so_item i JOIN x_so x ON x.so_key = i.so_key ORDER BY x.so_tanggal_input, x.so_no, i.line_no) s;
+
+DROP TABLE IF EXISTS pg_temp.x_ik_map;
+CREATE TEMP TABLE x_ik_map AS
+SELECT ik_key, nextval(pg_get_serial_sequence('public.consignment_ik', 'id')) AS ik_id
+FROM (SELECT ik_key FROM x_ik ORDER BY ik_tanggal, ik_kode) s;
+
+-- ---------------------------------------------------------------------
+-- 7. SO Consignment + barang SO
+-- ---------------------------------------------------------------------
+INSERT INTO public.consignment_so (
+  id, so_no, so_tanggal_input, tgl_po_email_marketing, tgl_po_customer, due_date, no_po,
+  customer_id, site, site_id, created_by, so_is_import
+)
+SELECT m.so_id, x.so_no, x.so_tanggal_input, x.tgl_po_email_marketing, x.tgl_po_customer, x.due_date, x.no_po,
+       c.customer_id, s.site_name, s.site_id, pic.id, true
+FROM x_so x
+JOIN x_so_map m ON m.so_key = x.so_key
+JOIN x_cust c ON c.customer_name = x.customer_name
+JOIN x_site s ON s.so_key = x.so_key
+CROSS JOIN x_pic pic
+ORDER BY m.so_id;
+
+INSERT INTO public.consignment_so_items (id, so_id, part_id, part_number, part_name, satuan, part_number_customer, qty)
+-- Satuan = UoM Excel (satuan pesanan customer); master hanya kalau Excel kosong.
+SELECT im.item_id, m.so_id, p.id, p.part_number, p.part_name,
+       COALESCE(NULLIF(btrim(i.satuan), ''), NULLIF(btrim(p.part_satuan), ''), 'EA'),
+       i.part_number_customer, i.qty
+FROM x_so_item i
+JOIN x_item_map im ON im.excel_row = i.excel_row
+JOIN x_so_map m ON m.so_key = i.so_key
+JOIN x_part p ON p.k = upper(btrim(i.part_number))
+ORDER BY im.item_id;
+
+-- ---------------------------------------------------------------------
+-- 8. IK import (tujuan = site customer SO) + barang IK
+-- ---------------------------------------------------------------------
+INSERT INTO public.consignment_ik (
+  id, ik_kode, ik_tanggal, so_id, dari_cabang_id, ke_cabang_id, ke_site_id, ke_site_name,
+  no_awb, no_po, remarks, created_by, ik_is_import
+)
+SELECT km.ik_id, k.ik_kode, k.ik_tanggal, m.so_id, g.cabang_id, NULL, s.site_id, s.site_name,
+       NULL, x.no_po, k.remarks, pic.id, true
+FROM x_ik k
+JOIN x_ik_map km ON km.ik_key = k.ik_key
+JOIN x_so x ON x.so_key = k.so_key
+JOIN x_so_map m ON m.so_key = k.so_key
+JOIN x_site s ON s.so_key = k.so_key
+JOIN x_gudang g ON g.gudang_k = upper(btrim(k.gudang))
+CROSS JOIN x_pic pic
+ORDER BY km.ik_id;
+
+INSERT INTO public.consignment_ik_items (ik_id, so_item_id, part_id, part_number, part_name, part_number_customer, satuan, qty)
+SELECT km.ik_id, si.id, si.part_id, si.part_number, si.part_name, si.part_number_customer, si.satuan, ki.qty
+FROM x_ik_item ki
+JOIN x_ik_map km ON km.ik_key = ki.ik_key
+JOIN x_item_map im ON im.excel_row = ki.excel_row
+JOIN public.consignment_so_items si ON si.id = im.item_id
+ORDER BY km.ik_id, ki.excel_row;
+
+-- ---------------------------------------------------------------------
+-- 9. Stok: IK memotong stok gudang asal (boleh minus) + stock_movements
+--    type IK per barang IK (pola sama dengan createConsignmentIk).
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_stok_line;
+CREATE TEMP TABLE x_stok_line AS
+SELECT ii.part_id, ik.dari_cabang_id AS cabang_id, ii.qty, ik.ik_kode, ik.ik_tanggal, ik.ke_site_name, ii.part_number, ii.part_name
+FROM x_ik_stok ks
+JOIN x_ik_map km ON km.ik_key = ks.ik_key
+JOIN public.consignment_ik ik ON ik.id = km.ik_id
+JOIN public.consignment_ik_items ii ON ii.ik_id = ik.id;
+
+DROP TABLE IF EXISTS pg_temp.x_stok_before;
+CREATE TEMP TABLE x_stok_before AS
+SELECT l.part_id, l.cabang_id, sum(l.qty) AS qty_keluar, COALESCE(min(st.qty), 0) AS qty_sebelum
+FROM x_stok_line l
+LEFT JOIN public.stock st ON st.part_id = l.part_id AND st.cabang_id = l.cabang_id
+GROUP BY l.part_id, l.cabang_id;
+
+INSERT INTO public.stock (part_id, cabang_id, qty)
+SELECT part_id, cabang_id, -qty_keluar
+FROM x_stok_before
+ON CONFLICT (part_id, cabang_id)
+DO UPDATE SET qty = public.stock.qty + EXCLUDED.qty, updated_at = now();
+
+INSERT INTO public.stock_movements (part_id, cabang_id, qty_change, type, reference_id, notes, created_by)
+SELECT l.part_id, l.cabang_id, -l.qty, 'IK', l.ik_kode,
+       'IK ' || l.ik_kode || ' (import riwayat ERP, tgl kirim ' || l.ik_tanggal || '): ' || l.part_number || ' ' || l.part_name
+         || ' dikirim ke site ' || COALESCE(l.ke_site_name, '-') || ' (consignment)',
+       (SELECT id FROM x_pic)
+FROM x_stok_line l
+ORDER BY l.ik_tanggal, l.ik_kode, l.part_number;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Stok dipotong IK import: gudang asal', cb.nama_cabang,
+       count(*) || ' barang, qty ' || sum(b.qty_keluar) || '; jadi minus ' || count(*) FILTER (WHERE b.qty_sebelum - b.qty_keluar < 0)
+         || ' barang (total ' || COALESCE(sum(LEAST(b.qty_sebelum - b.qty_keluar, 0)) FILTER (WHERE b.qty_sebelum - b.qty_keluar < 0), 0) || ')'
+FROM x_stok_before b JOIN public.cabang cb ON cb.id = b.cabang_id
+GROUP BY cb.nama_cabang;
+
+-- ---------------------------------------------------------------------
+-- 10. Sanity check -- gagal = seluruh import dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_n BIGINT;
+  v_bad TEXT;
+BEGIN
+  IF (SELECT count(*) FROM public.consignment_so d JOIN x_so_map m ON m.so_id = d.id) <> (SELECT count(*) FROM x_so) THEN
+    RAISE EXCEPTION 'SO tersimpan <> sumber (%)', (SELECT count(*) FROM x_so);
+  END IF;
+  SELECT count(*) INTO v_n FROM public.consignment_so_items si JOIN x_item_map m ON m.item_id = si.id;
+  IF v_n <> (SELECT count(*) FROM x_so_item) THEN
+    RAISE EXCEPTION 'Barang SO tersimpan (%) <> sumber (%)', v_n, (SELECT count(*) FROM x_so_item);
+  END IF;
+  SELECT count(*) INTO v_n FROM public.consignment_ik d JOIN x_ik_map m ON m.ik_id = d.id;
+  IF v_n <> (SELECT count(*) FROM x_ik) THEN
+    RAISE EXCEPTION 'IK tersimpan (%) <> sumber (%)', v_n, (SELECT count(*) FROM x_ik);
+  END IF;
+  SELECT count(*) INTO v_n FROM public.consignment_ik_items ii JOIN x_ik_map m ON m.ik_id = ii.ik_id;
+  IF v_n <> (SELECT count(*) FROM x_ik_item) THEN
+    RAISE EXCEPTION 'Barang IK tersimpan (%) <> sumber (%)', v_n, (SELECT count(*) FROM x_ik_item);
+  END IF;
+  IF EXISTS (SELECT 1 FROM x_ik_map m WHERE NOT EXISTS (SELECT 1 FROM public.consignment_ik_items ii WHERE ii.ik_id = m.ik_id)) THEN
+    RAISE EXCEPTION 'Ada IK import tanpa barang';
+  END IF;
+  -- Qty kirim per baris Excel = total qty IK barang SO itu.
+  SELECT string_agg(e.excel_row::text, ', ') INTO v_bad
+  FROM (SELECT excel_row, sum(qty) AS qty FROM x_ik_item GROUP BY excel_row) e
+  JOIN x_item_map im ON im.excel_row = e.excel_row
+  LEFT JOIN (SELECT so_item_id, sum(qty) AS qty FROM public.consignment_ik_items GROUP BY so_item_id) d ON d.so_item_id = im.item_id
+  WHERE d.qty IS DISTINCT FROM e.qty;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Qty IK per barang SO beda dengan Excel, baris: %', left(v_bad, 500);
+  END IF;
+  SELECT -COALESCE(sum(qty_change), 0) INTO v_n
+  FROM public.stock_movements
+  WHERE type = 'IK' AND reference_id IN (SELECT ik_kode FROM x_stok_line);
+  IF v_n <> (SELECT COALESCE(sum(qty), 0) FROM x_stok_line) THEN
+    RAISE EXCEPTION 'Stock movement IK (%) <> qty IK yang memotong stok (%)', v_n, (SELECT sum(qty) FROM x_stok_line);
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ---------------------------------------------------------------------
+-- HASIL
+-- ---------------------------------------------------------------------
+SELECT kategori, count(*) AS jumlah,
+       left(string_agg(NULLIF(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ''), ', ' ORDER BY ref, detail), 1000) AS contoh
+FROM (
+  SELECT kategori, ref, detail FROM x_report
+  UNION ALL SELECT 'SO Consignment dibuat', x.so_no, NULL FROM x_so x
+  UNION ALL SELECT 'Barang SO dibuat', NULL, NULL FROM x_so_item
+  UNION ALL SELECT 'IK import dibuat', k.ik_kode, NULL FROM x_ik k
+  UNION ALL SELECT 'Barang IK dibuat', NULL, NULL FROM x_ik_item
+) r
+GROUP BY kategori
+ORDER BY kategori;

@@ -258,6 +258,9 @@ export async function getConsignmentDashboardReport(params?: {
   } else {
     query = query.order("created_at", { ascending: false });
   }
+  // Pemecah seri: SO hasil import punya created_at sama -> tanpa ini isi
+  // halaman bisa dobel / terlewat.
+  query = query.order("so_id", { ascending: false }).order("item_id", { ascending: true });
 
   if (params?.search) {
     query = query.or(
@@ -467,6 +470,8 @@ type PerfIkRow = {
   ik_tanggal: string;
   no_awb: string | null;
   so: { so_no: string | null; customer: { customer_name: string | null } | null } | null;
+  ik_is_import: boolean;
+  ke_site_name: string | null;
   cabang_tujuan: { nama_cabang: string | null } | null;
   consignment_ik_items: { qty: number }[] | null;
 };
@@ -535,7 +540,7 @@ export async function getConsignmentPerformanceReport(params?: {
         supabase
           .from("consignment_ik")
           .select(
-            "id, ik_kode, ik_tanggal, no_awb, so:consignment_so(so_no, customer:customers!customer_id(customer_name)), cabang_tujuan:cabang!consignment_ik_ke_cabang_id_fkey(nama_cabang), consignment_ik_items(qty)",
+            "id, ik_kode, ik_tanggal, no_awb, ik_is_import, ke_site_name, so:consignment_so(so_no, customer:customers!customer_id(customer_name)), cabang_tujuan:cabang!consignment_ik_ke_cabang_id_fkey(nama_cabang), consignment_ik_items(qty)",
           )
           .order("id", { ascending: true })
           .range(from, to),
@@ -735,14 +740,15 @@ export async function getConsignmentPerformanceReport(params?: {
       trend[ti].ik += 1;
       trend[ti].qty_ik += qty;
     }
-    if (!confirmedIk.has(ik.id)) {
+    // IK import (riwayat ERP) tidak perlu konfirmasi penerimaan.
+    if (!confirmedIk.has(ik.id) && !ik.ik_is_import) {
       pending.push({
         ik_id: ik.id,
         ik_kode: ik.ik_kode,
         ik_tanggal: date,
         so_no: ik.so?.so_no ?? null,
         customer_name: ik.so?.customer?.customer_name ?? null,
-        gudang_tujuan: ik.cabang_tujuan?.nama_cabang ?? null,
+        gudang_tujuan: ik.ke_site_name ?? ik.cabang_tujuan?.nama_cabang ?? null,
         no_awb: ik.no_awb,
         total_qty: qty,
         age_days: Math.max(diffDays(date, today), 0),

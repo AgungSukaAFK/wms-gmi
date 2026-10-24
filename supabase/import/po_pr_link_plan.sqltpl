@@ -1,0 +1,162 @@
+-- ---------------------------------------------------------------------
+-- RENCANA LINK item PO Outstanding -> item PR (read-only, temp table saja)
+-- Aturan (keputusan user 2026-10-23):
+--   - Kandidat: item PO Outstanding (PO tidak ditolak) yang belum ter-link
+--     PR dan punya referensi PR di po_items.ost_pr_ref (PR-GMI-xxxx).
+--   - Item yang sudah punya RI langsung di WMS (bukan RI import) DIKUNCI,
+--     sama seperti panel PO Outstanding (bisa bikin qty MR dobel).
+--   - Tujuan: item PR dengan part sama, PR berstatus approved / closed /
+--     completed, item PR tidak ditolak, masih ada sisa qty belum ter-PO.
+--     Urutan PR mengikuti urutan referensi; satu item PR maksimal satu item
+--     per PO (aturan panel).
+--   - Item belum diterima: qty > sisa PR -> item dipecah (bagian ter-link =
+--     sisa PR, sisanya lanjut ke item PR berikutnya / dibiarkan tanpa link).
+--   - Item sudah diterima (RI import): di-link utuh tanpa dipecah (RI-nya
+--     tidak bisa dibagi), walau melebihi sisa PR.
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.l_report;
+DROP TABLE IF EXISTS pg_temp.l_cand;
+DROP TABLE IF EXISTS pg_temp.l_rem;
+DROP TABLE IF EXISTS pg_temp.l_plan;
+DROP TABLE IF EXISTS pg_temp.l_left;
+
+CREATE TEMP TABLE l_report (kategori TEXT NOT NULL, ref TEXT, detail TEXT);
+
+CREATE TEMP TABLE l_cand AS
+SELECT pi.id AS po_item_id, pi.po_id, btrim(p.po_kode) AS po_kode, p.po_tanggal,
+       pi.part_id, pi.part_number, pi.qty, pi.qty_received, pi.ost_pr_ref,
+       -- Nomor PR di referensi, unik, urut sesuai tulisan.
+       ARRAY(
+         SELECT k FROM (
+           SELECT 'PR-GMI-' || m[1] AS k, min(o) AS o
+           FROM regexp_matches(pi.ost_pr_ref, 'PR[[:space:]-]*GMI[[:space:]-]*([0-9]{4})', 'gi') WITH ORDINALITY AS t(m, o)
+           GROUP BY 1
+         ) r ORDER BY o
+       ) AS refs,
+       (pi.qty_received > 0 OR EXISTS (
+          SELECT 1 FROM public.receive_items ri JOIN public.receives r ON r.id = ri.ri_id
+          WHERE ri.po_item_id = pi.id AND r.ri_status::text <> 'rejected')) AS received,
+       EXISTS (
+          SELECT 1 FROM public.receive_items ri JOIN public.receives r ON r.id = ri.ri_id
+          WHERE ri.po_item_id = pi.id AND r.ri_status::text <> 'rejected' AND NOT r.ri_is_import) AS locked
+FROM public.po_items pi
+JOIN public.pos p ON p.id = pi.po_id
+WHERE p.po_is_outstanding AND p.po_status::text <> 'rejected'
+  AND pi.pr_item_id IS NULL AND pi.ost_pr_ref IS NOT NULL AND pi.qty > 0;
+
+-- Sisa qty item PR yang belum ter-PO (rumus = fetchPrItemPoCoverage).
+CREATE TEMP TABLE l_rem AS
+WITH conv AS (
+  SELECT pi.pr_item_id, sum(pi.qty) AS q
+  FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+  WHERE pi.pr_item_id IS NOT NULL AND p.po_status::text <> 'rejected'
+  GROUP BY pi.pr_item_id
+  UNION ALL
+  SELECT l.pr_item_id, sum(l.qty_pr)
+  FROM public.po_item_pr_links l
+  JOIN public.po_items pi ON pi.id = l.po_item_id
+  JOIN public.pos p ON p.id = pi.po_id
+  WHERE p.po_status::text <> 'rejected'
+  GROUP BY l.pr_item_id
+)
+SELECT pri.id AS pr_item_id, pri.pr_id, pri.mr_id, pri.part_id, pri.qty AS pr_qty,
+       upper(btrim(pr.pr_kode)) AS pr_key, pr.pr_kode, pr.pr_status::text AS pr_status,
+       pri.qty - COALESCE((SELECT sum(q) FROM conv WHERE conv.pr_item_id = pri.id), 0) AS rem
+FROM public.pr_items pri
+JOIN public.prs pr ON pr.id = pri.pr_id
+WHERE lower(COALESCE(pri.status::text, '')) <> 'rejected'
+  AND pr.pr_status::text IN ('approved', 'closed', 'completed')
+  AND upper(btrim(pr.pr_kode)) IN (SELECT DISTINCT unnest(refs) FROM l_cand);
+
+CREATE TEMP TABLE l_plan (
+  po_item_id BIGINT NOT NULL,
+  po_id BIGINT NOT NULL,
+  seq INT NOT NULL,
+  pr_item_id BIGINT NOT NULL,
+  pr_id BIGINT NOT NULL,
+  mr_id BIGINT,
+  qty INT NOT NULL,
+  rem_sebelum INT NOT NULL,
+  received BOOLEAN NOT NULL,
+  PRIMARY KEY (po_item_id, seq)
+);
+CREATE TEMP TABLE l_left (po_item_id BIGINT PRIMARY KEY, qty INT NOT NULL);
+
+DO $$
+DECLARE
+  c RECORD;
+  r RECORD;
+  v_code TEXT;
+  v_left INT;
+  v_take INT;
+  v_seq INT;
+BEGIN
+  FOR c IN SELECT * FROM l_cand WHERE NOT locked ORDER BY po_tanggal, po_kode, po_item_id LOOP
+    v_left := c.qty;
+    v_seq := 0;
+    FOREACH v_code IN ARRAY c.refs LOOP
+      EXIT WHEN v_left <= 0;
+      FOR r IN
+        SELECT * FROM l_rem x
+        WHERE x.pr_key = v_code AND x.part_id = c.part_id AND x.rem > 0
+          AND NOT EXISTS (SELECT 1 FROM public.po_items o WHERE o.po_id = c.po_id AND o.pr_item_id = x.pr_item_id)
+          AND NOT EXISTS (SELECT 1 FROM l_plan lp WHERE lp.po_id = c.po_id AND lp.pr_item_id = x.pr_item_id)
+        ORDER BY x.pr_item_id
+      LOOP
+        EXIT WHEN v_left <= 0;
+        -- Item sudah diterima tidak dipecah: link utuh ke item PR pertama.
+        v_take := CASE WHEN c.received THEN v_left ELSE LEAST(v_left, r.rem) END;
+        v_seq := v_seq + 1;
+        INSERT INTO l_plan VALUES (c.po_item_id, c.po_id, v_seq, r.pr_item_id, r.pr_id, r.mr_id, v_take, r.rem, c.received);
+        UPDATE l_rem SET rem = rem - v_take WHERE pr_item_id = r.pr_item_id;
+        v_left := v_left - v_take;
+      END LOOP;
+    END LOOP;
+    IF v_seq > 0 AND v_left > 0 THEN
+      INSERT INTO l_left VALUES (c.po_item_id, v_left);
+    END IF;
+  END LOOP;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- Catatan rencana
+-- ---------------------------------------------------------------------
+INSERT INTO l_report (kategori, ref, detail)
+SELECT CASE
+         WHEN p.received AND p.qty > p.rem_sebelum THEN 'Link: item sudah diterima, utuh melebihi sisa PR'
+         WHEN p.received THEN 'Link: item sudah diterima (RI import), utuh'
+         WHEN n.n > 1 OR lf.qty IS NOT NULL THEN 'Link: item dipecah (qty PO > sisa PR)'
+         ELSE 'Link: item belum diterima, utuh'
+       END,
+       c.po_kode,
+       c.part_number || ' qty ' || p.qty || ' -> ' || x.pr_kode
+FROM l_plan p
+JOIN l_cand c ON c.po_item_id = p.po_item_id
+JOIN l_rem x ON x.pr_item_id = p.pr_item_id
+JOIN (SELECT po_item_id, count(*) AS n FROM l_plan GROUP BY po_item_id) n ON n.po_item_id = p.po_item_id
+LEFT JOIN l_left lf ON lf.po_item_id = p.po_item_id;
+
+INSERT INTO l_report (kategori, ref, detail)
+SELECT 'Sisa item dipecah yang tetap tanpa link PR', c.po_kode, c.part_number || ' qty ' || lf.qty
+FROM l_left lf JOIN l_cand c ON c.po_item_id = lf.po_item_id;
+
+-- Kandidat yang tidak dapat link, dengan alasan pertama yang berlaku.
+INSERT INTO l_report (kategori, ref, detail)
+SELECT 'Tidak di-link: ' || alasan, po_kode, part_number || ' (' || ost_pr_ref || ')'
+FROM (
+  SELECT c.*,
+         CASE
+           WHEN c.locked THEN 'sudah ada RI langsung di WMS (dikunci)'
+           WHEN cardinality(c.refs) = 0 THEN 'referensi bukan nomor PR-GMI-xxxx'
+           WHEN NOT EXISTS (SELECT 1 FROM public.prs pr WHERE upper(btrim(pr.pr_kode)) = ANY (c.refs))
+             THEN 'PR rujukan tidak ada di WMS'
+           WHEN NOT EXISTS (SELECT 1 FROM l_rem x WHERE x.pr_key = ANY (c.refs))
+             THEN 'PR rujukan berstatus ' || (SELECT string_agg(DISTINCT pr.pr_status::text, '/') FROM public.prs pr
+                                               WHERE upper(btrim(pr.pr_kode)) = ANY (c.refs))
+           WHEN NOT EXISTS (SELECT 1 FROM l_rem x WHERE x.pr_key = ANY (c.refs) AND x.part_id = c.part_id)
+             THEN 'barang tidak ada di PR rujukan'
+           ELSE 'item PR rujukan sudah ter-PO penuh'
+         END AS alasan
+  FROM l_cand c
+  WHERE NOT EXISTS (SELECT 1 FROM l_plan p WHERE p.po_item_id = c.po_item_id)
+) t;

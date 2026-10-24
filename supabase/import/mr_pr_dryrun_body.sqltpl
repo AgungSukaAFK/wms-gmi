@@ -1,0 +1,92 @@
+-- ---------------------------------------------------------------------
+-- DRY-RUN: ringkasan rencana import (tidak ada data yang ditulis)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_dry;
+CREATE TEMP TABLE x_dry (no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+INSERT INTO x_dry
+SELECT 0, '0. Dry-run', 'Tidak ada data yang diubah -- ini simulasi mr_pr_import.sql', NULL, NULL;
+
+INSERT INTO x_dry
+SELECT 101, '1. Master', 'PIC MR & PR import', nama, NULL FROM x_pic;
+
+INSERT INTO x_dry
+SELECT 102, '1. Master', 'Barang baru yang akan dibuat', count(*)::text,
+       left(string_agg(part_number || ' (' || COALESCE(part_name, '-') || ')', ', ' ORDER BY part_number), 600)
+FROM (
+  SELECT DISTINCT ON (upper(btrim(part_number))) btrim(part_number) AS part_number, part_name
+  FROM (SELECT part_number, part_name, excel_row FROM x_mr_item UNION ALL SELECT part_number, part_name, excel_row FROM x_pr_item) s
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(s.part_number)))
+  ORDER BY upper(btrim(part_number)), (part_name IS NULL), excel_row
+) t;
+
+INSERT INTO x_dry
+SELECT 201, '2. MR', 'MR akan dibuat (approved / completed / rejected)',
+       count(*) || ' (' || count(*) FILTER (WHERE mr_status = 'approved') || ' / '
+         || count(*) FILTER (WHERE mr_status = 'completed') || ' / ' || count(*) FILTER (WHERE mr_status = 'rejected') || ')',
+       NULL
+FROM x_mr;
+
+INSERT INTO x_dry
+SELECT 202, '2. MR', 'MR di-skip karena sudah ada di prod (approved / completed / rejected)',
+       count(*) || ' (' || count(*) FILTER (WHERE mr_status = 'approved') || ' / '
+         || count(*) FILTER (WHERE mr_status = 'completed') || ' / ' || count(*) FILTER (WHERE mr_status = 'rejected') || ')',
+       left(string_agg(mr_kode, ', ' ORDER BY mr_kode), 400)
+FROM x_mr_skip;
+
+INSERT INTO x_dry
+SELECT 203, '2. MR', 'Barang MR akan dibuat: total / ditolak / ada qty historis / share stock (+gudang / tanpa gudang)',
+       count(*) || ' / ' || count(*) FILTER (WHERE item_status = 'rejected') || ' / '
+         || count(*) FILTER (WHERE qty_received_import > 0) || ' / '
+         || count(*) FILTER (WHERE qty_share > 0) || ' (' || count(*) FILTER (WHERE qty_share > 0 AND alloc_cabang IS NOT NULL)
+         || ' / ' || count(*) FILTER (WHERE qty_share > 0 AND alloc_cabang IS NULL) || ')',
+       NULL
+FROM x_mr_item;
+
+INSERT INTO x_dry
+SELECT 204, '2. MR', 'MR akan dibuat per lokasi', NULL, string_agg(cabang || ': ' || n, ' | ' ORDER BY n DESC)
+FROM (SELECT cabang, count(*) AS n FROM x_mr GROUP BY cabang) t;
+
+INSERT INTO x_dry
+SELECT 301, '3. PR', 'PR akan dibuat (approved / closed), baris barang',
+       count(*) || ' (' || count(*) FILTER (WHERE pr_status = 'approved') || ' / ' || count(*) FILTER (WHERE pr_status = 'closed') || ')',
+       (SELECT count(*) FROM x_pr_item) || ' baris barang'
+FROM x_pr;
+
+INSERT INTO x_dry
+SELECT 302, '3. PR', 'PR di-skip karena sudah ada di prod', count(*)::text,
+       left(string_agg(pr_kode || ' (' || db_status || ')', ', ' ORDER BY pr_kode), 600)
+FROM x_pr_skip;
+
+INSERT INTO x_dry
+SELECT 401, '4. Tautan', 'Baris PR menempel ke: MR import / MR prod / MR penampung',
+       count(*) FILTER (WHERE via = 'import') || ' / ' || count(*) FILTER (WHERE via = 'prod') || ' / ' || count(*) FILTER (WHERE via = 'penampung'),
+       count(DISTINCT pr_kode) FILTER (WHERE via = 'penampung') || ' MR penampung; '
+         || count(DISTINCT mr_id) FILTER (WHERE via = 'prod') || ' MR prod dapat baris PR baru'
+FROM x_pr_item;
+
+-- Barang MR import yang akan muncul di form Buat PR: jatah PR dikurangi qty
+-- baris PR import yang menempel.
+INSERT INTO x_dry
+SELECT 501, '5. Dampak', 'Barang MR import yang akan muncul di form Buat PR (jatah PR belum ter-PR)',
+       count(*) || ' barang, qty ' || COALESCE(sum(sisa), 0),
+       left(string_agg(mr_kode || ':' || part_number || ' (' || sisa || ')', ', ' ORDER BY sisa DESC), 400)
+FROM (
+  SELECT m.mr_kode, i.part_number,
+         i.qty_pr - COALESCE((SELECT sum(p.qty) FROM x_pr_item p
+                              WHERE p.via = 'import' AND p.mr_key = i.mr_key AND p.mr_line = i.line_no), 0) AS sisa
+  FROM x_mr_item i JOIN x_mr m ON m.mr_key = i.mr_key
+  WHERE m.mr_status = 'approved' AND i.item_status = 'active'
+) t
+WHERE sisa > 0;
+
+-- Semua catatan rencana (skip, penyesuaian, tautan, dll).
+INSERT INTO x_dry
+SELECT 900 + row_number() OVER (ORDER BY kategori), '9. Catatan', kategori, count(*)::text,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 600)
+FROM x_report
+GROUP BY kategori;
+
+SELECT no, kelompok, cek, nilai, contoh
+FROM x_dry
+ORDER BY no;

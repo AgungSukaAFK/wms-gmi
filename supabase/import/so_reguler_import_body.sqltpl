@@ -1,0 +1,113 @@
+-- ---------------------------------------------------------------------
+-- 3. Barang yang belum ada: buat otomatis (nama = Part Name Excel)
+-- ---------------------------------------------------------------------
+WITH missing AS (
+  SELECT DISTINCT ON (upper(btrim(s.part_number))) btrim(s.part_number) AS part_number,
+         COALESCE(NULLIF(btrim(s.part_name), ''), btrim(s.part_number)) AS part_name,
+         COALESCE(NULLIF(btrim(s.satuan), ''), 'EA') AS satuan
+  FROM x_so_item s
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(s.part_number)))
+  ORDER BY upper(btrim(s.part_number)), (s.part_name IS NULL), s.so_key, s.line_no
+),
+ins AS (
+  INSERT INTO public.barang (part_number, part_name, part_satuan)
+  SELECT part_number, part_name, satuan FROM missing
+  ON CONFLICT (part_number) DO NOTHING
+  RETURNING part_number, part_name, part_satuan
+)
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang baru dibuat (cek nama & satuan di halaman Barang)', part_number, part_name || ' (' || part_satuan || ')'
+FROM ins;
+
+-- Barang master per part number (huruf besar/kecil diabaikan).
+DROP TABLE IF EXISTS pg_temp.x_part;
+CREATE TEMP TABLE x_part AS
+SELECT DISTINCT ON (k) k, b.id, b.part_number, b.part_name, b.part_satuan
+FROM (SELECT DISTINCT upper(btrim(part_number)) AS k, part_number AS raw FROM x_so_item) s
+JOIN public.barang b ON upper(btrim(b.part_number)) = s.k
+ORDER BY k, (b.part_number = s.raw) DESC, b.id;
+
+-- ---------------------------------------------------------------------
+-- 4. SO + barang SO
+-- ---------------------------------------------------------------------
+INSERT INTO public.so_reguler (
+  so_kode, so_tanggal, so_due_date, kategori, customer_id,
+  customer_po_no, customer_po_date, customer_po_received_date, marketing_name,
+  so_pic, so_pic_id, remarks, so_status, created_by, so_is_import
+)
+SELECT x.so_kode, x.so_tanggal, x.so_due_date, x.kategori, c.customer_id,
+       x.customer_po_no, x.customer_po_date, x.customer_po_received_date, x.marketing_name,
+       pic.nama, pic.id, x.remarks, 'open', pic.id, true
+FROM x_so x
+JOIN x_cust c ON c.customer_name = x.customer_name
+CROSS JOIN x_pic pic
+ORDER BY x.so_tanggal, x.so_kode;
+
+DROP TABLE IF EXISTS pg_temp.x_so_map;
+CREATE TEMP TABLE x_so_map AS
+SELECT x.so_key, d.id AS so_id
+FROM x_so x
+JOIN public.so_reguler d ON d.so_kode = x.so_kode AND d.so_is_import;
+
+INSERT INTO public.so_reguler_items (so_id, part_id, part_number, part_name, satuan, qty, item_priority, remarks)
+-- Satuan = UoM Excel (satuan pesanan customer); master hanya kalau Excel kosong.
+SELECT m.so_id, p.id, p.part_number, p.part_name, COALESCE(NULLIF(btrim(i.satuan), ''), NULLIF(btrim(p.part_satuan), ''), 'EA'),
+       i.qty, 'P3', i.remarks
+FROM x_so_item i
+JOIN x_so_map m ON m.so_key = i.so_key
+JOIN x_part p ON p.k = upper(btrim(i.part_number))
+ORDER BY i.so_key, i.line_no;
+
+-- ---------------------------------------------------------------------
+-- 5. Sanity check -- gagal = seluruh import dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_n BIGINT;
+  v_bad TEXT;
+BEGIN
+  IF (SELECT count(*) FROM x_so_map) <> (SELECT count(*) FROM x_so) THEN
+    RAISE EXCEPTION 'SO tersimpan (%) <> sumber (%)', (SELECT count(*) FROM x_so_map), (SELECT count(*) FROM x_so);
+  END IF;
+  SELECT count(*) INTO v_n
+  FROM public.so_reguler_items si JOIN x_so_map m ON m.so_id = si.so_id;
+  IF v_n <> (SELECT count(*) FROM x_so_item) THEN
+    RAISE EXCEPTION 'Barang SO tersimpan (%) <> sumber (%)', v_n, (SELECT count(*) FROM x_so_item);
+  END IF;
+  IF EXISTS (SELECT 1 FROM x_so_map m WHERE NOT EXISTS (SELECT 1 FROM public.so_reguler_items si WHERE si.so_id = m.so_id)) THEN
+    RAISE EXCEPTION 'Ada SO import tanpa barang';
+  END IF;
+  -- Edit SO (update_so_reguler) menolak barang dobel & deadline < tanggal SO.
+  SELECT string_agg(k, ', ') INTO v_bad FROM (
+    SELECT min(s.so_kode || ':' || si.part_number) AS k
+    FROM public.so_reguler_items si
+    JOIN x_so_map m ON m.so_id = si.so_id
+    JOIN public.so_reguler s ON s.id = si.so_id
+    GROUP BY si.so_id, si.part_id HAVING count(*) > 1
+  ) d;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Barang dobel dalam 1 SO: %', v_bad;
+  END IF;
+  SELECT string_agg(s.so_kode, ', ') INTO v_bad
+  FROM public.so_reguler s JOIN x_so_map m ON m.so_id = s.id
+  WHERE s.so_due_date < s.so_tanggal
+     OR s.customer_po_received_date < s.customer_po_date;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Tanggal SO tidak lolos validasi Edit SO: %', v_bad;
+  END IF;
+END $$;
+
+COMMIT;
+
+-- ---------------------------------------------------------------------
+-- HASIL
+-- ---------------------------------------------------------------------
+SELECT kategori, count(*) AS jumlah,
+       left(string_agg(NULLIF(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ''), ', ' ORDER BY ref, detail), 1000) AS contoh
+FROM (
+  SELECT kategori, ref, detail FROM x_report
+  UNION ALL SELECT 'SO dibuat (' || x.kategori || ')', x.so_kode, NULL FROM x_so x
+  UNION ALL SELECT 'Barang SO dibuat', NULL, NULL FROM x_so_item
+) r
+GROUP BY kategori
+ORDER BY kategori;

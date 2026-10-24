@@ -1,0 +1,166 @@
+-- ---------------------------------------------------------------------
+-- VERIFIKASI: SO import di DB vs data Excel (x_so / x_so_item)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_chk;
+CREATE TEMP TABLE x_chk (no INT PRIMARY KEY, status TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+-- SO di DB per No SO Excel (utamakan hasil import).
+DROP TABLE IF EXISTS pg_temp.x_db;
+CREATE TEMP TABLE x_db AS
+SELECT DISTINCT ON (x.so_key) x.so_key, d.id AS so_id, d.so_kode, d.so_is_import, d.so_status, d.so_revision,
+       d.so_tanggal, d.so_due_date, d.kategori, d.customer_id, d.customer_po_no, d.customer_po_date,
+       d.customer_po_received_date, d.marketing_name
+FROM x_so x
+JOIN public.so_reguler d ON upper(btrim(d.so_kode)) = x.so_key
+ORDER BY x.so_key, d.so_is_import DESC, d.id;
+
+DROP TABLE IF EXISTS pg_temp.x_imp;
+CREATE TEMP TABLE x_imp AS
+SELECT x.*, b.so_id, b.so_status, b.so_revision,
+       b.so_tanggal AS db_tanggal, b.so_due_date AS db_due, b.kategori AS db_kategori, b.customer_id AS db_customer_id,
+       b.customer_po_no AS db_po_no, b.customer_po_date AS db_po_date, b.customer_po_received_date AS db_po_received,
+       b.marketing_name AS db_marketing
+FROM x_so x
+JOIN x_db b ON b.so_key = x.so_key AND b.so_is_import;
+
+-- ---------------------------------------------------------------------
+-- 1. Cakupan
+-- ---------------------------------------------------------------------
+INSERT INTO x_chk
+SELECT 101, 'INFO', 'SO Excel calon import: total / ada di DB hasil import / sudah ada lewat form / tidak ada di DB',
+       count(*) || ' / ' || count(b.so_id) FILTER (WHERE b.so_is_import) || ' / '
+         || count(b.so_id) FILTER (WHERE NOT b.so_is_import) || ' / ' || count(*) FILTER (WHERE b.so_id IS NULL),
+       NULL
+FROM x_so x LEFT JOIN x_db b ON b.so_key = x.so_key;
+
+INSERT INTO x_chk
+SELECT 102, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'SO Excel tidak ada di DB (import belum jalan / customer tidak ketemu / ambigu saat import)', count(*)::text,
+       left(string_agg(x.so_kode || ' ' || x.customer_name, ', ' ORDER BY x.so_kode), 1000)
+FROM x_so x
+WHERE NOT EXISTS (SELECT 1 FROM x_db b WHERE b.so_key = x.so_key);
+
+INSERT INTO x_chk
+SELECT 103, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'SO Excel yang sudah ada lewat form sebelum import (di-skip, isi tidak dicek)', count(*)::text,
+       left(string_agg(b.so_kode || ' (' || b.so_status || ')', ', ' ORDER BY b.so_kode), 1000)
+FROM x_db b WHERE NOT b.so_is_import;
+
+INSERT INTO x_chk
+SELECT 104, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'SO import di DB yang tidak ada di data Excel ini', count(*)::text,
+       left(string_agg(d.so_kode, ', ' ORDER BY d.so_kode), 1000)
+FROM public.so_reguler d
+WHERE d.so_is_import AND NOT EXISTS (SELECT 1 FROM x_so x WHERE x.so_key = upper(btrim(d.so_kode)));
+
+-- ---------------------------------------------------------------------
+-- 2. Header SO
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_hdr_diff;
+CREATE TEMP TABLE x_hdr_diff AS
+SELECT so_kode, so_revision, concat_ws('; ',
+         CASE WHEN db_tanggal IS DISTINCT FROM so_tanggal THEN 'tgl SO ' || db_tanggal || ' vs ' || so_tanggal END,
+         CASE WHEN db_due IS DISTINCT FROM so_due_date THEN 'due ' || COALESCE(db_due::text, '-') || ' vs ' || COALESCE(so_due_date::text, '-') END,
+         CASE WHEN db_kategori IS DISTINCT FROM kategori THEN 'kategori ' || COALESCE(db_kategori, '-') || ' vs ' || kategori END,
+         CASE WHEN db_po_no IS DISTINCT FROM customer_po_no THEN 'No PO ' || COALESCE(db_po_no, '-') || ' vs ' || COALESCE(customer_po_no, '-') END,
+         CASE WHEN db_po_date IS DISTINCT FROM customer_po_date THEN 'tgl PO ' || COALESCE(db_po_date::text, '-') || ' vs ' || COALESCE(customer_po_date::text, '-') END,
+         CASE WHEN db_po_received IS DISTINCT FROM customer_po_received_date THEN 'tgl PO diterima ' || COALESCE(db_po_received::text, '-') || ' vs ' || COALESCE(customer_po_received_date::text, '-') END,
+         CASE WHEN db_marketing IS DISTINCT FROM marketing_name THEN 'marketing ' || COALESCE(db_marketing, '-') || ' vs ' || COALESCE(marketing_name, '-') END
+       ) AS diff
+FROM x_imp;
+DELETE FROM x_hdr_diff WHERE diff = '';
+
+INSERT INTO x_chk
+SELECT 201, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Header SO import beda dengan Excel (DB vs Excel), SO belum pernah diedit', count(*)::text,
+       left(string_agg(so_kode || ': ' || diff, ' | ' ORDER BY so_kode), 1000)
+FROM x_hdr_diff WHERE so_revision = 0;
+
+INSERT INTO x_chk
+SELECT 202, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'Header SO import beda dengan Excel, SO sudah diedit user (Edit SO)', count(*)::text,
+       left(string_agg(so_kode || ' rev ' || so_revision || ': ' || diff, ' | ' ORDER BY so_kode), 1000)
+FROM x_hdr_diff WHERE so_revision > 0;
+
+-- Customer: CUSTOMER_MAP -> customer_no harus sama; selain itu nama customer
+-- DB harus sama dengan nama Excel (persis atau tanpa PT/CV/Tbk & tanda baca).
+INSERT INTO x_chk
+SELECT 203, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Customer SO import tidak sesuai nama Excel / CUSTOMER_MAP', count(*)::text,
+       left(string_agg(i.so_kode || ': ' || i.customer_name || ' -> ' || c.customer_no || ' = ' || c.customer_name, ' | ' ORDER BY i.so_kode), 1000)
+FROM x_imp i
+JOIN public.customers c ON c.id = i.db_customer_id
+LEFT JOIN x_cust_map m ON m.customer_name = upper(btrim(i.customer_name))
+WHERE CASE
+        WHEN m.customer_no IS NOT NULL THEN btrim(c.customer_no) <> btrim(m.customer_no)
+        ELSE regexp_replace(regexp_replace(upper(c.customer_name), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g')
+             <> regexp_replace(regexp_replace(upper(i.customer_name), '\m(PT|CV|TBK)\M', '', 'g'), '[^A-Z0-9]', '', 'g')
+      END;
+
+INSERT INTO x_chk
+SELECT 204, 'INFO', 'Customer SO import (nama Excel -> customer_no)', count(DISTINCT c.id)::text,
+       left(string_agg(DISTINCT i.customer_name || ' -> ' || c.customer_no, ' | '), 1000)
+FROM x_imp i JOIN public.customers c ON c.id = i.db_customer_id;
+
+-- ---------------------------------------------------------------------
+-- 3. Barang SO
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_item_diff;
+CREATE TEMP TABLE x_item_diff AS
+SELECT i.so_kode, i.so_revision, e.n AS n_excel, b.n AS n_db, e.sig AS sig_excel, b.sig AS sig_db
+FROM x_imp i
+LEFT JOIN LATERAL (
+  SELECT count(*) AS n, string_agg(upper(btrim(s.part_number)) || ':' || s.qty, ',' ORDER BY upper(btrim(s.part_number)), s.qty) AS sig
+  FROM x_so_item s WHERE s.so_key = i.so_key
+) e ON true
+LEFT JOIN LATERAL (
+  SELECT count(*) AS n, string_agg(upper(btrim(si.part_number)) || ':' || si.qty, ',' ORDER BY upper(btrim(si.part_number)), si.qty) AS sig
+  FROM public.so_reguler_items si WHERE si.so_id = i.so_id
+) b ON true
+WHERE e.sig IS DISTINCT FROM b.sig;
+
+INSERT INTO x_chk
+SELECT 301, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Barang SO import beda dengan Excel (part number + qty), SO belum pernah diedit', count(*)::text,
+       left(string_agg(so_kode || ': DB ' || COALESCE(n_db, 0) || ' baris [' || COALESCE(sig_db, '') || '] vs Excel ' || n_excel || ' [' || sig_excel || ']', ' | ' ORDER BY so_kode), 1000)
+FROM x_item_diff WHERE so_revision = 0;
+
+INSERT INTO x_chk
+SELECT 302, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'WARN' END,
+       'Barang SO import beda dengan Excel, SO sudah diedit user', count(*)::text,
+       left(string_agg(so_kode || ' rev ' || so_revision, ', ' ORDER BY so_kode), 1000)
+FROM x_item_diff WHERE so_revision > 0;
+
+INSERT INTO x_chk
+SELECT 303, CASE WHEN count(*) = 0 THEN 'OK' ELSE 'FAIL' END,
+       'Barang SO import menunjuk master barang dengan part number lain', count(*)::text,
+       left(string_agg(i.so_kode || ': ' || si.part_number || ' -> ' || COALESCE(b.part_number, '(tidak ada)'), ', ' ORDER BY i.so_kode), 1000)
+FROM x_imp i
+JOIN public.so_reguler_items si ON si.so_id = i.so_id
+LEFT JOIN public.barang b ON b.id = si.part_id
+WHERE b.id IS NULL OR upper(btrim(b.part_number)) <> upper(btrim(si.part_number));
+
+INSERT INTO x_chk
+SELECT 304, 'INFO', 'Total barang & qty SO import: DB / Excel',
+       (SELECT count(*) || ' baris, qty ' || COALESCE(sum(si.qty), 0) FROM public.so_reguler_items si JOIN x_imp i ON i.so_id = si.so_id),
+       (SELECT count(*) || ' baris, qty ' || COALESCE(sum(s.qty), 0) FROM x_so_item s JOIN x_imp i ON i.so_key = s.so_key);
+
+-- ---------------------------------------------------------------------
+-- 4. Status & proses lanjutan
+-- ---------------------------------------------------------------------
+INSERT INTO x_chk
+SELECT 401, 'INFO', 'Status SO import sekarang (open / partial / completed / cancelled)',
+       count(*) FILTER (WHERE so_status = 'open') || ' / ' || count(*) FILTER (WHERE so_status = 'partial') || ' / '
+         || count(*) FILTER (WHERE so_status = 'completed') || ' / ' || count(*) FILTER (WHERE so_status = 'cancelled'),
+       NULL
+FROM x_imp;
+
+INSERT INTO x_chk
+SELECT 402, 'INFO', 'PO / DO Reguler yang sudah dibuat dari SO import',
+       (SELECT count(DISTINCT p.id) FROM public.pos p JOIN x_imp i ON i.so_id = p.so_id) || ' PO / '
+         || (SELECT count(DISTINCT d.id) FROM public.do_reguler d JOIN x_imp i ON i.so_id = d.so_id) || ' DO',
+       NULL;
+
+SELECT no, status, cek, nilai, contoh
+FROM x_chk
+ORDER BY no;

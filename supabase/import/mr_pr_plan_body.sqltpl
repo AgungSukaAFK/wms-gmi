@@ -1,0 +1,185 @@
+-- ---------------------------------------------------------------------
+-- 0. Prasyarat: migration, gudang, PIC
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_missing TEXT;
+  v_dup TEXT;
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'mr_items' AND column_name = 'qty_received_import') THEN
+    RAISE EXCEPTION 'Migration 20261023100000_mr_pr_import.sql belum dijalankan.';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                 WHERE table_schema = 'public' AND table_name = 'mr_items' AND column_name = 'item_status') THEN
+    RAISE EXCEPTION 'Migration 20261021110000_mr_item_reject.sql belum dijalankan.';
+  END IF;
+
+  SELECT string_agg(n, ', ') INTO v_missing
+  FROM unnest(string_to_array((SELECT value FROM x_cfg WHERE key = 'cabang_names'), '|')) AS n
+  WHERE NOT EXISTS (SELECT 1 FROM public.cabang c WHERE upper(btrim(c.nama_cabang)) = upper(n));
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'Gudang tidak ditemukan di tabel cabang: %', v_missing;
+  END IF;
+
+  SELECT string_agg(n, ', ') INTO v_dup
+  FROM unnest(string_to_array((SELECT value FROM x_cfg WHERE key = 'cabang_names'), '|')) AS n
+  WHERE (SELECT count(*) FROM public.cabang c WHERE upper(btrim(c.nama_cabang)) = upper(n)) > 1;
+  IF v_dup IS NOT NULL THEN
+    RAISE EXCEPTION 'Nama gudang dobel di tabel cabang: %', v_dup;
+  END IF;
+END $$;
+
+DROP TABLE IF EXISTS pg_temp.x_cab;
+CREATE TEMP TABLE x_cab AS
+SELECT upper(btrim(c.nama_cabang)) AS nama, c.id
+FROM public.cabang c
+WHERE upper(btrim(c.nama_cabang)) IN (
+  SELECT upper(n) FROM unnest(string_to_array((SELECT value FROM x_cfg WHERE key = 'cabang_names'), '|')) AS n
+);
+
+-- PIC MR & PR import: --pic=<email>, atau user yang namanya = Pembuat PR.
+DROP TABLE IF EXISTS pg_temp.x_pic;
+CREATE TEMP TABLE x_pic (id UUID NOT NULL, nama TEXT NOT NULL);
+
+DO $$
+DECLARE
+  v_email TEXT := (SELECT value FROM x_cfg WHERE key = 'pic_email');
+  v_n INT;
+  v_list TEXT;
+BEGIN
+  IF v_email IS NOT NULL THEN
+    INSERT INTO x_pic
+    SELECT p.id, p.nama FROM public.profiles p WHERE lower(btrim(p.email)) = lower(btrim(v_email));
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      RAISE EXCEPTION 'User PIC dengan email % tidak ditemukan (ketemu % user).', v_email, v_n;
+    END IF;
+  ELSE
+    INSERT INTO x_pic
+    SELECT p.id, p.nama FROM public.profiles p
+    WHERE lower(btrim(p.nama)) IN (SELECT DISTINCT lower(btrim(pembuat)) FROM x_pr WHERE pembuat IS NOT NULL);
+    GET DIAGNOSTICS v_n = ROW_COUNT;
+    IF v_n <> 1 THEN
+      SELECT string_agg(p.nama || ' <' || COALESCE(p.email, '-') || '>', ', ') INTO v_list
+      FROM public.profiles p
+      WHERE lower(btrim(p.nama)) IN (SELECT DISTINCT lower(btrim(pembuat)) FROM x_pr WHERE pembuat IS NOT NULL);
+      RAISE EXCEPTION 'PIC import tidak bisa ditentukan otomatis (% user bernama sama dengan Pembuat PR: %). Generate ulang dengan --pic=<email>.',
+        v_n, COALESCE(v_list, '-');
+    END IF;
+  END IF;
+END $$;
+
+-- ---------------------------------------------------------------------
+-- 1. Skip MR & PR yang kodenya sudah ada di prod
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_mr_skip;
+CREATE TEMP TABLE x_mr_skip AS
+SELECT DISTINCT ON (m.mr_key) m.mr_key, m.mr_kode, m.mr_status, d.mr_kode AS db_kode
+FROM x_mr m
+JOIN public.mrs d ON upper(btrim(d.mr_kode)) = m.mr_key
+ORDER BY m.mr_key, (d.mr_kode = m.mr_kode) DESC, d.id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP MR: kode sudah ada di prod', mr_kode,
+       CASE WHEN db_kode <> mr_kode THEN 'di prod: ' || db_kode END
+FROM x_mr_skip;
+
+-- Baris PR turunan kolom NO PR milik MR yang di-skip: jejak PR MR itu sudah
+-- dikelola di WMS, jangan ditambah dobel. Baris PR OPEN tetap dicoba tautkan
+-- ke MR prod-nya (langkah 6).
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP baris PR dari MR Monitoring: MR-nya sudah ada di prod', p.pr_kode, p.mr_kode || ' : ' || p.part_number
+FROM x_pr_item p
+WHERE p.src = 'mr' AND p.mr_key IN (SELECT mr_key FROM x_mr_skip);
+
+DELETE FROM x_pr_item WHERE src = 'mr' AND mr_key IN (SELECT mr_key FROM x_mr_skip);
+UPDATE x_pr_item SET mr_key = NULL, mr_line = NULL WHERE mr_key IN (SELECT mr_key FROM x_mr_skip);
+DELETE FROM x_mr_item WHERE mr_key IN (SELECT mr_key FROM x_mr_skip);
+DELETE FROM x_mr WHERE mr_key IN (SELECT mr_key FROM x_mr_skip);
+
+-- PR yang sudah ada di prod di-skip utuh. Baris PR-nya yang menunjuk barang
+-- MR import tidak bisa ditautkan, padahal barang itu memang sudah di-PR (di
+-- prod): jatah PR-nya dikurangi supaya tidak ditawarkan lagi di form Buat PR.
+DROP TABLE IF EXISTS pg_temp.x_pr_skip;
+CREATE TEMP TABLE x_pr_skip AS
+SELECT DISTINCT ON (x.pr_kode) x.pr_kode, d.pr_kode AS db_kode, d.pr_status::text AS db_status
+FROM x_pr x
+JOIN public.prs d ON upper(btrim(d.pr_kode)) = upper(btrim(x.pr_kode))
+ORDER BY x.pr_kode, (d.pr_kode = x.pr_kode) DESC, d.id;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'SKIP PR: kode sudah ada di prod', s.pr_kode,
+       'status prod ' || s.db_status || ', ' || count(i.*) || ' baris Excel'
+FROM x_pr_skip s
+LEFT JOIN x_pr_item i ON i.pr_kode = s.pr_kode
+GROUP BY s.pr_kode, s.db_status;
+
+DROP TABLE IF EXISTS pg_temp.x_pr_drop;
+CREATE TEMP TABLE x_pr_drop AS
+SELECT i.mr_key, i.mr_line, sum(i.qty) AS qty, string_agg(DISTINCT i.pr_kode, ', ') AS prs
+FROM x_pr_item i
+WHERE i.pr_kode IN (SELECT pr_kode FROM x_pr_skip) AND i.mr_key IS NOT NULL
+GROUP BY i.mr_key, i.mr_line;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Barang MR import yang PR-nya sudah ada di prod (tidak ditautkan, jatah PR dikurangi)',
+       m.mr_kode, i.part_number || ' qty PR ' || d.qty || ' (' || d.prs || ')'
+FROM x_pr_drop d
+JOIN x_mr_item i ON i.mr_key = d.mr_key AND i.line_no = d.mr_line
+JOIN x_mr m ON m.mr_key = d.mr_key;
+
+UPDATE x_mr_item i
+SET qty_pr = GREATEST(i.qty_pr - d.qty, 0)
+FROM x_pr_drop d
+WHERE d.mr_key = i.mr_key AND d.mr_line = i.line_no;
+
+DELETE FROM x_pr_item WHERE pr_kode IN (SELECT pr_kode FROM x_pr_skip);
+DELETE FROM x_pr x WHERE NOT EXISTS (SELECT 1 FROM x_pr_item i WHERE i.pr_kode = x.pr_kode);
+
+-- ---------------------------------------------------------------------
+-- 2. Rencana tautan baris PR -> barang MR: MR import / MR prod / penampung
+-- ---------------------------------------------------------------------
+ALTER TABLE x_pr_item ADD COLUMN mr_id BIGINT, ADD COLUMN mr_item_id BIGINT, ADD COLUMN via TEXT;
+
+UPDATE x_pr_item p
+SET via = 'import'
+WHERE EXISTS (SELECT 1 FROM x_mr_item i WHERE i.mr_key = p.mr_key AND i.line_no = p.mr_line);
+
+UPDATE x_pr_item p
+SET mr_id = t.mr_id, mr_item_id = t.id, via = 'prod'
+FROM (
+  SELECT DISTINCT ON (p2.pr_kode, p2.line_no) p2.pr_kode, p2.line_no, mi.mr_id, mi.id
+  FROM x_pr_item p2
+  JOIN public.mrs m ON upper(btrim(m.mr_kode)) = upper(btrim(p2.mr_kode))
+  JOIN public.mr_items mi ON mi.mr_id = m.id AND upper(btrim(mi.part_number)) = upper(btrim(p2.part_number))
+  WHERE p2.via IS NULL AND p2.mr_kode IS NOT NULL
+  ORDER BY p2.pr_kode, p2.line_no, (mi.item_status = 'rejected'), mi.id
+) t
+WHERE t.pr_kode = p.pr_kode AND t.line_no = p.line_no;
+
+UPDATE x_pr_item SET via = 'penampung' WHERE via IS NULL;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Baris PR ditautkan ke MR yang sudah ada di prod', pr_kode, mr_kode || ' : ' || part_number
+FROM x_pr_item WHERE via = 'prod';
+
+-- Barang MR prod yang sudah punya baris PR aktif lain di WMS: qty PR-nya bisa
+-- terhitung dua kali -- cek manual.
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Baris PR ke barang MR prod yang sudah punya PR lain di WMS (cek dobel)', p.pr_kode,
+       p.mr_kode || ' : ' || p.part_number || ' -> sudah di ' || string_agg(DISTINCT d.pr_kode, ', ')
+FROM x_pr_item p
+JOIN public.pr_items pi ON pi.mr_item_id = p.mr_item_id
+JOIN public.prs d ON d.id = pi.pr_id
+WHERE p.via = 'prod' AND d.pr_status::text <> 'rejected' AND lower(COALESCE(pi.status::text, '')) <> 'rejected'
+GROUP BY p.pr_kode, p.mr_kode, p.part_number;
+
+INSERT INTO x_report (kategori, ref, detail)
+SELECT 'Baris PR masuk MR penampung',
+       pr_kode,
+       part_number || ' qty ' || qty
+         || CASE WHEN mr_kode IS NULL THEN ' (tanpa Referensi MR)'
+                 ELSE ' (barang tidak ada di MR ' || mr_kode || ')' END
+FROM x_pr_item WHERE via = 'penampung';
+

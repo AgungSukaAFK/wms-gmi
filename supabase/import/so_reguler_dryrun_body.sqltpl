@@ -1,0 +1,70 @@
+-- ---------------------------------------------------------------------
+-- DRY-RUN: ringkasan rencana import (tidak ada data yang ditulis)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_dry;
+CREATE TEMP TABLE x_dry (no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+INSERT INTO x_dry
+SELECT 0, '0. Dry-run', 'Tidak ada data yang diubah -- ini simulasi so_reguler_import.sql', NULL, NULL;
+
+INSERT INTO x_dry
+SELECT 101, '1. Master', 'Pembuat SO import (so_pic)', nama, COALESCE(id::text, 'tanpa user (created_by kosong)') FROM x_pic;
+
+INSERT INTO x_dry
+SELECT 102, '1. Master', 'Barang baru yang akan dibuat', count(*)::text,
+       left(string_agg(part_number || ' (' || COALESCE(part_name, '-') || ')', ', ' ORDER BY part_number), 1000)
+FROM (
+  SELECT DISTINCT ON (upper(btrim(part_number))) btrim(part_number) AS part_number, part_name
+  FROM x_so_item s
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(s.part_number)))
+  ORDER BY upper(btrim(part_number)), (part_name IS NULL), so_key, line_no
+) t;
+
+INSERT INTO x_dry
+SELECT 103, '1. Master', 'Customer terpakai (semua sudah dicocokkan)', count(DISTINCT c.customer_id)::text, NULL
+FROM x_so x JOIN x_cust c ON c.customer_name = x.customer_name;
+
+INSERT INTO x_dry
+SELECT 201, '2. SO', 'SO akan dibuat (status open) / barang / total qty',
+       count(*) || ' SO', (SELECT count(*) || ' barang, qty ' || COALESCE(sum(qty), 0) FROM x_so_item)
+FROM x_so;
+
+INSERT INTO x_dry
+SELECT 202, '2. SO', 'SO di-skip karena kodenya sudah ada di prod', count(*)::text,
+       left(string_agg(so_kode || ' (' || db_status || CASE WHEN db_import THEN ', import' ELSE '' END || ')', ', ' ORDER BY so_kode), 1000)
+FROM x_so_skip;
+
+INSERT INTO x_dry
+SELECT 203, '2. SO', 'SO akan dibuat per kategori', NULL, string_agg(kategori || ': ' || n, ' | ' ORDER BY n DESC)
+FROM (SELECT kategori, count(*) AS n FROM x_so GROUP BY kategori) t;
+
+INSERT INTO x_dry
+SELECT 204, '2. SO', 'SO akan dibuat per bulan tanggal SO', NULL, string_agg(bln || ': ' || n, ' | ' ORDER BY bln)
+FROM (SELECT to_char(so_tanggal, 'YYYY-MM') AS bln, count(*) AS n FROM x_so GROUP BY 1) t;
+
+INSERT INTO x_dry
+SELECT 205, '2. SO', 'SO akan dibuat per marketing', NULL, string_agg(m || ': ' || n, ' | ' ORDER BY n DESC)
+FROM (SELECT COALESCE(marketing_name, '(kosong)') AS m, count(*) AS n FROM x_so GROUP BY 1) t;
+
+-- Semua catatan rencana (skip, pemetaan, penyesuaian, dll).
+INSERT INTO x_dry
+SELECT 300 + row_number() OVER (ORDER BY kategori), '3. Catatan', kategori, count(*)::text,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 2000)
+FROM x_report
+GROUP BY kategori;
+
+-- Daftar SO yang akan dibuat.
+INSERT INTO x_dry
+SELECT 1000 + row_number() OVER (ORDER BY x.so_tanggal, x.so_kode), '4. Daftar SO',
+       x.so_kode || ' | ' || x.so_tanggal || ' | ' || x.kategori,
+       count(i.*) || ' barang, qty ' || sum(i.qty),
+       c.customer_no || ' = ' || c.db_name || ' | PO ' || COALESCE(x.customer_po_no, '-') || ' | ' || COALESCE(x.marketing_name, '-')
+         || ' | ' || left(string_agg(i.part_number || ' x' || i.qty, ', ' ORDER BY i.line_no), 400)
+FROM x_so x
+JOIN x_cust c ON c.customer_name = x.customer_name
+JOIN x_so_item i ON i.so_key = x.so_key
+GROUP BY x.so_key, x.so_kode, x.so_tanggal, x.kategori, x.customer_po_no, x.marketing_name, c.customer_no, c.db_name;
+
+SELECT no, kelompok, cek, nilai, contoh
+FROM x_dry
+ORDER BY no;

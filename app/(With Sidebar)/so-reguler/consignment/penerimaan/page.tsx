@@ -388,9 +388,9 @@ export default function ConsignmentPenerimaanPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Hapus Penerimaan {deleteTarget?.penerimaan_kode}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Stok akan dikembalikan ke gudang tujuan IK dan dikurangi dari
-              stok customer (membalikkan pergerakan stok Penerimaan ini).
-              Tindakan ini tidak bisa dibatalkan.
+              Qty terima akan dikurangi dari stok customer (membalikkan
+              pergerakan stok Penerimaan ini). Tindakan ini tidak bisa
+              dibatalkan.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

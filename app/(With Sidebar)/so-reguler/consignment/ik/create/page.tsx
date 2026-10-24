@@ -48,6 +48,7 @@ import {
 import { getCustomerSites } from "@/services/master-actions";
 
 type CabangOption = { id: number; nama_cabang: string };
+type SiteOption = { id: number; site_name: string };
 
 interface ShipItemRow {
   id: number; // so_item_id
@@ -68,16 +69,14 @@ export default function CreateConsignmentIkPage() {
 
   const [loading, setLoading] = useState(false);
   const [cabangs, setCabangs] = useState<CabangOption[]>([]);
-  // Gudang yang terhubung ke site customer SO terpilih (customer_sites.cabang_id).
-  const [siteCabangs, setSiteCabangs] = useState<
-    (CabangOption & { site_names: string[] })[]
-  >([]);
-  const [siteCabangsLoading, setSiteCabangsLoading] = useState(false);
+  // Site (gudang customer) aktif milik customer SO terpilih = tujuan IK.
+  const [sites, setSites] = useState<SiteOption[]>([]);
+  const [sitesLoading, setSitesLoading] = useState(false);
 
   // Header
   const [ikTanggal, setIkTanggal] = useState(toYmdLocal());
   const [dariCabangId, setDariCabangId] = useState<string>("");
-  const [keCabangId, setKeCabangId] = useState<string>("");
+  const [keSiteId, setKeSiteId] = useState<string>("");
   const [noAwb, setNoAwb] = useState("");
   const [remarks, setRemarks] = useState("");
 
@@ -110,7 +109,8 @@ export default function CreateConsignmentIkPage() {
         .select(
           "id, so_no, no_po, customer_id, site_id, site, customer:customers!customer_id(customer_name)",
         )
-        .order("created_at", { ascending: false })
+        .order("so_tanggal_input", { ascending: false })
+        .order("id", { ascending: false })
         .limit(20);
       if (debouncedSoSearch)
         q = q.or(`so_no.ilike.%${debouncedSoSearch}%,no_po.ilike.%${debouncedSoSearch}%`);
@@ -120,33 +120,22 @@ export default function CreateConsignmentIkPage() {
     run();
   }, [debouncedSoSearch, soPopoverOpen]);
 
-  const loadSiteCabangs = async (so: any) => {
-    setSiteCabangsLoading(true);
-    setKeCabangId("");
+  const loadSites = async (so: any) => {
+    setSitesLoading(true);
+    setKeSiteId("");
     const res = await getCustomerSites(so.customer_id, { activeOnly: true });
-    const byCabang = new Map<number, CabangOption & { site_names: string[] }>();
-    for (const site of res.data as any[]) {
-      if (!site.cabang) continue;
-      const entry = byCabang.get(site.cabang.id) || {
-        id: site.cabang.id,
-        nama_cabang: site.cabang.nama_cabang,
-        site_names: [] as string[],
-      };
-      entry.site_names.push(site.site_name);
-      byCabang.set(site.cabang.id, entry);
-    }
-    setSiteCabangs(Array.from(byCabang.values()));
-    // Default ke gudang milik site SO, kalau ada
-    const soSite = (res.data as any[]).find((s) => s.id === so.site_id);
-    if (soSite?.cabang_id) setKeCabangId(String(soSite.cabang_id));
-    setSiteCabangsLoading(false);
+    const rows = (res.data as any[]).map((site) => ({ id: site.id, site_name: site.site_name }));
+    setSites(rows);
+    // Default ke site SO, kalau masih aktif
+    if (rows.some((site) => site.id === so.site_id)) setKeSiteId(String(so.site_id));
+    setSitesLoading(false);
   };
 
   const selectSo = async (so: any) => {
     setSelectedSo(so);
     setSoPopoverOpen(false);
     setSoSearch("");
-    loadSiteCabangs(so);
+    loadSites(so);
     setItemsLoading(true);
     const res = await getConsignmentSoRemainingToShip(so.id);
     if (res.error) {
@@ -207,10 +196,8 @@ export default function CreateConsignmentIkPage() {
 
   const handleSubmit = async () => {
     if (!selectedSo) return toast.error("Pilih SO Consignment terlebih dahulu.");
-    if (!dariCabangId || !keCabangId)
-      return toast.error("Gudang asal dan tujuan wajib dipilih.");
-    if (dariCabangId === keCabangId)
-      return toast.error("Gudang asal dan tujuan tidak boleh sama.");
+    if (!dariCabangId || !keSiteId)
+      return toast.error("Gudang asal dan site tujuan wajib dipilih.");
 
     const toShip = items.filter((i) => i.qty_kirim > 0);
     if (toShip.length === 0)
@@ -228,7 +215,7 @@ export default function CreateConsignmentIkPage() {
         ik_tanggal: ikTanggal,
         so_id: selectedSo.id,
         dari_cabang_id: Number(dariCabangId),
-        ke_cabang_id: Number(keCabangId),
+        ke_site_id: Number(keSiteId),
         no_awb: noAwb || undefined,
         no_po: selectedSo.no_po || undefined,
         remarks: remarks || undefined,
@@ -245,7 +232,7 @@ export default function CreateConsignmentIkPage() {
 
       if (result.error) throw new Error(result.error);
       toast.success(
-        `Item Konsinyasi ${result.data?.ik_kode || ""} berhasil dibuat, stok sudah dipindahkan.`,
+        `Item Konsinyasi ${result.data?.ik_kode || ""} berhasil dibuat, stok gudang asal sudah dipotong.`,
       );
       router.push("/so-reguler/consignment/ik");
     } catch (e: any) {
@@ -275,7 +262,7 @@ export default function CreateConsignmentIkPage() {
               Buat Item Konsinyasi
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-              Pengiriman Fisik Barang Consignment — Memindahkan Stok
+              Pengiriman Fisik Barang Consignment ke Site Customer — Memotong Stok
             </p>
           </div>
         </div>
@@ -362,46 +349,36 @@ export default function CreateConsignmentIkPage() {
           </div>
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
-              <Truck className="h-3 w-3" /> Gudang Tujuan
+              <Truck className="h-3 w-3" /> Site Tujuan (Gudang Customer)
             </Label>
             <Select
-              value={keCabangId}
-              onValueChange={setKeCabangId}
-              disabled={!selectedSo || siteCabangsLoading}
+              value={keSiteId}
+              onValueChange={setKeSiteId}
+              disabled={!selectedSo || sitesLoading || sites.length === 0}
             >
               <SelectTrigger className="h-10 w-full text-sm font-semibold">
                 <SelectValue
                   placeholder={
                     !selectedSo
                       ? "Pilih SO dulu..."
-                      : siteCabangsLoading
+                      : sitesLoading
                         ? "Memuat site customer..."
-                        : "Pilih gudang tujuan..."
+                        : "Pilih site tujuan..."
                   }
                 />
               </SelectTrigger>
               <SelectContent>
-                {siteCabangs.length > 0
-                  ? siteCabangs.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.nama_cabang}
-                        <span className="text-muted-foreground text-xs">
-                          {" "}
-                          · {c.site_names.join(", ")}
-                        </span>
-                      </SelectItem>
-                    ))
-                  : cabangs.map((c) => (
-                      <SelectItem key={c.id} value={String(c.id)}>
-                        {c.nama_cabang}
-                      </SelectItem>
-                    ))}
+                {sites.map((site) => (
+                  <SelectItem key={site.id} value={String(site.id)}>
+                    {site.site_name}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
-            {selectedSo && !siteCabangsLoading && siteCabangs.length === 0 && (
+            {selectedSo && !sitesLoading && sites.length === 0 && (
               <p className="text-[10px] text-warning font-semibold">
-                Customer ini belum punya site dengan gudang terhubung — semua
-                gudang ditampilkan. Atur di Master Customer → Kelola Site.
+                Customer ini belum punya site aktif. Tambahkan di Master
+                Customer → Kelola Site.
               </p>
             )}
           </div>
@@ -518,9 +495,9 @@ export default function CreateConsignmentIkPage() {
       <Content>
         <div className="flex flex-col lg:flex-row justify-between gap-6 lg:items-center">
           <p className="text-[11px] text-muted-foreground font-medium max-w-125">
-            IK memindahkan stok sungguhan: stok Gudang Asal langsung berkurang
-            dan Gudang Tujuan bertambah begitu disimpan — tanpa approval.
-            Pastikan data sudah benar sebelum submit.
+            IK memotong stok sungguhan: stok Gudang Asal langsung berkurang
+            begitu disimpan — tanpa approval. Barang masuk stok customer saat
+            Penerimaan dicatat. Pastikan data sudah benar sebelum submit.
           </p>
           <Button
             className="h-10 lg:w-70 font-bold text-sm uppercase"

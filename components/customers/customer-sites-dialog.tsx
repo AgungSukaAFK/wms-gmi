@@ -13,13 +13,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -31,20 +24,16 @@ import { Loader2, Pencil, Plus, ToggleLeft, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   createCustomerSite,
-  getCabangList,
   getCustomerSites,
   updateCustomerSite,
 } from "@/services/master-actions";
 
-const NO_CABANG = "none";
-
 type SiteForm = {
   site_name: string;
   alamat: string;
-  cabang_id: string;
 };
 
-const emptyForm: SiteForm = { site_name: "", alamat: "", cabang_id: NO_CABANG };
+const emptyForm: SiteForm = { site_name: "", alamat: "" };
 
 export function CustomerSitesDialog({
   customer,
@@ -58,7 +47,6 @@ export function CustomerSitesDialog({
   canWrite: boolean;
 }) {
   const [sites, setSites] = useState<any[]>([]);
-  const [cabangs, setCabangs] = useState<{ id: number; nama_cabang: string }[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -78,7 +66,6 @@ export function CustomerSitesDialog({
     setEditingId(null);
     setForm(emptyForm);
     fetchSites();
-    if (cabangs.length === 0) getCabangList().then((data) => setCabangs(data || []));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, customer?.id]);
 
@@ -87,7 +74,6 @@ export function CustomerSitesDialog({
     setForm({
       site_name: site.site_name || "",
       alamat: site.alamat || "",
-      cabang_id: site.cabang_id ? String(site.cabang_id) : NO_CABANG,
     });
   };
 
@@ -100,15 +86,14 @@ export function CustomerSitesDialog({
     if (!customer) return;
     if (!form.site_name.trim()) return toast.error("Nama site wajib diisi");
     setSaving(true);
-    const payload = {
-      site_name: form.site_name,
-      alamat: form.alamat,
-      cabang_id: form.cabang_id === NO_CABANG ? null : Number(form.cabang_id),
-    };
+    const payload = { site_name: form.site_name, alamat: form.alamat };
     const editingSite = sites.find((s) => s.id === editingId);
     const res = editingId
       ? await updateCustomerSite(editingId, {
           ...payload,
+          // Kolom lama (site -> gudang cabang) sudah tidak dipakai IK; nilai
+          // yang ada dibiarkan.
+          cabang_id: editingSite?.cabang_id ?? null,
           is_active: editingSite?.is_active ?? true,
         })
       : await createCustomerSite(customer.id, payload);
@@ -136,14 +121,13 @@ export function CustomerSitesDialog({
         <DialogHeader>
           <DialogTitle>Site Customer</DialogTitle>
           <DialogDescription>
-            {customer?.customer_name} — site ini muncul di dropdown Site SO
-            Consignment. Gudang terhubung dipakai sebagai pilihan Gudang Tujuan
-            di Invoice Konsinyasi.
+            {customer?.customer_name} — site (gudang customer) ini muncul di
+            dropdown Site SO Consignment dan Site Tujuan Invoice Konsinyasi.
           </DialogDescription>
         </DialogHeader>
 
         {canWrite && (
-          <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_auto] gap-2 items-end rounded-md border border-border p-3 bg-muted/30">
+          <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2 items-end rounded-md border border-border p-3 bg-muted/30">
             <div className="space-y-1.5">
               <Label className="text-[10px] uppercase font-bold text-muted-foreground">
                 Nama Site
@@ -165,27 +149,6 @@ export function CustomerSitesDialog({
                 placeholder="Opsional"
                 className="h-9 text-sm"
               />
-            </div>
-            <div className="space-y-1.5">
-              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                Gudang Terhubung
-              </Label>
-              <Select
-                value={form.cabang_id}
-                onValueChange={(val) => setForm((p) => ({ ...p, cabang_id: val }))}
-              >
-                <SelectTrigger className="h-9 w-full text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_CABANG}>— Tidak ada —</SelectItem>
-                  {cabangs.map((c) => (
-                    <SelectItem key={c.id} value={String(c.id)}>
-                      {c.nama_cabang}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
             </div>
             <div className="flex gap-1.5">
               <Button onClick={handleSubmit} disabled={saving} className="h-9 gap-1.5">
@@ -212,7 +175,6 @@ export function CustomerSitesDialog({
             <TableHeader className="bg-muted/50">
               <TableRow>
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Site</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Gudang Terhubung</TableHead>
                 <TableHead className="w-24 text-center text-[10px] font-black uppercase text-muted-foreground">Status</TableHead>
                 <TableHead className="w-24 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">Aksi</TableHead>
               </TableRow>
@@ -220,13 +182,13 @@ export function CustomerSitesDialog({
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center">
+                  <TableCell colSpan={3} className="h-24 text-center">
                     <Loader2 className="h-5 w-5 animate-spin text-muted-foreground mx-auto" />
                   </TableCell>
                 </TableRow>
               ) : sites.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={4} className="h-24 text-center text-sm italic text-muted-foreground">
+                  <TableCell colSpan={3} className="h-24 text-center text-sm italic text-muted-foreground">
                     Belum ada site untuk customer ini.
                   </TableCell>
                 </TableRow>
@@ -241,7 +203,6 @@ export function CustomerSitesDialog({
                         </span>
                       </div>
                     </TableCell>
-                    <TableCell className="text-xs">{site.cabang?.nama_cabang || "-"}</TableCell>
                     <TableCell className="text-center">
                       <Badge
                         variant={site.is_active ? "default" : "secondary"}

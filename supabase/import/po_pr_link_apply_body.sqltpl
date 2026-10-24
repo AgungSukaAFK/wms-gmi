@@ -1,0 +1,161 @@
+-- ---------------------------------------------------------------------
+-- TULIS: link + pecah item PO, pos.pr_id, status PR
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.l_before;
+CREATE TEMP TABLE l_before AS
+SELECT po_id, sum(qty) AS qty, sum(qty_received) AS qty_received
+FROM public.po_items
+WHERE po_id IN (SELECT DISTINCT po_id FROM l_plan)
+GROUP BY po_id;
+
+DO $$
+DECLARE
+  s RECORD;
+  v_n INT;
+BEGIN
+  FOR s IN SELECT * FROM l_plan ORDER BY po_item_id, seq LOOP
+    IF s.seq = 1 THEN
+      UPDATE public.po_items
+      SET pr_item_id = s.pr_item_id, mr_id = s.mr_id, qty = s.qty
+      WHERE id = s.po_item_id AND pr_item_id IS NULL;
+      GET DIAGNOSTICS v_n = ROW_COUNT;
+      IF v_n <> 1 THEN
+        RAISE EXCEPTION 'Item PO % berubah saat proses link -- jalankan ulang dry-run.', s.po_item_id;
+      END IF;
+    ELSE
+      -- Pecahan berikutnya: salinan item asal, ter-link ke item PR lain.
+      INSERT INTO public.po_items (
+        po_id, mr_id, pr_item_id, part_id, part_number, part_name, satuan, qty, qty_received,
+        harga, vendor_id, so_item_id, ost_pr_ref, ost_proyek_ref, ost_keterangan,
+        item_ppn_rate, item_pph_type, item_pph_rate
+      )
+      SELECT po_id, s.mr_id, s.pr_item_id, part_id, part_number, part_name, satuan, s.qty, 0,
+             harga, vendor_id, so_item_id, ost_pr_ref, ost_proyek_ref, ost_keterangan,
+             item_ppn_rate, item_pph_type, item_pph_rate
+      FROM public.po_items WHERE id = s.po_item_id;
+    END IF;
+  END LOOP;
+END $$;
+
+-- Sisa item yang dipecah tapi tidak kebagian PR: tetap tanpa link.
+INSERT INTO public.po_items (
+  po_id, mr_id, pr_item_id, part_id, part_number, part_name, satuan, qty, qty_received,
+  harga, vendor_id, so_item_id, ost_pr_ref, ost_proyek_ref, ost_keterangan,
+  item_ppn_rate, item_pph_type, item_pph_rate
+)
+SELECT pi.po_id, NULL, NULL, pi.part_id, pi.part_number, pi.part_name, pi.satuan, lf.qty, 0,
+       pi.harga, pi.vendor_id, pi.so_item_id, pi.ost_pr_ref, pi.ost_proyek_ref, pi.ost_keterangan,
+       pi.item_ppn_rate, pi.item_pph_type, pi.item_pph_rate
+FROM l_left lf
+JOIN public.po_items pi ON pi.id = lf.po_item_id;
+
+-- pos.pr_id = PR pertama yang ter-link (sama seperti syncHeaderPrId).
+WITH linked AS (
+  SELECT pi.po_id, pri.pr_id, pi.id
+  FROM public.po_items pi
+  JOIN public.pr_items pri ON pri.id = pi.pr_item_id
+  WHERE pi.po_id IN (SELECT DISTINCT po_id FROM l_plan)
+),
+first_pr AS (
+  SELECT DISTINCT ON (po_id) po_id, pr_id FROM linked ORDER BY po_id, id
+)
+UPDATE public.pos p
+SET pr_id = f.pr_id
+FROM first_pr f
+WHERE p.id = f.po_id
+  AND (p.pr_id IS NULL OR NOT EXISTS (SELECT 1 FROM linked l WHERE l.po_id = p.id AND l.pr_id = p.pr_id));
+
+-- Status PR (rumus = applyPrConversionStatus + applyPrCompletionStatus).
+DROP TABLE IF EXISTS pg_temp.l_pr_status;
+CREATE TEMP TABLE l_pr_status AS
+WITH touched AS (SELECT DISTINCT pr_id FROM l_plan),
+items AS (
+  SELECT pri.pr_id, pri.id, pri.qty
+  FROM public.pr_items pri
+  WHERE pri.pr_id IN (SELECT pr_id FROM touched) AND lower(COALESCE(pri.status::text, '')) <> 'rejected'
+),
+cov AS (
+  SELECT pi.pr_item_id, pi.po_id, pi.qty
+  FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id
+  WHERE pi.pr_item_id IN (SELECT id FROM items) AND p.po_status::text <> 'rejected'
+  UNION ALL
+  SELECT l.pr_item_id, pi.po_id, l.qty_pr
+  FROM public.po_item_pr_links l
+  JOIN public.po_items pi ON pi.id = l.po_item_id
+  JOIN public.pos p ON p.id = pi.po_id
+  WHERE l.pr_item_id IN (SELECT id FROM items) AND p.po_status::text <> 'rejected'
+),
+per_item AS (
+  SELECT i.pr_id, i.id, i.qty, COALESCE((SELECT sum(c.qty) FROM cov c WHERE c.pr_item_id = i.id), 0) AS conv
+  FROM items i
+)
+SELECT t.pr_id,
+       CASE WHEN COALESCE(sum(LEAST(pi.qty, pi.conv)), 0) <= 0 THEN 'pending'
+            WHEN sum(LEAST(pi.qty, pi.conv)) < sum(pi.qty) THEN 'partial'
+            ELSE 'complete' END AS convert_status,
+       COALESCE(bool_and(pi.conv >= pi.qty), false)
+         AND EXISTS (SELECT 1 FROM cov c JOIN items i ON i.id = c.pr_item_id WHERE i.pr_id = t.pr_id)
+         AND NOT EXISTS (SELECT 1 FROM cov c JOIN items i ON i.id = c.pr_item_id
+                         JOIN public.pos p ON p.id = c.po_id
+                         WHERE i.pr_id = t.pr_id AND p.po_receive_status <> 'complete') AS done
+FROM touched t
+LEFT JOIN per_item pi ON pi.pr_id = t.pr_id
+GROUP BY t.pr_id;
+
+UPDATE public.prs pr
+SET pr_convert_status = s.convert_status
+FROM l_pr_status s
+WHERE s.pr_id = pr.id AND pr.pr_convert_status IS DISTINCT FROM s.convert_status;
+
+UPDATE public.prs pr
+SET pr_status = CASE WHEN s.done THEN 'completed' ELSE 'approved' END::public.doc_status
+FROM l_pr_status s
+WHERE s.pr_id = pr.id
+  AND pr.pr_status::text IN ('approved', 'completed')
+  AND pr.pr_status::text <> CASE WHEN s.done THEN 'completed' ELSE 'approved' END;
+
+-- ---------------------------------------------------------------------
+-- Sanity check -- gagal = semua dibatalkan
+-- ---------------------------------------------------------------------
+DO $$
+DECLARE
+  v_bad TEXT;
+BEGIN
+  SELECT string_agg(btrim(p.po_kode), ', ') INTO v_bad
+  FROM l_before b
+  JOIN public.pos p ON p.id = b.po_id
+  JOIN (SELECT po_id, sum(qty) AS qty, sum(qty_received) AS qty_received
+        FROM public.po_items GROUP BY po_id) a ON a.po_id = b.po_id
+  WHERE a.qty <> b.qty OR a.qty_received <> b.qty_received;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Total qty / qty diterima PO berubah setelah link: %', v_bad;
+  END IF;
+
+  IF (SELECT count(*) FROM public.po_items pi JOIN l_plan p ON p.pr_item_id = pi.pr_item_id AND p.po_id = pi.po_id)
+     <> (SELECT count(*) FROM l_plan) THEN
+    RAISE EXCEPTION 'Jumlah link tersimpan tidak sama dengan rencana (%)', (SELECT count(*) FROM l_plan);
+  END IF;
+
+  SELECT string_agg(pi.id::text, ', ') INTO v_bad
+  FROM public.po_items pi JOIN public.pr_items pri ON pri.id = pi.pr_item_id
+  WHERE pi.po_id IN (SELECT po_id FROM l_plan) AND pi.part_id <> pri.part_id;
+  IF v_bad IS NOT NULL THEN
+    RAISE EXCEPTION 'Part item PO beda dengan item PR: %', v_bad;
+  END IF;
+END $$;
+
+COMMIT;
+
+SELECT kategori, count(*) AS jumlah,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 300) AS contoh
+FROM (
+  SELECT kategori, ref, detail FROM l_report
+  UNION ALL
+  SELECT 'PR: status konversi -> ' || s.convert_status, pr.pr_kode, NULL
+  FROM l_pr_status s JOIN public.prs pr ON pr.id = s.pr_id
+  UNION ALL
+  SELECT 'PR: status sekarang ' || pr.pr_status::text, pr.pr_kode, NULL
+  FROM l_pr_status s JOIN public.prs pr ON pr.id = s.pr_id
+) r
+GROUP BY kategori
+ORDER BY kategori;

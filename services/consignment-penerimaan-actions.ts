@@ -8,13 +8,16 @@ import { changeStockQty } from "@/lib/stock-mutation";
 // PENERIMAAN KONSINYASI — konfirmasi customer atas satu IK (staff internal
 // yang input atas nama customer, belum ada login customer di sistem ini).
 //
-// qty_terima SELALU dianggap sudah berpindah fisik ke customer (dikurangi
-// dari stok gudang tujuan IK, ditambahkan ke customer_stock) — terlepas
-// dari status ('sesuai'/'komplain'). Selisih qty_kirim - qty_terima TETAP
-// di stok gudang tujuan, belum jadi tanggungan customer, ditindaklanjuti
-// manual (redelivery via IK baru, dst).
+// qty_terima SELALU dianggap sudah berpindah fisik ke customer (ditambahkan
+// ke customer_stock) — terlepas dari status ('sesuai'/'komplain'). IK ke
+// site customer sudah memotong stok gudang asal saat dibuat, jadi selisih
+// qty_kirim - qty_terima tidak masuk stok mana pun: tanggungan GMI,
+// ditindaklanjuti manual lewat komplain (redelivery via IK baru, dst).
+// IK lama (ke_cabang_id): qty_terima dikurangi dari stok gudang tujuan,
+// selisihnya tetap di sana.
 //
-// Satu IK cuma boleh punya SATU penerimaan (UNIQUE ik_id di DB).
+// Satu IK cuma boleh punya SATU penerimaan (UNIQUE ik_id di DB). IK import
+// (riwayat ERP, ik_is_import) tidak perlu penerimaan.
 // ============================================================
 
 async function getRoleNames(supabase: any, userId: string): Promise<string[]> {
@@ -41,7 +44,7 @@ export type ConsignmentPenerimaanItemInput = {
 
 /**
  * Daftar IK yang belum punya dokumen penerimaan — dipakai picker di form
- * create Penerimaan.
+ * create Penerimaan. IK import (riwayat ERP) tidak ikut.
  */
 export async function getIkPendingPenerimaan() {
   const supabase = await createClient();
@@ -49,8 +52,9 @@ export async function getIkPendingPenerimaan() {
   const { data: iks, error } = await supabase
     .from("consignment_ik")
     .select(
-      "id, ik_kode, ik_tanggal, no_awb, so:consignment_so(so_no, customer:customers!customer_id(customer_name)), cabang_tujuan:cabang!consignment_ik_ke_cabang_id_fkey(nama_cabang), consignment_ik_items(id)",
+      "id, ik_kode, ik_tanggal, no_awb, ke_site_name, so:consignment_so(so_no, customer:customers!customer_id(customer_name)), cabang_tujuan:cabang!consignment_ik_ke_cabang_id_fkey(nama_cabang), consignment_ik_items(id)",
     )
+    .eq("ik_is_import", false)
     .order("ik_tanggal", { ascending: false });
   if (error) return { data: [], error: error.message };
 
@@ -71,11 +75,13 @@ export async function getIkForPenerimaan(ikId: number) {
   const { data: ik, error } = await supabase
     .from("consignment_ik")
     .select(
-      "id, ik_kode, so_id, so:consignment_so(customer_id), consignment_ik_items(id, part_id, part_number, part_name, satuan, qty)",
+      "id, ik_kode, so_id, ik_is_import, so:consignment_so(customer_id), consignment_ik_items(id, part_id, part_number, part_name, satuan, qty)",
     )
     .eq("id", ikId)
     .single();
   if (error || !ik) return { data: null, error: error?.message || "IK tidak ditemukan." };
+  if (ik.ik_is_import)
+    return { data: null, error: "IK hasil import (riwayat ERP) tidak perlu dokumen penerimaan." };
 
   const { data: existing } = await supabase
     .from("consignment_penerimaan")
@@ -155,10 +161,12 @@ export async function createConsignmentPenerimaan(data: {
 
   const { data: ik, error: ikError } = await supabase
     .from("consignment_ik")
-    .select("id, ik_kode, ke_cabang_id, so:consignment_so(customer_id)")
+    .select("id, ik_kode, ke_cabang_id, ik_is_import, so:consignment_so(customer_id)")
     .eq("id", data.ik_id)
     .single();
   if (ikError || !ik) return { error: "IK tidak ditemukan." };
+  if (ik.ik_is_import)
+    return { error: "IK hasil import (riwayat ERP) tidak perlu dokumen penerimaan." };
 
   const { data: existingPenerimaan } = await supabase
     .from("consignment_penerimaan")
@@ -210,27 +218,28 @@ export async function createConsignmentPenerimaan(data: {
     return { error: itemsError.message };
   }
 
-  // Pindahkan qty_terima: kurangi stok gudang tujuan IK, tambahkan ke
-  // customer_stock. Selisih (qty_kirim - qty_terima) sengaja dibiarkan di
-  // stok gudang tujuan.
+  // qty_terima masuk customer_stock. IK lama (ke gudang cabang): kurangi
+  // dulu dari stok gudang tujuan; selisihnya dibiarkan di sana.
   for (const item of data.items) {
     if (item.qty_terima <= 0) continue;
 
-    await changeStockQty(
-      supabase,
-      { partId: item.part_id, cabangId: ik.ke_cabang_id },
-      -item.qty_terima,
-      { allowNegative: true, label: item.part_number },
-    );
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: ik.ke_cabang_id,
-      qty_change: -item.qty_terima,
-      type: "PENERIMAAN_KONSINYASI",
-      reference_id: kode,
-      created_by: user.id,
-      notes: `Penerimaan ${kode} (IK ${ik.ik_kode}): ${item.part_number} ${item.part_name} diterima customer`,
-    });
+    if (ik.ke_cabang_id) {
+      await changeStockQty(
+        supabase,
+        { partId: item.part_id, cabangId: ik.ke_cabang_id },
+        -item.qty_terima,
+        { allowNegative: true, label: item.part_number },
+      );
+      await supabase.from("stock_movements").insert({
+        part_id: item.part_id,
+        cabang_id: ik.ke_cabang_id,
+        qty_change: -item.qty_terima,
+        type: "PENERIMAAN_KONSINYASI",
+        reference_id: kode,
+        created_by: user.id,
+        notes: `Penerimaan ${kode} (IK ${ik.ik_kode}): ${item.part_number} ${item.part_name} diterima customer`,
+      });
+    }
 
     await changeStockQty(
       supabase,
@@ -282,9 +291,9 @@ export async function resolveComplaintItem(itemId: number, catatanResolusi: stri
 }
 
 /**
- * Hapus Penerimaan (moderator/admin) — membalikkan stok (kembalikan ke
- * gudang tujuan IK, kurangi dari customer_stock) sebelum menghapus
- * dokumennya. Safety valve, sama seperti deleteConsignmentIk.
+ * Hapus Penerimaan (moderator/admin) — membalikkan stok (kurangi dari
+ * customer_stock; IK lama: kembalikan ke gudang tujuan IK) sebelum
+ * menghapus dokumennya. Safety valve, sama seperti deleteConsignmentIk.
  */
 export async function deleteConsignmentPenerimaan(penerimaanId: number) {
   const supabase = await createClient();
@@ -325,21 +334,23 @@ export async function deleteConsignmentPenerimaan(penerimaanId: number) {
   for (const item of items || []) {
     if (item.qty_terima <= 0) continue;
 
-    await changeStockQty(
-      supabase,
-      { partId: item.part_id, cabangId: keCabangId },
-      item.qty_terima,
-      { allowNegative: true },
-    );
-    await supabase.from("stock_movements").insert({
-      part_id: item.part_id,
-      cabang_id: keCabangId,
-      qty_change: item.qty_terima,
-      type: "PENERIMAAN_KONSINYASI",
-      reference_id: penerimaan.penerimaan_kode,
-      created_by: user.id,
-      notes: `Pembatalan Penerimaan ${penerimaan.penerimaan_kode} (IK ${ikKode}): ${item.part_number} ${item.part_name} dikembalikan ke gudang tujuan`,
-    });
+    if (keCabangId) {
+      await changeStockQty(
+        supabase,
+        { partId: item.part_id, cabangId: keCabangId },
+        item.qty_terima,
+        { allowNegative: true },
+      );
+      await supabase.from("stock_movements").insert({
+        part_id: item.part_id,
+        cabang_id: keCabangId,
+        qty_change: item.qty_terima,
+        type: "PENERIMAAN_KONSINYASI",
+        reference_id: penerimaan.penerimaan_kode,
+        created_by: user.id,
+        notes: `Pembatalan Penerimaan ${penerimaan.penerimaan_kode} (IK ${ikKode}): ${item.part_number} ${item.part_name} dikembalikan ke gudang tujuan`,
+      });
+    }
 
     await changeStockQty(
       supabase,

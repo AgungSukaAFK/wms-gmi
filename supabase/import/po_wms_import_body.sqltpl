@@ -14,6 +14,22 @@ BEGIN
   IF v_missing IS NOT NULL THEN
     RAISE EXCEPTION 'Gudang tidak ditemukan di tabel cabang: %', v_missing;
   END IF;
+
+  -- Item PO yang sudah dipecah (link PO Outstanding -> PR / panel) membuat
+  -- pencocokan per (PO, part, urutan) di bawah salah sasaran: import ulang
+  -- akan menimpa qty pecahan. Batalkan.
+  SELECT string_agg(d.po_kode || ':' || d.k, ', ') INTO v_missing
+  FROM (
+    SELECT btrim(p.po_kode) AS po_kode, upper(btrim(pi.part_number)) AS k, count(*) AS n
+    FROM public.po_items pi JOIN public.pos p ON p.id = pi.po_id AND p.po_is_outstanding
+    GROUP BY 1, 2
+  ) d
+  JOIN (SELECT po_kode, upper(btrim(part_number)) AS k, count(*) AS n FROM wms_item GROUP BY 1, 2) x
+    ON x.po_kode = d.po_kode AND x.k = d.k
+  WHERE d.n > x.n;
+  IF v_missing IS NOT NULL THEN
+    RAISE EXCEPTION 'Import ulang dibatalkan: item PO Outstanding sudah dipecah / bertambah dibanding Excel (%). Import PO sudah selesai -- yang dijalankan seharusnya po_wms_verify.sql.', left(v_missing, 300);
+  END IF;
 END $$;
 
 -- ---------------------------------------------------------------------

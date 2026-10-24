@@ -1,0 +1,136 @@
+-- ---------------------------------------------------------------------
+-- DRY-RUN: ringkasan rencana import (tidak ada data yang ditulis)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.x_dry;
+CREATE TEMP TABLE x_dry (no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+INSERT INTO x_dry
+SELECT 0, '0. Dry-run', 'Tidak ada data yang diubah -- ini simulasi consignment_import.sql', NULL, NULL;
+
+INSERT INTO x_dry
+SELECT 101, '1. Master', 'Pembuat SO & IK import (created_by)', nama, COALESCE(id::text, 'created_by kosong') FROM x_pic;
+
+INSERT INTO x_dry
+SELECT 102, '1. Master', 'Barang baru yang akan dibuat', count(*)::text,
+       left(string_agg(part_number || ' (' || COALESCE(part_name, '-') || ', ' || COALESCE(satuan, 'EA') || ')', ', ' ORDER BY part_number), 1000)
+FROM (
+  SELECT DISTINCT ON (upper(btrim(part_number))) btrim(part_number) AS part_number, part_name, satuan
+  FROM x_so_item s
+  WHERE NOT EXISTS (SELECT 1 FROM public.barang b WHERE upper(btrim(b.part_number)) = upper(btrim(s.part_number)))
+  ORDER BY upper(btrim(part_number)), (part_name IS NULL), excel_row
+) t;
+
+INSERT INTO x_dry
+SELECT 103, '1. Master', 'Customer', count(DISTINCT c.customer_id)::text,
+       string_agg(DISTINCT c.customer_no || ' = ' || c.db_name, ' | ')
+FROM x_so x JOIN x_cust c ON c.customer_name = x.customer_name;
+
+INSERT INTO x_dry
+SELECT 104, '1. Master', 'Site SO: cocok master site / site teks saja', count(*) FILTER (WHERE site_id IS NOT NULL) || ' / ' || count(*) FILTER (WHERE site_id IS NULL),
+       (SELECT string_agg(site_name || ': ' || n, ' | ' ORDER BY n DESC) FROM (SELECT site_name, count(*) AS n FROM x_site GROUP BY 1) t)
+FROM x_site;
+
+INSERT INTO x_dry
+SELECT 201, '2. SO', 'SO akan dibuat / barang / total qty',
+       count(*) || ' SO', (SELECT count(*) || ' barang, qty ' || COALESCE(sum(qty), 0) FROM x_so_item)
+FROM x_so;
+
+INSERT INTO x_dry
+SELECT 202, '2. SO', 'SO di-skip karena nomornya sudah ada di prod', count(*)::text,
+       left(string_agg(so_no || ' (' || n_db || ' brg/' || COALESCE(qty_db, 0) || ' vs Excel ' || n_excel || '/' || qty_excel || ')', ', ' ORDER BY so_no), 1000)
+FROM x_so_skip;
+
+INSERT INTO x_dry
+SELECT 203, '2. SO', 'SO akan dibuat per bulan tgl input SO', NULL, string_agg(bln || ': ' || n, ' | ' ORDER BY bln)
+FROM (SELECT to_char(so_tanggal_input, 'YYYY-MM') AS bln, count(*) AS n FROM x_so GROUP BY 1) t;
+
+INSERT INTO x_dry
+SELECT 204, '2. SO', 'Status kirim SO setelah import (Full / Partial / Belum)',
+       count(*) FILTER (WHERE kirim >= qty) || ' / ' || count(*) FILTER (WHERE kirim > 0 AND kirim < qty) || ' / ' || count(*) FILTER (WHERE kirim = 0),
+       'per SO, dari total qty IK vs qty SO'
+FROM (
+  SELECT x.so_key, (SELECT sum(i.qty) FROM x_so_item i WHERE i.so_key = x.so_key) AS qty,
+         COALESCE((SELECT sum(ki.qty) FROM x_ik k JOIN x_ik_item ki ON ki.ik_key = k.ik_key WHERE k.so_key = x.so_key), 0) AS kirim
+  FROM x_so x
+) t;
+
+INSERT INTO x_dry
+SELECT 205, '2. SO', 'Sisa belum dikirim setelah import (bisa di-IK lewat WMS)',
+       count(*) || ' barang', 'qty ' || COALESCE(sum(i.qty - COALESCE(k.qty, 0)), 0)
+FROM x_so_item i
+LEFT JOIN (SELECT excel_row, sum(qty) AS qty FROM x_ik_item GROUP BY 1) k ON k.excel_row = i.excel_row
+WHERE i.qty > COALESCE(k.qty, 0);
+
+INSERT INTO x_dry
+SELECT 301, '3. IK', 'IK import akan dibuat / barang IK / total qty',
+       count(*) || ' IK', (SELECT count(*) || ' barang, qty ' || COALESCE(sum(qty), 0) FROM x_ik_item)
+FROM x_ik;
+
+INSERT INTO x_dry
+SELECT 302, '3. IK', 'IK per bulan (IK / qty)', NULL, string_agg(bln || ': ' || n || ' / ' || qty, ' | ' ORDER BY bln)
+FROM (
+  SELECT to_char(k.ik_tanggal, 'YYYY-MM') AS bln, count(DISTINCT k.ik_key) AS n, sum(ki.qty) AS qty
+  FROM x_ik k JOIN x_ik_item ki ON ki.ik_key = k.ik_key GROUP BY 1
+) t;
+
+INSERT INTO x_dry
+SELECT 303, '3. IK', 'IK per gudang asal (IK / qty)', NULL, string_agg(gudang || ': ' || n || ' / ' || qty, ' | ' ORDER BY qty DESC)
+FROM (
+  SELECT k.gudang, count(DISTINCT k.ik_key) AS n, sum(ki.qty) AS qty
+  FROM x_ik k JOIN x_ik_item ki ON ki.ik_key = k.ik_key GROUP BY 1
+) t;
+
+-- Efek stok gudang asal (sama dengan langkah 9 import).
+DROP TABLE IF EXISTS pg_temp.x_dry_stok;
+CREATE TEMP TABLE x_dry_stok AS
+SELECT g.cabang_id, g.nama_cabang, p.id AS part_id, upper(btrim(i.part_number)) AS part_k, sum(ki.qty) AS qty_keluar,
+       COALESCE((SELECT st.qty FROM public.stock st WHERE st.part_id = p.id AND st.cabang_id = g.cabang_id), 0) AS qty_sebelum
+FROM x_ik_stok ks
+JOIN x_ik k ON k.ik_key = ks.ik_key
+JOIN x_ik_item ki ON ki.ik_key = k.ik_key
+JOIN x_so_item i ON i.excel_row = ki.excel_row
+JOIN x_gudang g ON g.gudang_k = upper(btrim(k.gudang))
+LEFT JOIN public.barang p ON upper(btrim(p.part_number)) = upper(btrim(i.part_number))
+GROUP BY g.cabang_id, g.nama_cabang, p.id, upper(btrim(i.part_number));
+
+INSERT INTO x_dry
+SELECT 401 + row_number() OVER (ORDER BY nama_cabang), '4. Stok', 'Stok dipotong: ' || nama_cabang || ' (barang / qty keluar / stok sebelum -> sesudah)',
+       count(*) || ' barang, qty ' || sum(qty_keluar),
+       sum(qty_sebelum) || ' -> ' || sum(qty_sebelum - qty_keluar) || '; jadi minus ' || count(*) FILTER (WHERE qty_sebelum - qty_keluar < 0)
+         || ' barang (total ' || COALESCE(sum(qty_sebelum - qty_keluar) FILTER (WHERE qty_sebelum - qty_keluar < 0), 0) || ')'
+FROM x_dry_stok
+GROUP BY nama_cabang;
+
+INSERT INTO x_dry
+SELECT 410, '4. Stok', 'Minus terbesar sesudah import (part: sebelum - keluar = sesudah)', NULL,
+       left(string_agg(nama_cabang || ' ' || part_k || ': ' || qty_sebelum || ' - ' || qty_keluar || ' = ' || (qty_sebelum - qty_keluar), ', '
+                       ORDER BY qty_sebelum - qty_keluar), 1000)
+FROM (SELECT * FROM x_dry_stok WHERE qty_sebelum - qty_keluar < 0 ORDER BY qty_sebelum - qty_keluar LIMIT 15) t;
+
+INSERT INTO x_dry
+SELECT 411, '4. Stok', 'IK yang TIDAK memotong stok (--stok-sejak)', count(*)::text,
+       (SELECT 'qty ' || COALESCE(sum(ki.qty), 0) FROM x_ik_item ki WHERE ki.ik_key NOT IN (SELECT ik_key FROM x_ik_stok))
+FROM x_ik WHERE ik_key NOT IN (SELECT ik_key FROM x_ik_stok);
+
+-- Semua catatan rencana (skip, pemetaan, penyesuaian, dll).
+INSERT INTO x_dry
+SELECT 500 + row_number() OVER (ORDER BY kategori), '5. Catatan', kategori, count(*)::text,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 2000)
+FROM x_report
+GROUP BY kategori;
+
+-- Daftar SO yang akan dibuat.
+INSERT INTO x_dry
+SELECT 1000 + row_number() OVER (ORDER BY x.so_tanggal_input, x.so_no), '6. Daftar SO',
+       x.so_no || ' | ' || x.so_tanggal_input || ' | ' || s.site_name,
+       count(i.*) || ' barang, qty ' || sum(i.qty) || ', kirim ' || COALESCE(sum(k.qty), 0),
+       'PO ' || COALESCE(x.no_po, '-') || ' | IK ' || COALESCE((SELECT string_agg(ik_kode, ', ' ORDER BY ik_tanggal, ik_kode) FROM x_ik WHERE so_key = x.so_key), '-')
+FROM x_so x
+JOIN x_site s ON s.so_key = x.so_key
+JOIN x_so_item i ON i.so_key = x.so_key
+LEFT JOIN (SELECT excel_row, sum(qty) AS qty FROM x_ik_item GROUP BY 1) k ON k.excel_row = i.excel_row
+GROUP BY x.so_key, x.so_no, x.so_tanggal_input, x.no_po, s.site_name;
+
+SELECT no, kelompok, cek, nilai, contoh
+FROM x_dry
+ORDER BY no;

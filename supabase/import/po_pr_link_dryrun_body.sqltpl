@@ -1,0 +1,36 @@
+-- ---------------------------------------------------------------------
+-- DRY-RUN: ringkasan rencana link (tidak ada data yang ditulis)
+-- ---------------------------------------------------------------------
+DROP TABLE IF EXISTS pg_temp.l_dry;
+CREATE TEMP TABLE l_dry (no INT PRIMARY KEY, kelompok TEXT NOT NULL, cek TEXT NOT NULL, nilai TEXT, contoh TEXT);
+
+INSERT INTO l_dry VALUES (0, '0. Dry-run', 'Tidak ada data yang diubah -- simulasi po_pr_link_apply.sql', NULL, NULL);
+
+INSERT INTO l_dry
+SELECT 101, '1. Kandidat', 'Item PO Outstanding belum ter-link yang punya referensi PR (total / dikunci RI WMS)',
+       count(*) || ' / ' || count(*) FILTER (WHERE locked), NULL
+FROM l_cand;
+
+INSERT INTO l_dry
+SELECT 201, '2. Rencana', 'Item PO akan di-link (belum diterima / sudah diterima)',
+       count(DISTINCT po_item_id) || ' (' || count(DISTINCT po_item_id) FILTER (WHERE NOT received) || ' / '
+         || count(DISTINCT po_item_id) FILTER (WHERE received) || ')',
+       count(*) || ' baris link; ' || count(DISTINCT po_item_id) FILTER (WHERE seq > 1) || ' item dipecah ke >1 PR; '
+         || (SELECT count(*) FROM l_left) || ' item menyisakan bagian tanpa PR'
+FROM l_plan;
+
+INSERT INTO l_dry
+SELECT 202, '2. Rencana', 'PO & PR yang tersentuh',
+       count(DISTINCT po_id) || ' PO, ' || count(DISTINCT pr_id) || ' PR',
+       (SELECT string_agg(st || ': ' || n, ' | ' ORDER BY st) FROM (
+          SELECT x.pr_status AS st, count(DISTINCT x.pr_id) AS n
+          FROM l_plan p JOIN l_rem x ON x.pr_item_id = p.pr_item_id GROUP BY 1) t)
+FROM l_plan;
+
+INSERT INTO l_dry
+SELECT 900 + row_number() OVER (ORDER BY kategori), '9. Catatan', kategori, count(*)::text,
+       left(string_agg(COALESCE(ref, '') || COALESCE(' ' || detail, ''), ', ' ORDER BY ref, detail), 300)
+FROM l_report
+GROUP BY kategori;
+
+SELECT no, kelompok, cek, nilai, contoh FROM l_dry ORDER BY no;
