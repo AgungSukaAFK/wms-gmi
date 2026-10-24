@@ -66,6 +66,7 @@ import {
   Wrench,
   Search,
   X,
+  FileUp,
 } from "lucide-react";
 
 // Update the menu data
@@ -90,6 +91,11 @@ const data = {
       title: "Trigger Level MR",
       url: "/mr-level-settings",
       icon: SlidersHorizontal,
+    },
+    {
+      title: "Import Data Excel",
+      url: "/import",
+      icon: FileUp,
     },
   ],
   navMain: [
