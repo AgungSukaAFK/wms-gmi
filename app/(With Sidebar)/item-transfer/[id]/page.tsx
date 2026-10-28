@@ -23,23 +23,15 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { toast } from "sonner";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { ItemTransferTrackingControl } from "@/components/item-transfer/item-transfer-tracking-control";
 import {
   approveItemTransfer,
   rejectItemTransfer,
-  updateItemTransferTracking,
-  updateItemTransferTrackingModerator,
   finalizeItemTransfer,
 } from "@/services/item-transfer-actions";
 import {
@@ -67,31 +59,6 @@ import {
   StickyNote,
 } from "lucide-react";
 
-const TRACKING_ORDER = [
-  "created",
-  "packing",
-  "ready_pickup",
-  "in_transit",
-  "delivered",
-];
-const TRACKING_LABEL: Record<string, string> = {
-  created: "Item Transfer Dibuat",
-  packing: "Packing",
-  ready_pickup: "Siap Diambil",
-  in_transit: "Dalam Pengiriman",
-  delivered: "Barang Diterima",
-  completed: "Selesai Final",
-};
-const TRACKING_FULL_ORDER = [...TRACKING_ORDER, "completed"];
-const isTrackingStepCompleted = (
-  current: string | undefined,
-  stepId: string,
-) => {
-  const ci = TRACKING_FULL_ORDER.indexOf(current || "created");
-  const si = TRACKING_FULL_ORDER.indexOf(stepId);
-  return ci > si;
-};
-
 export default function ItemTransferDetailPage({
   params,
 }: {
@@ -116,10 +83,6 @@ export default function ItemTransferDetailPage({
 
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
-
-  const [moderatorTrackingStatus, setModeratorTrackingStatus] =
-    useState("created");
-  const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
 
   useEffect(() => {
     if (itId) {
@@ -158,8 +121,6 @@ export default function ItemTransferDetailPage({
         .eq("id", itId)
         .single();
       setIt(itData);
-      setModeratorTrackingStatus(itData?.tracking_status || "created");
-      setModeratorTrackingNote(itData?.tracking_note || "");
 
       const { data: itemData } = await supabase
         .from("item_transfer_items")
@@ -210,10 +171,6 @@ export default function ItemTransferDetailPage({
     it?.status === "approved" &&
     it?.tracking_status === "delivered" &&
     isReceiver;
-  const nextTracking =
-    it && TRACKING_ORDER.indexOf(it.tracking_status) >= 0
-      ? TRACKING_ORDER[TRACKING_ORDER.indexOf(it.tracking_status) + 1]
-      : null;
   const isModeratorOrAdmin = roleNames.some(
     (role) => role === "moderator" || role === "admin",
   );
@@ -253,29 +210,6 @@ export default function ItemTransferDetailPage({
     toast.success("Item Transfer ditolak");
     setRejectDialogOpen(false);
     setRejectionReason("");
-    await fetchDetails();
-  };
-
-  const handleTrack = async () => {
-    if (!nextTracking) return;
-    setBusy(true);
-    const res = await updateItemTransferTracking(Number(itId), nextTracking);
-    setBusy(false);
-    if ((res as any).error) return toast.error((res as any).error);
-    toast.success(`Tracking: ${TRACKING_LABEL[nextTracking]}`);
-    await fetchDetails();
-  };
-
-  const handleModeratorTrackingSave = async () => {
-    setBusy(true);
-    const res = await updateItemTransferTrackingModerator(
-      Number(itId),
-      moderatorTrackingStatus,
-      moderatorTrackingNote,
-    );
-    setBusy(false);
-    if ((res as any).error) return toast.error((res as any).error);
-    toast.success("Tracking status dan catatan berhasil diperbarui");
     await fetchDetails();
   };
 
@@ -576,68 +510,15 @@ export default function ItemTransferDetailPage({
 
       <Content title="Status Pengiriman">
         <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3">
-          <div className="space-y-2.5">
-            {TRACKING_FULL_ORDER.map((stepId, idx) => {
-              const completed = isTrackingStepCompleted(
-                it?.tracking_status,
-                stepId,
-              );
-              const current = it?.tracking_status === stepId;
-              return (
-                <div key={stepId} className="flex items-center gap-3">
-                  <div
-                    className={cn(
-                      "h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0",
-                      completed
-                        ? "bg-green-500 text-white"
-                        : current
-                          ? "bg-orange-500 text-white"
-                          : "bg-slate-100 text-slate-400",
-                    )}
-                  >
-                    {completed ? (
-                      <CheckCircle2 className="h-3 w-3" />
-                    ) : (
-                      <span>{idx + 1}</span>
-                    )}
-                  </div>
-                  <span
-                    className={cn(
-                      "text-xs font-bold flex-1",
-                      current
-                        ? "text-orange-600"
-                        : completed
-                          ? "text-green-600"
-                          : "text-slate-400",
-                    )}
-                  >
-                    {TRACKING_LABEL[stepId]}
-                  </span>
-                  {current && (
-                    <Badge className="text-[9px] font-bold bg-orange-100 text-orange-700 border-0">
-                      Sekarang
-                    </Badge>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {canTrack && nextTracking && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full gap-2 text-xs font-bold border-orange-200 text-orange-700 hover:bg-orange-50"
-              disabled={busy}
-              onClick={handleTrack}
-            >
-              {busy ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <CheckCircle2 className="h-3.5 w-3.5" />
-              )}
-              Lanjutkan ke Tahap Berikutnya
-            </Button>
+          {it && (
+            <ItemTransferTrackingControl
+              itId={Number(itId)}
+              trackingStatus={it.tracking_status}
+              trackingNote={it.tracking_note}
+              canTrack={!!canTrack}
+              canOverride={isModeratorOrAdmin && it.status === "approved"}
+              onSaved={fetchDetails}
+            />
           )}
 
           {it?.status === "open" && (
@@ -678,62 +559,6 @@ export default function ItemTransferDetailPage({
             </Button>
           )}
         </div>
-
-        {isModeratorOrAdmin && it?.status === "approved" && (
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="h-4 w-1 bg-indigo-500 rounded-full" />
-              <h4 className="text-[11px] font-bold uppercase tracking-tight">
-                Tracking Moderator/Admin
-              </h4>
-            </div>
-            <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3">
-              <Select
-                value={moderatorTrackingStatus}
-                onValueChange={setModeratorTrackingStatus}
-                disabled={busy}
-              >
-                <SelectTrigger className="h-10 bg-white border-indigo-200 font-bold text-xs uppercase rounded-lg">
-                  <SelectValue placeholder="Pilih status tracking" />
-                </SelectTrigger>
-                <SelectContent>
-                  {TRACKING_ORDER.map((s) => (
-                    <SelectItem
-                      key={s}
-                      value={s}
-                      className="text-xs font-bold uppercase"
-                    >
-                      {TRACKING_LABEL[s]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-
-              <Textarea
-                value={moderatorTrackingNote}
-                onChange={(e) => setModeratorTrackingNote(e.target.value)}
-                placeholder="Catatan tracking custom (opsional)"
-                className="min-h-20 bg-white border-indigo-200 text-xs"
-                disabled={busy}
-              />
-
-              <Button
-                variant="outline"
-                size="sm"
-                className="w-full gap-2 text-xs font-bold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
-                onClick={handleModeratorTrackingSave}
-                disabled={busy}
-              >
-                {busy ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <CheckCircle2 className="h-3.5 w-3.5" />
-                )}
-                Simpan Tracking + Catatan
-              </Button>
-            </div>
-          </div>
-        )}
       </Content>
 
       {it?.approvals && it.approvals.length > 0 && (

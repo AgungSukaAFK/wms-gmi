@@ -32,6 +32,7 @@ import { toast } from "sonner";
 import { ItemTransferDetailSheet } from "@/components/item-transfer/item-transfer-detail-sheet";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { formatDate } from "@/lib/utils";
+import { summarizeApprovals } from "@/lib/approval-progress";
 import {
   IT_STATUS_LABEL,
   buildItemTransferWorkbook,
@@ -449,7 +450,22 @@ export default function ItemTransferPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      {getStatusBadge(r.status)}
+                      {(() => {
+                        const pendingApprover =
+                          r.status === "open"
+                            ? summarizeApprovals(r.approvals).pendingApprover
+                            : null;
+                        return (
+                          <div className="flex flex-col items-center gap-0.5">
+                            {getStatusBadge(r.status)}
+                            {pendingApprover && (
+                              <span className="text-[9px] font-medium text-warning uppercase tracking-tight">
+                                Menunggu: {pendingApprover.nama}
+                              </span>
+                            )}
+                          </div>
+                        );
+                      })()}
                     </TableCell>
                     <TableCell className="text-right">
                       <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary inline" />
