@@ -429,7 +429,9 @@ export function CreateSpbPoDialog({
               }
             />
             <div className="flex flex-col gap-2 sm:flex-row">
-              <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+              {/* modal: konten popover di-portal ke luar Dialog, tanpa ini
+                  scroll lock Dialog ikut memblokir wheel/touch di list. */}
+              <Popover modal open={pickerOpen} onOpenChange={setPickerOpen}>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
