@@ -1273,8 +1273,9 @@ export default function StockClient({
           {!filterReady && (
             <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs font-medium text-warning">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              Filter gudang, status & satuan belum tersedia karena database
-              belum diperbarui. Pencarian, rentang stok & tanggal tetap jalan.
+              Filter gudang, status & satuan sementara tidak tersedia (database
+              belum diperbarui atau gagal dimuat). Pencarian, rentang stok &
+              tanggal tetap jalan.
             </div>
           )}
 

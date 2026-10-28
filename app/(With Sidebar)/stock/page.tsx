@@ -160,8 +160,13 @@ export default async function StockPage({
   let count = 0;
   let filterReady = true;
 
-  if (summaryRes.error?.code === "PGRST202") {
-    // Fungsi belum ada di schema cache (migration belum jalan di VPS).
+  if (summaryRes.error) {
+    // PGRST202: fungsi belum ada di schema cache (migration belum jalan di
+    // VPS). Error lain (mis. 57014 statement timeout): tetap tampilkan data
+    // lewat query lama, jangan sampai halaman kosong.
+    if (summaryRes.error.code !== "PGRST202") {
+      console.error("Error fetching stock summary:", summaryRes.error);
+    }
     filterReady = false;
     const legacy = await fetchLegacySummary(supabase, {
       q,
@@ -176,8 +181,6 @@ export default async function StockPage({
     if (legacy.error) console.error("Error fetching stock:", legacy.error);
     data = legacy.data || [];
     count = legacy.count || 0;
-  } else if (summaryRes.error) {
-    console.error("Error fetching stock summary:", summaryRes.error);
   } else {
     data = summaryRes.data || [];
     count = Number(data[0]?.total_count ?? 0);
