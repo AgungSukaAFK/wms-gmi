@@ -17,6 +17,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { createClient } from "@/lib/supabase/client";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, ReactNode, useEffect, useState } from "react";
 import { toast } from "sonner";
@@ -52,7 +53,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             {isLast ? (
               <BreadcrumbPage>{readablePart}</BreadcrumbPage>
             ) : (
-              <BreadcrumbLink href={href}>{readablePart}</BreadcrumbLink>
+              <BreadcrumbLink asChild>
+                <Link href={href}>{readablePart}</Link>
+              </BreadcrumbLink>
             )}
           </BreadcrumbItem>
           {!isLast && <BreadcrumbSeparator />}
@@ -119,7 +122,9 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
               <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
                 <BreadcrumbList className="min-w-0 flex-nowrap overflow-x-auto">
                   <BreadcrumbItem className="hidden md:block">
-                    <BreadcrumbLink href="/dashboard">WMS-GMI</BreadcrumbLink>
+                    <BreadcrumbLink asChild>
+                      <Link href="/dashboard">WMS-GMI</Link>
+                    </BreadcrumbLink>
                   </BreadcrumbItem>
                   <BreadcrumbSeparator className="hidden md:block" />
                   {urlToBreadcrumb(pathname)}
@@ -128,17 +133,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             </div>
           </header>
           <div className="flex min-w-0 flex-1 flex-col gap-4 [overflow-x:clip] p-4 pt-0">
-            {userId ? (
-              <DailyResetGuard userId={userId}>
-                <div className="grid min-w-0 auto-rows-auto grid-cols-12 items-start gap-4 md:gap-6">
-                  {children}
-                </div>
-              </DailyResetGuard>
-            ) : (
+            {/* Guard selalu dirender (walau userId belum ada) supaya posisi
+                {children} di tree tetap — kalau wrapper-nya berganti saat
+                userId terisi, halaman ke-unmount lalu mount ulang dan semua
+                fetch datanya jalan dua kali. */}
+            <DailyResetGuard userId={userId}>
               <div className="grid min-w-0 auto-rows-auto grid-cols-12 items-start gap-4 md:gap-6">
                 {children}
               </div>
-            )}
+            </DailyResetGuard>
           </div>
         </SidebarInset>
       </SidebarProvider>

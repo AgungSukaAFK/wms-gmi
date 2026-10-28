@@ -17,6 +17,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { useState } from "react";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { MyAlertDialog } from "./dialog-confirm";
 import { redirect } from "next/navigation";
@@ -87,11 +88,11 @@ export function NavUser({
               </DropdownMenuLabel>
               <DropdownMenuSeparator />
               <DropdownMenuGroup>
-                <DropdownMenuItem>
-                  <SquareUserRound />
-                  <a href="/profile" className="w-full">
+                <DropdownMenuItem asChild>
+                  <Link href="/profile" className="w-full">
+                    <SquareUserRound />
                     My Profile
-                  </a>
+                  </Link>
                 </DropdownMenuItem>
               </DropdownMenuGroup>
               <DropdownMenuSeparator />

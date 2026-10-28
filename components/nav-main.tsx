@@ -1,6 +1,8 @@
 "use client";
 
-import { ChevronDown, type LucideIcon } from "lucide-react";
+import { useState } from "react";
+import Link, { useLinkStatus } from "next/link";
+import { ChevronDown, Loader2, type LucideIcon } from "lucide-react";
 
 import {
   SidebarGroup,
@@ -8,8 +10,78 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
+
+type NavItem = {
+  label?: string;
+  title: string;
+  url: string;
+  icon?: LucideIcon;
+  isActive?: boolean;
+  badge?: number;
+  dot?: boolean;
+  items?: {
+    title: string;
+    url: string;
+  }[];
+};
+
+// Ikon diganti spinner selama navigasi pending (prefetch belum selesai /
+// route dinamis), ukuran slot tetap jadi tidak ada layout shift.
+function NavItemIcon({ icon: Icon }: { icon?: LucideIcon }) {
+  const { pending } = useLinkStatus();
+  if (pending) {
+    return <Loader2 className="h-4 w-4 shrink-0 animate-spin" />;
+  }
+  return Icon ? <Icon className="h-4 w-4 shrink-0" /> : null;
+}
+
+function NavMainItem({ item }: { item: NavItem }) {
+  // Prefetch baru jalan setelah ada niat (hover/sentuh/fokus). Sidebar punya
+  // puluhan link — prefetch semua yang kelihatan di viewport = puluhan request
+  // lewat proxy (masing-masing query ke Supabase) tiap kali app dibuka.
+  const [intent, setIntent] = useState(false);
+  const { isMobile, setOpenMobile } = useSidebar();
+  const markIntent = () => setIntent(true);
+
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton tooltip={item.title} asChild>
+        <Link
+          href={item.url}
+          prefetch={intent ? null : false}
+          onMouseEnter={markIntent}
+          onTouchStart={markIntent}
+          onFocus={markIntent}
+          onClick={() => {
+            // Navigasi client-side tidak reload halaman, jadi sheet sidebar
+            // mobile harus ditutup manual.
+            if (isMobile) setOpenMobile(false);
+          }}
+          className={cn(
+            "w-full flex gap-4 items-center rounded-md px-3 py-2 transition-colors hover:bg-accent",
+            item.isActive && "bg-primary/5",
+          )}
+        >
+          <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
+            <NavItemIcon icon={item.icon} />
+            {item.dot && (
+              <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive" />
+            )}
+          </span>
+          <span className="grow text-left">{item.title}</span>
+          {item.badge != null && item.badge > 0 && (
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
+              {item.badge > 99 ? "99+" : item.badge}
+            </span>
+          )}
+        </Link>
+      </SidebarMenuButton>
+    </SidebarMenuItem>
+  );
+}
 
 export function NavMain({
   items,
@@ -20,19 +92,7 @@ export function NavMain({
   label?: string;
   collapsed?: boolean;
   onToggle?: () => void;
-  items: {
-    label?: string;
-    title: string;
-    url: string;
-    icon?: LucideIcon;
-    isActive?: boolean;
-    badge?: number;
-    dot?: boolean;
-    items?: {
-      title: string;
-      url: string;
-    }[];
-  }[];
+  items: NavItem[];
 }) {
   return (
     <SidebarGroup>
@@ -53,30 +113,7 @@ export function NavMain({
       {!collapsed && (
         <SidebarMenu>
           {items.map((item) => (
-            <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton tooltip={item.title} asChild>
-                <a
-                  href={item.url}
-                  className={cn(
-                    "w-full flex gap-4 items-center rounded-md px-3 py-2 transition-colors hover:bg-accent",
-                    item.isActive && "bg-primary/5",
-                  )}
-                >
-                  <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
-                    {item.icon && <item.icon className="h-4 w-4 shrink-0" />}
-                    {item.dot && (
-                      <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive" />
-                    )}
-                  </span>
-                  <span className="grow text-left">{item.title}</span>
-                  {item.badge != null && item.badge > 0 && (
-                    <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground">
-                      {item.badge > 99 ? "99+" : item.badge}
-                    </span>
-                  )}
-                </a>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+            <NavMainItem key={item.title} item={item} />
           ))}
         </SidebarMenu>
       )}
