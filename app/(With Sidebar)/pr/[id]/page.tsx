@@ -167,7 +167,7 @@ export default function PRDetailPage({
     try {
       const { data: prData } = await supabase
         .from("prs")
-        .select("*, cabang(nama_cabang), profiles(nama)")
+        .select("*, cabang(nama_cabang), profiles(nama), vendor:vendors!pr_vendor_id(vendor_name, vendor_no)")
         .eq("id", prId)
         .single();
       setPr(prData);
@@ -587,6 +587,14 @@ export default function PRDetailPage({
                   {pr?.pr_kode}
                 </h1>
                 {getStatusBadge(pr?.pr_status)}
+                {pr?.pr_jenis === "konsinyasi" && (
+                  <Badge
+                    variant="outline"
+                    className="text-[9px] font-bold uppercase border-violet-300 bg-violet-50 text-violet-700"
+                  >
+                    Konsinyasi · {pr?.vendor?.vendor_name}
+                  </Badge>
+                )}
                 {pr?.pr_convert_status && (
                   <Badge
                     variant="outline"

@@ -643,6 +643,14 @@ export default function PRListPage() {
                         <span className="font-bold text-foreground tracking-tight uppercase text-sm">
                           {pr.pr_kode}
                         </span>
+                        {pr.pr_jenis === "konsinyasi" && (
+                          <Badge
+                            variant="outline"
+                            className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700"
+                          >
+                            Konsinyasi
+                          </Badge>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>

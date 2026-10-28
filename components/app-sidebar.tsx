@@ -5,6 +5,7 @@
 import * as React from "react";
 import { usePathname, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import {
   Sidebar,
   SidebarContent,
@@ -67,6 +68,7 @@ import {
   Search,
   X,
   FileUp,
+  Scale,
 } from "lucide-react";
 
 // Update the menu data
@@ -178,6 +180,14 @@ const data = {
       icon: Warehouse,
     },
   ],
+  // Konsinyasi vendor (supplier titip AC part di gudang GMI). IT & SPB
+  // konsinyasi dibuat dari menu Item Transfer / SPB biasa (toggle Konsinyasi).
+  navVendorConsignment: [
+    { title: "PR Konsinyasi", url: "/vendor-consignment/pr", icon: FileSpreadsheet },
+    { title: "GR Konsinyasi", url: "/vendor-consignment/gr", icon: PackageCheck },
+    { title: "Stok Konsinyasi", url: "/vendor-consignment/stock", icon: Warehouse },
+    { title: "Rekonsil & BAST", url: "/vendor-consignment/rekonsil", icon: Scale },
+  ],
   navHmMaintenance: [
     { title: "Periodic Maintenance", url: "/maintenance", icon: Gauge },
     { title: "Forecasting AC", url: "/maintenance/forecast-ac", icon: Snowflake },
@@ -217,6 +227,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     stockOut: boolean;
     soReguler: boolean;
     consignment: boolean;
+    vendorConsignment: boolean;
     hmMaintenance: boolean;
     help: boolean;
   };
@@ -231,6 +242,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     stockOut: false,
     soReguler: false,
     consignment: false,
+    vendorConsignment: false,
     hmMaintenance: false,
     help: false,
   };
@@ -258,6 +270,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
   React.useEffect(() => {
     let isMounted = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const getUser = async () => {
       const supabase = createClient();
@@ -266,6 +279,12 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
       if (!isMounted) return;
 
       if (!data.user || error) {
+        // Supabase tidak terjangkau ≠ sesi invalid — jangan tendang ke login,
+        // coba lagi sebentar lagi.
+        if (isAuthRetryableFetchError(error)) {
+          retryTimer = setTimeout(getUser, 3000);
+          return;
+        }
         if (error) {
           await supabase.auth.signOut();
         }
@@ -310,6 +329,7 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
 
     return () => {
       isMounted = false;
+      clearTimeout(retryTimer);
     };
   }, [router]);
 
@@ -438,6 +458,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
         key: "consignment",
         label: "Consignment",
         items: markActive(data.navConsignment),
+      },
+      {
+        key: "vendorConsignment",
+        label: "Konsinyasi Vendor",
+        items: markActive(data.navVendorConsignment),
       },
       {
         key: "hmMaintenance",

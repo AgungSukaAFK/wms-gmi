@@ -65,6 +65,7 @@ type CabangOption = { id: number; nama_cabang: string };
 type SpbRow = {
   id: number;
   spb_no: string;
+  spb_is_consignment?: boolean | null;
   spb_no_wo?: string | null;
   spb_tanggal: string;
   spb_kode_unit?: string | null;
@@ -523,7 +524,14 @@ export default function SpbPage() {
               ) : (
                 rows.map((row) => (
                   <TableRow key={row.id}>
-                    <TableCell className="font-medium">{row.spb_no}</TableCell>
+                    <TableCell className="font-medium">
+                      {row.spb_no}
+                      {row.spb_is_consignment && (
+                        <span className="ml-1.5 rounded border border-violet-300 bg-violet-50 px-1 text-[9px] font-bold uppercase text-violet-700">
+                          Konsinyasi
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell>{row.spb_no_wo || "-"}</TableCell>
                     <TableCell>
                       {formatDate(row.spb_tanggal)}

@@ -409,6 +409,7 @@ function LinkDialog({
         )
         .in("part_id", partIds)
         .eq("prs.pr_status", "approved")
+        .neq("prs.pr_jenis", "konsinyasi")
         .neq("status", "rejected")
         .limit(1000);
       const rows = (data as any[]) || [];

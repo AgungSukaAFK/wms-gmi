@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { useAuthStore } from "@/stores/auth-store";
@@ -26,19 +26,34 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
   const today = new Date().toLocaleDateString("sv-SE");
   const needsInit =
     !!userId && (!profile || profile.id !== userId || lastLoginDate !== today);
+  const [retryTick, setRetryTick] = useState(0);
 
   useEffect(() => {
     if (!needsInit || !userId) return;
     let isMounted = true;
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
 
     const initSession = async () => {
       const supabase = createClient();
 
-      const { data: profileData, error: profileError } = await supabase
+      const {
+        data: profileData,
+        error: profileError,
+        status: profileStatus,
+      } = await supabase
         .from("profiles")
         .select("*, cabang(id, nama_cabang, kode_cabang)")
         .eq("id", userId)
         .single();
+
+      // status 0 = gagal jaringan/timeout, 5xx = gateway bermasalah — bukan
+      // bukti sesi invalid. Coba lagi, jangan sign out.
+      if (profileError && (profileStatus === 0 || profileStatus >= 500)) {
+        if (isMounted) {
+          retryTimer = setTimeout(() => setRetryTick((t) => t + 1), 3000);
+        }
+        return;
+      }
 
       if (!profileData || profileError) {
         // Sesi/akun sudah tidak valid — bersihkan cache lokal supaya
@@ -71,8 +86,9 @@ export function DailyResetGuard({ children, userId }: DailyResetGuardProps) {
 
     return () => {
       isMounted = false;
+      clearTimeout(retryTimer);
     };
-  }, [needsInit, userId, setSession, clearSession, router]);
+  }, [needsInit, userId, setSession, clearSession, router, retryTick]);
 
   if (needsInit) {
     return (

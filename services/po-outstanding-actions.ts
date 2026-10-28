@@ -128,7 +128,7 @@ export async function linkOutstandingPoItems(poId: number, links: OutstandingLin
         .in("pr_item_id", prItemIds),
       supabase
         .from("pr_items")
-        .select("id, pr_id, mr_id, qty, status, part_id, part_number, satuan, prs!inner(pr_kode, pr_status)")
+        .select("id, pr_id, mr_id, qty, status, part_id, part_number, satuan, prs!inner(pr_kode, pr_status, pr_jenis)")
         .in("id", prItemIds),
       fetchLockedPoItemIds(supabase, poItemIds),
       fetchPrItemConvertedQty(supabase, prItemIds),
@@ -164,6 +164,10 @@ export async function linkOutstandingPoItems(poId: number, links: OutstandingLin
     const pr = Array.isArray(prItem.prs) ? prItem.prs[0] : prItem.prs;
     if (pr?.pr_status !== "approved") {
       errors.push(`${pn}: PR ${pr?.pr_kode || ""} tidak berstatus approved.`);
+      continue;
+    }
+    if (pr?.pr_jenis === "konsinyasi") {
+      errors.push(`${pn}: PR ${pr?.pr_kode} adalah PR Konsinyasi (di-PO lewat Rekonsil).`);
       continue;
     }
     if (isPrItemRejected(prItem)) {

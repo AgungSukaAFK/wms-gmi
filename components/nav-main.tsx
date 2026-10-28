@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link, { useLinkStatus } from "next/link";
 import { ChevronDown, Loader2, type LucideIcon } from "lucide-react";
 
@@ -38,13 +38,22 @@ function NavItemIcon({ icon: Icon }: { icon?: LucideIcon }) {
   return Icon ? <Icon className="h-4 w-4 shrink-0" /> : null;
 }
 
+// Kursor harus diam sebentar di menu baru dianggap niat — kursor yang cuma
+// lewat (nyapu sidebar) jangan memicu prefetch.
+const HOVER_INTENT_MS = 150;
+
 function NavMainItem({ item }: { item: NavItem }) {
   // Prefetch baru jalan setelah ada niat (hover/sentuh/fokus). Sidebar punya
   // puluhan link — prefetch semua yang kelihatan di viewport = puluhan request
   // lewat proxy (masing-masing query ke Supabase) tiap kali app dibuka.
   const [intent, setIntent] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
+    undefined,
+  );
   const { isMobile, setOpenMobile } = useSidebar();
   const markIntent = () => setIntent(true);
+
+  useEffect(() => () => clearTimeout(hoverTimer.current), []);
 
   return (
     <SidebarMenuItem>
@@ -52,7 +61,11 @@ function NavMainItem({ item }: { item: NavItem }) {
         <Link
           href={item.url}
           prefetch={intent ? null : false}
-          onMouseEnter={markIntent}
+          onMouseEnter={() => {
+            if (intent) return;
+            hoverTimer.current = setTimeout(markIntent, HOVER_INTENT_MS);
+          }}
+          onMouseLeave={() => clearTimeout(hoverTimer.current)}
           onTouchStart={markIntent}
           onFocus={markIntent}
           onClick={() => {

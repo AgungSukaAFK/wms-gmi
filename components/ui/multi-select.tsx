@@ -15,6 +15,8 @@ import { Input } from "@/components/ui/input";
 export interface MultiSelectOption {
   label: string;
   value: string;
+  /** Keterangan kecil rata kanan di daftar (mis. jumlah data), opsional. */
+  hint?: string;
 }
 
 interface MultiSelectProps {
@@ -130,6 +132,11 @@ export function MultiSelect({
                 >
                   <Checkbox checked={checked} className="pointer-events-none" />
                   <span className="truncate">{opt.label}</span>
+                  {opt.hint && (
+                    <span className="ml-auto shrink-0 pl-2 text-[10px] font-semibold tabular-nums text-muted-foreground">
+                      {opt.hint}
+                    </span>
+                  )}
                 </div>
               );
             })

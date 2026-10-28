@@ -4,10 +4,57 @@
 // services/moderator-edit-actions.ts) yang memegang validasi izin & claim.
 
 import { changeStockQty } from "@/lib/stock-mutation";
+import { findSpbRekonsil } from "@/lib/vendor-consignment";
 
 function rel(row: any, key: string) {
   const v = row?.[key];
   return Array.isArray(v) ? v[0] : v;
+}
+
+// SPB konsinyasi (spb_is_consignment) mengeluarkan barang titipan vendor:
+// stoknya vendor_consignment_stock + kartu stok vendor_consignment_movements,
+// bukan stock + stock_movements. Kolom kedua tabel kartu stok sama (plus
+// vendor_id), jadi alur posting di bawah cukup memilih "ledger"-nya.
+type SpbLedger = { vendorId: number | null };
+
+async function fetchSpbLedger(supabase: any, spbId: number): Promise<SpbLedger> {
+  const { data } = await supabase
+    .from("spb")
+    .select("spb_is_consignment, spb_vendor_id")
+    .eq("id", spbId)
+    .maybeSingle();
+  return { vendorId: data?.spb_is_consignment ? data.spb_vendor_id : null };
+}
+
+function ledgerMovesTable(ledger: SpbLedger) {
+  return ledger.vendorId ? "vendor_consignment_movements" : "stock_movements";
+}
+
+function ledgerMove(ledger: SpbLedger, row: Record<string, any>) {
+  return ledger.vendorId ? { ...row, vendor_id: ledger.vendorId } : row;
+}
+
+function ledgerChange(
+  supabase: any,
+  ledger: SpbLedger,
+  partId: number,
+  cabangId: number,
+  delta: number,
+  opts?: { allowNegative?: boolean; label?: string },
+) {
+  return ledger.vendorId
+    ? changeStockQty(
+        supabase,
+        { table: "vendor_consignment_stock", partId, cabangId, vendorId: ledger.vendorId },
+        delta,
+        opts,
+      )
+    : changeStockQty(supabase, { partId, cabangId }, delta, opts);
+}
+
+function ledgerMovesQuery(supabase: any, ledger: SpbLedger, columns: string) {
+  const q = supabase.from(ledgerMovesTable(ledger)).select(columns);
+  return ledger.vendorId ? q.eq("vendor_id", ledger.vendorId) : q;
 }
 
 /**
@@ -121,9 +168,8 @@ export async function postSpbStockOut(supabase: any, spbId: number, actorId: str
     byPart.set(row.part_id, cur);
   }
 
-  const { data: posted } = await supabase
-    .from("stock_movements")
-    .select("part_id")
+  const ledger = await fetchSpbLedger(supabase, spbId);
+  const { data: posted } = await ledgerMovesQuery(supabase, ledger, "part_id")
     .eq("type", "SPB_OUT")
     .eq("reference_id", spbHeader.spb_no);
   const postedParts = new Set((posted || []).map((r: any) => r.part_id));
@@ -131,36 +177,35 @@ export async function postSpbStockOut(supabase: any, spbId: number, actorId: str
   const applied: { partId: number; qty: number }[] = [];
   for (const [partId, { qty, pn }] of byPart) {
     if (postedParts.has(partId)) continue;
-    const res = await changeStockQty(
-      supabase,
-      { partId, cabangId: spbHeader.cabang_id },
-      -qty,
-      { label: pn },
-    );
+    const res = await ledgerChange(supabase, ledger, partId, spbHeader.cabang_id, -qty, { label: pn });
     if (!res.ok) {
       for (const a of applied) {
-        await changeStockQty(supabase, { partId: a.partId, cabangId: spbHeader.cabang_id }, a.qty, {
+        await ledgerChange(supabase, ledger, a.partId, spbHeader.cabang_id, a.qty, {
           allowNegative: true,
         });
         await supabase
-          .from("stock_movements")
+          .from(ledgerMovesTable(ledger))
           .delete()
           .eq("type", "SPB_OUT")
           .eq("reference_id", spbHeader.spb_no)
           .eq("part_id", a.partId);
       }
-      return { error: `Stok part ${pn} tidak mencukupi. ${res.error}` };
+      return {
+        error: `Stok ${ledger.vendorId ? "konsinyasi " : ""}part ${pn} tidak mencukupi. ${res.error}`,
+      };
     }
     applied.push({ partId, qty });
-    await supabase.from("stock_movements").insert({
-      part_id: partId,
-      cabang_id: spbHeader.cabang_id,
-      qty_change: -qty,
-      type: "SPB_OUT",
-      reference_id: spbHeader.spb_no,
-      notes: `Stock out dari SPB ${spbHeader.spb_no}`,
-      created_by: actorId,
-    });
+    await supabase.from(ledgerMovesTable(ledger)).insert(
+      ledgerMove(ledger, {
+        part_id: partId,
+        cabang_id: spbHeader.cabang_id,
+        qty_change: -qty,
+        type: "SPB_OUT",
+        reference_id: spbHeader.spb_no,
+        notes: `Stock out dari SPB ${spbHeader.spb_no}${ledger.vendorId ? " (konsinyasi)" : ""}`,
+        created_by: actorId,
+      }),
+    );
   }
   return { success: true };
 }
@@ -181,9 +226,8 @@ export async function returnSpbOutstandingStock(
     .from("spb_details")
     .select("part_id, dtl_spb_part_number, dtl_spb_qty, dtl_spb_qty_returned")
     .eq("spb_id", params.spbId);
-  const { data: moves } = await supabase
-    .from("stock_movements")
-    .select("part_id, qty_change")
+  const ledger = await fetchSpbLedger(supabase, params.spbId);
+  const { data: moves } = await ledgerMovesQuery(supabase, ledger, "part_id, qty_change")
     .eq("reference_id", params.spbNo)
     .eq("cabang_id", params.cabangId)
     .in("type", ["SPB_OUT", "SPB_CANCEL", "SPB_ROLLBACK"]);
@@ -205,21 +249,21 @@ export async function returnSpbOutstandingStock(
   for (const [partId, { outstanding, returned, pn }] of byPart) {
     const qty = Math.min(outstanding, Math.max(0, (cut.get(partId) || 0) - returned));
     if (qty <= 0) continue;
-    await changeStockQty(
-      supabase,
-      { partId, cabangId: params.cabangId },
-      qty,
-      { allowNegative: true, label: pn },
-    );
-    await supabase.from("stock_movements").insert({
-      part_id: partId,
-      cabang_id: params.cabangId,
-      qty_change: qty,
-      type: params.type,
-      reference_id: params.spbNo,
-      notes: params.note,
-      created_by: params.actorId,
+    await ledgerChange(supabase, ledger, partId, params.cabangId, qty, {
+      allowNegative: true,
+      label: pn,
     });
+    await supabase.from(ledgerMovesTable(ledger)).insert(
+      ledgerMove(ledger, {
+        part_id: partId,
+        cabang_id: params.cabangId,
+        qty_change: qty,
+        type: params.type,
+        reference_id: params.spbNo,
+        notes: params.note,
+        created_by: params.actorId,
+      }),
+    );
   }
 }
 
@@ -289,6 +333,12 @@ export async function postReturnSpb(supabase: any, returnId: number, actorId: st
     }
   }
 
+  // SPB konsinyasi yang sudah direkonsil sudah jadi dasar PO ke vendor.
+  const rekonsilKode = await findSpbRekonsil(supabase, header.spb_id, dtlIds);
+  if (rekonsilKode) {
+    return { error: `Item SPB ini sudah masuk Rekonsil Konsinyasi ${rekonsilKode}, tidak bisa diretur.` };
+  }
+
   // Stok kembali per part (part diambil dari detail SPB, bukan payload).
   const byPart = new Map<number, number>();
   for (const r of detailRows) {
@@ -297,29 +347,25 @@ export async function postReturnSpb(supabase: any, returnId: number, actorId: st
     if (!d?.part_id || qty <= 0) continue;
     byPart.set(d.part_id, (byPart.get(d.part_id) || 0) + qty);
   }
-  const { data: posted } = await supabase
-    .from("stock_movements")
-    .select("part_id")
+  const ledger = await fetchSpbLedger(supabase, header.spb_id);
+  const { data: posted } = await ledgerMovesQuery(supabase, ledger, "part_id")
     .eq("type", "SPB_RETURN")
     .eq("reference_id", header.rtn_kode);
   const postedParts = new Set((posted || []).map((r: any) => r.part_id));
   for (const [partId, qty] of byPart) {
     if (postedParts.has(partId)) continue;
-    await changeStockQty(
-      supabase,
-      { partId, cabangId: spbHeader.cabang_id },
-      qty,
-      { label: String(partId) },
+    await ledgerChange(supabase, ledger, partId, spbHeader.cabang_id, qty, { label: String(partId) });
+    await supabase.from(ledgerMovesTable(ledger)).insert(
+      ledgerMove(ledger, {
+        part_id: partId,
+        cabang_id: spbHeader.cabang_id,
+        qty_change: qty,
+        type: "SPB_RETURN",
+        reference_id: header.rtn_kode,
+        notes: `Stock return from SPB${ledger.vendorId ? " (konsinyasi)" : ""}`,
+        created_by: actorId,
+      }),
     );
-    await supabase.from("stock_movements").insert({
-      part_id: partId,
-      cabang_id: spbHeader.cabang_id,
-      qty_change: qty,
-      type: "SPB_RETURN",
-      reference_id: header.rtn_kode,
-      notes: "Stock return from SPB",
-      created_by: actorId,
-    });
   }
 
   await recomputeSpbReturnedQty(supabase, header.spb_id);

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useTransition } from "react";
 import { Content } from "@/components/content";
 import {
   Table,
@@ -24,6 +24,12 @@ import {
   Download,
   RefreshCw,
   CalendarIcon,
+  MapPin,
+  SlidersHorizontal,
+  ChevronDown,
+  ChevronUp,
+  X,
+  AlertTriangle,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -87,20 +93,164 @@ import { Badge } from "@/components/ui/badge";
 import { useDebounce } from "use-debounce";
 import { useRouter, useSearchParams } from "next/navigation";
 import { StockDetailSheet } from "@/components/stock/stock-detail-sheet";
-import { cn } from "@/lib/utils";
+import { cn, formatDate } from "@/lib/utils";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
+
+// Status dihitung dalam cakupan gudang terpilih (atau semua gudang), lihat
+// search_stock_summary di migration 20261028100000.
+const STATUS_OPTIONS = [
+  { value: "all", label: "Semua Status" },
+  { value: "in_stock", label: "Ada Stok (> 0)" },
+  { value: "empty", label: "Stok Kosong (0)" },
+  { value: "negative", label: "Stok Minus (< 0)" },
+  { value: "below_min", label: "Di Bawah Min" },
+  { value: "above_max", label: "Di Atas Max" },
+  { value: "minmax_unset", label: "Min/Max Belum Diatur" },
+];
+
+/** max_qty >= ini = default "tanpa batas" dari Update SOH. */
+const MAX_UNLIMITED = 999999;
+const fmtQty = (n: unknown) => Number(n ?? 0).toLocaleString("id-ID");
+
+interface CabangStockRow {
+  cabang_id: number;
+  nama_cabang: string;
+  qty: number;
+  min_qty: number;
+  max_qty: number;
+}
+
+/**
+ * Rincian di bawah kolom Stok Gudang: 1 gudang -> min/max-nya, beberapa
+ * gudang -> qty per gudang yang tidak nol.
+ */
+function CabangBreakdown({
+  rows,
+  single,
+}: {
+  rows: CabangStockRow[];
+  single: boolean;
+}) {
+  if (single) {
+    const r = rows[0];
+    if (!r || (r.min_qty === 0 && r.max_qty === 0)) {
+      return (
+        <span className="text-[10px] italic text-muted-foreground/70">
+          Min/Max belum diatur
+        </span>
+      );
+    }
+    return (
+      <span className="text-[10px] font-medium text-muted-foreground">
+        Min {fmtQty(r.min_qty)} · Max{" "}
+        {r.max_qty >= MAX_UNLIMITED ? "∞" : fmtQty(r.max_qty)}
+      </span>
+    );
+  }
+  const nonZero = rows.filter((r) => r.qty !== 0);
+  if (nonZero.length === 0) return null;
+  const shown = nonZero.slice(0, 3);
+  return (
+    <div className="flex w-full flex-col text-[10px] font-medium leading-tight text-muted-foreground">
+      {shown.map((r) => (
+        <span key={r.cabang_id} className="truncate">
+          {r.nama_cabang}:{" "}
+          <span
+            className={cn(
+              "font-bold",
+              r.qty < 0 ? "text-destructive" : "text-foreground",
+            )}
+          >
+            {fmtQty(r.qty)}
+          </span>
+        </span>
+      ))}
+      {nonZero.length > shown.length && (
+        <span>+{nonZero.length - shown.length} gudang lain</span>
+      )}
+    </div>
+  );
+}
+
+interface CabangOption {
+  id: number;
+  nama_cabang: string;
+  /** Jumlah part dengan stok > 0 di gudang ini. */
+  parts_in_stock: number;
+}
+
+interface ScopeCounts {
+  scope_locations?: number;
+  negative_locations?: number;
+  below_min_locations?: number;
+  above_max_locations?: number;
+}
+
+/** Badge masalah stok dalam cakupan (gudang terpilih / semua gudang). */
+function StockStatusBadges({ part }: { part: ScopeCounts }) {
+  const issues = [
+    {
+      n: Number(part.negative_locations || 0),
+      label: "Minus",
+      title: "gudang stoknya minus",
+      className: "bg-destructive/10 text-destructive",
+    },
+    {
+      n: Number(part.below_min_locations || 0),
+      label: "< Min",
+      title: "gudang di bawah min",
+      className: "bg-warning/10 text-warning",
+    },
+    {
+      n: Number(part.above_max_locations || 0),
+      label: "> Max",
+      title: "gudang di atas max",
+      className: "bg-primary/10 text-primary",
+    },
+  ].filter((i) => i.n > 0);
+
+  if (issues.length === 0) {
+    return Number(part.scope_locations || 0) > 0 ? (
+      <span className="text-xs text-muted-foreground/40">—</span>
+    ) : (
+      <span className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground/50">
+        Kosong
+      </span>
+    );
+  }
+  return (
+    <div className="flex flex-wrap justify-center gap-1">
+      {issues.map((i) => (
+        <Badge
+          key={i.label}
+          variant="secondary"
+          title={`${i.n} ${i.title}`}
+          className={cn("h-5 border-none px-1.5 text-[10px] font-bold", i.className)}
+        >
+          {i.label}
+          {i.n > 1 && ` ×${i.n}`}
+        </Badge>
+      ))}
+    </div>
+  );
+}
 
 interface StockClientProps {
   initialData: any[];
   totalCount: number;
-  cabangList: any[];
+  cabangList: CabangOption[];
+  satuanList: string[];
+  /** false = fungsi search_stock_summary belum ada di DB (migration belum jalan). */
+  filterReady: boolean;
   currentPage: number;
   pageSize: number;
   initialQuery: string;
-  initialCabang: string;
+  initialCabang: string[];
   initialStatus: string;
+  initialSatuan: string[];
   initialSort: string;
   initialView: "table" | "grid";
   initialStockFrom: string;
@@ -113,11 +263,14 @@ export default function StockClient({
   initialData,
   totalCount,
   cabangList,
+  satuanList,
+  filterReady,
   currentPage,
   pageSize,
   initialQuery,
   initialCabang,
   initialStatus,
+  initialSatuan,
   initialSort,
   initialView,
   initialStockFrom,
@@ -790,13 +943,155 @@ export default function StockClient({
   const [debouncedStockTo] = useDebounce(stockTo, 500);
   const [updatedFrom, setUpdatedFrom] = useState(initialUpdatedFrom);
   const [updatedTo, setUpdatedTo] = useState(initialUpdatedTo);
+  // Gudang/status/satuan langsung ke URL; state lokal cuma supaya kontrolnya
+  // responsif sebelum server selesai render ulang, lalu disinkron dari props.
+  const [cabangFilter, setCabangFilter] = useState<string[]>(initialCabang);
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
+  const [satuanFilter, setSatuanFilter] = useState<string[]>(initialSatuan);
+  const [showAdvanced, setShowAdvanced] = useState(
+    Boolean(
+      initialStockFrom ||
+        initialStockTo ||
+        initialUpdatedFrom ||
+        initialUpdatedTo ||
+        initialSatuan.length,
+    ),
+  );
+  const [isPending, startTransition] = useTransition();
+
+  const cabangKey = initialCabang.join(",");
+  const satuanKey = initialSatuan.join(",");
+  useEffect(() => setCabangFilter(cabangKey ? cabangKey.split(",") : []), [cabangKey]);
+  useEffect(() => setStatusFilter(initialStatus), [initialStatus]);
+  useEffect(() => setSatuanFilter(satuanKey ? satuanKey.split(",") : []), [satuanKey]);
+
+  const hasCabang = cabangFilter.length > 0;
+  // Kolom tabel ikut data dari server (props), bukan state lokal, supaya
+  // tidak tampil kolom gudang dengan data lama selama navigasi pending.
+  const showCabangCol = filterReady && initialCabang.length > 0;
+  const cabangNameById = new Map<string, string>(
+    cabangList.map((c) => [String(c.id), c.nama_cabang]),
+  );
+  const advancedCount =
+    (stockFrom || stockTo ? 1 : 0) +
+    (updatedFrom || updatedTo ? 1 : 0) +
+    (satuanFilter.length > 0 ? 1 : 0);
 
   // Selected Part for Detail
   const [selectedPartId, setSelectedPartId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
+  // URL terakhir yang di-push. useSearchParams baru berubah setelah navigasi
+  // selesai, jadi perubahan filter beruntun (atau Reset) selama navigasi
+  // masih pending harus dibangun dari sini supaya tidak saling menimpa.
+  const latestParamsRef = useRef(searchParams.toString());
   useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
+    latestParamsRef.current = searchParams.toString();
+  }, [searchParams]);
+  const currentParams = () => new URLSearchParams(latestParamsRef.current);
+
+  const navigate = (params: URLSearchParams) => {
+    latestParamsRef.current = params.toString();
+    startTransition(() => router.push(`/stock?${params.toString()}`));
+  };
+
+  /** Ubah query string + kembali ke halaman 1. */
+  const pushFilter = (mutate: (params: URLSearchParams) => void) => {
+    const params = currentParams();
+    mutate(params);
+    params.set("page", "1");
+    navigate(params);
+  };
+
+  const handleCabangChange = (ids: string[]) => {
+    setCabangFilter(ids);
+    pushFilter((params) => {
+      if (ids.length > 0) params.set("cabang", ids.join(","));
+      else params.delete("cabang");
+      // Urutan stok ikut cakupan: stok gudang terpilih kalau ada gudang,
+      // total semua gudang kalau tidak.
+      const sort = params.get("sort") || "qty_desc";
+      if (ids.length > 0 && sort.startsWith("qty_")) {
+        params.set("sort", `cabang_${sort}`);
+      } else if (ids.length === 0 && sort.startsWith("cabang_qty_")) {
+        params.set("sort", sort.replace("cabang_", ""));
+      }
+    });
+  };
+
+  const handleStatusChange = (value: string) => {
+    setStatusFilter(value);
+    pushFilter((params) => params.set("status", value));
+  };
+
+  const handleSatuanChange = (values: string[]) => {
+    setSatuanFilter(values);
+    pushFilter((params) => {
+      if (values.length > 0) params.set("satuan", values.join(","));
+      else params.delete("satuan");
+    });
+  };
+
+  const handleReset = () => {
+    setSearch("");
+    setStockFrom("");
+    setStockTo("");
+    setUpdatedFrom("");
+    setUpdatedTo("");
+    setCabangFilter([]);
+    setStatusFilter("all");
+    setSatuanFilter([]);
+    navigate(new URLSearchParams());
+  };
+
+  // Chip ringkasan filter aktif (bisa dihapus satu per satu).
+  const activeChips: { key: string; label: string; onRemove: () => void }[] =
+    [];
+  if (hasCabang) {
+    activeChips.push({
+      key: "cabang",
+      label: `Gudang: ${cabangFilter.map((id) => cabangNameById.get(id) ?? id).join(", ")}`,
+      onRemove: () => handleCabangChange([]),
+    });
+  }
+  if (statusFilter !== "all") {
+    activeChips.push({
+      key: "status",
+      label: `Status: ${STATUS_OPTIONS.find((o) => o.value === statusFilter)?.label ?? statusFilter}${hasCabang ? " di gudang terpilih" : ""}`,
+      onRemove: () => handleStatusChange("all"),
+    });
+  }
+  if (stockFrom || stockTo) {
+    activeChips.push({
+      key: "qty",
+      label: `${hasCabang ? "Stok gudang" : "Total stok"}: ${stockFrom || "…"} – ${stockTo || "…"}`,
+      onRemove: () => {
+        setStockFrom("");
+        setStockTo("");
+      },
+    });
+  }
+  if (updatedFrom || updatedTo) {
+    activeChips.push({
+      key: "updated",
+      label: `Diubah: ${updatedFrom ? formatDate(updatedFrom) : "…"} – ${updatedTo ? formatDate(updatedTo) : "…"}`,
+      onRemove: () => {
+        setUpdatedFrom("");
+        setUpdatedTo("");
+      },
+    });
+  }
+  if (satuanFilter.length > 0) {
+    activeChips.push({
+      key: "satuan",
+      label: `Satuan: ${satuanFilter.join(", ")}`,
+      onRemove: () => handleSatuanChange([]),
+    });
+  }
+
+  useEffect(() => {
+    const params = currentParams();
+    const before = params.toString();
 
     if (debouncedSearch) params.set("q", debouncedSearch);
     else params.delete("q");
@@ -813,8 +1108,11 @@ export default function StockClient({
     if (updatedTo) params.set("updated_to", updatedTo);
     else params.delete("updated_to");
 
+    // Tidak ada yang berubah (mis. saat mount / setelah Reset) -> jangan
+    // push, supaya halaman aktif tidak ikut ter-reset ke 1.
+    if (params.toString() === before) return;
     params.set("page", "1");
-    router.push(`/stock?${params.toString()}`);
+    navigate(params);
   }, [
     debouncedSearch,
     debouncedStockFrom,
@@ -824,23 +1122,23 @@ export default function StockClient({
   ]);
 
   const handlePageChange = (newPage: number) => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = currentParams();
     params.set("page", newPage.toString());
-    router.push(`/stock?${params.toString()}`);
+    navigate(params);
   };
 
   const handleSortChange = (newSort: string) => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = currentParams();
     params.set("sort", newSort);
     params.set("page", "1");
-    router.push(`/stock?${params.toString()}`);
+    navigate(params);
   };
 
   const handleLimitChange = (newLimit: string) => {
-    const params = new URLSearchParams(searchParams.toString());
+    const params = currentParams();
     params.set("limit", newLimit);
     params.set("page", "1");
-    router.push(`/stock?${params.toString()}`);
+    navigate(params);
   };
 
   const handleRowClick = (partId: number) => {
@@ -971,90 +1269,230 @@ export default function StockClient({
 
       {/* Section 2: Filter Bar */}
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70 group">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary" />
-            <Input
-              placeholder="Cari Barang..."
-              className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium text-foreground transition-all focus:bg-background"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+        <div className="flex flex-col gap-3">
+          {!filterReady && (
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-xs font-medium text-warning">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              Filter gudang, status & satuan belum tersedia karena database
+              belum diperbarui. Pencarian, rentang stok & tanggal tetap jalan.
+            </div>
+          )}
 
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select value={initialSort} onValueChange={handleSortChange}>
-              <SelectTrigger className="h-9 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-45">
-                <div className="flex items-center gap-2">
-                  <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
-                  <SelectValue placeholder="Urutkan" />
-                </div>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="qty_desc">Stok Terbanyak</SelectItem>
-                <SelectItem value="qty_asc">Stok Terendah</SelectItem>
-                <SelectItem value="part_name_asc">Nama (A-Z)</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Input
-              type="number"
-              min="0"
-              placeholder="Stok min"
-              className="h-9 w-full border-input bg-muted/40 text-xs font-medium text-foreground sm:w-28"
-              value={stockFrom}
-              onChange={(e) => setStockFrom(e.target.value)}
-            />
-
-            <Input
-              type="number"
-              min="0"
-              placeholder="Stok max"
-              className="h-9 w-full border-input bg-muted/40 text-xs font-medium text-foreground sm:w-28"
-              value={stockTo}
-              onChange={(e) => setStockTo(e.target.value)}
-            />
-
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <CalendarIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <DatePickerString
-                value={updatedFrom}
-                onChange={setUpdatedFrom}
-                placeholder="Diubah dari"
-                className="h-9 w-full text-xs font-medium sm:w-38"
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
+            <div className="relative min-w-0 flex-1 xl:min-w-60 group">
+              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground transition-colors group-focus-within:text-primary" />
+              <Input
+                placeholder="Cari part number / nama barang..."
+                className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium text-foreground transition-all focus:bg-background"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
               />
             </div>
 
-            <DatePickerString
-              value={updatedTo}
-              onChange={setUpdatedTo}
-              placeholder="Diubah sampai"
-              className="h-9 w-full text-xs font-medium sm:w-38"
-            />
+            <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
+              <MultiSelect
+                className="w-full sm:w-52"
+                contentClassName="w-64"
+                placeholder="Semua Gudang"
+                icon={<MapPin className="h-3.5 w-3.5 text-muted-foreground" />}
+                searchable
+                disabled={!filterReady}
+                selected={cabangFilter}
+                onChange={handleCabangChange}
+                options={cabangList.map((c) => ({
+                  label: c.nama_cabang,
+                  value: String(c.id),
+                  hint: filterReady
+                    ? `${fmtQty(c.parts_in_stock)} part`
+                    : undefined,
+                }))}
+              />
 
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setSearch("");
-                setStockFrom("");
-                setStockTo("");
-                setUpdatedFrom("");
-                setUpdatedTo("");
-                router.push("/stock");
-              }}
-              className="h-9 text-xs font-bold text-muted-foreground hover:text-destructive"
-            >
-              <FilterX className="mr-1 h-3.5 w-3.5" /> Reset
-            </Button>
+              <Select
+                value={statusFilter}
+                onValueChange={handleStatusChange}
+                disabled={!filterReady}
+              >
+                <SelectTrigger className="h-9 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-48">
+                  <SelectValue placeholder="Status Stok" />
+                </SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+
+              <Select value={initialSort} onValueChange={handleSortChange}>
+                <SelectTrigger className="h-9 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-52">
+                  <div className="flex items-center gap-2">
+                    <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground" />
+                    <SelectValue placeholder="Urutkan" />
+                  </div>
+                </SelectTrigger>
+                <SelectContent>
+                  {hasCabang && (
+                    <>
+                      <SelectItem value="cabang_qty_desc">
+                        Stok Gudang Terbanyak
+                      </SelectItem>
+                      <SelectItem value="cabang_qty_asc">
+                        Stok Gudang Terendah
+                      </SelectItem>
+                    </>
+                  )}
+                  <SelectItem value="qty_desc">
+                    {hasCabang ? "Total Stok Terbanyak" : "Stok Terbanyak"}
+                  </SelectItem>
+                  <SelectItem value="qty_asc">
+                    {hasCabang ? "Total Stok Terendah" : "Stok Terendah"}
+                  </SelectItem>
+                  <SelectItem value="active_locations_desc">
+                    Lokasi Terbanyak
+                  </SelectItem>
+                  <SelectItem value="last_updated_desc">
+                    Terakhir Diubah
+                  </SelectItem>
+                  <SelectItem value="part_number_asc">
+                    Part Number (A-Z)
+                  </SelectItem>
+                  <SelectItem value="part_name_asc">Nama (A-Z)</SelectItem>
+                </SelectContent>
+              </Select>
+
+              <Button
+                type="button"
+                variant={showAdvanced ? "secondary" : "outline"}
+                onClick={() => setShowAdvanced((v) => !v)}
+                aria-expanded={showAdvanced}
+                className="h-9 gap-2 rounded-md px-3 text-xs font-semibold"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Filter Lanjutan
+                {advancedCount > 0 && (
+                  <Badge className="h-5 min-w-5 justify-center rounded-full px-1.5 text-[10px]">
+                    {advancedCount}
+                  </Badge>
+                )}
+                {showAdvanced ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+              </Button>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleReset}
+                className="h-9 text-xs font-bold text-muted-foreground hover:text-destructive"
+              >
+                <FilterX className="mr-1 h-3.5 w-3.5" /> Reset
+              </Button>
+            </div>
           </div>
+
+          {showAdvanced && (
+            <div className="grid gap-3 md:grid-cols-3">
+              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  {hasCabang ? "Stok di Gudang Terpilih" : "Total Stok"}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <Input
+                    type="number"
+                    placeholder="Dari"
+                    className="h-9 border-input bg-background text-xs font-medium text-foreground"
+                    value={stockFrom}
+                    onChange={(e) => setStockFrom(e.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    placeholder="Sampai"
+                    className="h-9 border-input bg-background text-xs font-medium text-foreground"
+                    value={stockTo}
+                    onChange={(e) => setStockTo(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+                <p className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  <CalendarIcon className="h-3 w-3" />
+                  Terakhir Diubah
+                  {hasCabang && " (Gudang Terpilih)"}
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <DatePickerString
+                    value={updatedFrom}
+                    onChange={setUpdatedFrom}
+                    placeholder="Dari"
+                    className="h-9 w-full text-xs font-medium"
+                  />
+                  <DatePickerString
+                    value={updatedTo}
+                    onChange={setUpdatedTo}
+                    placeholder="Sampai"
+                    className="h-9 w-full text-xs font-medium"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-3">
+                <p className="text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+                  Satuan
+                </p>
+                <MultiSelect
+                  className="w-full"
+                  placeholder="Semua Satuan"
+                  disabled={!filterReady}
+                  selected={satuanFilter}
+                  onChange={handleSatuanChange}
+                  options={satuanList.map((s) => ({ label: s, value: s }))}
+                />
+              </div>
+            </div>
+          )}
+
+          {activeChips.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="mr-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                {isPending && <Loader2 className="h-3 w-3 animate-spin" />}
+                {fmtQty(totalCount)} part cocok
+              </span>
+              {activeChips.map((chip) => (
+                <Badge
+                  key={chip.key}
+                  variant="secondary"
+                  className="h-6 max-w-full gap-1 rounded-full pl-2.5 pr-1 text-[11px] font-semibold"
+                >
+                  <span className="truncate">{chip.label}</span>
+                  <button
+                    type="button"
+                    onClick={chip.onRemove}
+                    aria-label={`Hapus filter ${chip.label}`}
+                    className="rounded-full p-0.5 text-muted-foreground hover:bg-background hover:text-destructive"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
       </Content>
 
       {/* Section 3: Table + Pagination */}
       <Content className="overflow-hidden">
-        <div className="overflow-x-auto text-[13px]">
-          <Table className="table-fixed">
+        <div
+          className={cn(
+            "overflow-x-auto text-[13px] transition-opacity",
+            isPending && "opacity-60",
+          )}
+        >
+          <Table className="table-fixed min-w-225">
             <TableHeader className="bg-muted/50">
               <TableRow className="h-10 border-b border-border hover:bg-transparent">
                 <SortableTableHead
@@ -1089,6 +1527,17 @@ export default function StockClient({
                 >
                   Lokasi
                 </SortableTableHead>
+                {showCabangCol && (
+                  <SortableTableHead
+                    sortKey="cabang_qty"
+                    currentSort={initialSort}
+                    onSort={handleSortChange}
+                    defaultDir="desc"
+                    className="w-40 text-center text-[10px] font-black uppercase text-primary"
+                  >
+                    Stok Gudang
+                  </SortableTableHead>
+                )}
                 <SortableTableHead
                   sortKey="qty"
                   currentSort={initialSort}
@@ -1101,6 +1550,11 @@ export default function StockClient({
                 <TableHead className="w-30 text-center text-[10px] font-black uppercase text-muted-foreground">
                   Rata/Site
                 </TableHead>
+                {filterReady && (
+                  <TableHead className="w-32 text-center text-[10px] font-black uppercase text-muted-foreground">
+                    {showCabangCol ? "Status Gudang" : "Status"}
+                  </TableHead>
+                )}
                 <TableHead className="w-15 pr-6" />
               </TableRow>
             </TableHeader>
@@ -1133,6 +1587,28 @@ export default function StockClient({
                         {part.active_locations} Site
                       </Badge>
                     </TableCell>
+                    {showCabangCol && (
+                      <TableCell className="text-center">
+                        <div className="flex flex-col items-center gap-0.5">
+                          <span
+                            className={cn(
+                              "text-sm font-black",
+                              part.scope_qty < 0
+                                ? "text-destructive"
+                                : part.scope_qty > 0
+                                  ? "text-primary"
+                                  : "text-muted-foreground/40",
+                            )}
+                          >
+                            {fmtQty(part.scope_qty)}
+                          </span>
+                          <CabangBreakdown
+                            rows={part.cabang_breakdown || []}
+                            single={initialCabang.length === 1}
+                          />
+                        </div>
+                      </TableCell>
+                    )}
                     <TableCell className="text-center">
                       <span className="text-sm font-black text-foreground">
                         {part.total_qty}
@@ -1159,6 +1635,11 @@ export default function StockClient({
                         </span>
                       </div>
                     </TableCell>
+                    {filterReady && (
+                      <TableCell className="text-center">
+                        <StockStatusBadges part={part} />
+                      </TableCell>
+                    )}
                     <TableCell className="pr-4 text-right">
                       <ArrowRight className="h-4 w-4 text-muted-foreground/40 transition-all group-hover:translate-x-1 group-hover:text-primary" />
                     </TableCell>
@@ -1167,10 +1648,12 @@ export default function StockClient({
               ) : (
                 <TableRow>
                   <TableCell
-                    colSpan={7}
+                    colSpan={7 + (showCabangCol ? 1 : 0) + (filterReady ? 1 : 0)}
                     className="h-32 text-center text-sm italic text-muted-foreground"
                   >
-                    Belum ada data stok.
+                    {activeChips.length > 0 || search
+                      ? "Tidak ada part yang cocok dengan filter."
+                      : "Belum ada data stok."}
                   </TableCell>
                 </TableRow>
               )}
@@ -1668,6 +2151,7 @@ export default function StockClient({
         open={detailOpen}
         onOpenChange={setDetailOpen}
         onUpdate={() => router.refresh()}
+        highlightCabangIds={initialCabang.map(Number)}
       />
     </>
   );

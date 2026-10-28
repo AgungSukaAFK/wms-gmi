@@ -38,6 +38,7 @@ import {
 } from "@/services/spb-actions";
 import { useRouter } from "next/navigation";
 import { toYmdLocal } from "@/lib/utils";
+import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 
 type Barang = {
   id: number;
@@ -118,6 +119,10 @@ export default function SpbCreatePage() {
   const [selectedPartId, setSelectedPartId] = useState<string>("");
 
   const [stockMap, setStockMap] = useState<Record<number, number>>({});
+  // SPB Out Konsinyasi: barang keluar dari stok titipan vendor di gudang ini.
+  const [isKonsinyasi, setIsKonsinyasi] = useState(false);
+  const [vendor, setVendor] = useState<VendorOption | null>(null);
+  const [regularStockMap, setRegularStockMap] = useState<Record<number, number>>({});
 
   const [selectedQty, setSelectedQty] = useState("");
   const [items, setItems] = useState<SpbItem[]>([]);
@@ -198,9 +203,50 @@ export default function SpbCreatePage() {
         {} as Record<number, number>,
       );
       setStockMap(mapped);
+      setRegularStockMap(mapped);
     }
 
     setMasterLoading(false);
+  };
+
+  // Mode konsinyasi: kolom stok & pilihan part mengacu ke stok titipan vendor.
+  useEffect(() => {
+    if (!isKonsinyasi) {
+      setStockMap(regularStockMap);
+      return;
+    }
+    if (!vendor || !cabangId) {
+      setStockMap({});
+      return;
+    }
+    supabase
+      .from("vendor_consignment_stock")
+      .select("part_id, qty")
+      .eq("vendor_id", vendor.id)
+      .eq("cabang_id", cabangId)
+      .then(({ data }) => {
+        setStockMap(
+          ((data || []) as StockRow[]).reduce(
+            (acc, row) => {
+              acc[row.part_id] = row.qty;
+              return acc;
+            },
+            {} as Record<number, number>,
+          ),
+        );
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isKonsinyasi, vendor?.id, cabangId, regularStockMap]);
+
+  const switchMode = (konsinyasi: boolean) => {
+    if (konsinyasi === isKonsinyasi) return;
+    setIsKonsinyasi(konsinyasi);
+    setVendor(null);
+    setSelectedPartId("");
+    if (items.length > 0) {
+      setItems([]);
+      toast.info("Daftar item direset karena jenis SPB berubah.");
+    }
   };
 
   useEffect(() => {
@@ -212,13 +258,39 @@ export default function SpbCreatePage() {
       if (!partPickerOpen) return;
 
       setPartLoading(true);
+      const keyword = partSearch.trim();
+      if (isKonsinyasi) {
+        if (!vendor || !cabangId) {
+          setPartOptions([]);
+          setPartLoading(false);
+          return;
+        }
+        let kq = supabase
+          .from("vendor_consignment_stock")
+          .select("barang!inner(id, part_number, part_name, part_satuan)")
+          .eq("vendor_id", vendor.id)
+          .eq("cabang_id", cabangId)
+          .gt("qty", 0)
+          .limit(15);
+        if (keyword) {
+          kq = kq.or(`part_number.ilike.${keyword}%,part_name.ilike.%${keyword}%`, {
+            referencedTable: "barang",
+          });
+        }
+        const { data, error } = await kq;
+        if (error) toast.error(error.message);
+        setPartOptions(
+          (data || []).map((r: any) => (Array.isArray(r.barang) ? r.barang[0] : r.barang)) as Barang[],
+        );
+        setPartLoading(false);
+        return;
+      }
       let query = supabase
         .from("barang")
         .select("id, part_number, part_name, part_satuan")
         .order("part_name", { ascending: true })
         .limit(15);
 
-      const keyword = partSearch.trim();
       if (keyword) {
         // part_number: prefix match saja (bukan "mengandung di mana saja"),
         // supaya cari "14L-0135" tidak nyangkut ke kode lain yang sekadar
@@ -249,7 +321,8 @@ export default function SpbCreatePage() {
     };
 
     fetchPartOptions();
-  }, [partPickerOpen, partSearch, supabase]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [partPickerOpen, partSearch, supabase, isKonsinyasi, vendor?.id, cabangId]);
 
   useEffect(() => {
     const fetchTemplateSteps = async () => {
@@ -302,6 +375,11 @@ export default function SpbCreatePage() {
       return;
     }
 
+    if (isKonsinyasi && qty > (stockMap[selectedPart.id] ?? 0)) {
+      toast.error(`Stok konsinyasi ${selectedPart.part_number} hanya ${stockMap[selectedPart.id] ?? 0}.`);
+      return;
+    }
+
     setItems((prev) => [
       ...prev,
       {
@@ -333,6 +411,8 @@ export default function SpbCreatePage() {
     if (!items.length) return toast.error("Tambahkan minimal 1 item.");
     if (!approvalTemplateId)
       return toast.error("Template tanda tangan wajib dipilih.");
+    if (isKonsinyasi && !vendor)
+      return toast.error("Pilih vendor konsinyasi.");
 
     setLoading(true);
 
@@ -351,6 +431,8 @@ export default function SpbCreatePage() {
       spb_problem_remark: remark || undefined,
       spb_gudang: gudang || undefined,
       cabang_id: cabangId || undefined,
+      spb_is_consignment: isKonsinyasi,
+      spb_vendor_id: isKonsinyasi ? vendor?.id : null,
       items,
     });
 
@@ -398,6 +480,50 @@ export default function SpbCreatePage() {
               disabled
             />
           </div>
+
+          <div className="space-y-2">
+            <Label>Sumber Barang</Label>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant={isKonsinyasi ? "outline" : "default"}
+                className="flex-1"
+                onClick={() => switchMode(false)}
+              >
+                Stok GMI
+              </Button>
+              <Button
+                type="button"
+                variant={isKonsinyasi ? "default" : "outline"}
+                className="flex-1"
+                onClick={() => switchMode(true)}
+              >
+                SPB Out Konsinyasi
+              </Button>
+            </div>
+          </div>
+
+          {isKonsinyasi && (
+            <div className="space-y-2">
+              <Label>Vendor Konsinyasi</Label>
+              <VendorPicker
+                value={vendor}
+                onChange={(v) => {
+                  setVendor(v);
+                  setSelectedPartId("");
+                  if (items.length > 0) {
+                    setItems([]);
+                    toast.info("Daftar item direset karena vendor berubah.");
+                  }
+                }}
+                stockCabangId={cabangId}
+                disabled={!cabangId}
+              />
+              <p className="text-xs text-muted-foreground">
+                Barang keluar dari stok titipan vendor ini dan nantinya direkonsil (BAST) sebagai dasar PO ke vendor.
+              </p>
+            </div>
+          )}
 
           <div className="space-y-2">
             <Label>Template Tanda Tangan</Label>
@@ -548,7 +674,7 @@ export default function SpbCreatePage() {
                       variant="outline"
                       role="combobox"
                       className="w-full justify-between font-normal"
-                      disabled={masterLoading}
+                      disabled={masterLoading || (isKonsinyasi && !vendor)}
                     >
                       <span className="truncate">
                         {selectedPart
@@ -642,7 +768,7 @@ export default function SpbCreatePage() {
                   <TableHead className="w-20">Satuan</TableHead>
                   <TableHead className="w-20">Qty SPB</TableHead>
                   <TableHead className="w-40">
-                    Stock Saat Ini ({gudang || "-"})
+                    {isKonsinyasi ? "Stok Konsinyasi" : "Stock Saat Ini"} ({gudang || "-"})
                   </TableHead>
                   <TableHead className="w-16">Aksi</TableHead>
                 </TableRow>

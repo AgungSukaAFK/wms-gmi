@@ -4,10 +4,15 @@ import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import type { KoliRow } from "@/lib/shipment";
 import {
+  computeMrItemsOutstandingForTransfer,
   recomputeMrItemsFulfillment,
   resolveReceiveItemsMrLineage,
 } from "@/lib/mr-fulfillment";
 import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
+import {
+  applyConsignmentChanges,
+  fetchConsignmentStockMap,
+} from "@/lib/vendor-consignment";
 import {
   notifyApprovers,
   notifyDocumentOwner,
@@ -27,10 +32,34 @@ const TRACKING_ORDER = [
  */
 async function releaseStockFromSource(
   supabase: any,
-  it: { id: number; it_kode: string; dari_cabang_id: number },
+  it: {
+    id: number;
+    it_kode: string;
+    dari_cabang_id: number;
+    it_is_consignment?: boolean | null;
+    it_vendor_id?: number | null;
+  },
   items: { part_id: number; part_number: string; part_name: string; qty: number }[],
   userId?: string,
 ) {
+  // IT konsinyasi: yang keluar stok titipan vendor (vendor_consignment_stock).
+  if (it.it_is_consignment && it.it_vendor_id) {
+    const res = await applyConsignmentChanges(
+      supabase,
+      items.map((item) => ({
+        vendorId: it.it_vendor_id!,
+        cabangId: it.dari_cabang_id,
+        partId: item.part_id,
+        delta: -item.qty,
+        label: item.part_number,
+        notes: `Item Transfer ${it.it_kode}: ${item.part_number} ${item.part_name} keluar (dalam pengiriman)`,
+      })),
+      { type: "IT_OUT", referenceId: it.it_kode, actorId: userId ?? null },
+    );
+    if (!res.ok) return { error: "Stok konsinyasi gudang asal tidak mencukupi:\n" + res.error };
+    return { success: true };
+  }
+
   // Total per part (PN sama di beberapa baris dijumlah), dipotong atomik.
   // Kalau ada yang gagal, potongan yang sudah terjadi dikembalikan.
   const neededByPart = sumQtyByPart(items, (i) => i.qty);
@@ -93,6 +122,11 @@ export async function createItemTransfer(data: {
   uid_receiver?: string;
   signature_requester_id?: string;
   approvals?: any[];
+  // IT Konsinyasi: memindahkan stok titipan vendor ini (bukan stok GMI).
+  // Item boleh membawa mr_item_id langsung (MR site tujuan) -- dikredit ke
+  // MR saat finalize, tanpa perlu RI sumber.
+  is_consignment?: boolean;
+  vendor_id?: number | null;
   items: {
     part_id: number;
     part_number: string;
@@ -133,6 +167,42 @@ export async function createItemTransfer(data: {
 
   if (data.items.some((i) => !(i.qty > 0) || !Number.isInteger(Number(i.qty))))
     return { error: "Qty item harus bilangan bulat lebih dari 0." };
+
+  const isConsignment = Boolean(data.is_consignment);
+  if (isConsignment) {
+    if (!data.vendor_id) return { error: "Vendor konsinyasi wajib dipilih." };
+    if (data.items.some((i) => i.receive_item_id))
+      return { error: "IT Konsinyasi tidak bisa mengambil item dari RI." };
+    // Item yang membawa MR site tujuan: divalidasi ulang di server (MR
+    // approved, milik gudang tujuan, part sama, qty <= sisa yang belum
+    // terpenuhi / belum dalam proses IT lain).
+    const mrItemIds = data.items.map((i) => i.mr_item_id).filter(Boolean) as number[];
+    if (mrItemIds.length > 0) {
+      const outstanding = await computeMrItemsOutstandingForTransfer(supabase, mrItemIds);
+      const requested = new Map<number, number>();
+      for (const item of data.items) {
+        if (!item.mr_item_id) continue;
+        const o = outstanding.get(item.mr_item_id);
+        if (!o) return { error: `${item.part_number}: item MR tidak ditemukan.` };
+        if (o.mr_status !== "approved")
+          return { error: `${item.part_number}: MR ${o.mr_kode} tidak berstatus approved.` };
+        if (Number(o.cabang_id) !== Number(data.ke_cabang_id))
+          return { error: `${item.part_number}: MR ${o.mr_kode} bukan milik gudang tujuan.` };
+        if (Number(o.part_id) !== Number(item.part_id))
+          return { error: `${item.part_number}: part tidak sesuai dengan item MR ${o.mr_kode}.` };
+        if (o.item_status === "rejected")
+          return { error: `${item.part_number}: item MR ${o.mr_kode} sudah ditolak.` };
+        requested.set(item.mr_item_id, (requested.get(item.mr_item_id) || 0) + Number(item.qty));
+      }
+      for (const [mrItemId, qty] of requested) {
+        const o = outstanding.get(mrItemId)!;
+        if (qty > o.outstanding)
+          return {
+            error: `MR ${o.mr_kode}: qty ${qty} melebihi sisa MR yang belum terpenuhi (${o.outstanding}).`,
+          };
+      }
+    }
+  }
 
   // Baris "dari RI": divalidasi ulang di server -- RI harus completed, barang
   // mendarat di gudang asal IT ini, part sama, dan total qty tidak melebihi
@@ -177,20 +247,26 @@ export async function createItemTransfer(data: {
       }
     }
   }
-  // Tanpa RI sumber tidak ada lineage MR yang sah.
+  // Tanpa RI sumber tidak ada lineage MR yang sah (kecuali IT konsinyasi
+  // yang item MR-nya sudah divalidasi di atas).
   for (const item of data.items) {
-    if (!item.receive_item_id) item.mr_item_id = null;
+    if (!isConsignment && !item.receive_item_id) item.mr_item_id = null;
   }
 
   // Validasi qty <= stok gudang asal (dijumlah per part)
   const partIds = data.items.map((i) => i.part_id);
   const neededByPart = sumQtyByPart(data.items, (i) => i.qty);
-  const { data: stockRows } = await supabase
-    .from("stock")
-    .select("part_id, qty")
-    .eq("cabang_id", data.dari_cabang_id)
-    .in("part_id", partIds);
-  const stockMap = new Map((stockRows || []).map((s: any) => [s.part_id, s.qty]));
+  let stockMap: Map<number, number>;
+  if (isConsignment) {
+    stockMap = await fetchConsignmentStockMap(supabase, data.vendor_id!, data.dari_cabang_id, partIds);
+  } else {
+    const { data: stockRows } = await supabase
+      .from("stock")
+      .select("part_id, qty")
+      .eq("cabang_id", data.dari_cabang_id)
+      .in("part_id", partIds);
+    stockMap = new Map((stockRows || []).map((s: any) => [s.part_id, s.qty]));
+  }
   const violations: string[] = [];
   for (const [partId, needed] of neededByPart) {
     const avail = (stockMap.get(partId) as number) ?? 0;
@@ -198,40 +274,47 @@ export async function createItemTransfer(data: {
     if (needed > avail) violations.push(`${name}: minta ${needed}, stok ${avail}`);
   }
   if (violations.length > 0)
-    return { error: "Qty melebihi stok gudang asal:\n" + violations.join("\n") };
+    return {
+      error:
+        `Qty melebihi stok ${isConsignment ? "konsinyasi " : ""}gudang asal:\n` +
+        violations.join("\n"),
+    };
 
   // Validasi batas max stok di gudang tujuan: stok_tujuan + qty <= max_qty.
   // max_qty = 0 dianggap belum di-set => barang tidak boleh ditransfer ke sana.
-  const { data: destRows } = await supabase
-    .from("stock")
-    .select("part_id, qty, max_qty")
-    .eq("cabang_id", data.ke_cabang_id)
-    .in("part_id", partIds);
-  const destMap = new Map(
-    (destRows || []).map((s: any) => [s.part_id, s]),
-  );
-  const destViolations: string[] = [];
-  for (const [partId, needed] of neededByPart) {
-    const name = data.items.find((i) => i.part_id === partId)?.part_number;
-    const d = destMap.get(partId) as
-      | { qty: number; max_qty: number }
-      | undefined;
-    const destMax = d?.max_qty ?? 0;
-    const destQty = d?.qty ?? 0;
-    if (destMax <= 0)
-      destViolations.push(
-        `${name}: belum ada batas max stok di gudang tujuan`,
-      );
-    else if (destQty + needed > destMax)
-      destViolations.push(
-        `${name}: ${destQty} + ${needed} melebihi max ${destMax}`,
-      );
+  // Min/max mengatur stok GMI, jadi tidak berlaku untuk stok titipan vendor.
+  if (!isConsignment) {
+    const { data: destRows } = await supabase
+      .from("stock")
+      .select("part_id, qty, max_qty")
+      .eq("cabang_id", data.ke_cabang_id)
+      .in("part_id", partIds);
+    const destMap = new Map(
+      (destRows || []).map((s: any) => [s.part_id, s]),
+    );
+    const destViolations: string[] = [];
+    for (const [partId, needed] of neededByPart) {
+      const name = data.items.find((i) => i.part_id === partId)?.part_number;
+      const d = destMap.get(partId) as
+        | { qty: number; max_qty: number }
+        | undefined;
+      const destMax = d?.max_qty ?? 0;
+      const destQty = d?.qty ?? 0;
+      if (destMax <= 0)
+        destViolations.push(
+          `${name}: belum ada batas max stok di gudang tujuan`,
+        );
+      else if (destQty + needed > destMax)
+        destViolations.push(
+          `${name}: ${destQty} + ${needed} melebihi max ${destMax}`,
+        );
+    }
+    if (destViolations.length > 0)
+      return {
+        error:
+          "Melebihi batas max stok gudang tujuan:\n" + destViolations.join("\n"),
+      };
   }
-  if (destViolations.length > 0)
-    return {
-      error:
-        "Melebihi batas max stok gudang tujuan:\n" + destViolations.join("\n"),
-    };
 
   const approvals = data.approvals ?? [];
   const initialStatus =
@@ -273,6 +356,7 @@ export async function createItemTransfer(data: {
         status: initialStatus as any,
         tracking_status: "created",
         stock_released: false,
+        ...(isConsignment ? { it_is_consignment: true, it_vendor_id: data.vendor_id } : {}),
       },
     ])
     .select()
@@ -604,7 +688,7 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
   const { data: it } = await supabase
     .from("item_transfers")
     .select(
-      "id, it_kode, ke_cabang_id, dari_cabang_id, status, tracking_status, signature_receiver_id",
+      "id, it_kode, ke_cabang_id, dari_cabang_id, status, tracking_status, signature_receiver_id, it_is_consignment, it_vendor_id",
     )
     .eq("id", itId)
     .single();
@@ -661,8 +745,23 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
   if (error) return { error: error.message };
   if (!claimed || claimed.length === 0) return { success: true, alreadyFinalized: true };
 
-  // Tambah stok ke gudang tujuan
-  for (const item of items) {
+  // Tambah stok ke gudang tujuan. IT konsinyasi: masuk stok titipan vendor
+  // di gudang tujuan (penerimaan GR konsinyasi di WH site).
+  if (it.it_is_consignment && it.it_vendor_id) {
+    await applyConsignmentChanges(
+      supabase,
+      items.map((item: any) => ({
+        vendorId: it.it_vendor_id,
+        cabangId: it.ke_cabang_id,
+        partId: item.part_id,
+        delta: item.qty,
+        label: item.part_number,
+        notes: `Item Transfer ${it.it_kode}: ${item.part_number} ${item.part_name} diterima`,
+      })),
+      { type: "IT_IN", referenceId: it.it_kode, actorId: user.id },
+    );
+  }
+  for (const item of it.it_is_consignment ? [] : items) {
     await changeStockQty(
       supabase,
       { partId: item.part_id, cabangId: it.ke_cabang_id },

@@ -477,6 +477,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         "id, pr_kode, pr_status, pr_convert_status, pr_tanggal, cabang(nama_cabang), profiles(nama)",
       )
       .eq("pr_status", "approved")
+      // PR Konsinyasi di-PO lewat Rekonsil (FIFO), bukan dari form ini.
+      .neq("pr_jenis", "konsinyasi")
       .order("created_at", { ascending: false })
       .limit(50);
 

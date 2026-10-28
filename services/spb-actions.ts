@@ -9,6 +9,7 @@ import {
   resolveSpbIdFromInvoice,
   returnSpbOutstandingStock,
 } from "@/lib/spb-posting";
+import { findSpbRekonsil } from "@/lib/vendor-consignment";
 
 type SpbItemPayload = {
   part_id: number;
@@ -33,6 +34,10 @@ type CreateSpbPayload = {
   spb_problem_remark?: string;
   spb_gudang?: string;
   cabang_id?: number;
+  // SPB Out Konsinyasi: barang keluar dari stok titipan vendor ini (bukan
+  // stok GMI) di gudang SPB -- lihat lib/spb-posting.ts.
+  spb_is_consignment?: boolean;
+  spb_vendor_id?: number | null;
   items: SpbItemPayload[];
 };
 
@@ -605,6 +610,11 @@ export async function createSpb(payload: CreateSpbPayload) {
     }
   }
 
+  const isConsignment = Boolean(payload.spb_is_consignment);
+  if (isConsignment && !payload.spb_vendor_id) {
+    return { error: "Vendor konsinyasi wajib dipilih untuk SPB Konsinyasi." };
+  }
+
   const nowIsoStr = new Date().toISOString();
 
   const { data: spbHeader, error: spbErr } = await supabase
@@ -631,6 +641,9 @@ export async function createSpb(payload: CreateSpbPayload) {
       approval_status: "completed",
       completed_at: nowIsoStr,
       created_by: me.user.id,
+      ...(isConsignment
+        ? { spb_is_consignment: true, spb_vendor_id: payload.spb_vendor_id }
+        : {}),
     })
     .select()
     .single();
@@ -719,6 +732,11 @@ export async function deleteSpb(id: number) {
     .eq("approval_status", "open");
   if (pendingReturns && pendingReturns > 0) {
     return { error: "SPB ini punya Return SPB yang masih menunggu approval. Selesaikan/tolak dulu." };
+  }
+
+  const rekonsilKode = await findSpbRekonsil(supabase, id);
+  if (rekonsilKode) {
+    return { error: `SPB ini sudah masuk Rekonsil Konsinyasi ${rekonsilKode}. Hapus rekonsilnya dulu.` };
   }
 
   // SPB CANCELLED: stoknya sudah dikembalikan saat cancel -> jangan dobel.
@@ -1297,6 +1315,10 @@ export async function createReturnSpb(payload: {
     return { error: "Qty return harus bilangan bulat." };
   }
   const dtlIds = Array.from(new Set(activeDetails.map((d) => d.spb_dtl_id)));
+  const rekonsilKode = dtlIds.length ? await findSpbRekonsil(supabase, payload.spb_id, dtlIds) : null;
+  if (rekonsilKode) {
+    return { error: `Item SPB ini sudah masuk Rekonsil Konsinyasi ${rekonsilKode}, tidak bisa diretur.` };
+  }
   const { data: spbDetails } = dtlIds.length
     ? await supabase
         .from("spb_details")
@@ -1587,6 +1609,11 @@ export async function cancelSpb(id: number, reason: string) {
     .eq("approval_status", "open");
   if (pendingReturns && pendingReturns > 0) {
     return { error: "SPB ini punya Return SPB yang masih menunggu approval. Selesaikan/tolak dulu." };
+  }
+
+  const rekonsilKode = await findSpbRekonsil(supabase, id);
+  if (rekonsilKode) {
+    return { error: `SPB ini sudah masuk Rekonsil Konsinyasi ${rekonsilKode}. Hapus rekonsilnya dulu.` };
   }
 
   // Claim (kondisional) dulu sebelum stok dikembalikan -> tidak dobel.

@@ -4,12 +4,14 @@
 // proses lain yang mengubah baris yang sama di tengah jalan. Tanpa ini, dua
 // request yang membaca qty yang sama akan saling menimpa (satu mutasi hilang).
 //
-// Dipakai untuk tabel `stock` (lokasi cabang) dan `customer_stock` (stok
-// konsinyasi di customer).
+// Dipakai untuk tabel `stock` (lokasi cabang), `customer_stock` (stok
+// konsinyasi di customer), dan `vendor_consignment_stock` (barang titipan
+// vendor di gudang GMI).
 
-type StockLocation =
+export type StockLocation =
   | { table?: "stock"; partId: number; cabangId: number }
-  | { table: "customer_stock"; partId: number; customerId: number };
+  | { table: "customer_stock"; partId: number; customerId: number }
+  | { table: "vendor_consignment_stock"; partId: number; cabangId: number; vendorId: number };
 
 export type StockChangeResult =
   | { ok: true; before: number; after: number }
@@ -17,10 +19,21 @@ export type StockChangeResult =
 
 const MAX_ATTEMPTS = 6;
 
-function locationFilter(loc: StockLocation): [string, number] {
-  return loc.table === "customer_stock"
-    ? ["customer_id", loc.customerId]
-    : ["cabang_id", (loc as any).cabangId];
+function locationFilters(loc: StockLocation): [string, number][] {
+  if (loc.table === "customer_stock") return [["customer_id", loc.customerId]];
+  if (loc.table === "vendor_consignment_stock") {
+    return [
+      ["vendor_id", loc.vendorId],
+      ["cabang_id", loc.cabangId],
+    ];
+  }
+  return [["cabang_id", loc.cabangId]];
+}
+
+function whereLocation(query: any, loc: StockLocation) {
+  let q = query.eq("part_id", loc.partId);
+  for (const [col, val] of locationFilters(loc)) q = q.eq(col, val);
+  return q;
 }
 
 /**
@@ -35,27 +48,19 @@ export async function changeStockQty(
   opts?: { allowNegative?: boolean; label?: string },
 ): Promise<StockChangeResult> {
   const table = loc.table ?? "stock";
-  const [col, locId] = locationFilter(loc);
   const label = opts?.label ?? `part ${loc.partId}`;
 
   if (!delta) {
-    const { data } = await supabase
-      .from(table)
-      .select("qty")
-      .eq("part_id", loc.partId)
-      .eq(col, locId)
-      .maybeSingle();
+    const { data } = await whereLocation(supabase.from(table).select("qty"), loc).maybeSingle();
     const q = Number(data?.qty) || 0;
     return { ok: true, before: q, after: q };
   }
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    const { data: row, error: readErr } = await supabase
-      .from(table)
-      .select("id, qty")
-      .eq("part_id", loc.partId)
-      .eq(col, locId)
-      .maybeSingle();
+    const { data: row, error: readErr } = await whereLocation(
+      supabase.from(table).select("id, qty"),
+      loc,
+    ).maybeSingle();
     if (readErr) return { ok: false, error: readErr.message };
 
     if (!row) {
@@ -64,7 +69,7 @@ export async function changeStockQty(
       }
       const { error: insErr } = await supabase
         .from(table)
-        .insert({ part_id: loc.partId, [col]: locId, qty: delta });
+        .insert({ part_id: loc.partId, ...Object.fromEntries(locationFilters(loc)), qty: delta });
       if (!insErr) return { ok: true, before: 0, after: delta };
       // Kemungkinan baris baru saja dibuat proses lain (unique violation) ->
       // ulangi sebagai update.

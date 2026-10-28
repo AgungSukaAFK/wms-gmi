@@ -336,6 +336,7 @@ function LinkToPrDialog({
         .from("prs")
         .select("id, pr_kode, pr_items(id, part_number, part_name, satuan, qty)")
         .eq("pr_status", "approved")
+        .neq("pr_jenis", "konsinyasi")
         .order("created_at", { ascending: false })
         .limit(10);
       if (debouncedSearch) q = q.ilike("pr_kode", `%${debouncedSearch}%`);

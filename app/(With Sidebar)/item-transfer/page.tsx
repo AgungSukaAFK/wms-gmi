@@ -429,6 +429,11 @@ export default function ItemTransferPage() {
                   >
                     <TableCell className="font-bold text-foreground uppercase text-sm">
                       {r.it_kode}
+                      {r.it_is_consignment && (
+                        <Badge variant="outline" className="ml-1.5 text-[9px] font-bold normal-case border-violet-300 text-violet-700">
+                          Konsinyasi
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2 text-xs font-bold text-foreground uppercase">

@@ -17,6 +17,7 @@ import {
   SidebarTrigger,
 } from "@/components/ui/sidebar";
 import { createClient } from "@/lib/supabase/client";
+import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, ReactNode, useEffect, useState } from "react";
@@ -65,6 +66,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
   }
 
   useEffect(() => {
+    let retryTimer: ReturnType<typeof setTimeout> | undefined;
+
     async function fetch() {
       const supabase = createClient();
       const {
@@ -73,6 +76,12 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       } = await supabase.auth.getUser();
 
       if (!user) {
+        // Supabase tidak terjangkau ≠ sesi invalid — jangan tendang ke login,
+        // coba lagi sebentar lagi.
+        if (isAuthRetryableFetchError(error)) {
+          retryTimer = setTimeout(fetch, 3000);
+          return;
+        }
         if (error) {
           await supabase.auth.signOut();
         }
@@ -103,6 +112,8 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
     }
 
     fetch();
+
+    return () => clearTimeout(retryTimer);
   }, [router]);
 
   return (

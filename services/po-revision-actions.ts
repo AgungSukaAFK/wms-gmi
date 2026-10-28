@@ -184,6 +184,13 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
   const newItems = items.filter((i) => !i.po_item_id);
 
   const poJenis: string = po.po_jenis || "reguler";
+  // PO Rekonsil Konsinyasi: item & qty terkunci ke hasil rekonsil (FIFO PR).
+  if (poJenis === "konsinyasi") {
+    return {
+      error:
+        "PO Rekonsil Konsinyasi tidak bisa direvisi. Hapus PO-nya (moderator) lalu buat ulang dari Rekonsil.",
+    };
+  }
   if (poJenis === "so") {
     if (newItems.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
       return { error: "PO dari SO tidak boleh berisi item dari PR." };

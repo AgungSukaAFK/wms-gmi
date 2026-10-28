@@ -53,6 +53,7 @@ import {
   User,
   ArrowRight,
   PackageCheck,
+  ClipboardList,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -70,6 +71,8 @@ import {
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { createItemTransfer } from "@/services/item-transfer-actions";
+import { getConsignmentMrOutstanding } from "@/services/vendor-consignment-actions";
+import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 
 interface ITItem {
   part_id: number;
@@ -87,6 +90,22 @@ interface ITItem {
   receive_item_id?: number | null;
   mr_kode?: string;
   ri_kode?: string;
+}
+
+// IT Konsinyasi boleh berisi part yang sama dari beberapa item MR.
+const rowKey = (i: ITItem) => `${i.part_id}:${i.mr_item_id ?? ""}:${i.receive_item_id ?? ""}`;
+
+interface MrLine {
+  mr_item_id: number;
+  mr_kode: string;
+  part_id: number;
+  part_number: string;
+  part_name: string;
+  satuan: string;
+  outstanding: number;
+  stok_konsinyasi: number;
+  qty_pilih: number;
+  selected: boolean;
 }
 
 interface RiLine {
@@ -160,6 +179,13 @@ export default function CreateItemTransferPage() {
   const [riLines, setRiLines] = useState<RiLine[]>([]);
   const [riLinesLoading, setRiLinesLoading] = useState(false);
 
+  // IT Konsinyasi: pindahkan stok titipan vendor (bukan stok GMI).
+  const [isKonsinyasi, setIsKonsinyasi] = useState(false);
+  const [vendor, setVendor] = useState<VendorOption | null>(null);
+  const [mrDialogOpen, setMrDialogOpen] = useState(false);
+  const [mrLines, setMrLines] = useState<MrLine[]>([]);
+  const [mrLinesLoading, setMrLinesLoading] = useState(false);
+
   // Signature
   const [isSignatureOpen, setIsSignatureOpen] = useState(false);
 
@@ -210,10 +236,34 @@ export default function CreateItemTransferPage() {
     init();
   }, []);
 
-  // Search barang
+  // Search barang (mode konsinyasi: hanya part yang ada stok titipan vendor
+  // di gudang asal).
   useEffect(() => {
     if (!searchOpen) return;
     const run = async () => {
+      if (isKonsinyasi) {
+        if (!vendor || !dariCabang) return setResults([]);
+        let q = supabase
+          .from("vendor_consignment_stock")
+          .select("qty, barang!inner(id, part_number, part_name, part_satuan)")
+          .eq("vendor_id", vendor.id)
+          .eq("cabang_id", dariCabang)
+          .gt("qty", 0)
+          .limit(15);
+        if (debouncedSearch)
+          q = q.or(
+            `part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`,
+            { referencedTable: "barang" },
+          );
+        const { data } = await q;
+        setResults(
+          (data || []).map((r: any) => ({
+            ...(Array.isArray(r.barang) ? r.barang[0] : r.barang),
+            konsinyasi_qty: r.qty,
+          })),
+        );
+        return;
+      }
       let q = supabase.from("barang").select("*").order("part_name").limit(15);
       if (debouncedSearch)
         q = q.or(
@@ -223,7 +273,8 @@ export default function CreateItemTransferPage() {
       setResults(data || []);
     };
     run();
-  }, [debouncedSearch, searchOpen]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, searchOpen, isKonsinyasi, vendor?.id, dariCabang]);
 
   // Search RI completed yang gudang penerima salah satu item-nya = gudang
   // asal (cabang) user ini -- cuma RI yang barangnya "mendarat" di cabang
@@ -429,6 +480,32 @@ export default function CreateItemTransferPage() {
       toast.error("Pilih gudang tujuan terlebih dahulu.");
       return;
     }
+    if (isKonsinyasi) {
+      // Min/max tidak berlaku untuk stok titipan vendor; stok tujuan cuma info.
+      const { data: dest } = await supabase
+        .from("vendor_consignment_stock")
+        .select("qty")
+        .eq("vendor_id", vendor!.id)
+        .eq("cabang_id", keCabang)
+        .eq("part_id", barang.id)
+        .maybeSingle();
+      setItems((prev) => [
+        ...prev,
+        {
+          part_id: barang.id,
+          part_number: barang.part_number,
+          part_name: barang.part_name,
+          satuan: barang.part_satuan,
+          qty: 1,
+          avail: Number(barang.konsinyasi_qty) || 0,
+          dest_qty: dest?.qty ?? 0,
+          dest_max: 0,
+        },
+      ]);
+      setSearchOpen(false);
+      setSearch("");
+      return;
+    }
     // Ambil stok PN ini di gudang asal
     const { data: stock } = await supabase
       .from("stock")
@@ -483,21 +560,90 @@ export default function CreateItemTransferPage() {
   };
 
   // Batas maksimal qty yang boleh dikirim: stok asal & sisa kapasitas tujuan
+  // (konsinyasi: stok asal & sisa MR kalau baris dari MR).
   const maxSendable = (i: ITItem) =>
-    Math.max(0, Math.min(i.avail, i.dest_max - i.dest_qty));
+    isKonsinyasi
+      ? Math.max(0, Math.min(i.avail, i.mr_item_id ? i.dest_max : i.avail))
+      : Math.max(0, Math.min(i.avail, i.dest_max - i.dest_qty));
 
-  const updateQty = (partId: number, qty: number) => {
+  const updateQty = (key: string, qty: number) => {
     setItems((prev) =>
       prev.map((i) =>
-        i.part_id === partId
+        rowKey(i) === key
           ? { ...i, qty: Math.max(1, Math.min(qty || 1, maxSendable(i))) }
           : i,
       ),
     );
   };
 
-  const removeItem = (partId: number) =>
-    setItems((prev) => prev.filter((i) => i.part_id !== partId));
+  const removeItem = (key: string) =>
+    setItems((prev) => prev.filter((i) => rowKey(i) !== key));
+
+  const switchMode = (konsinyasi: boolean) => {
+    if (konsinyasi === isKonsinyasi) return;
+    setIsKonsinyasi(konsinyasi);
+    setVendor(null);
+    if (items.length > 0) {
+      setItems([]);
+      toast.info("Daftar item direset karena jenis transfer berubah.");
+    }
+  };
+
+  // "Monitoring MR Site": item MR outstanding di gudang tujuan + stok
+  // konsinyasi vendor di gudang asal.
+  const openMrDialog = async () => {
+    if (!vendor || !dariCabang || !keCabang) return;
+    setMrDialogOpen(true);
+    setMrLinesLoading(true);
+    const res = await getConsignmentMrOutstanding({
+      keCabangId: keCabang,
+      dariCabangId: dariCabang,
+      vendorId: vendor.id,
+    });
+    setMrLinesLoading(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    setMrLines(
+      res.data.map((l: any) => {
+        const max = Math.min(l.outstanding, l.stok_konsinyasi);
+        return { ...l, qty_pilih: max, selected: false };
+      }),
+    );
+  };
+
+  const addSelectedMrItems = () => {
+    const chosen = mrLines.filter((l) => l.selected && l.qty_pilih > 0);
+    if (chosen.length === 0) return toast.error("Pilih minimal satu item MR.");
+    const toAdd: ITItem[] = [];
+    const skipped: string[] = [];
+    for (const l of chosen) {
+      if (items.some((i) => i.mr_item_id === l.mr_item_id)) {
+        skipped.push(`${l.part_number} (MR ${l.mr_kode} sudah ada)`);
+        continue;
+      }
+      toAdd.push({
+        part_id: l.part_id,
+        part_number: l.part_number,
+        part_name: l.part_name,
+        satuan: l.satuan,
+        qty: l.qty_pilih,
+        avail: l.stok_konsinyasi,
+        dest_qty: 0,
+        // Baris dari MR: dest_max dipakai sebagai batas sisa MR.
+        dest_max: l.outstanding,
+        mr_item_id: l.mr_item_id,
+        mr_kode: l.mr_kode,
+      });
+    }
+    if (toAdd.length > 0) setItems((prev) => [...prev, ...toAdd]);
+    if (skipped.length > 0) toast.warning(`Dilewati: ${skipped.join(", ")}`);
+    if (toAdd.length > 0) {
+      toast.success(`${toAdd.length} item MR ditambahkan.`);
+      setMrDialogOpen(false);
+    }
+  };
 
   const validate = () => {
     if (!itKode.trim()) return "Kode Item Transfer wajib diisi.";
@@ -505,6 +651,18 @@ export default function CreateItemTransferPage() {
     if (!keCabang) return "Pilih gudang tujuan.";
     if (dariCabang === keCabang) return "Gudang asal dan tujuan tidak boleh sama.";
     if (items.length === 0) return "Tambahkan minimal satu item.";
+    if (isKonsinyasi) {
+      if (!vendor) return "Pilih vendor konsinyasi.";
+      const perPart = new Map<number, { qty: number; avail: number; pn: string }>();
+      for (const i of items) {
+        const cur = perPart.get(i.part_id) || { qty: 0, avail: i.avail, pn: i.part_number };
+        cur.qty += i.qty;
+        perPart.set(i.part_id, cur);
+      }
+      for (const p of perPart.values()) {
+        if (p.qty > p.avail) return `${p.pn}: total qty ${p.qty} melebihi stok konsinyasi ${p.avail}.`;
+      }
+    }
     if (!picUid) return "PIC harus dipilih.";
     if (!receiverUid) return "Penerima harus dipilih.";
     if (!selectedTemplateId) return "Pilih alur approval.";
@@ -591,6 +749,8 @@ export default function CreateItemTransferPage() {
         remarks: remarks || undefined,
         signature_requester_id: signature.id,
         approvals: approvalData,
+        is_consignment: isKonsinyasi,
+        vendor_id: isKonsinyasi ? vendor?.id : undefined,
         items: items.map((i) => ({
           part_id: i.part_id,
           part_number: i.part_number,
@@ -675,6 +835,7 @@ export default function CreateItemTransferPage() {
                 const next = parseInt(v);
                 setDariCabang(next);
                 if (keCabang === next) setKeCabang(null);
+                if (isKonsinyasi) setVendor(null);
                 if (items.length > 0) {
                   setItems([]);
                   toast.info("Daftar item direset karena gudang asal berubah.");
@@ -723,6 +884,46 @@ export default function CreateItemTransferPage() {
               </SelectContent>
             </Select>
           </div>
+          <div className="space-y-1.5">
+            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Jenis Transfer</Label>
+            <div className="flex gap-1.5">
+              <Button
+                type="button"
+                variant={isKonsinyasi ? "outline" : "default"}
+                className="h-10 flex-1 text-xs font-bold"
+                onClick={() => switchMode(false)}
+              >
+                Stok GMI
+              </Button>
+              <Button
+                type="button"
+                variant={isKonsinyasi ? "default" : "outline"}
+                className="h-10 flex-1 text-xs font-bold"
+                onClick={() => switchMode(true)}
+              >
+                Konsinyasi Vendor
+              </Button>
+            </div>
+          </div>
+          {isKonsinyasi && (
+            <div className="space-y-1.5 xl:col-span-2">
+              <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                Vendor Konsinyasi (stok titipan di gudang asal)
+              </Label>
+              <VendorPicker
+                value={vendor}
+                onChange={(v) => {
+                  setVendor(v);
+                  if (items.length > 0) {
+                    setItems([]);
+                    toast.info("Daftar item direset karena vendor berubah.");
+                  }
+                }}
+                stockCabangId={dariCabang}
+                disabled={!dariCabang}
+              />
+            </div>
+          )}
         </div>
       </Content>
 
@@ -734,6 +935,18 @@ export default function CreateItemTransferPage() {
             <h3 className="font-semibold text-sm">Daftar Item</h3>
           </div>
           <div className="flex items-center gap-2">
+          {isKonsinyasi ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 gap-2"
+              disabled={!keCabang || !vendor}
+              title={!keCabang || !vendor ? "Pilih gudang tujuan & vendor terlebih dahulu" : undefined}
+              onClick={openMrDialog}
+            >
+              <ClipboardList className="h-3.5 w-3.5" /> Ambil dari MR Site
+            </Button>
+          ) : (
           <Button
             variant="outline"
             size="sm"
@@ -744,13 +957,14 @@ export default function CreateItemTransferPage() {
           >
             <PackageCheck className="h-3.5 w-3.5" /> Cari dari RI
           </Button>
+          )}
           <Popover open={searchOpen} onOpenChange={setSearchOpen}>
             <PopoverTrigger asChild>
               <Button
                 variant="outline"
                 size="sm"
                 className="h-8 gap-2"
-                disabled={!keCabang}
+                disabled={!keCabang || (isKonsinyasi && !vendor)}
                 title={
                   !keCabang ? "Pilih gudang tujuan terlebih dahulu" : undefined
                 }
@@ -781,6 +995,11 @@ export default function CreateItemTransferPage() {
                       className="w-full text-left p-2 hover:bg-muted rounded-md disabled:opacity-50"
                     >
                       <code className="text-xs font-bold">{r.part_number}</code>
+                      {isKonsinyasi && (
+                        <span className="ml-2 text-[10px] font-bold text-primary">
+                          stok {r.konsinyasi_qty}
+                        </span>
+                      )}
                       <span className="block text-[10px] text-muted-foreground truncate">
                         {r.part_name}
                       </span>
@@ -788,7 +1007,9 @@ export default function CreateItemTransferPage() {
                   ))
                 ) : (
                   <div className="p-6 text-center text-xs text-muted-foreground italic">
-                    Barang tidak ditemukan.
+                    {isKonsinyasi
+                      ? "Tidak ada stok konsinyasi vendor ini di gudang asal."
+                      : "Barang tidak ditemukan."}
                   </div>
                 )}
               </div>
@@ -802,7 +1023,9 @@ export default function CreateItemTransferPage() {
               <TableRow className="h-10 hover:bg-transparent">
                 <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Part</TableHead>
                 <TableHead className="w-20 text-center text-[10px] font-black uppercase text-muted-foreground">Unit</TableHead>
-                <TableHead className="w-28 text-center text-[10px] font-black uppercase text-muted-foreground">Stok Tujuan</TableHead>
+                <TableHead className="w-28 text-center text-[10px] font-black uppercase text-muted-foreground">
+                  {isKonsinyasi ? "Stok Konsinyasi Tujuan / Sisa MR" : "Stok Tujuan"}
+                </TableHead>
                 <TableHead className="w-36 text-center text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
                 <TableHead className="w-14"></TableHead>
               </TableRow>
@@ -810,7 +1033,7 @@ export default function CreateItemTransferPage() {
             <TableBody>
               {items.length > 0 ? (
                 items.map((item) => (
-                  <TableRow key={item.part_id} className="h-12">
+                  <TableRow key={rowKey(item)} className="h-12">
                     <TableCell>
                       <span className="font-semibold text-xs">{item.part_name}</span>
                       <code className="block text-[10px] text-muted-foreground">{item.part_number}</code>
@@ -820,11 +1043,22 @@ export default function CreateItemTransferPage() {
                           {item.ri_kode} &rarr; {item.mr_kode}
                         </Badge>
                       )}
+                      {isKonsinyasi && item.mr_item_id && (
+                        <Badge variant="outline" className="mt-1 text-[9px] font-bold gap-1">
+                          <ClipboardList className="h-2.5 w-2.5" />
+                          MR {item.mr_kode}
+                        </Badge>
+                      )}
                     </TableCell>
                     <TableCell className="text-center text-[10px] font-medium text-muted-foreground uppercase">
                       {item.satuan}
                     </TableCell>
                     <TableCell className="text-center">
+                      {isKonsinyasi ? (
+                        <span className="text-xs font-bold text-foreground">
+                          {item.mr_item_id ? `sisa MR ${item.dest_max}` : item.dest_qty}
+                        </span>
+                      ) : (
                       <div className="flex flex-col items-center leading-tight">
                         <span className="text-xs font-bold text-foreground">
                           {item.dest_qty} / {item.dest_max}
@@ -833,6 +1067,7 @@ export default function CreateItemTransferPage() {
                           sisa {item.dest_max - item.dest_qty}
                         </span>
                       </div>
+                      )}
                     </TableCell>
                     <TableCell>
                       <div className="flex flex-col items-center gap-0.5">
@@ -841,7 +1076,7 @@ export default function CreateItemTransferPage() {
                           min={1}
                           max={maxSendable(item)}
                           value={item.qty}
-                          onChange={(e) => updateQty(item.part_id, parseInt(e.target.value))}
+                          onChange={(e) => updateQty(rowKey(item), parseInt(e.target.value))}
                           className="h-8 w-20 text-center text-xs"
                         />
                         <span className="text-[9px] font-medium text-amber-600">
@@ -850,7 +1085,7 @@ export default function CreateItemTransferPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => removeItem(item.part_id)}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-muted-foreground hover:text-destructive" onClick={() => removeItem(rowKey(item))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </TableCell>
@@ -1117,7 +1352,9 @@ export default function CreateItemTransferPage() {
             <div className="bg-foreground p-5 rounded-lg flex flex-col items-center gap-3">
               <ShieldCheck className="h-6 w-6 text-success" />
               <p className="text-[10px] text-background/60 text-center font-medium">
-                Stok keluar dari gudang asal setelah IT disetujui penuh.
+                {isKonsinyasi
+                  ? "Stok konsinyasi vendor keluar dari gudang asal setelah IT disetujui penuh, dan masuk stok konsinyasi gudang tujuan saat diterima."
+                  : "Stok keluar dari gudang asal setelah IT disetujui penuh."}
               </p>
               <Button
                 className="w-full h-10 bg-background text-foreground hover:bg-muted font-bold text-sm"
@@ -1291,6 +1528,98 @@ export default function CreateItemTransferPage() {
               </Button>
             </DialogFooter>
           )}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={mrDialogOpen} onOpenChange={setMrDialogOpen}>
+        <DialogContent className="sm:max-w-3xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4" /> Ambil dari MR Site
+            </DialogTitle>
+            <DialogDescription>
+              Item MR approved di gudang tujuan yang belum terpenuhi. Qty yang dikirim lewat IT
+              konsinyasi ini langsung mengkredit MR saat barang diterima di site.
+            </DialogDescription>
+          </DialogHeader>
+          {mrLinesLoading ? (
+            <div className="py-8 flex justify-center">
+              <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+            </div>
+          ) : mrLines.length === 0 ? (
+            <div className="p-8 text-center text-xs text-muted-foreground italic">
+              Tidak ada item MR outstanding di gudang tujuan.
+            </div>
+          ) : (
+            <div className="border rounded-lg overflow-hidden max-h-96 overflow-y-auto">
+              <Table>
+                <TableHeader className="bg-muted/50 sticky top-0">
+                  <TableRow className="h-9">
+                    <TableHead className="w-8"></TableHead>
+                    <TableHead className="text-[10px] font-black uppercase">Part / MR</TableHead>
+                    <TableHead className="w-24 text-center text-[10px] font-black uppercase">Sisa MR</TableHead>
+                    <TableHead className="w-24 text-center text-[10px] font-black uppercase">Stok Kons.</TableHead>
+                    <TableHead className="w-24 text-center text-[10px] font-black uppercase">Qty</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {mrLines.map((l) => {
+                    const max = Math.min(l.outstanding, l.stok_konsinyasi);
+                    return (
+                      <TableRow key={l.mr_item_id} className={`h-12 ${max <= 0 ? "opacity-50" : ""}`}>
+                        <TableCell>
+                          <Checkbox
+                            checked={l.selected}
+                            disabled={max <= 0}
+                            onCheckedChange={() =>
+                              setMrLines((prev) =>
+                                prev.map((x) => (x.mr_item_id === l.mr_item_id ? { ...x, selected: !x.selected } : x)),
+                              )
+                            }
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-semibold text-xs">{l.part_name}</span>
+                          <code className="block text-[10px] text-muted-foreground">{l.part_number}</code>
+                          <Badge variant="outline" className="mt-1 text-[9px] font-bold">
+                            MR {l.mr_kode}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center text-xs font-bold">
+                          {l.outstanding} {l.satuan}
+                        </TableCell>
+                        <TableCell className="text-center text-xs">{l.stok_konsinyasi}</TableCell>
+                        <TableCell>
+                          <Input
+                            type="number"
+                            min={0}
+                            max={max}
+                            value={l.qty_pilih}
+                            disabled={!l.selected}
+                            onChange={(e) => {
+                              const qty = Math.max(0, Math.min(max, parseInt(e.target.value) || 0));
+                              setMrLines((prev) =>
+                                prev.map((x) => (x.mr_item_id === l.mr_item_id ? { ...x, qty_pilih: qty } : x)),
+                              );
+                            }}
+                            className="h-8 text-center text-xs"
+                          />
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setMrDialogOpen(false)}>
+              Batal
+            </Button>
+            <Button onClick={addSelectedMrItems} disabled={mrLinesLoading}>
+              Tambahkan Item Terpilih
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </>

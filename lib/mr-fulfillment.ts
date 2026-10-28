@@ -177,6 +177,72 @@ export async function computeMrItemsFulfilledQty(
 }
 
 /**
+ * Sisa qty item MR yang masih bisa dipenuhi lewat Item Transfer: qty_request
+ * - total terpenuhi (semua sumber di atas) - qty IT lain yang masih dalam
+ * proses (open/approved, belum completed). Dipakai IT konsinyasi yang
+ * langsung mengkredit MR site tujuan.
+ */
+export async function computeMrItemsOutstandingForTransfer(
+  supabase: any,
+  mrItemIds: number[],
+  opts?: { excludeItId?: number },
+): Promise<
+  Map<
+    number,
+    {
+      mr_id: number;
+      mr_kode: string | null;
+      mr_status: string | null;
+      cabang_id: number | null;
+      part_id: number;
+      item_status: string | null;
+      qty_request: number;
+      outstanding: number;
+    }
+  >
+> {
+  const result = new Map<number, any>();
+  const ids = Array.from(new Set(mrItemIds.filter(Boolean)));
+  if (ids.length === 0) return result;
+
+  const [{ totals }, { data: rows }, { data: inflight }] = await Promise.all([
+    computeMrItemsFulfilledQty(supabase, ids),
+    supabase
+      .from("mr_items")
+      .select("id, mr_id, part_id, qty_request, item_status, mrs(mr_kode, mr_status, cabang_id)")
+      .in("id", ids),
+    supabase
+      .from("item_transfer_items")
+      .select("mr_item_id, qty, it_id, item_transfers!inner(status)")
+      .in("mr_item_id", ids)
+      .in("item_transfers.status", ["open", "approved"]),
+  ]);
+  const inflightByItem = new Map<number, number>();
+  for (const r of inflight || []) {
+    if (opts?.excludeItId && r.it_id === opts.excludeItId) continue;
+    inflightByItem.set(r.mr_item_id, (inflightByItem.get(r.mr_item_id) || 0) + (Number(r.qty) || 0));
+  }
+  for (const r of rows || []) {
+    const mr = rel(r, "mrs");
+    const qtyRequest = Number(r.qty_request) || 0;
+    result.set(r.id, {
+      mr_id: r.mr_id,
+      mr_kode: mr?.mr_kode ?? null,
+      mr_status: mr?.mr_status ?? null,
+      cabang_id: mr?.cabang_id ?? null,
+      part_id: r.part_id,
+      item_status: r.item_status ?? null,
+      qty_request: qtyRequest,
+      outstanding: Math.max(
+        0,
+        qtyRequest - (totals.get(r.id) || 0) - (inflightByItem.get(r.id) || 0),
+      ),
+    });
+  }
+  return result;
+}
+
+/**
  * Recompute mrs.mr_status dari total qty_received vs qty_request. Hanya MR
  * yang sudah approved/completed yang disentuh -- MR open (menunggu approval)
  * atau rejected tidak pernah diubah dari sini.

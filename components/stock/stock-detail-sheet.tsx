@@ -60,6 +60,8 @@ interface StockDetailSheetProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpdate?: () => void;
+  /** Gudang yang sedang difilter di /stock: ditaruh paling atas & disorot. */
+  highlightCabangIds?: number[];
 }
 
 export function StockDetailSheet({
@@ -67,6 +69,7 @@ export function StockDetailSheet({
   open,
   onOpenChange,
   onUpdate,
+  highlightCabangIds = [],
 }: StockDetailSheetProps) {
   const supabase = createClient();
   const profile = useAuthStore((s) => s.profile);
@@ -281,55 +284,73 @@ export function StockDetailSheet({
 
                 <div className="flex-1 overflow-y-auto p-5 bg-white">
                   <TabsContent value="locations" className="m-0 space-y-3">
-                    {locations.map((loc) => (
-                      <div
-                        key={loc.id}
-                        className="bg-white border border-slate-200 p-3 rounded-xl flex items-center justify-between hover:border-primary/30 transition-all"
-                      >
-                        <div className="space-y-1">
-                          <h4 className="text-sm font-bold text-slate-700">
-                            {loc.nama_cabang}
-                          </h4>
-                          <div className="flex items-center gap-3 text-[10px] text-slate-400 font-medium">
-                            <span>Min: {loc.min_qty}</span>
-                            <span>Max: {loc.max_qty}</span>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-right">
-                            <p className="text-lg font-black text-slate-900 leading-none">
-                              {loc.qty}
-                            </p>
-                            <Badge
-                              variant="secondary"
-                              className={cn(
-                                "mt-1 text-[8px] h-3.5 px-1 font-black uppercase tracking-widest border-none",
-                                loc.status === "low"
-                                  ? "bg-red-50 text-red-600"
-                                  : loc.status === "overstock"
-                                    ? "bg-amber-50 text-amber-600"
-                                    : "bg-green-50 text-green-600",
-                              )}
-                            >
-                              {loc.status}
-                            </Badge>
-                          </div>
-                          {canEditStock(profile, loc.cabang_id) && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 hover:bg-slate-100 rounded-lg text-slate-400"
-                              onClick={() => {
-                                setEditingStock(loc);
-                                setIsEditOpen(true);
-                              }}
-                            >
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
+                    {[...locations]
+                      .sort(
+                        (a, b) =>
+                          Number(highlightCabangIds.includes(b.cabang_id)) -
+                          Number(highlightCabangIds.includes(a.cabang_id)),
+                      )
+                      .map((loc) => (
+                        <div
+                          key={loc.id}
+                          className={cn(
+                            "bg-white border border-slate-200 p-3 rounded-xl flex items-center justify-between hover:border-primary/30 transition-all",
+                            highlightCabangIds.includes(loc.cabang_id) &&
+                              "border-primary/40 bg-primary/5",
                           )}
+                        >
+                          <div className="space-y-1">
+                            <h4 className="flex items-center gap-1.5 text-sm font-bold text-slate-700">
+                              {loc.nama_cabang}
+                              {highlightCabangIds.includes(loc.cabang_id) && (
+                                <Badge
+                                  variant="secondary"
+                                  className="h-4 border-none bg-primary/10 px-1 text-[8px] font-black uppercase tracking-widest text-primary"
+                                >
+                                  Difilter
+                                </Badge>
+                              )}
+                            </h4>
+                            <div className="flex items-center gap-3 text-[10px] text-slate-400 font-medium">
+                              <span>Min: {loc.min_qty}</span>
+                              <span>Max: {loc.max_qty}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-4">
+                            <div className="text-right">
+                              <p className="text-lg font-black text-slate-900 leading-none">
+                                {loc.qty}
+                              </p>
+                              <Badge
+                                variant="secondary"
+                                className={cn(
+                                  "mt-1 text-[8px] h-3.5 px-1 font-black uppercase tracking-widest border-none",
+                                  loc.status === "low"
+                                    ? "bg-red-50 text-red-600"
+                                    : loc.status === "overstock"
+                                      ? "bg-amber-50 text-amber-600"
+                                      : "bg-green-50 text-green-600",
+                                )}
+                              >
+                                {loc.status}
+                              </Badge>
+                            </div>
+                            {canEditStock(profile, loc.cabang_id) && (
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 hover:bg-slate-100 rounded-lg text-slate-400"
+                                onClick={() => {
+                                  setEditingStock(loc);
+                                  setIsEditOpen(true);
+                                }}
+                              >
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      ))}
                   </TabsContent>
 
                   <TabsContent value="history" className="m-0">

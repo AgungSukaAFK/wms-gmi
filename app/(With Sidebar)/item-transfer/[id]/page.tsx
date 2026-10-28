@@ -153,7 +153,7 @@ export default function ItemTransferDetailPage({
       const { data: itData } = await supabase
         .from("item_transfers")
         .select(
-          "*, dari:cabang!dari_cabang_id(nama_cabang, kode_cabang), tujuan:cabang!ke_cabang_id(nama_cabang, kode_cabang)",
+          "*, dari:cabang!dari_cabang_id(nama_cabang, kode_cabang), tujuan:cabang!ke_cabang_id(nama_cabang, kode_cabang), vendor:vendors!it_vendor_id(vendor_name)",
         )
         .eq("id", itId)
         .single();
@@ -379,6 +379,11 @@ export default function ItemTransferDetailPage({
                   {it?.it_kode}
                 </h1>
                 {getStatusBadge(it?.status)}
+                {it?.it_is_consignment && (
+                  <Badge variant="outline" className="text-[10px] font-bold border-violet-300 text-violet-700">
+                    Konsinyasi · {it?.vendor?.vendor_name}
+                  </Badge>
+                )}
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1 flex items-center gap-1.5 flex-wrap">
                 {it?.dari?.nama_cabang}

@@ -6,6 +6,7 @@ import { canViewPOPrice, maskPOPriceItems } from "@/lib/po-price-access";
 import { toCompletedIfLegacy } from "@/lib/document-status";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { fetchPrItemConvertedQty, isPrItemRejected } from "@/lib/pr-po-coverage";
+import { prepareConsignmentPoItems } from "@/lib/vendor-consignment";
 import {
   applyMrConversionStatus,
   applyPrCompletionStatus,
@@ -1931,7 +1932,11 @@ export async function createPurchaseOrder(data: {
   // "so": item ditarik dari SO Reguler (so_id + so_item_id per item), barang
   // nanti diterima di gudang penerima (so_cabang_id) lalu dikirim ke
   // customer via DO Reguler.
-  po_jenis?: "reguler" | "non_pr" | "so";
+  // "konsinyasi": PO Rekonsil ke vendor konsinyasi. Item dihitung ulang di
+  // server dari rekonsil (FIFO item PR Konsinyasi), barang sudah diterima
+  // lewat GR Konsinyasi jadi PO langsung "diterima penuh" (tanpa RI).
+  po_jenis?: "reguler" | "non_pr" | "so" | "konsinyasi";
+  vendor_consignment_rekonsil_id?: number | null;
   po_pr_referensi?: string;
   so_id?: number | null;
   // PO dari SO: gudang penerima barang (dipilih di form, default gudang akun).
@@ -1965,7 +1970,7 @@ export async function createPurchaseOrder(data: {
   }
 
   const poJenis =
-    data.po_jenis === "non_pr" || data.po_jenis === "so"
+    data.po_jenis === "non_pr" || data.po_jenis === "so" || data.po_jenis === "konsinyasi"
       ? data.po_jenis
       : "reguler";
   // PO dari SO: lokasi PO = gudang penerima pilihan pembuat PO (RI dikunci ke
@@ -2012,6 +2017,14 @@ export async function createPurchaseOrder(data: {
     soCabangId = Number(data.so_cabang_id);
   } else if (data.items.some((i) => i.so_item_id)) {
     return { error: "Item SO hanya bisa diproses lewat PO jenis SO." };
+  } else if (poJenis === "konsinyasi") {
+    const prep = await prepareConsignmentPoItems(
+      supabase,
+      data.vendor_consignment_rekonsil_id,
+      data.items,
+    );
+    if ("error" in prep) return { error: prep.error };
+    data.items = prep.items;
   } else if (poJenis === "non_pr") {
     if (data.items.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
       return {
@@ -2189,7 +2202,7 @@ export async function createPurchaseOrder(data: {
         po_pph_rate: data.po_pph_rate ?? 0,
         po_pph_amount: data.po_pph_amount ?? 0,
         po_status: approvals.length === 0 ? "approved" : "open",
-        po_receive_status: "pending",
+        po_receive_status: poJenis === "konsinyasi" ? "complete" : "pending",
         approvals: approvals as any,
       },
     ])
@@ -2219,13 +2232,31 @@ export async function createPurchaseOrder(data: {
       });
       return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
     })(),
-    qty_received: 0,
+    qty_received: poJenis === "konsinyasi" ? item.qty : 0,
   }));
 
   const { error: itemsError } = await supabase
     .from("po_items")
     .insert(itemsToInsert);
   if (itemsError) return { error: itemsError.message };
+
+  // PO Rekonsil: kunci rekonsil ke PO ini (kondisional -- dua submit
+  // bersamaan cuma satu yang menang; yang kalah PO-nya dihapus lagi).
+  if (poJenis === "konsinyasi") {
+    const { data: claimed } = await supabase
+      .from("vendor_consignment_rekonsil")
+      .update({ po_id: po.id })
+      .eq("id", data.vendor_consignment_rekonsil_id)
+      .eq("status", "final")
+      .is("po_id", null)
+      .select("id");
+    if (!claimed || claimed.length === 0) {
+      await supabase.from("pos").delete().eq("id", po.id);
+      return { error: "Rekonsil ini baru saja dibuatkan PO oleh request lain. Muat ulang halaman." };
+    }
+    // Tanpa langkah approval: PO langsung approved & sudah diterima penuh.
+    if (approvals.length === 0) await syncPoReceiveAndCompletion(supabase, po.id);
+  }
 
   // Recompute conversion progress for every source PR involved.
   await Promise.all(
@@ -2264,6 +2295,7 @@ export async function createPurchaseOrder(data: {
   revalidatePath("/po");
   revalidatePath("/pr");
   if (poJenis === "so") revalidatePath("/so-reguler/so");
+  if (poJenis === "konsinyasi") revalidatePath("/vendor-consignment/rekonsil");
   return { success: true, data: po };
 }
 

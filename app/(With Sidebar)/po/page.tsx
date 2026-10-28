@@ -760,6 +760,14 @@ export default function POListPage() {
                               <span className="font-bold text-foreground tracking-tight uppercase text-sm">
                                 {po.po_kode}
                               </span>
+                              {po.po_jenis === "konsinyasi" && (
+                                <Badge
+                                  variant="outline"
+                                  className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700"
+                                >
+                                  Rekonsil Konsinyasi
+                                </Badge>
+                              )}
                               {po.po_is_outstanding && (
                                 <Badge
                                   variant="outline"
