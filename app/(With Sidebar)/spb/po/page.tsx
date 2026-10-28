@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
-  Check,
-  ChevronsUpDown,
   Plus,
   Printer,
   Search,
@@ -16,26 +14,12 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
-  Command,
-  CommandEmpty,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from "@/components/ui/command";
-import {
   Dialog,
   DialogContent,
-  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import {
   Table,
   TableBody,
@@ -47,25 +31,11 @@ import {
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
-import {
-  createSpbPo,
-  getSpbDetailsBySpbId,
-  getSpbOptionsForPo,
-  getSpbPoList,
-  updateSpbPo,
-} from "@/services/spb-actions";
+import { CreateSpbPoDialog } from "@/components/spb/create-spb-po-dialog";
+import { getSpbPoList, updateSpbPo } from "@/services/spb-actions";
 import { useDebounce } from "use-debounce";
-import { cn, formatDate, ymdToLocalStartIso } from "@/lib/utils";
+import { formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
-
-type SpbOption = { id: number; spb_no: string; spb_status: string };
-type SpbDetail = {
-  id: number;
-  dtl_spb_part_number: string;
-  dtl_spb_part_name: string;
-  dtl_spb_qty: number;
-  dtl_spb_part_satuan: string;
-};
 
 export default function SpbPoPage() {
   const supabase = createClient();
@@ -79,19 +49,6 @@ export default function SpbPoPage() {
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 500);
 
-  const [spbOptions, setSpbOptions] = useState<SpbOption[]>([]);
-  const [selectedSpbId, setSelectedSpbId] = useState("");
-  const [selectedSpbLabel, setSelectedSpbLabel] = useState("");
-  const [openSpbCombobox, setOpenSpbCombobox] = useState(false);
-  const [spbOptionSearch, setSpbOptionSearch] = useState("");
-  const [debouncedSpbOptionSearch] = useDebounce(spbOptionSearch, 300);
-  const [spbDetails, setSpbDetails] = useState<SpbDetail[]>([]);
-  const [selectedDetailIds, setSelectedDetailIds] = useState<number[]>([]);
-
-  const [poNo, setPoNo] = useState("");
-  const [soNo, setSoNo] = useState("");
-  const [soDate, setSoDate] = useState("");
-  const [submitting, setSubmitting] = useState(false);
   const [openCreateModal, setOpenCreateModal] = useState(false);
 
   // Moderator Edit state
@@ -101,11 +58,6 @@ export default function SpbPoPage() {
   const [modRow, setModRow] = useState<any>(null);
   const [modSoNo, setModSoNo] = useState("");
   const [modSoDate, setModSoDate] = useState("");
-
-  const selectedSpb = useMemo(
-    () => spbOptions.find((s) => String(s.id) === selectedSpbId),
-    [spbOptions, selectedSpbId],
-  );
 
   const fetchList = async () => {
     setLoading(true);
@@ -124,15 +76,6 @@ export default function SpbPoPage() {
       setTotal(res.count || 0);
     }
     setLoading(false);
-  };
-
-  const fetchSpbOptions = async (keyword?: string) => {
-    const res = await getSpbOptionsForPo({
-      search: keyword?.trim() || undefined,
-      limit: 15,
-    });
-    if (res.error) return;
-    setSpbOptions((res.data || []) as SpbOption[]);
   };
 
   useEffect(() => {
@@ -161,82 +104,6 @@ export default function SpbPoPage() {
     };
     loadUser();
   }, [supabase]);
-
-  useEffect(() => {
-    if (!openCreateModal) return;
-    fetchSpbOptions(debouncedSpbOptionSearch);
-  }, [openCreateModal, debouncedSpbOptionSearch]);
-
-  useEffect(() => {
-    const loadDetails = async () => {
-      if (!selectedSpbId) {
-        setSpbDetails([]);
-        setSelectedDetailIds([]);
-        return;
-      }
-      const res = await getSpbDetailsBySpbId(Number(selectedSpbId));
-      if (res.error) {
-        toast.error(res.error);
-        setSpbDetails([]);
-        return;
-      }
-      setSpbDetails((res.data || []) as SpbDetail[]);
-      setSelectedDetailIds([]);
-    };
-
-    loadDetails();
-  }, [selectedSpbId]);
-
-  const toggleDetail = (id: number, checked: boolean) => {
-    setSelectedDetailIds((prev) =>
-      checked ? [...prev, id] : prev.filter((v) => v !== id),
-    );
-  };
-
-  const submit = async () => {
-    if (!selectedSpbId) return toast.error("Pilih SPB.");
-    if (!poNo.trim()) return toast.error("No PO wajib diisi.");
-    if (!selectedDetailIds.length) return toast.error("Pilih minimal 1 item.");
-
-    setSubmitting(true);
-    const res = await createSpbPo({
-      spb_id: Number(selectedSpbId),
-      po_no: poNo,
-      so_no: soNo || undefined,
-      so_date: soDate ? ymdToLocalStartIso(soDate) : undefined,
-      details: selectedDetailIds.map((id) => ({ spb_dtl_id: id })),
-    });
-    setSubmitting(false);
-
-    if (res.error) {
-      toast.error(res.error);
-      return;
-    }
-
-    toast.success("SPB-PO berhasil dibuat.");
-    resetCreateForm();
-    setOpenCreateModal(false);
-    fetchList();
-  };
-
-  const resetCreateForm = () => {
-    setPoNo("");
-    setSoNo("");
-    setSoDate("");
-    setSelectedSpbId("");
-    setSelectedSpbLabel("");
-    setSpbOptionSearch("");
-    setOpenSpbCombobox(false);
-    setSpbDetails([]);
-    setSelectedDetailIds([]);
-  };
-
-  const handleOpenCreateModal = (open: boolean) => {
-    setOpenCreateModal(open);
-    if (!open) {
-      resetCreateForm();
-    }
-  };
 
   const openModEdit = (row: any) => {
     setModRow(row);
@@ -426,174 +293,11 @@ export default function SpbPoPage() {
         </div>
       </Content>
 
-      <Dialog open={openCreateModal} onOpenChange={handleOpenCreateModal}>
-        <DialogContent className="sm:max-w-5xl">
-          <DialogHeader>
-            <DialogTitle>Buat SPB-PO</DialogTitle>
-            <DialogDescription>
-              Pilih SPB, lengkapi informasi PO, lalu pilih item detail SPB.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="space-y-4">
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
-              <div className="space-y-2">
-                <Label>Pilih SPB</Label>
-                <Popover
-                  open={openSpbCombobox}
-                  onOpenChange={setOpenSpbCombobox}
-                >
-                  <PopoverTrigger asChild>
-                    <Button
-                      variant="outline"
-                      role="combobox"
-                      aria-expanded={openSpbCombobox}
-                      className="w-full justify-between font-normal"
-                    >
-                      <span className="truncate">
-                        {selectedSpb
-                          ? `${selectedSpb.spb_no} (${selectedSpb.spb_status})`
-                          : selectedSpbLabel || "Pilih SPB..."}
-                      </span>
-                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-                    </Button>
-                  </PopoverTrigger>
-                  <PopoverContent
-                    className="w-(--radix-popover-trigger-width) p-0"
-                    align="start"
-                  >
-                    <Command shouldFilter={false}>
-                      <CommandInput
-                        placeholder="Cari SPB..."
-                        value={spbOptionSearch}
-                        onValueChange={setSpbOptionSearch}
-                      />
-                      <CommandList>
-                        <CommandEmpty>Tidak ada SPB ditemukan.</CommandEmpty>
-                        <CommandGroup>
-                          {spbOptions.map((spb) => {
-                            const value = String(spb.id);
-                            const label = `${spb.spb_no} (${spb.spb_status})`;
-
-                            return (
-                              <CommandItem
-                                key={spb.id}
-                                value={label}
-                                onSelect={() => {
-                                  setSelectedSpbId(value);
-                                  setSelectedSpbLabel(label);
-                                  setOpenSpbCombobox(false);
-                                }}
-                              >
-                                <span className="truncate">{label}</span>
-                                <Check
-                                  className={cn(
-                                    "ml-auto",
-                                    selectedSpbId === value
-                                      ? "opacity-100"
-                                      : "opacity-0",
-                                  )}
-                                />
-                              </CommandItem>
-                            );
-                          })}
-                        </CommandGroup>
-                      </CommandList>
-                    </Command>
-                  </PopoverContent>
-                </Popover>
-              </div>
-
-              <div className="space-y-2">
-                <Label>SO Date</Label>
-                <DatePickerString value={soDate} onChange={setSoDate} />
-              </div>
-
-              <div className="space-y-2">
-                <Label>No PO</Label>
-                <Input value={poNo} onChange={(e) => setPoNo(e.target.value)} />
-              </div>
-
-              <div className="space-y-2">
-                <Label>No SO</Label>
-                <Input value={soNo} onChange={(e) => setSoNo(e.target.value)} />
-              </div>
-            </div>
-
-            {selectedSpbId && (
-              <div className="rounded-md border">
-                <Table
-                  className="table-fixed"
-                  containerClassName="max-h-[55vh] overflow-y-auto"
-                >
-                  <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-background [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
-                    <TableRow>
-                      <TableHead className="w-10">Pilih</TableHead>
-                      <TableHead className="w-32">Part Number</TableHead>
-                      <TableHead>Part Name</TableHead>
-                      <TableHead className="w-16">Qty</TableHead>
-                      <TableHead className="w-20">Satuan</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {spbDetails.length === 0 ? (
-                      <TableRow>
-                        <TableCell
-                          colSpan={5}
-                          className="text-center text-muted-foreground"
-                        >
-                          Tidak ada detail item.
-                        </TableCell>
-                      </TableRow>
-                    ) : (
-                      spbDetails.map((item) => (
-                        <TableRow key={item.id}>
-                          <TableCell>
-                            <input
-                              type="checkbox"
-                              checked={selectedDetailIds.includes(item.id)}
-                              onChange={(e) =>
-                                toggleDetail(item.id, e.target.checked)
-                              }
-                            />
-                          </TableCell>
-                          <TableCell
-                            className="truncate"
-                            title={item.dtl_spb_part_number}
-                          >
-                            {item.dtl_spb_part_number}
-                          </TableCell>
-                          <TableCell
-                            className="truncate"
-                            title={item.dtl_spb_part_name}
-                          >
-                            {item.dtl_spb_part_name}
-                          </TableCell>
-                          <TableCell>{item.dtl_spb_qty}</TableCell>
-                          <TableCell>{item.dtl_spb_part_satuan}</TableCell>
-                        </TableRow>
-                      ))
-                    )}
-                  </TableBody>
-                </Table>
-              </div>
-            )}
-          </div>
-
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => handleOpenCreateModal(false)}
-              disabled={submitting}
-            >
-              Batal
-            </Button>
-            <Button onClick={submit} disabled={submitting}>
-              {submitting ? "Menyimpan..." : "Simpan SPB-PO"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <CreateSpbPoDialog
+        open={openCreateModal}
+        onOpenChange={setOpenCreateModal}
+        onCreated={fetchList}
+      />
 
       <Dialog open={modOpen} onOpenChange={setModOpen}>
         <DialogContent>

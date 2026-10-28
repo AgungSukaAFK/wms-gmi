@@ -351,16 +351,6 @@ async function applySpbPosting(spbId: number, actorId: string) {
 // di-set langsung per aksi -- supaya tidak mundur karena urutan dokumen.
 // Posting retur ada di lib/spb-posting.ts (postReturnSpb), sengaja bukan
 // server action supaya tidak bisa dipanggil langsung dari browser.
-export async function finalizeSpbPoStatus(spbPoId: number) {
-  const supabase = await createClient();
-  const { data: po } = await supabase
-    .from("spb_po")
-    .select("spb_id")
-    .eq("id", spbPoId)
-    .single();
-  await refreshSpbStatus(supabase, po?.spb_id);
-}
-
 export async function finalizeSpbDoStatus(spbDoId: number) {
   const supabase = await createClient();
   const { data: doHeader } = await supabase
@@ -820,75 +810,127 @@ export async function getSpbPoList(params?: {
   return { data: data || [], count: count || 0, error: null as string | null };
 }
 
+// Satu No PO customer sering mencakup banyak SPB (sampai ±30), jadi SPB-PO
+// dibuat sekaligus: tiap SPB tetap jadi satu baris spb_po sendiri dengan
+// po_no/so_no/so_date yang sama. Semua divalidasi dulu, lalu header & detail
+// masing-masing di-insert dalam satu statement (all-or-nothing per tabel).
 export async function createSpbPo(payload: {
-  spb_id: number;
   po_no: string;
   so_no?: string;
   so_date?: string;
-  details: { spb_dtl_id: number }[];
+  spbs: { spb_id: number; details: { spb_dtl_id: number }[] }[];
 }) {
   const supabase = await createClient();
   const me = await getCurrentUserProfile();
   if (me.error || !me.user) return { error: me.error || "Unauthorized" };
 
-  if (!payload.details?.length) return { error: "Pilih minimal 1 item SPB." };
+  const poNo = payload.po_no?.trim();
+  if (!poNo) return { error: "No PO wajib diisi." };
+  if (!payload.spbs?.length) return { error: "Pilih minimal 1 SPB." };
 
-  const { data: spbHeader } = await supabase
+  const spbIds = payload.spbs.map((s) => s.spb_id);
+  if (new Set(spbIds).size !== spbIds.length) {
+    return { error: "Ada SPB yang dipilih lebih dari sekali." };
+  }
+
+  const { data: spbHeaders, error: spbErr } = await supabase
     .from("spb")
-    .select("id, cabang_id, spb_status")
-    .eq("id", payload.spb_id)
-    .single();
+    .select("id, spb_no, cabang_id, spb_status, spb_is_deleted")
+    .in("id", spbIds);
+  if (spbErr) return { error: spbErr.message };
 
-  if (!spbHeader?.cabang_id) {
-    return { error: "SPB sumber tidak valid." };
+  const spbById = new Map((spbHeaders || []).map((s: any) => [s.id, s]));
+  for (const entry of payload.spbs) {
+    const spb: any = spbById.get(entry.spb_id);
+    if (!spb?.cabang_id || spb.spb_is_deleted) {
+      return { error: "Ada SPB sumber yang tidak valid." };
+    }
+    if (spb.spb_status === "CANCELLED") {
+      return { error: `SPB ${spb.spb_no} sudah dibatalkan.` };
+    }
+    if (!entry.details?.length) {
+      return { error: `Pilih minimal 1 item untuk SPB ${spb.spb_no}.` };
+    }
   }
-  if (spbHeader.spb_status === "CANCELLED") {
-    return { error: "SPB sudah dibatalkan." };
-  }
-  const dtlIds = Array.from(new Set(payload.details.map((d) => d.spb_dtl_id)));
-  const { data: ownDetails } = await supabase
+
+  const dtlIdsBySpb = new Map(
+    payload.spbs.map((s) => [
+      s.spb_id,
+      Array.from(new Set(s.details.map((d) => d.spb_dtl_id))),
+    ]),
+  );
+  const allDtlIds = Array.from(dtlIdsBySpb.values()).flat();
+  const { data: ownDetails, error: dtlErr } = await supabase
     .from("spb_details")
-    .select("id")
-    .eq("spb_id", payload.spb_id)
-    .in("id", dtlIds);
-  if ((ownDetails || []).length !== dtlIds.length) {
-    return { error: "Ada item yang bukan bagian dari SPB ini." };
+    .select("id, spb_id")
+    .in("id", allDtlIds);
+  if (dtlErr) return { error: dtlErr.message };
+  const dtlOwner = new Map((ownDetails || []).map((d: any) => [d.id, d.spb_id]));
+  for (const [spbId, dtlIds] of dtlIdsBySpb) {
+    if (dtlIds.some((id) => dtlOwner.get(id) !== spbId)) {
+      return {
+        error: `Ada item yang bukan bagian dari SPB ${(spbById.get(spbId) as any)?.spb_no}.`,
+      };
+    }
+  }
+
+  // UNIQUE(spb_id, po_no) -- cek dulu supaya pesannya jelas SPB mana.
+  const { data: existing } = await supabase
+    .from("spb_po")
+    .select("spb_id")
+    .eq("po_no", poNo)
+    .in("spb_id", spbIds);
+  if (existing?.length) {
+    const dupNos = existing.map((e: any) => (spbById.get(e.spb_id) as any)?.spb_no);
+    return {
+      error: `No PO ${poNo} sudah terpasang di SPB: ${dupNos.join(", ")}.`,
+    };
   }
 
   // SPB PO tidak punya approval digital -- langsung 'completed' saat dibuat
   // (lihat komentar serupa di createSpb; berbeda dengan spb, print SPB PO
   // tidak baca approvals sama sekali, jadi template tidak perlu dipertahankan).
-  const { data: poHeader, error: poErr } = await supabase
+  const completedAt = new Date().toISOString();
+  const { data: poHeaders, error: poErr } = await supabase
     .from("spb_po")
-    .insert({
-      spb_id: payload.spb_id,
-      po_no: payload.po_no,
-      so_no: payload.so_no || null,
-      so_date: payload.so_date || null,
-      approvals: [],
-      approval_status: "completed",
-      completed_at: new Date().toISOString(),
-    })
-    .select()
-    .single();
+    .insert(
+      spbIds.map((spb_id) => ({
+        spb_id,
+        po_no: poNo,
+        so_no: payload.so_no?.trim() || null,
+        so_date: payload.so_date || null,
+        approvals: [],
+        approval_status: "completed",
+        completed_at: completedAt,
+      })),
+    )
+    .select("id, spb_id");
 
-  if (poErr || !poHeader)
+  if (poErr || !poHeaders?.length)
     return { error: poErr?.message || "Gagal membuat SPB PO." };
 
-  const rows = dtlIds.map((spb_dtl_id) => ({
-    spb_po_id: poHeader.id,
-    spb_dtl_id,
-  }));
+  const rows = poHeaders.flatMap((h: any) =>
+    (dtlIdsBySpb.get(h.spb_id) || []).map((spb_dtl_id) => ({
+      spb_po_id: h.id,
+      spb_dtl_id,
+    })),
+  );
   const { error: rowsErr } = await supabase.from("spb_po_details").insert(rows);
   if (rowsErr) {
-    await supabase.from("spb_po").delete().eq("id", poHeader.id);
+    await supabase
+      .from("spb_po")
+      .delete()
+      .in(
+        "id",
+        poHeaders.map((h: any) => h.id),
+      );
     return { error: rowsErr.message };
   }
 
-  await finalizeSpbPoStatus(poHeader.id);
+  await Promise.all(spbIds.map((id) => refreshSpbStatus(supabase, id)));
 
   revalidateStockOutPaths();
-  return { success: true, data: poHeader };
+  return { success: true, count: poHeaders.length };
 }
 
 export async function updateSpbPo(
@@ -1864,42 +1906,73 @@ export async function updateSpbInvoicePaymentStatus(
   return { error: null as string | null };
 }
 
+/**
+ * Opsi SPB untuk modal Buat SPB-PO. `search` mencocokkan No SPB / No WO /
+ * Kode Unit; `spb_nos` = daftar No SPB persis (fitur tempel banyak).
+ * po_nos = No PO yang sudah terpasang, supaya user tidak dobel input.
+ */
 export async function getSpbOptionsForPo(params?: {
   search?: string;
+  spb_nos?: string[];
   limit?: number;
 }) {
   const supabase = await createClient();
-  const limit = params?.limit ?? 15;
+  const limit = params?.spb_nos?.length || params?.limit || 15;
 
   let query = supabase
     .from("spb")
-    .select("id, spb_no, spb_status")
+    .select(
+      "id, spb_no, spb_status, spb_tanggal, spb_gudang, spb_kode_unit, spb_po(po_no)",
+    )
     .eq("spb_is_deleted", false)
     .in("spb_status", ["DONE QUOT", "PO_ATTACH", "DO_ATTACH"])
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(limit);
 
-  if (params?.search) {
-    query = query.ilike("spb_no", `%${params.search}%`);
+  if (params?.spb_nos?.length) {
+    query = query.in("spb_no", params.spb_nos);
+  } else if (params?.search) {
+    const s = params.search.replace(/[,()"]/g, " ").trim();
+    if (s) {
+      query = query.or(
+        `spb_no.ilike.%${s}%,spb_no_wo.ilike.%${s}%,spb_kode_unit.ilike.%${s}%`,
+      );
+    }
   }
 
   const { data, error } = await query;
 
   if (error) return { data: [], error: error.message };
-  return { data: data || [] };
+  return {
+    data: (data || []).map(({ spb_po, ...spb }: any) => ({
+      ...spb,
+      po_nos: (spb_po || []).map((p: any) => p.po_no as string),
+    })),
+  };
 }
 
-export async function getSpbDetailsBySpbId(spbId: number) {
+/** Item beberapa SPB sekaligus + No PO yang sudah memuat item tsb. */
+export async function getSpbDetailsForPo(spbIds: number[]) {
+  if (!spbIds.length) return { data: [] };
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("spb_details")
-    .select("*")
-    .eq("spb_id", spbId)
+    .select(
+      "id, spb_id, dtl_spb_part_number, dtl_spb_part_name, dtl_spb_qty, dtl_spb_part_satuan, spb_po_details(spb_po:spb_po_id(po_no))",
+    )
+    .in("spb_id", spbIds)
     .order("id");
 
   if (error) return { data: [], error: error.message };
-  return { data: data || [] };
+  return {
+    data: (data || []).map(({ spb_po_details, ...d }: any) => ({
+      ...d,
+      po_nos: (spb_po_details || [])
+        .map((p: any) => p.spb_po?.po_no as string)
+        .filter(Boolean),
+    })),
+  };
 }
 
 export async function getSpbPoOptionsForDo(params?: {
