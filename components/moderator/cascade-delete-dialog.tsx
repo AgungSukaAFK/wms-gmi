@@ -30,6 +30,7 @@ const DOC_TYPE_LABEL: Record<string, string> = {
   po: "PO",
   receive: "Receive (RI)",
   delivery: "Delivery/Share Stock",
+  item_transfer: "Item Transfer",
 };
 
 interface CascadeDeleteDialogProps {

@@ -12,7 +12,7 @@ import {
 import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
 import { refreshSoStatus } from "@/lib/so-reguler";
 
-export type CascadeDeleteDocType = "mr" | "pr" | "po" | "receive" | "delivery";
+export type CascadeDeleteDocType = "mr" | "pr" | "po" | "receive" | "delivery" | "item_transfer";
 
 export type CascadeDeleteDocumentRef = {
   doc_type: string;
@@ -126,7 +126,17 @@ export async function moderatorDeleteDocument(
     p_doc_id: docId,
     p_reason: trimmedReason,
   });
-  if (error) return { success: false, error: error.message };
+  if (error) {
+    // Audit log ditulis di transaksi yang sama; constraint doc_type yang
+    // belum memuat jenis dokumen ini menggagalkan seluruh penghapusan.
+    if (error.message.includes("moderator_edit_logs_doc_type_check"))
+      return {
+        success: false,
+        error:
+          "Database belum menjalankan migration 20261029100000_moderator_edit_logs_item_transfer.sql (riwayat hapus untuk dokumen ini ditolak).",
+      };
+    return { success: false, error: error.message };
+  }
 
   const result = data as CascadeDeletePlan & { success: boolean };
   if (!result.success) {
@@ -150,6 +160,7 @@ export async function moderatorDeleteDocument(
   revalidatePath("/share-stock");
   revalidatePath("/stock");
   revalidatePath("/planning-supply");
+  revalidatePath("/item-transfer");
 
   return { success: true, data: result };
 }
@@ -206,11 +217,17 @@ async function collectCascadeSurvivors(
           .map((r: any) => (Array.isArray(r.po_items) ? r.po_items[0] : r.po_items)?.pr_item_id)
           .filter(Boolean),
       );
-    } else if (docType === "delivery") {
-      const { data } = await supabase
-        .from("delivery_items")
-        .select("mr_item_id, mr_items(mr_id)")
-        .eq("dlv_id", docId);
+    } else if (docType === "delivery" || docType === "item_transfer") {
+      const { data } =
+        docType === "delivery"
+          ? await supabase
+              .from("delivery_items")
+              .select("mr_item_id, mr_items(mr_id)")
+              .eq("dlv_id", docId)
+          : await supabase
+              .from("item_transfer_items")
+              .select("mr_item_id, mr_items(mr_id)")
+              .eq("it_id", docId);
       for (const r of data || []) {
         if (r.mr_item_id) out.mrItemIds.push(r.mr_item_id);
         const mi = Array.isArray(r.mr_items) ? r.mr_items[0] : r.mr_items;

@@ -61,6 +61,7 @@ import {
   StickyNote,
   Pencil,
   ShieldAlert,
+  History,
 } from "lucide-react";
 
 export default function ItemTransferDetailPage({
@@ -73,6 +74,7 @@ export default function ItemTransferDetailPage({
 
   const [it, setIt] = useState<any>(null);
   const [items, setItems] = useState<any[]>([]);
+  const [kodeHistory, setKodeHistory] = useState<any[]>([]);
   const [profilesMap, setProfilesMap] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(true);
 
@@ -136,6 +138,16 @@ export default function ItemTransferDetailPage({
         .order("created_at");
       setItems(itemData || []);
 
+      // Error diabaikan: DB yang belum menjalankan migration 20261029110000
+      // belum punya tabel ini.
+      const { data: kodeRows, error: kodeErr } = await supabase
+        .from("item_transfer_kode_history")
+        .select("id, old_kode, new_kode, stock_movements_updated, consignment_movements_updated, changed_by, changed_at")
+        .eq("it_id", itId)
+        .order("changed_at", { ascending: false });
+      const history = kodeErr ? [] : kodeRows || [];
+      setKodeHistory(history);
+
       const uids = Array.from(
         new Set(
           [
@@ -143,6 +155,7 @@ export default function ItemTransferDetailPage({
             itData?.uid_pic,
             itData?.uid_receiver,
             itData?.tracking_note_updated_by,
+            ...history.map((h: any) => h.changed_by),
           ].filter(Boolean),
         ),
       );
@@ -456,6 +469,33 @@ export default function ItemTransferDetailPage({
               <p className="text-[11px] text-foreground whitespace-pre-wrap">
                 {it.remarks}
               </p>
+            </div>
+          )}
+          {kodeHistory.length > 0 && (
+            <div className="sm:col-span-2 lg:col-span-3 bg-muted/40 border border-border rounded-lg p-3">
+              <p className="text-[9px] font-bold uppercase text-muted-foreground mb-1.5 flex items-center gap-1.5">
+                <History className="h-3 w-3" /> Riwayat Kode
+              </p>
+              <div className="space-y-1">
+                {kodeHistory.map((h) => {
+                  const refCount =
+                    (h.stock_movements_updated || 0) + (h.consignment_movements_updated || 0);
+                  return (
+                    <div key={h.id} className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                      <span className="font-mono font-bold text-muted-foreground line-through">
+                        {h.old_kode}
+                      </span>
+                      <ArrowRight className="h-3 w-3 text-primary" />
+                      <span className="font-mono font-bold text-foreground">{h.new_kode}</span>
+                      <span className="text-[10px] text-muted-foreground">
+                        · {(h.changed_by && profilesMap[h.changed_by]) || "-"} ·{" "}
+                        {formatDateTime(h.changed_at)}
+                        {refCount > 0 && ` · ${refCount} riwayat stok ikut diperbarui`}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>

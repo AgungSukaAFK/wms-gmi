@@ -184,7 +184,7 @@ export function EditItemTransferDialog({
   const isConsignment = Boolean(it?.it_is_consignment);
   const hasRiRows = items.some((r) => r.from_ri);
   const hasMrRows = items.some((r) => r.from_mr && !r.from_ri);
-  const kodeLocked = released;
+  const kodeChanged = !!it && itKode.trim() !== it.it_kode;
   const dariLocked = released || hasRiRows;
   const keLocked = released || (isConsignment && hasMrRows);
   const itemsLocked = completed;
@@ -556,9 +556,9 @@ export function EditItemTransferDialog({
     : !isModeratorMode
       ? "Setelah disimpan, approval diulang dari tahap ke-2 dan approver dinotifikasi ulang."
       : completed
-        ? "IT sudah selesai (barang diterima). Hanya info dokumen & pengiriman yang bisa diubah; item, gudang, kode, penerima, dan status approval dikunci."
+        ? "IT sudah selesai (barang diterima). Hanya kode, info dokumen & pengiriman yang bisa diubah; item, gudang, penerima, dan status approval dikunci."
         : released
-          ? "Stok sudah keluar dari gudang asal. Gudang & kode dikunci, status approval harus tetap Approved semua, dan perubahan qty langsung dikoreksi ke stok gudang asal."
+          ? "Stok sudah keluar dari gudang asal. Gudang dikunci, status approval harus tetap Approved semua, dan perubahan qty langsung dikoreksi ke stok gudang asal."
           : "Kalau semua tahap approval di-set Approved, stok gudang asal langsung dikeluarkan seperti approve normal.";
 
   return (
@@ -624,15 +624,20 @@ export function EditItemTransferDialog({
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase flex items-center gap-1">
-                      Kode Item Transfer {kodeLocked && <Lock className="h-2.5 w-2.5" />}
-                    </Label>
+                    <Label className="text-[10px] font-bold uppercase">Kode Item Transfer</Label>
                     <Input
                       value={itKode}
                       onChange={(e) => setItKode(e.target.value)}
-                      disabled={kodeLocked}
                       className="h-9 font-bold text-xs uppercase text-primary"
                     />
+                    {kodeChanged && (
+                      <p className="text-[9px] font-medium text-muted-foreground">
+                        Kode lama <span className="font-bold">{it.it_kode}</span> tercatat di
+                        Riwayat Kode.
+                        {released &&
+                          " Referensi di riwayat stok / kartu stok konsinyasi ikut diganti ke kode baru."}
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold uppercase">Tanggal</Label>

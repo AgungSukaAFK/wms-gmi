@@ -1024,12 +1024,21 @@ async function planItemTransferEdit(
     const kode = payload.it_kode.trim();
     if (!kode) return { error: "Kode Item Transfer wajib diisi." };
     if (kode !== it.it_kode) {
-      // stock_movements & kartu stok konsinyasi mereferensikan it_kode.
-      if (released)
-        return {
-          error:
-            "Kode tidak bisa diubah setelah stok keluar — riwayat stok sudah tercatat dengan kode lama.",
-        };
+      // stock_movements & kartu stok konsinyasi mereferensikan it_kode;
+      // trigger trg_propagate_item_transfer_kode (migration 20261029110000)
+      // ikut mengganti referensinya + mencatat riwayat. Tanpa migration itu
+      // referensi stok jadi yatim, jadi diblok.
+      if (released) {
+        const { error: historyErr } = await supabase
+          .from("item_transfer_kode_history")
+          .select("id", { head: true, count: "exact" })
+          .limit(1);
+        if (historyErr)
+          return {
+            error:
+              "Kode IT yang stoknya sudah bergerak belum bisa diubah: migration 20261029110000_item_transfer_kode_rename.sql belum dijalankan di database.",
+          };
+      }
       const { data: dup } = await supabase
         .from("item_transfers")
         .select("id")
@@ -1519,11 +1528,13 @@ export async function editItemTransfer(itId: number, payload: ItemTransferEditPa
  *  - Stok belum keluar (open/rejected): semua bisa diubah, termasuk gudang &
  *    kode. Jadi approved semua -> stok gudang asal dikeluarkan seperti
  *    approve normal.
- *  - Stok sudah keluar (approved, belum diterima): gudang & kode dikunci,
- *    status tidak bisa turun dari approved; perubahan qty langsung
- *    dikoreksi ke stok gudang asal.
+ *  - Stok sudah keluar (approved, belum diterima): gudang dikunci, status
+ *    tidak bisa turun dari approved; perubahan qty langsung dikoreksi ke
+ *    stok gudang asal.
  *  - Completed (barang diterima, stok tujuan & MR sudah dikredit): hanya
- *    info dokumen/pengiriman.
+ *    kode & info dokumen/pengiriman.
+ * Kode bisa diganti di semua posisi; referensi di riwayat stok/kartu stok
+ * konsinyasi ikut diganti trigger DB dan tercatat di item_transfer_kode_history.
  */
 export async function moderatorEditItemTransfer(
   itId: number,
@@ -1644,9 +1655,37 @@ export async function moderatorEditItemTransfer(
     .eq("id", user.id)
     .single();
   const fieldLabels = Array.from(
-    new Set(Object.keys(plan.headerPatch).map((k) => IT_FIELD_LABEL[k] || k)),
+    new Set(
+      Object.keys(plan.headerPatch)
+        .filter((k) => k !== "it_kode")
+        .map((k) => IT_FIELD_LABEL[k] || k),
+    ),
   );
   const summaryParts: string[] = [];
+  let kodeChange: Record<string, any> | undefined;
+  if (plan.headerPatch.it_kode) {
+    const { data: kodeHistory } = await supabase
+      .from("item_transfer_kode_history")
+      .select("stock_movements_updated, consignment_movements_updated")
+      .eq("it_id", itId)
+      .eq("new_kode", plan.headerPatch.it_kode)
+      .order("changed_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const refCount =
+      (kodeHistory?.stock_movements_updated || 0) +
+      (kodeHistory?.consignment_movements_updated || 0);
+    kodeChange = {
+      before: it.it_kode,
+      after: plan.headerPatch.it_kode,
+      stock_movements_updated: kodeHistory?.stock_movements_updated ?? 0,
+      consignment_movements_updated: kodeHistory?.consignment_movements_updated ?? 0,
+    };
+    summaryParts.push(
+      `kode ${it.it_kode} → ${plan.headerPatch.it_kode}` +
+        (refCount > 0 ? ` (${refCount} riwayat stok ikut diperbarui)` : ""),
+    );
+  }
   if (fieldLabels.length > 0) summaryParts.push(fieldLabels.join("/"));
   if (plan.toUpdate.length) summaryParts.push(`${plan.toUpdate.length} item diubah`);
   if (plan.toInsert.length) summaryParts.push(`${plan.toInsert.length} item ditambah`);
@@ -1664,6 +1703,7 @@ export async function moderatorEditItemTransfer(
     summary: `Moderator edit: ${summaryParts.join(", ")}. Alasan: ${reason}`,
     changes: {
       reason,
+      kode: kodeChange,
       before: { ...revertPatch, approvals: it.approvals },
       after: claimPatch,
       items: plan.itemsChanged

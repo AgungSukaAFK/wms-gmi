@@ -27,9 +27,17 @@ import {
   Calendar as CalendarIcon,
   ChevronRight,
   Download,
+  Trash2,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { Checkbox } from "@/components/ui/checkbox";
+import { useAuthStore } from "@/stores/auth-store";
 import { ItemTransferDetailSheet } from "@/components/item-transfer/item-transfer-detail-sheet";
+import {
+  BulkDeleteItemTransferDialog,
+  type BulkDeleteItemTransferRow,
+} from "@/components/item-transfer/bulk-delete-item-transfer-dialog";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { formatDate } from "@/lib/utils";
 import { summarizeApprovals } from "@/lib/approval-progress";
@@ -65,6 +73,41 @@ export default function ItemTransferPage() {
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
+
+  // Hapus massal (moderator). Pilihan bertahan saat ganti halaman, direset
+  // saat filter/pencarian berubah supaya tidak ada IT tersembunyi ikut terhapus.
+  const profile = useAuthStore((s) => s.profile);
+  const isModerator = (profile?.roles || []).some((r: any) => r?.name === "moderator");
+  const [selectedRows, setSelectedRows] = useState<Record<number, BulkDeleteItemTransferRow>>({});
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const selectedList = Object.values(selectedRows);
+  const pageAllSelected = rows.length > 0 && rows.every((r) => selectedRows[r.id]);
+
+  const toSelectionRow = (r: any): BulkDeleteItemTransferRow => ({
+    id: r.id,
+    it_kode: r.it_kode,
+    status: r.status,
+    stock_released: Boolean(r.stock_released),
+    it_is_consignment: r.it_is_consignment,
+  });
+
+  const toggleRow = (r: any, checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      if (checked) next[r.id] = toSelectionRow(r);
+      else delete next[r.id];
+      return next;
+    });
+
+  const togglePage = (checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      for (const r of rows) {
+        if (checked) next[r.id] = toSelectionRow(r);
+        else delete next[r.id];
+      }
+      return next;
+    });
 
   useEffect(() => {
     supabase
@@ -335,6 +378,7 @@ export default function ItemTransferPage() {
               onChange={(e) => {
                 setSearchQuery(e.target.value);
                 setPage(1);
+                setSelectedRows({});
               }}
             />
           </div>
@@ -347,6 +391,7 @@ export default function ItemTransferPage() {
             onChange={(v) => {
               setLocationFilters(v);
               setPage(1);
+              setSelectedRows({});
             }}
             options={availableCabang.map((c) => ({
               label: c.nama_cabang,
@@ -360,6 +405,7 @@ export default function ItemTransferPage() {
             onChange={(v) => {
               setStatusFilters(v);
               setPage(1);
+              setSelectedRows({});
             }}
             options={[
               { label: "Menunggu Approval", value: "open" },
@@ -372,10 +418,45 @@ export default function ItemTransferPage() {
       </Content>
 
       <Content className="overflow-hidden">
+        {isModerator && selectedList.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
+            <span className="text-xs font-bold text-foreground">
+              {selectedList.length} Item Transfer dipilih
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-semibold"
+                onClick={() => setSelectedRows({})}
+              >
+                <X className="h-3.5 w-3.5" /> Batal Pilih
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-bold"
+                onClick={() => setBulkDeleteOpen(true)}
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Hapus Terpilih
+              </Button>
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <Table>
             <TableHeader className="bg-muted/50">
               <TableRow className="hover:bg-transparent h-12">
+                {isModerator && (
+                  <TableHead className="w-10 pl-4">
+                    <Checkbox
+                      checked={pageAllSelected}
+                      onCheckedChange={(v) => togglePage(v === true)}
+                      disabled={loading || rows.length === 0}
+                      aria-label="Pilih semua di halaman ini"
+                    />
+                  </TableHead>
+                )}
                 <SortableTableHead
                   sortKey="it_kode"
                   currentSort={sortOrder}
@@ -409,12 +490,12 @@ export default function ItemTransferPage() {
               {loading ? (
                 Array(5).fill(0).map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={5} className="h-16 animate-pulse bg-muted/20" />
+                    <TableCell colSpan={isModerator ? 6 : 5} className="h-16 animate-pulse bg-muted/20" />
                   </TableRow>
                 ))
               ) : rows.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]">
+                  <TableCell colSpan={isModerator ? 6 : 5} className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]">
                     Belum ada Item Transfer
                   </TableCell>
                 </TableRow>
@@ -428,6 +509,15 @@ export default function ItemTransferPage() {
                       setDetailOpen(true);
                     }}
                   >
+                    {isModerator && (
+                      <TableCell className="pl-4" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={!!selectedRows[r.id]}
+                          onCheckedChange={(v) => toggleRow(r, v === true)}
+                          aria-label={`Pilih ${r.it_kode}`}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="font-bold text-foreground uppercase text-sm">
                       {r.it_kode}
                       {r.it_is_consignment && (
@@ -497,6 +587,24 @@ export default function ItemTransferPage() {
         onOpenChange={setDetailOpen}
         onUpdate={fetchData}
       />
+
+      {isModerator && bulkDeleteOpen && (
+        <BulkDeleteItemTransferDialog
+          open={bulkDeleteOpen}
+          onOpenChange={setBulkDeleteOpen}
+          rows={selectedList}
+          onFinished={(deletedIds) => {
+            setSelectedRows((prev) => {
+              const next = { ...prev };
+              for (const id of deletedIds) delete next[id];
+              return next;
+            });
+            const pageEmptied = rows.every((r) => deletedIds.includes(r.id));
+            if (pageEmptied && page > 1) setPage((p) => p - 1);
+            else fetchData();
+          }}
+        />
+      )}
     </>
   );
 }
