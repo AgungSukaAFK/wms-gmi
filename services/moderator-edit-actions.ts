@@ -54,6 +54,11 @@ export type ModeratorApprovalStep = {
   // untuk slot tanda tangan cetak. Tidak dipakai MR/PR/PO — dibawa apa adanya
   // supaya tidak hilang saat step di-edit lewat ApprovalFlowEditor.
   position?: string | null;
+  // Dipakai khusus Item Transfer: label baris approval (Requester/Approver/
+  // Reviewer) & id step template — dibawa apa adanya, lihat
+  // moderatorEditItemTransfer di services/item-transfer-actions.ts.
+  role?: string | null;
+  step_id?: number | null;
 };
 
 type ModeratorAllocation = {
@@ -2004,7 +2009,7 @@ export async function moderatorEditReturnSpb(id: number, payload: ModeratorRetur
 }
 
 export async function getModeratorEditLogs(
-  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive" | "delivery",
+  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive" | "delivery" | "item_transfer",
   docId: number,
 ) {
   const supabase = await createClient();

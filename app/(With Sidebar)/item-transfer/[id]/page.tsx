@@ -29,6 +29,8 @@ import { SHIPMENT_LABEL } from "@/lib/shipment";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { ItemTransferTrackingControl } from "@/components/item-transfer/item-transfer-tracking-control";
+import { EditItemTransferDialog } from "@/components/item-transfer/edit-item-transfer-dialog";
+import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import {
   approveItemTransfer,
   rejectItemTransfer,
@@ -57,6 +59,8 @@ import {
   Boxes,
   AlertCircle,
   StickyNote,
+  Pencil,
+  ShieldAlert,
 } from "lucide-react";
 
 export default function ItemTransferDetailPage({
@@ -83,6 +87,9 @@ export default function ItemTransferDetailPage({
 
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+
+  const [editMode, setEditMode] = useState<"regular" | "moderator" | null>(null);
+  const [modLogRefreshKey, setModLogRefreshKey] = useState(0);
 
   useEffect(() => {
     if (itId) {
@@ -174,6 +181,22 @@ export default function ItemTransferDetailPage({
   const isModeratorOrAdmin = roleNames.some(
     (role) => role === "moderator" || role === "admin",
   );
+  const isModerator = roleNames.includes("moderator");
+  // Edit biasa (seperti Edit Isi MR): pembuat atau approver "menyetujui" yang
+  // sedang giliran, selama stok belum keluar.
+  const pendingIsMe =
+    !!me &&
+    !!pendingApproval &&
+    (pendingApproval.user_id === me.id || pendingApproval.userid === me.id);
+  const canEditRegular =
+    it?.status === "open" &&
+    !it?.stock_released &&
+    !!me &&
+    (it?.uid_requester === me.id ||
+      it?.created_by === me.id ||
+      (pendingIsMe &&
+        (pendingApproval.level ?? pendingApproval.approval_role ?? "menyetujui") !==
+          "mengetahui"));
 
   const onSign = async (signature: any) => {
     if (!itId || !sigMode) return;
@@ -328,7 +351,27 @@ export default function ItemTransferDetailPage({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {canEditRegular && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-2 font-semibold border-blue-200 text-blue-600 hover:bg-blue-50"
+                onClick={() => setEditMode("regular")}
+              >
+                <Pencil className="h-4 w-4" /> Edit
+              </Button>
+            )}
+            {isModerator && it && (
+              <Button
+                size="sm"
+                variant="outline"
+                className="gap-2 font-semibold border-warning/40 text-warning hover:bg-warning/10"
+                onClick={() => setEditMode("moderator")}
+              >
+                <ShieldAlert className="h-4 w-4" /> Moderator Edit
+              </Button>
+            )}
             <Button
               onClick={() => window.open(`/item-transfer/${itId}/print`, "_blank")}
               variant="outline"
@@ -722,6 +765,29 @@ export default function ItemTransferDetailPage({
           </Table>
         </div>
       </Content>
+
+      <Content>
+        <ModeratorEditLogPanel
+          docType="item_transfer"
+          docId={Number(itId)}
+          refreshKey={modLogRefreshKey}
+        />
+      </Content>
+
+      {editMode && (
+        <EditItemTransferDialog
+          itId={Number(itId)}
+          mode={editMode}
+          open={!!editMode}
+          onOpenChange={(o) => {
+            if (!o) setEditMode(null);
+          }}
+          onSaved={() => {
+            setModLogRefreshKey((k) => k + 1);
+            fetchDetails();
+          }}
+        />
+      )}
 
       <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
         <DialogContent>

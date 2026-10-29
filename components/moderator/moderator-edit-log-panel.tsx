@@ -11,7 +11,7 @@ import { getModeratorEditLogs } from "@/services/moderator-edit-actions";
 import { formatDateTime } from "@/lib/utils";
 
 interface ModeratorEditLogPanelProps {
-  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive" | "delivery";
+  docType: "mr" | "pr" | "po" | "spb" | "spb_po" | "spb_do" | "spb_invoice" | "return_spb" | "receive" | "delivery" | "item_transfer";
   docId: number;
   refreshKey?: number;
 }
