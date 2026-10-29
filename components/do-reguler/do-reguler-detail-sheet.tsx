@@ -12,16 +12,6 @@ import { createClient } from "@/lib/supabase/client";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
   Table,
   TableBody,
   TableCell,
@@ -50,20 +40,11 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import {
-  SHIPMENT_LABEL,
-  type KoliFormState,
-  isEkspedisi,
-  initialKoliForm,
-  koliFormFromDoc,
-  koliFormPayload,
-  validateKoliForm,
-} from "@/lib/shipment";
-import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
+import { SHIPMENT_LABEL } from "@/lib/shipment";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
+import { EditDoRegulerDialog } from "@/components/do-reguler/edit-do-reguler-dialog";
 import {
   deleteDoReguler,
-  updateDoReguler,
   updateDoRegulerTracking,
   updateDoRegulerTrackingModerator,
   cancelDoReguler,
@@ -118,23 +99,6 @@ export function DoRegulerDetailSheet({
     useState("created");
   const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
   const [editOpen, setEditOpen] = useState(false);
-  const [editSaving, setEditSaving] = useState(false);
-  const [editForm, setEditForm] = useState({
-    do_tanggal: "",
-    kode_po: "",
-    shipment_type: "ekspedisi",
-    ekspedisi: "",
-    sender_name: "",
-    eksternal_provider: "",
-    eksternal_id: "",
-    no_resi: "",
-    estimasi_hari: "1",
-    pic: "",
-    remarks: "",
-  });
-  const [editKoli, setEditKoli] = useState<KoliFormState>(initialKoliForm);
-  const [editLayananKurir, setEditLayananKurir] = useState("");
-  const [editRatePerKg, setEditRatePerKg] = useState(0);
 
   const fetchData = async () => {
     if (!doId) return;
@@ -201,53 +165,7 @@ export function DoRegulerDetailSheet({
 
   const openEditDialog = () => {
     if (!doRow) return;
-    setEditForm({
-      do_tanggal: doRow.do_tanggal ? String(doRow.do_tanggal).slice(0, 10) : "",
-      kode_po: doRow.kode_po || "",
-      shipment_type: doRow.shipment_type || "ekspedisi",
-      ekspedisi: doRow.ekspedisi || "",
-      sender_name: doRow.sender_name || "",
-      eksternal_provider: doRow.eksternal_provider || "",
-      eksternal_id: doRow.eksternal_id || "",
-      no_resi: doRow.no_resi || "",
-      estimasi_hari: String(doRow.estimasi_hari ?? 1),
-      pic: doRow.pic || "",
-      remarks: doRow.remarks || "",
-    });
-    setEditKoli(koliFormFromDoc(doRow));
-    setEditLayananKurir(doRow.layanan_kurir || "");
-    setEditRatePerKg(Number(doRow.rate_per_kg) || 0);
     setEditOpen(true);
-  };
-
-  const handleEditSave = async () => {
-    if (!doId) return;
-    // Berat tidak diwajibkan: DO lama belum punya detail koli.
-    const koliErr = validateKoliForm(editKoli, { requireBerat: false });
-    if (koliErr) return toast.error(koliErr);
-    const ekspedisi = isEkspedisi(editForm.shipment_type);
-    setEditSaving(true);
-    const res = await updateDoReguler(doId, {
-      do_tanggal: editForm.do_tanggal || undefined,
-      kode_po: editForm.kode_po || undefined,
-      shipment_type: editForm.shipment_type,
-      ekspedisi: editForm.ekspedisi || undefined,
-      sender_name: editForm.sender_name || undefined,
-      eksternal_provider: editForm.eksternal_provider || undefined,
-      eksternal_id: editForm.eksternal_id || undefined,
-      ...koliFormPayload(editKoli),
-      layanan_kurir: ekspedisi ? editLayananKurir : undefined,
-      rate_per_kg: ekspedisi ? editRatePerKg : undefined,
-      no_resi: editForm.no_resi || undefined,
-      estimasi_hari: Number(editForm.estimasi_hari) || 1,
-      pic: editForm.pic || undefined,
-      remarks: editForm.remarks || undefined,
-    });
-    setEditSaving(false);
-    if ((res as any).error) return toast.error((res as any).error);
-    toast.success("DO Reguler berhasil diperbarui");
-    setEditOpen(false);
-    await refresh();
   };
 
   const handleTrack = async () => {
@@ -640,172 +558,12 @@ export function DoRegulerDetailSheet({
         )}
       </SheetContent>
 
-      <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>Edit DO Reguler</DialogTitle>
-            <DialogDescription>
-              Moderator/admin dapat memperbarui metadata DO tanpa mengubah item.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="do_tanggal">Tanggal DO</Label>
-              <Input
-                id="do_tanggal"
-                type="date"
-                value={editForm.do_tanggal}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    do_tanggal: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="kode_po">Kode PO</Label>
-              <Input
-                id="kode_po"
-                value={editForm.kode_po}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, kode_po: e.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="shipment_type">Shipment Type</Label>
-              <Input
-                id="shipment_type"
-                value={editForm.shipment_type}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    shipment_type: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="ekspedisi">Ekspedisi</Label>
-              <Input
-                id="ekspedisi"
-                value={editForm.ekspedisi}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    ekspedisi: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="sender_name">Sender Name</Label>
-              <Input
-                id="sender_name"
-                value={editForm.sender_name}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    sender_name: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="pic">PIC</Label>
-              <Input
-                id="pic"
-                value={editForm.pic}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, pic: e.target.value }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="estimasi_hari">Estimasi Hari</Label>
-              <Input
-                id="estimasi_hari"
-                type="number"
-                value={editForm.estimasi_hari}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    estimasi_hari: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="eksternal_provider">Eksternal Provider</Label>
-              <Input
-                id="eksternal_provider"
-                value={editForm.eksternal_provider}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    eksternal_provider: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="eksternal_id">Eksternal ID</Label>
-              <Input
-                id="eksternal_id"
-                value={editForm.eksternal_id}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    eksternal_id: e.target.value,
-                  }))
-                }
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="no_resi">No Resi</Label>
-              <Input
-                id="no_resi"
-                value={editForm.no_resi}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, no_resi: e.target.value }))
-                }
-              />
-            </div>
-            <div className="md:col-span-2">
-              <KoliDetailEditor
-                koli={editKoli}
-                onKoliChange={setEditKoli}
-                shipmentType={editForm.shipment_type}
-                layananKurir={editLayananKurir}
-                onLayananKurirChange={setEditLayananKurir}
-                ratePerKg={editRatePerKg}
-                onRatePerKgChange={setEditRatePerKg}
-              />
-            </div>
-            <div className="space-y-2 md:col-span-2">
-              <Label htmlFor="remarks">Remarks</Label>
-              <Textarea
-                id="remarks"
-                value={editForm.remarks}
-                onChange={(e) =>
-                  setEditForm((prev) => ({ ...prev, remarks: e.target.value }))
-                }
-              />
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditOpen(false)}>
-              Batal
-            </Button>
-            <Button onClick={handleEditSave} disabled={editSaving}>
-              {editSaving ? "Menyimpan..." : "Simpan Perubahan"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      <EditDoRegulerDialog
+        doRow={doRow}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={refresh}
+      />
     </Sheet>
   );
 }

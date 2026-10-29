@@ -2,7 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import type { KoliRow } from "@/lib/shipment";
+import { SHIPMENT_LABEL, type KoliRow } from "@/lib/shipment";
 import { changeStockQty, sumQtyByPart } from "@/lib/stock-mutation";
 import {
   computeSoItemRemaining,
@@ -482,6 +482,13 @@ export async function updateDoReguler(
 ) {
   const auth = await requireModeratorOrAdmin();
   if ("error" in auth) return { error: auth.error };
+
+  // Termasuk nilai lama 'ekspedisi' (DO hasil import) supaya tetap bisa disimpan.
+  if (
+    payload.shipment_type !== undefined &&
+    !Object.prototype.hasOwnProperty.call(SHIPMENT_LABEL, payload.shipment_type)
+  )
+    return { error: "Jenis pengiriman tidak valid." };
 
   const { supabase } = auth;
   const safePayload = {

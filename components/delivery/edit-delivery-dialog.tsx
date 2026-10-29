@@ -6,6 +6,9 @@
 // direverse dulu baru item baru divalidasi ulang di server
 // (moderatorEditDelivery, services/inventory-actions.ts) — dialog ini cuma
 // menyiapkan payload-nya, semua aritmatika stok terjadi di server.
+// Input pengiriman sama seperti form create & edit Item Transfer: jenis/kurir/
+// penyedia pakai dropdown, field yang tidak relevan dengan jenis pengiriman
+// dikosongkan saat simpan (buildHeader).
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -41,9 +44,9 @@ import {
   getShareStockRemaining,
 } from "@/services/inventory-actions";
 import {
+  defaultEstimasiHari,
   isEkspedisi,
   SHIPMENT_LABEL,
-  type ShipmentType,
   type KoliFormState,
   initialKoliForm,
   koliFormFromDoc,
@@ -67,6 +70,100 @@ interface EditDeliveryDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onUpdated?: () => void;
+}
+
+const COURIERS = [
+  "JNE",
+  "J&T Express",
+  "SiCepat",
+  "Pos Indonesia",
+  "Anteraja",
+  "TIKI",
+  "Lion Parcel",
+  "Ninja Xpress",
+  "Wahana",
+  "SAP Express",
+  "Indah Cargo",
+  "Flexo Fast",
+];
+const HANDCARRY_PROVIDERS = ["Gojek", "Grab", "Maxim", "Lalamove"];
+const SHIPMENT_TYPES = [
+  "handcarry_internal",
+  "handcarry_eksternal",
+  "ekspedisi_laut",
+  "ekspedisi_udara",
+];
+
+interface HeaderForm {
+  dlvKode: string;
+  shipmentType: string;
+  kurir: string;
+  senderName: string;
+  eksternalProvider: string;
+  eksternalId: string;
+  noResi: string;
+  estimasiHari: number;
+  koli: KoliFormState;
+  layananKurir: string;
+  ratePerKg: number;
+  picUid: string;
+  receiverUid: string;
+}
+
+function headerFormFromDelivery(d: any): HeaderForm {
+  const t = d.shipment_type || "ekspedisi_laut";
+  return {
+    dlvKode: d.dlv_kode || "",
+    shipmentType: t,
+    // "Handcarry Internal" di jenis ekspedisi = sisa edit lama yang ganti
+    // jenis tanpa ganti kurir -> dianggap belum ada kurir.
+    kurir:
+      isEkspedisi(t) && d.ekspedisi !== "Handcarry Internal"
+        ? d.ekspedisi || ""
+        : "",
+    senderName: d.sender_name || "",
+    eksternalProvider:
+      d.eksternal_provider ||
+      (t === "handcarry_eksternal" ? d.ekspedisi || "" : ""),
+    eksternalId: d.eksternal_id || "",
+    noResi: d.no_resi || "",
+    estimasiHari: d.estimasi_hari || 1,
+    koli: koliFormFromDoc(d),
+    layananKurir: d.layanan_kurir || "",
+    ratePerKg: Number(d.rate_per_kg) || 0,
+    picUid: d.uid_pic || "",
+    receiverUid: d.uid_receiver || "",
+  };
+}
+
+// Header yang dikirim ke server. Dipakai juga untuk deteksi perubahan: form
+// yang tidak disentuh menghasilkan header yang sama persis dengan versi awal.
+function buildHeader(f: HeaderForm) {
+  const ekspedisi = isEkspedisi(f.shipmentType);
+  return {
+    dlv_kode: f.dlvKode.trim(),
+    ekspedisi: ekspedisi
+      ? f.kurir
+      : f.shipmentType === "handcarry_eksternal"
+        ? f.eksternalProvider
+        : "Handcarry Internal",
+    shipment_type: f.shipmentType,
+    sender_name:
+      f.shipmentType === "handcarry_internal" ? f.senderName || null : null,
+    eksternal_provider:
+      f.shipmentType === "handcarry_eksternal"
+        ? f.eksternalProvider || null
+        : null,
+    eksternal_id:
+      f.shipmentType === "handcarry_eksternal" ? f.eksternalId || null : null,
+    no_resi: ekspedisi ? f.noResi || null : null,
+    estimasi_hari: f.estimasiHari,
+    ...koliFormPayload(f.koli),
+    layanan_kurir: ekspedisi ? f.layananKurir || null : null,
+    rate_per_kg: ekspedisi ? f.ratePerKg || null : null,
+    uid_pic: f.picUid || null,
+    uid_receiver: f.receiverUid || null,
+  };
 }
 
 function itemsSignature(items: DeliveryItemRow[]): string {
@@ -96,16 +193,15 @@ export function EditDeliveryDialog({
   >({});
 
   const [dlvKode, setDlvKode] = useState("");
-  const [ekspedisi, setEkspedisi] = useState("");
-  const [shipmentType, setShipmentType] =
-    useState<ShipmentType>("ekspedisi_laut");
+  const [shipmentType, setShipmentType] = useState("ekspedisi_laut");
+  const [kurir, setKurir] = useState("");
   const [senderName, setSenderName] = useState("");
   const [eksternalProvider, setEksternalProvider] = useState("");
   const [eksternalId, setEksternalId] = useState("");
   const [noResi, setNoResi] = useState("");
   const [estimasiHari, setEstimasiHari] = useState(1);
   const [koli, setKoli] = useState<KoliFormState>(initialKoliForm);
-  const [originalKoliKey, setOriginalKoliKey] = useState("");
+  const [originalHeaderKey, setOriginalHeaderKey] = useState("");
   const [layananKurir, setLayananKurir] = useState("");
   const [ratePerKg, setRatePerKg] = useState(0);
   const [picUid, setPicUid] = useState("");
@@ -118,6 +214,13 @@ export function EditDeliveryDialog({
   const [shareStockPopoverOpen, setShareStockPopoverOpen] = useState(false);
 
   const [reason, setReason] = useState("");
+
+  // Jenis pengiriman di luar 4 pilihan sekarang (mis. 'ekspedisi' lama).
+  const origShipmentType: string = delivery?.shipment_type || "";
+  const legacyShipmentType =
+    origShipmentType && !SHIPMENT_TYPES.includes(origShipmentType)
+      ? origShipmentType
+      : null;
 
   useEffect(() => {
     if (open && deliveryId) {
@@ -138,23 +241,21 @@ export function EditDeliveryDialog({
         .single();
       setDelivery(dlvData);
       if (dlvData) {
-        setDlvKode(dlvData.dlv_kode || "");
-        setEkspedisi(dlvData.ekspedisi || "");
-        setShipmentType(
-          (dlvData.shipment_type as ShipmentType) || "ekspedisi_laut",
-        );
-        setSenderName(dlvData.sender_name || "");
-        setEksternalProvider(dlvData.eksternal_provider || "");
-        setEksternalId(dlvData.eksternal_id || "");
-        setNoResi(dlvData.no_resi || "");
-        setEstimasiHari(dlvData.estimasi_hari || 1);
-        const initialKoli = koliFormFromDoc(dlvData);
-        setKoli(initialKoli);
-        setOriginalKoliKey(JSON.stringify(koliFormPayload(initialKoli)));
-        setLayananKurir(dlvData.layanan_kurir || "");
-        setRatePerKg(Number(dlvData.rate_per_kg) || 0);
-        setPicUid(dlvData.uid_pic || "");
-        setReceiverUid(dlvData.uid_receiver || "");
+        const f = headerFormFromDelivery(dlvData);
+        setDlvKode(f.dlvKode);
+        setShipmentType(f.shipmentType);
+        setKurir(f.kurir);
+        setSenderName(f.senderName);
+        setEksternalProvider(f.eksternalProvider);
+        setEksternalId(f.eksternalId);
+        setNoResi(f.noResi);
+        setEstimasiHari(f.estimasiHari);
+        setKoli(f.koli);
+        setLayananKurir(f.layananKurir);
+        setRatePerKg(f.ratePerKg);
+        setPicUid(f.picUid);
+        setReceiverUid(f.receiverUid);
+        setOriginalHeaderKey(JSON.stringify(buildHeader(f)));
       }
 
       const { data: usersData } = await supabase
@@ -303,64 +404,59 @@ export function EditDeliveryDialog({
       return;
     }
 
-    // Berat tidak diwajibkan di sini: delivery lama belum punya detail koli,
-    // moderator harus tetap bisa edit info lain tanpa melengkapinya.
-    const koliErr = validateKoliForm(koli, { requireBerat: false });
-    if (koliErr) {
-      toast.error(koliErr);
-      return;
-    }
-
-    const headerChanged =
-      dlvKode.trim() !== (delivery.dlv_kode || "") ||
-      ekspedisi !== (delivery.ekspedisi || "") ||
-      shipmentType !== (delivery.shipment_type || "ekspedisi_laut") ||
-      senderName !== (delivery.sender_name || "") ||
-      eksternalProvider !== (delivery.eksternal_provider || "") ||
-      eksternalId !== (delivery.eksternal_id || "") ||
-      noResi !== (delivery.no_resi || "") ||
-      estimasiHari !== (delivery.estimasi_hari || 1) ||
-      JSON.stringify(koliFormPayload(koli)) !== originalKoliKey ||
-      layananKurir !== (delivery.layanan_kurir || "") ||
-      ratePerKg !== (Number(delivery.rate_per_kg) || 0) ||
-      picUid !== (delivery.uid_pic || "") ||
-      receiverUid !== (delivery.uid_receiver || "");
+    const header = buildHeader({
+      dlvKode,
+      shipmentType,
+      kurir,
+      senderName,
+      eksternalProvider,
+      eksternalId,
+      noResi,
+      estimasiHari,
+      koli,
+      layananKurir,
+      ratePerKg,
+      picUid,
+      receiverUid,
+    });
+    const headerChanged = JSON.stringify(header) !== originalHeaderKey;
 
     if (!itemsChanged && !headerChanged) {
       toast.error("Tidak ada perubahan untuk disimpan");
       return;
     }
 
+    // Info pengiriman cuma divalidasi kalau ikut dikirim — edit item saja
+    // tidak boleh terblok data pengiriman lama yang belum lengkap.
+    if (headerChanged) {
+      // Kurir wajib untuk ekspedisi laut/udara (sama seperti form create);
+      // 'ekspedisi' lama boleh tetap tanpa kurir.
+      if (
+        isEkspedisi(shipmentType) &&
+        shipmentType !== legacyShipmentType &&
+        !kurir.trim()
+      ) {
+        toast.error("Pilih kurir ekspedisi");
+        return;
+      }
+      if (shipmentType === "handcarry_eksternal" && !eksternalProvider.trim()) {
+        toast.error("Pilih penyedia handcarry eksternal");
+        return;
+      }
+      // Berat tidak diwajibkan di sini: delivery lama belum punya detail
+      // koli, moderator harus tetap bisa edit info lain tanpa melengkapinya.
+      const koliErr = validateKoliForm(koli, { requireBerat: false });
+      if (koliErr) {
+        toast.error(koliErr);
+        return;
+      }
+    }
+
     setSaving(true);
     try {
       const result = await moderatorEditDelivery(deliveryId, {
         reason: reason.trim(),
-        header: headerChanged
-          ? {
-              dlv_kode: dlvKode.trim(),
-              ekspedisi,
-              shipment_type: shipmentType,
-              sender_name:
-                shipmentType === "handcarry_internal"
-                  ? senderName || null
-                  : null,
-              eksternal_provider:
-                shipmentType === "handcarry_eksternal"
-                  ? eksternalProvider || null
-                  : null,
-              eksternal_id:
-                shipmentType === "handcarry_eksternal"
-                  ? eksternalId || null
-                  : null,
-              no_resi: isEkspedisi(shipmentType) ? noResi || null : null,
-              estimasi_hari: estimasiHari,
-              ...koliFormPayload(koli),
-              layanan_kurir: isEkspedisi(shipmentType) ? layananKurir || null : null,
-              rate_per_kg: isEkspedisi(shipmentType) ? ratePerKg || null : null,
-              uid_pic: picUid || null,
-              uid_receiver: receiverUid || null,
-            }
-          : undefined,
+        header: headerChanged ? header : undefined,
         items: itemsChanged
           ? finalItems.map((i) => ({
               mr_item_id: i.mr_item_id,
@@ -389,6 +485,10 @@ export function EditDeliveryDialog({
 
   const picName = users.find((u) => u.id === picUid)?.nama;
   const receiverName = users.find((u) => u.id === receiverUid)?.nama;
+  const courierOptions = Array.from(new Set([...COURIERS, ...(kurir ? [kurir] : [])]));
+  const providerOptions = Array.from(
+    new Set([...HANDCARRY_PROVIDERS, ...(eksternalProvider ? [eksternalProvider] : [])]),
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -416,152 +516,27 @@ export function EditDeliveryDialog({
             </div>
           ) : (
             <>
-              {/* Info Logistik */}
+              {/* Info Dokumen */}
               <div className="space-y-3">
                 <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
-                  Info Logistik
+                  Info Dokumen
                 </h4>
-                <div className="space-y-1.5">
-                  <Label className="text-[10px] font-bold uppercase">
-                    Nomor Delivery
-                  </Label>
-                  <Input
-                    value={dlvKode}
-                    onChange={(e) => setDlvKode(e.target.value)}
-                    placeholder="DLV/XXXX/2026..."
-                    className="h-9 font-bold text-xs uppercase text-primary"
-                  />
-                  <p className="text-[9px] font-medium text-muted-foreground/70">
-                    Referensi lama (mis. di stock movement/riwayat sebelumnya)
-                    tetap menampilkan nomor lama — cuma dokumen ini yang berganti nomor.
-                  </p>
-                </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
+                  <div className="space-y-1.5 sm:col-span-2">
                     <Label className="text-[10px] font-bold uppercase">
-                      Jenis Pengiriman
-                    </Label>
-                    <Select
-                      value={shipmentType}
-                      onValueChange={(v) => setShipmentType(v as ShipmentType)}
-                    >
-                      <SelectTrigger className="h-9 font-bold text-xs">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {Object.entries(SHIPMENT_LABEL)
-                          .filter(([v]) => v !== "ekspedisi")
-                          .map(([v, label]) => (
-                            <SelectItem key={v} value={v} className="text-xs font-bold">
-                              {label}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-1.5">
-                    <Label className="text-[10px] font-bold uppercase">
-                      Estimasi (Hari)
+                      Nomor Delivery
                     </Label>
                     <Input
-                      type="number"
-                      min={1}
-                      value={estimasiHari}
-                      onChange={(e) =>
-                        setEstimasiHari(Math.max(1, parseInt(e.target.value) || 1))
-                      }
-                      className="h-9 font-bold text-xs"
+                      value={dlvKode}
+                      onChange={(e) => setDlvKode(e.target.value)}
+                      placeholder="DLV/XXXX/2026..."
+                      className="h-9 font-bold text-xs uppercase text-primary"
                     />
+                    <p className="text-[9px] font-medium text-muted-foreground/70">
+                      Referensi lama (mis. di stock movement/riwayat sebelumnya)
+                      tetap menampilkan nomor lama — cuma dokumen ini yang berganti nomor.
+                    </p>
                   </div>
-
-                  {shipmentType === "handcarry_internal" && (
-                    <div className="space-y-1.5 sm:col-span-2">
-                      <Label className="text-[10px] font-bold uppercase">
-                        Nama Pengirim
-                      </Label>
-                      <Input
-                        value={senderName}
-                        onChange={(e) => setSenderName(e.target.value)}
-                        placeholder="Nama kurir/pengirim internal..."
-                        className="h-9 font-bold text-xs"
-                      />
-                    </div>
-                  )}
-
-                  {shipmentType === "handcarry_eksternal" && (
-                    <>
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase">
-                          Layanan
-                        </Label>
-                        <Select
-                          value={eksternalProvider}
-                          onValueChange={setEksternalProvider}
-                        >
-                          <SelectTrigger className="h-9 font-bold text-xs">
-                            <SelectValue placeholder="Pilih layanan..." />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {["Gojek", "Grab", "Maxim", "Lalamove"].map((p) => (
-                              <SelectItem key={p} value={p} className="text-xs font-bold">
-                                {p}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase">
-                          ID Pengiriman
-                        </Label>
-                        <Input
-                          value={eksternalId}
-                          onChange={(e) => setEksternalId(e.target.value)}
-                          className="h-9 font-bold text-xs"
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  {isEkspedisi(shipmentType) && (
-                    <>
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase">
-                          Kurir
-                        </Label>
-                        <Input
-                          value={ekspedisi}
-                          onChange={(e) => setEkspedisi(e.target.value)}
-                          placeholder="JNE, J&T, dll..."
-                          className="h-9 font-bold text-xs"
-                        />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label className="text-[10px] font-bold uppercase">
-                          Nomor Resi
-                        </Label>
-                        <Input
-                          value={noResi}
-                          onChange={(e) => setNoResi(e.target.value)}
-                          className="h-9 font-bold text-xs"
-                        />
-                      </div>
-                    </>
-                  )}
-
-                  <div className="col-span-full">
-                    <KoliDetailEditor
-                      koli={koli}
-                      onKoliChange={setKoli}
-                      shipmentType={shipmentType}
-                      layananKurir={layananKurir}
-                      onLayananKurirChange={setLayananKurir}
-                      ratePerKg={ratePerKg}
-                      onRatePerKgChange={setRatePerKg}
-                    />
-                  </div>
-
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold uppercase">PIC</Label>
                     <Select value={picUid || undefined} onValueChange={setPicUid}>
@@ -579,7 +554,6 @@ export function EditDeliveryDialog({
                       </SelectContent>
                     </Select>
                   </div>
-
                   <div className="space-y-1.5">
                     <Label className="text-[10px] font-bold uppercase">
                       Penerima
@@ -601,6 +575,137 @@ export function EditDeliveryDialog({
                         ))}
                       </SelectContent>
                     </Select>
+                  </div>
+                </div>
+              </div>
+
+              {/* Info Pengiriman */}
+              <div className="space-y-3">
+                <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  Info Pengiriman
+                </h4>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase">Jenis Pengiriman</Label>
+                    <Select
+                      value={shipmentType}
+                      onValueChange={(t) => {
+                        setShipmentType(t);
+                        setEstimasiHari(defaultEstimasiHari(t));
+                      }}
+                    >
+                      <SelectTrigger className="h-9 font-bold text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="handcarry_internal" className="text-xs font-bold">🚶 Handcarry Internal</SelectItem>
+                        <SelectItem value="handcarry_eksternal" className="text-xs font-bold">🛵 Handcarry Eksternal</SelectItem>
+                        <SelectItem value="ekspedisi_laut" className="text-xs font-bold">🚢 Ekspedisi Laut</SelectItem>
+                        <SelectItem value="ekspedisi_udara" className="text-xs font-bold">✈️ Ekspedisi Udara</SelectItem>
+                        {legacyShipmentType && (
+                          <SelectItem value={legacyShipmentType} className="text-xs font-bold">
+                            {SHIPMENT_LABEL[legacyShipmentType] || legacyShipmentType} (data lama)
+                          </SelectItem>
+                        )}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-[10px] font-bold uppercase">Estimasi (Hari)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={estimasiHari}
+                      onChange={(e) =>
+                        setEstimasiHari(Math.max(1, parseInt(e.target.value) || 1))
+                      }
+                      className="h-9 font-bold text-xs"
+                    />
+                  </div>
+
+                  {isEkspedisi(shipmentType) && (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase">Kurir</Label>
+                        <Select value={kurir || undefined} onValueChange={setKurir}>
+                          <SelectTrigger className="h-9 font-bold text-xs">
+                            <SelectValue placeholder="Pilih kurir..." />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {courierOptions.map((c) => (
+                              <SelectItem key={c} value={c} className="text-xs font-bold">
+                                {c}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase">No. Resi</Label>
+                        <Input
+                          value={noResi}
+                          onChange={(e) => setNoResi(e.target.value)}
+                          placeholder="Opsional"
+                          className="h-9 font-bold text-xs"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  {shipmentType === "handcarry_internal" && (
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label className="text-[10px] font-bold uppercase">Nama Pengantar</Label>
+                      <Input
+                        value={senderName}
+                        onChange={(e) => setSenderName(e.target.value)}
+                        placeholder="Nama orang yg mengantar"
+                        className="h-9 font-bold text-xs"
+                      />
+                    </div>
+                  )}
+
+                  {shipmentType === "handcarry_eksternal" && (
+                    <>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase">Penyedia</Label>
+                        <Select
+                          value={eksternalProvider || undefined}
+                          onValueChange={setEksternalProvider}
+                        >
+                          <SelectTrigger className="h-9 font-bold text-xs">
+                            <SelectValue placeholder="Pilih penyedia" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {providerOptions.map((p) => (
+                              <SelectItem key={p} value={p} className="text-xs font-bold">
+                                {p}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-[10px] font-bold uppercase">Order / Booking ID</Label>
+                        <Input
+                          value={eksternalId}
+                          onChange={(e) => setEksternalId(e.target.value)}
+                          placeholder="Opsional"
+                          className="h-9 font-bold text-xs"
+                        />
+                      </div>
+                    </>
+                  )}
+
+                  <div className="col-span-full">
+                    <KoliDetailEditor
+                      koli={koli}
+                      onKoliChange={setKoli}
+                      shipmentType={shipmentType}
+                      layananKurir={layananKurir}
+                      onLayananKurirChange={setLayananKurir}
+                      ratePerKg={ratePerKg}
+                      onRatePerKgChange={setRatePerKg}
+                    />
                   </div>
                 </div>
               </div>
