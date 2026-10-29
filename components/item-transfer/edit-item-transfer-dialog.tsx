@@ -1017,7 +1017,13 @@ export function EditItemTransferDialog({
                   <h4 className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
                     Jalur & Status Approval
                   </h4>
-                  <ApprovalFlowEditor steps={approvals} onChange={setApprovals} />
+                  <ApprovalFlowEditor
+                    steps={approvals}
+                    onChange={setApprovals}
+                    templateType="Item Transfer"
+                    templateCabangId={dariCabang}
+                    requesterId={it?.uid_requester ?? it?.created_by ?? null}
+                  />
                   {approvals.some((a) => a.status === "rejected") && (
                     <div className="space-y-1.5">
                       <Label className="text-[10px] font-bold uppercase">

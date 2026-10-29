@@ -787,6 +787,9 @@ export default function PRDetailPage({
                 <ApprovalFlowEditor
                   steps={modApprovals}
                   onChange={setModApprovals}
+                  templateType="Purchase Request"
+                  templateCabangId={modCabangId ? Number(modCabangId) : (pr?.cabang_id ?? null)}
+                  requesterId={pr?.pr_pic_id ?? null}
                 />
               </div>
             ) : (

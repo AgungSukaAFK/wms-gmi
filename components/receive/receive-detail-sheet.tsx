@@ -562,7 +562,13 @@ export function ReceiveDetailSheet({
                         )}
                       </div>
                     )}
-                    <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                    <ApprovalFlowEditor
+                      steps={modApprovals}
+                      onChange={setModApprovals}
+                      templateType="Receive Item"
+                      templateCabangId={receive?.cabang?.id ?? null}
+                      requesterId={receive?.ri_pic_id ?? null}
+                    />
                     {modWillReject && (
                       <div className="space-y-1.5">
                         <Label className="text-[10px] font-bold uppercase text-muted-foreground">

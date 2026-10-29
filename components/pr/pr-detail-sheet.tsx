@@ -776,7 +776,13 @@ export function PRDetailSheet({
                           )}
                         </div>
                       )}
-                      <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                      <ApprovalFlowEditor
+                        steps={modApprovals}
+                        onChange={setModApprovals}
+                        templateType="Purchase Request"
+                        templateCabangId={modCabangId ? Number(modCabangId) : (pr?.cabang_id ?? null)}
+                        requesterId={pr?.pr_pic_id ?? null}
+                      />
                     </div>
                   ) : (
                   <div className="border border-slate-100 rounded-xl overflow-hidden shadow-sm divide-y divide-slate-50">

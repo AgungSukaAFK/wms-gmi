@@ -149,11 +149,11 @@ export function PODetailSheet({
         .select(
           `
           id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
-          po_pic, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
+          po_pic, po_pic_id, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
           po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
-          po_is_outstanding, cabang(nama_cabang),
+          po_is_outstanding, cabang_id, cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
             cabang(nama_cabang),
@@ -747,7 +747,13 @@ export function PODetailSheet({
                             )}
                           </div>
                         )}
-                        <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                        <ApprovalFlowEditor
+                          steps={modApprovals}
+                          onChange={setModApprovals}
+                          templateType="Purchase Order"
+                          templateCabangId={po?.cabang_id ?? null}
+                          requesterId={po?.po_pic_id ?? null}
+                        />
                       </div>
                     ) : (
                     <div className="space-y-2">

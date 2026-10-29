@@ -2013,7 +2013,13 @@ export default function MRDetailPage({
                     )}
                   </div>
                 )}
-                <ApprovalFlowEditor steps={modApprovals} onChange={setModApprovals} />
+                <ApprovalFlowEditor
+                  steps={modApprovals}
+                  onChange={setModApprovals}
+                  templateType="Material Request"
+                  templateCabangId={modCabangId ? Number(modCabangId) : (mr?.cabang_id ?? null)}
+                  requesterId={mr?.mr_pic_id ?? null}
+                />
                 {modApprovals.some((a) => a.status === "rejected") && (
                   <div className="space-y-1.5">
                     <Label className="text-[11px] font-bold uppercase text-muted-foreground">

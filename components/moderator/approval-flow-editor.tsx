@@ -5,10 +5,17 @@
 // role (menyetujui/mengetahui), urutan, dan status tiap tahap secara langsung.
 // Status akhir dokumen (open/approved/rejected) diturunkan otomatis dari array
 // ini oleh server action — komponen ini murni edit state di client.
+//
+// Kalau `templateType` diisi, di atas daftar muncul pilihan "Isi dari
+// Template": moderator bisa mengganti seluruh jalur sekaligus sesuai
+// approval_templates, lalu tetap mengubah tiap tahap secara manual.
+// (Dokumen Stock Out tidak memakainya — StockOutModeratorEditDialog punya
+// pemilih template sendiri karena ikut menyimpan approval_template_id.)
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useDebounce } from "use-debounce";
+import { toast } from "sonner";
 import {
   Popover,
   PopoverContent,
@@ -33,21 +40,91 @@ import {
   Search,
   Loader2,
   ChevronsUpDown,
+  LayoutTemplate,
 } from "lucide-react";
 import type { ModeratorApprovalStep } from "@/services/moderator-edit-actions";
+import type { ApprovalType } from "@/type";
 
 interface ApprovalFlowEditorProps {
   steps: ModeratorApprovalStep[];
   onChange: (steps: ModeratorApprovalStep[]) => void;
+  // Opsional — aktifkan pilihan "Isi dari Template".
+  templateType?: ApprovalType;
+  // Lokasi dokumen: template lokasi ini (lalu Global) ditaruh paling atas.
+  templateCabangId?: number | null;
+  // Pembuat dokumen, mengisi tahap template bertipe "requester".
+  requesterId?: string | null;
 }
 
-export function ApprovalFlowEditor({ steps, onChange }: ApprovalFlowEditorProps) {
+type TemplateOption = {
+  id: number;
+  name: string | null;
+  cabang_id: number | null;
+  cabang: { nama_cabang: string } | null;
+  steps: {
+    id: number;
+    step_order: number;
+    approver_type: "user" | "requester";
+    level: string | null;
+    profiles: { id: string; nama: string; email: string } | null;
+  }[];
+};
+
+const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+
+export function ApprovalFlowEditor({
+  steps,
+  onChange,
+  templateType,
+  templateCabangId,
+  requesterId,
+}: ApprovalFlowEditorProps) {
   const supabase = createClient();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 300);
   const [profiles, setProfiles] = useState<any[]>([]);
   const [searching, setSearching] = useState(false);
+  const [templates, setTemplates] = useState<TemplateOption[]>([]);
+  const [loadingTemplates, setLoadingTemplates] = useState(false);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [applyingTemplate, setApplyingTemplate] = useState(false);
+
+  useEffect(() => {
+    if (!templateType) return;
+    const run = async () => {
+      setLoadingTemplates(true);
+      const { data, error } = await supabase
+        .from("approval_templates")
+        .select(
+          "id, name, cabang_id, cabang(nama_cabang), steps:approval_template_steps(id, step_order, approver_type, level, profiles(id, nama, email))",
+        )
+        .eq("type", templateType)
+        .order("name");
+      if (error) toast.error(`Gagal memuat template approval: ${error.message}`);
+      setTemplates(
+        (data || []).map((t: any) => ({
+          ...t,
+          cabang: one(t.cabang) ?? null,
+          steps: (t.steps || []).map((s: any) => ({ ...s, profiles: one(s.profiles) ?? null })),
+        })),
+      );
+      setLoadingTemplates(false);
+    };
+    run();
+  }, [templateType]);
+
+  // Moderator boleh pakai template lokasi mana pun, tapi yang sesuai lokasi
+  // dokumen (lalu Global) ditaruh di atas.
+  const sortedTemplates = useMemo(() => {
+    const rank = (t: TemplateOption) =>
+      templateCabangId != null && t.cabang_id === templateCabangId
+        ? 0
+        : t.cabang_id === null
+          ? 1
+          : 2;
+    return [...templates].sort((a, b) => rank(a) - rank(b));
+  }, [templates, templateCabangId]);
 
   useEffect(() => {
     if (activeIndex === null) return;
@@ -108,8 +185,136 @@ export function ApprovalFlowEditor({ steps, onChange }: ApprovalFlowEditorProps)
     return "bg-muted text-muted-foreground border-border";
   };
 
+  // Ganti seluruh jalur dengan langkah template. Approver yang sudah approve
+  // dan masih ada di template baru tetap approved (TTD-nya dipertahankan);
+  // sisanya pending. Hasilnya cuma state form — belum tersimpan.
+  const applyTemplate = async () => {
+    const template = templates.find((t) => String(t.id) === selectedTemplateId);
+    if (!template) return;
+    const templateSteps = [...template.steps].sort((a, b) => a.step_order - b.step_order);
+    if (templateSteps.length === 0) {
+      toast.error("Template ini belum punya langkah approval.");
+      return;
+    }
+
+    setApplyingTemplate(true);
+    let requester: { id: string; nama: string; email: string } | null = null;
+    if (requesterId && templateSteps.some((s) => s.approver_type === "requester")) {
+      const { data } = await supabase
+        .from("profiles")
+        .select("id, nama, email")
+        .eq("id", requesterId)
+        .maybeSingle();
+      requester = data;
+    }
+    setApplyingTemplate(false);
+
+    const usedPrev = new Set<number>();
+    const next: ModeratorApprovalStep[] = templateSteps.map((s) => {
+      const isRequester = s.approver_type === "requester";
+      const profile = isRequester ? requester : s.profiles;
+      const userid = profile?.id || "";
+      const prevIndex = userid
+        ? steps.findIndex(
+            (p, i) => !usedPrev.has(i) && p.userid === userid && p.status === "approved",
+          )
+        : -1;
+      const prev = prevIndex >= 0 ? steps[prevIndex] : null;
+      if (prevIndex >= 0) usedPrev.add(prevIndex);
+      return {
+        userid,
+        nama: profile?.nama || "",
+        email: profile?.email || "",
+        approval_role: s.level === "mengetahui" ? "mengetahui" : "menyetujui",
+        status: prev ? "approved" : "pending",
+        processed_at: prev?.processed_at ?? null,
+        signature_url: prev?.signature_url ?? null,
+        notes: null,
+        snapshot: prev?.snapshot ?? null,
+        ...(isRequester ? { role: "Requester" } : {}),
+        step_id: s.id,
+      };
+    });
+
+    const previous = steps;
+    onChange(next);
+    setActiveIndex(null);
+    const kept = next.filter((s) => s.status === "approved").length;
+    const missing = next.filter((s) => !s.userid).length;
+    toast.success(
+      `Template "${template.name || `#${template.id}`}" diterapkan (${next.length} tahap` +
+        (kept ? `, ${kept} tetap approved` : "") +
+        `). Cek lalu simpan.`,
+      {
+        description: missing
+          ? `${missing} tahap belum punya approver — pilih manual.`
+          : undefined,
+        action: { label: "Batalkan", onClick: () => onChange(previous) },
+      },
+    );
+  };
+
   return (
     <div className="space-y-2.5">
+      {templateType && (
+        <div className="rounded-lg border border-dashed border-border bg-muted/30 p-3 space-y-2">
+          <span className="text-[9px] font-bold uppercase text-muted-foreground">
+            Isi dari Template
+          </span>
+          <div className="flex items-center gap-2">
+            <Select
+              value={selectedTemplateId || undefined}
+              onValueChange={setSelectedTemplateId}
+              disabled={loadingTemplates || templates.length === 0}
+            >
+              <SelectTrigger className="h-9 flex-1 min-w-0 bg-background text-[12px]">
+                <SelectValue
+                  placeholder={
+                    loadingTemplates
+                      ? "Memuat template..."
+                      : templates.length === 0
+                        ? "Belum ada template untuk dokumen ini"
+                        : "Pilih template approval..."
+                  }
+                />
+              </SelectTrigger>
+              <SelectContent>
+                {sortedTemplates.map((t) => (
+                  <SelectItem key={t.id} value={String(t.id)} className="text-[12px]">
+                    {t.name || `Template #${t.id}`}
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {t.cabang?.nama_cabang || "Global"} · {t.steps.length} tahap
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-9 gap-1.5 text-[11px] font-bold shrink-0"
+              onClick={applyTemplate}
+              disabled={!selectedTemplateId || applyingTemplate}
+            >
+              {applyingTemplate ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <LayoutTemplate className="h-3.5 w-3.5" />
+              )}
+              Terapkan
+            </Button>
+          </div>
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            Mengganti seluruh daftar di bawah sesuai template. Approver yang
+            sudah approve dan masih ada di template tetap approved (TTD-nya
+            ikut), sisanya pending. Setelah itu tiap tahap tetap bisa diubah —
+            belum tersimpan sampai tombol simpan ditekan.
+          </p>
+        </div>
+      )}
+
       {steps.map((step, index) => (
         <div
           key={index}
