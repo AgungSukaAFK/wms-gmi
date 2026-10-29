@@ -43,8 +43,6 @@ import {
 } from "@/components/ui/select";
 import {
   updateDeliveryDocument,
-  updateDeliveryTracking,
-  updateDeliveryTrackingModerator,
   finalizeDelivery,
   cancelDelivery,
 } from "@/services/inventory-actions";
@@ -53,6 +51,7 @@ import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { EditDeliveryDialog } from "@/components/delivery/edit-delivery-dialog";
+import { DeliveryTrackingControl } from "@/components/delivery/delivery-tracking-control";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeDocumentStatus } from "@/lib/document-status";
@@ -85,8 +84,6 @@ export function DeliveryDetailSheet({
     [],
   );
   const [finalizing, setFinalizing] = useState(false);
-  const [moderatorTrackingStatus, setModeratorTrackingStatus] = useState("");
-  const [moderatorTrackingNote, setModeratorTrackingNote] = useState("");
   const [cancelReason, setCancelReason] = useState("");
   const [cancelling, setCancelling] = useState(false);
   const [editDeliveryOpen, setEditDeliveryOpen] = useState(false);
@@ -138,8 +135,6 @@ export function DeliveryDetailSheet({
         .eq("id", deliveryId)
         .single();
       setDelivery(dlvData);
-      setModeratorTrackingStatus(dlvData?.tracking_status || "created");
-      setModeratorTrackingNote(dlvData?.tracking_note || "");
 
       const { data: itemsData } = await supabase
         .from("delivery_items")
@@ -209,61 +204,6 @@ export function DeliveryDetailSheet({
           </Badge>
         );
     }
-  };
-
-  const TRACKING_STEPS = [
-    { id: "created", label: "Delivery Dibuat" },
-    { id: "packing", label: "Packing" },
-    { id: "ready_pickup", label: "Siap Diambil" },
-    { id: "in_transit", label: "Dalam Pengiriman" },
-    { id: "delivered", label: "Barang Diterima" },
-    { id: "completed", label: "Selesai Final" },
-  ];
-  const TRACKING_ORDER = TRACKING_STEPS.map((s) => s.id);
-
-  const isTrackingStepCompleted = (
-    current: string | undefined,
-    stepId: string,
-  ) => {
-    const ci = TRACKING_ORDER.indexOf(current || "created");
-    const si = TRACKING_ORDER.indexOf(stepId);
-    return ci > si;
-  };
-
-  const handleAdvanceTracking = async () => {
-    if (!delivery) return;
-    const ci = TRACKING_ORDER.indexOf(delivery.tracking_status || "created");
-    const deliveredIndex = TRACKING_ORDER.indexOf("delivered");
-    if (ci < 0 || ci >= deliveredIndex) return;
-    const nextStatus = TRACKING_ORDER[ci + 1];
-    setUpdating(true);
-    const result = await updateDeliveryTracking(delivery.id, nextStatus);
-    if (result.success) {
-      toast.success("Status pengiriman diperbarui");
-      fetchDetails();
-      if (onUpdate) onUpdate();
-    } else {
-      toast.error(result.error || "Gagal memperbarui status");
-    }
-    setUpdating(false);
-  };
-
-  const handleModeratorTrackingSave = async () => {
-    if (!delivery) return;
-    setUpdating(true);
-    const result = await updateDeliveryTrackingModerator(
-      delivery.id,
-      moderatorTrackingStatus,
-      moderatorTrackingNote,
-    );
-    if (result.success) {
-      toast.success("Tracking status dan catatan berhasil diperbarui");
-      fetchDetails();
-      if (onUpdate) onUpdate();
-    } else {
-      toast.error(result.error || "Gagal memperbarui tracking moderator");
-    }
-    setUpdating(false);
   };
 
   const handleFinalizeWithSignature = async (signature: {
@@ -352,12 +292,30 @@ export function DeliveryDetailSheet({
     }
   };
 
-  const currentTrackingIndex = TRACKING_ORDER.indexOf(
-    delivery?.tracking_status || "created",
-  );
-  const deliveredIndex = TRACKING_ORDER.indexOf("delivered");
-  const canAdvanceTracking =
-    currentTrackingIndex >= 0 && currentTrackingIndex < deliveredIndex;
+  // Tracking terkunci begitu delivery dibatalkan atau sudah diterima (TTD
+  // penerima) — sama dengan guard di updateDeliveryTracking.
+  const trackingOpen =
+    Boolean(delivery) &&
+    delivery?.status !== "cancelled" &&
+    delivery?.status !== "completed" &&
+    delivery?.tracking_status !== "completed" &&
+    !delivery?.signature_receiver_id;
+  // Pihak terkait delivery boleh pilih tahap pengiriman (maju/mundur).
+  const isInvolvedInDelivery =
+    (currentUserCabangId !== null &&
+      (currentUserCabangId === delivery?.dari_cabang_id ||
+        currentUserCabangId === delivery?.ke_cabang_id)) ||
+    (Boolean(currentUserId) &&
+      [delivery?.uid_sender, delivery?.uid_receiver, delivery?.uid_pic].includes(
+        currentUserId,
+      ));
+  const canTrack = trackingOpen && isInvolvedInDelivery;
+  const canOverrideTracking = trackingOpen && isModeratorOrAdmin;
+
+  const handleTrackingSaved = async () => {
+    await fetchDetails();
+    onUpdate?.();
+  };
 
   // Kode MR unik yang tergabung di delivery ini — satu delivery bisa berisi
   // item dari lebih dari 1 MR.
@@ -497,7 +455,7 @@ export function DeliveryDetailSheet({
                 />
               </div>
 
-              {/* Tracking Timeline */}
+              {/* Status pengiriman (dropdown, sama seperti Item Transfer) */}
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-1 bg-orange-500 rounded-full" />
@@ -506,67 +464,22 @@ export function DeliveryDetailSheet({
                   </h3>
                 </div>
                 <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3">
-                  <div className="space-y-2.5">
-                    {TRACKING_STEPS.map((step, idx) => {
-                      const completed = isTrackingStepCompleted(
-                        delivery?.tracking_status,
-                        step.id,
-                      );
-                      const current = delivery?.tracking_status === step.id;
-                      return (
-                        <div key={step.id} className="flex items-center gap-3">
-                          <div
-                            className={cn(
-                              "h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-black shrink-0",
-                              completed
-                                ? "bg-green-500 text-white"
-                                : current
-                                  ? "bg-orange-500 text-white"
-                                  : "bg-slate-100 text-slate-400",
-                            )}
-                          >
-                            {completed ? (
-                              <CheckCircle2 className="h-3 w-3" />
-                            ) : (
-                              <span>{idx + 1}</span>
-                            )}
-                          </div>
-                          <span
-                            className={cn(
-                              "text-xs font-bold flex-1",
-                              current
-                                ? "text-orange-600"
-                                : completed
-                                  ? "text-green-600"
-                                  : "text-slate-400",
-                            )}
-                          >
-                            {step.label}
-                          </span>
-                          {current && (
-                            <Badge className="text-[9px] font-bold bg-orange-100 text-orange-700 border-0">
-                              Sekarang
-                            </Badge>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                  {canAdvanceTracking && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full gap-2 text-xs font-bold border-orange-200 text-orange-700 hover:bg-orange-50"
-                      disabled={updating}
-                      onClick={handleAdvanceTracking}
-                    >
-                      {updating ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      )}
-                      Lanjutkan ke Tahap Berikutnya
-                    </Button>
+                  {delivery && (
+                    <DeliveryTrackingControl
+                      deliveryId={delivery.id}
+                      trackingStatus={delivery.tracking_status}
+                      trackingNote={delivery.tracking_note}
+                      canTrack={canTrack}
+                      canOverride={canOverrideTracking}
+                      onSaved={handleTrackingSaved}
+                    />
+                  )}
+
+                  {delivery?.status === "cancelled" && (
+                    <p className="text-[10px] font-medium text-destructive bg-white border border-destructive/30 rounded-lg p-2.5">
+                      Delivery ini sudah dibatalkan — status pengiriman tidak
+                      bisa diubah lagi.
+                    </p>
                   )}
 
                   {delivery?.tracking_note && (
@@ -582,13 +495,14 @@ export function DeliveryDetailSheet({
                 </div>
               </div>
 
-              {/* Moderator Tracking Override */}
-              {isModeratorOrAdmin && (
+              {/* Aksi Moderator/Admin */}
+              {isModeratorOrAdmin &&
+                (canEditDelivery || canCancelDelivery || canDeleteDelivery) && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="h-4 w-1 bg-indigo-500 rounded-full" />
                     <h3 className="text-[11px] font-bold text-slate-900 uppercase tracking-tight">
-                      Tracking Moderator/Admin
+                      Moderator/Admin
                     </h3>
                   </div>
 
@@ -606,75 +520,6 @@ export function DeliveryDetailSheet({
                       )}
                     </div>
                   )}
-
-                  <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3">
-                    <Select
-                      value={moderatorTrackingStatus}
-                      onValueChange={setModeratorTrackingStatus}
-                      disabled={updating}
-                    >
-                      <SelectTrigger className="h-10 bg-white border-indigo-200 font-bold text-xs uppercase text-slate-700 rounded-lg">
-                        <SelectValue placeholder="Pilih status tracking" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem
-                          value="created"
-                          className="text-xs font-bold uppercase"
-                        >
-                          Delivery Dibuat
-                        </SelectItem>
-                        <SelectItem
-                          value="packing"
-                          className="text-xs font-bold uppercase"
-                        >
-                          Packing
-                        </SelectItem>
-                        <SelectItem
-                          value="ready_pickup"
-                          className="text-xs font-bold uppercase"
-                        >
-                          Siap Diambil
-                        </SelectItem>
-                        <SelectItem
-                          value="in_transit"
-                          className="text-xs font-bold uppercase"
-                        >
-                          Dalam Pengiriman
-                        </SelectItem>
-                        <SelectItem
-                          value="delivered"
-                          className="text-xs font-bold uppercase"
-                        >
-                          Barang Diterima
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-
-                    <Textarea
-                      value={moderatorTrackingNote}
-                      onChange={(event) =>
-                        setModeratorTrackingNote(event.target.value)
-                      }
-                      placeholder="Catatan tracking custom (opsional)"
-                      className="min-h-20 bg-white border-indigo-200 text-xs"
-                      disabled={updating}
-                    />
-
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="w-full gap-2 text-xs font-bold border-indigo-200 text-indigo-700 hover:bg-indigo-50"
-                      onClick={handleModeratorTrackingSave}
-                      disabled={updating}
-                    >
-                      {updating ? (
-                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                      )}
-                      Simpan Tracking + Catatan
-                    </Button>
-                  </div>
 
                   {canCancelDelivery && (
                     <div className="p-4 bg-red-50/50 border border-red-100 rounded-xl space-y-3">

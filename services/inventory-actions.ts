@@ -827,22 +827,93 @@ export async function createDelivery(data: {
   return { success: true, dlv_kode: applyResult.dlvKode };
 }
 
+const DELIVERY_TRACKING_ORDER = [
+  "created",
+  "packing",
+  "ready_pickup",
+  "in_transit",
+  "delivered",
+];
+
+/**
+ * Cek delivery masih boleh diubah tracking-nya: belum dibatalkan, belum
+ * diterima (TTD penerima / completed), dan user = moderator/admin atau pihak
+ * terkait (staff gudang asal/tujuan, pengirim, penerima, PIC).
+ */
+async function _guardDeliveryTrackingEditable(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  deliveryId: number,
+  userId: string,
+  { requireModerator }: { requireModerator: boolean },
+): Promise<string | null> {
+  const [{ data: delivery }, { data: profile }] = await Promise.all([
+    supabase
+      .from("deliveries")
+      .select(
+        "status, tracking_status, signature_receiver_id, dari_cabang_id, ke_cabang_id, uid_sender, uid_receiver, uid_pic",
+      )
+      .eq("id", deliveryId)
+      .single(),
+    supabase
+      .from("profiles")
+      .select("cabang_id, user_roles(roles(name))")
+      .eq("id", userId)
+      .single(),
+  ]);
+  if (!delivery) return "Delivery tidak ditemukan";
+  if (delivery.status === "cancelled") return "Delivery sudah dibatalkan.";
+  if (
+    delivery.status === "completed" ||
+    delivery.tracking_status === "completed" ||
+    delivery.signature_receiver_id
+  )
+    return "Delivery sudah selesai diterima — status pengiriman tidak bisa diubah lagi.";
+
+  const roleNames = ((profile as any)?.user_roles || [])
+    .map((row: any) => row?.roles?.name)
+    .filter((role: string | undefined): role is string => Boolean(role));
+  const isModeratorOrAdmin = roleNames.some(
+    (role: string) => role === "moderator" || role === "admin",
+  );
+  if (requireModerator) {
+    return isModeratorOrAdmin
+      ? null
+      : "Hanya moderator/admin yang dapat override status dan catatan tracking.";
+  }
+  const cabangId = profile?.cabang_id ?? null;
+  const isInvolved =
+    (cabangId !== null &&
+      (cabangId === delivery.dari_cabang_id ||
+        cabangId === delivery.ke_cabang_id)) ||
+    [delivery.uid_sender, delivery.uid_receiver, delivery.uid_pic].includes(
+      userId,
+    );
+  if (!isModeratorOrAdmin && !isInvolved)
+    return "Hanya staff gudang asal/tujuan, pengirim, penerima, PIC, atau moderator yang dapat mengubah status pengiriman.";
+  return null;
+}
+
 export async function updateDeliveryTracking(
   deliveryId: number,
   trackingStatus: string,
 ) {
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
 
-  const TRACKING_ORDER = [
-    "created",
-    "packing",
-    "ready_pickup",
-    "in_transit",
-    "delivered",
-  ];
-  if (!TRACKING_ORDER.includes(trackingStatus)) {
+  if (!DELIVERY_TRACKING_ORDER.includes(trackingStatus)) {
     return { error: "Status tracking tidak valid" };
   }
+
+  const guardError = await _guardDeliveryTrackingEditable(
+    supabase,
+    deliveryId,
+    user.id,
+    { requireModerator: false },
+  );
+  if (guardError) return { error: guardError };
 
   // Guard freeze: kunci progres tracking bila salah satu MR sumber ter-freeze.
   const sourceMrIdsForTracking = await getDeliverySourceMrIds(
@@ -860,15 +931,22 @@ export async function updateDeliveryTracking(
   const trackingItemFreezeError = await guardDeliveryItemFreeze(supabase, deliveryId);
   if (trackingItemFreezeError) return { error: trackingItemFreezeError };
 
-  const { error } = await supabase
+  // Kondisional: jangan menimpa delivery yang keburu difinalisasi/dibatalkan
+  // di antara guard di atas dan update ini.
+  const { data: updated, error } = await supabase
     .from("deliveries")
     .update({
       tracking_status: trackingStatus,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", deliveryId);
+    .eq("id", deliveryId)
+    .is("signature_receiver_id", null)
+    .not("status", "in", "(cancelled,completed)")
+    .select("id");
 
   if (error) return { error: error.message };
+  if (!updated || updated.length === 0)
+    return { error: "Delivery sudah selesai atau dibatalkan. Muat ulang halaman." };
 
   revalidatePath("/deliveries");
   revalidatePath("/share-stock");
@@ -890,41 +968,17 @@ export async function updateDeliveryTrackingModerator(
     return { error: "Session expired" };
   }
 
-  const TRACKING_ORDER = [
-    "created",
-    "packing",
-    "ready_pickup",
-    "in_transit",
-    "delivered",
-  ] as const;
-
-  if (!TRACKING_ORDER.includes(trackingStatus as any)) {
+  if (!DELIVERY_TRACKING_ORDER.includes(trackingStatus)) {
     return { error: "Status tracking tidak valid" };
   }
 
-  const { data: roleRows, error: roleError } = await supabase
-    .from("user_roles")
-    .select("roles(name)")
-    .eq("user_id", user.id);
-
-  if (roleError) {
-    return { error: roleError.message };
-  }
-
-  const roleNames = (roleRows || [])
-    .map((row: any) => row?.roles?.name)
-    .filter((role: string | undefined): role is string => Boolean(role));
-
-  const isModeratorOrAdmin = roleNames.some(
-    (role) => role === "moderator" || role === "admin",
+  const guardError = await _guardDeliveryTrackingEditable(
+    supabase,
+    deliveryId,
+    user.id,
+    { requireModerator: true },
   );
-
-  if (!isModeratorOrAdmin) {
-    return {
-      error:
-        "Hanya moderator/admin yang dapat override status dan catatan tracking.",
-    };
-  }
+  if (guardError) return { error: guardError };
 
   const safeTrackingNote = trackingNote?.trim() || null;
   if (safeTrackingNote && safeTrackingNote.length > 1000) {
@@ -950,7 +1004,7 @@ export async function updateDeliveryTrackingModerator(
   );
   if (modTrackingItemFreezeError) return { error: modTrackingItemFreezeError };
 
-  const { error: updateError } = await supabase
+  const { data: updated, error: updateError } = await supabase
     .from("deliveries")
     .update({
       tracking_status: trackingStatus,
@@ -959,11 +1013,16 @@ export async function updateDeliveryTrackingModerator(
       tracking_note_updated_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .eq("id", deliveryId);
+    .eq("id", deliveryId)
+    .is("signature_receiver_id", null)
+    .not("status", "in", "(cancelled,completed)")
+    .select("id");
 
   if (updateError) {
     return { error: updateError.message };
   }
+  if (!updated || updated.length === 0)
+    return { error: "Delivery sudah selesai atau dibatalkan. Muat ulang halaman." };
 
   revalidatePath("/deliveries");
   revalidatePath("/share-stock");
