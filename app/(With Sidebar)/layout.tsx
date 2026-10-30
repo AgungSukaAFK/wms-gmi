@@ -28,6 +28,7 @@ import { NotificationProvider } from "@/components/providers/NotificationProvide
 import { FontSizeSync } from "@/components/font-size-sync";
 import { NavigationProgress } from "@/components/navigation-progress";
 import { TopbarActions } from "@/components/topbar/topbar";
+import { TopbarSearch } from "@/components/topbar/topbar-search";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -140,7 +141,7 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
             className="no-print sticky top-0 z-40 mb-4 flex shrink-0 flex-col border-b border-border/60 bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75 md:backdrop-blur-xl md:backdrop-saturate-150 md:supports-[backdrop-filter]:bg-background/60 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-gradient-to-r after:from-transparent after:via-primary/30 after:to-transparent"
           >
             <div className="flex h-(--app-topbar-h) items-center gap-2 transition-[height] ease-linear">
-              <div className="flex min-w-0 flex-1 items-center gap-2 pl-3 md:pl-4">
+              <div className="flex min-w-0 items-center gap-2 pl-3 md:pl-4">
                 <SidebarTrigger className="-ml-1 shrink-0" />
                 <Separator
                   orientation="vertical"
@@ -157,6 +158,11 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
                     {urlToBreadcrumb(pathname)}
                   </BreadcrumbList>
                 </Breadcrumb>
+              </div>
+              {/* Global search: field inline di tengah mulai lg, di bawahnya
+                  jadi tombol ikon yg nempel di kiri deretan aksi. */}
+              <div className="-mr-1 flex min-w-0 flex-1 justify-end lg:mr-0 lg:justify-center lg:px-2">
+                <TopbarSearch />
               </div>
               <div className="shrink-0 pr-2 md:pr-3">
                 <TopbarActions />

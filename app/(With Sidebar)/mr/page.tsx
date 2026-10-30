@@ -24,7 +24,6 @@ import {
   Calendar as CalendarIcon,
   MapPin,
   ClipboardList,
-  FilterX,
   Navigation2,
   Clock,
   AlertTriangle,
@@ -32,17 +31,9 @@ import {
   Download,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import { MRDetailSheet } from "@/components/mr/mr-detail-sheet";
@@ -67,12 +58,35 @@ import {
 } from "@/lib/mr-level";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { StatusBadge } from "@/components/status-badge";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import {
+  type ActiveFilter,
+  FilterPanel,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 
 const MR_SORT_COLUMNS: Record<string, string> = {
   mr_kode: "mr_kode",
   mr_tanggal: "mr_tanggal",
   mr_status: "mr_status",
 };
+
+const MR_PRIORITY_OPTIONS = [
+  { label: "P1 - EMERGENCY", value: "P1" },
+  { label: "P2 - HIGH", value: "P2" },
+  { label: "P3 - NORMAL", value: "P3" },
+  { label: "P4 - LOW", value: "P4" },
+];
+
+const MR_STATUS_OPTIONS = [
+  { label: "Open (Pending)", value: "open" },
+  { label: "Approved", value: "approved" },
+  { label: "Rejected", value: "rejected" },
+  { label: "Completed", value: "completed" },
+];
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
@@ -91,20 +105,43 @@ export default function MaterialRequestPage() {
     DEFAULT_MR_LEVEL_AUTO_RULES,
   );
 
-  // Pagination & Filters
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 500);
-  const [statusFilters, setStatusFilters] = useState<string[]>([]);
-  const [priorityFilters, setPriorityFilters] = useState<string[]>([]);
-  const [accurateFilter, setAccurateFilter] = useState<string>("all");
-  const [sortOrder, setSortOrder] = useState<string>("newest");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
+  // Pagination & Filters - disimpan di URL (hooks/use-url-list-state.ts),
+  // jadi bisa di-share & tombol Back browser bekerja. Setter di bawah tetap
+  // bernama seperti useState lama.
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusFilters = urlState.list("status");
+  const setStatusFilters = (v: string[]) =>
+    urlState.set({ status: v }, { resetPage: true });
+  const priorityFilters = urlState.list("prioritas");
+  const setPriorityFilters = (v: string[]) =>
+    urlState.set({ prioritas: v }, { resetPage: true });
+  // ACCURATE_HIDDEN: filter Accurate tidak ditampilkan, tapi ?accurate=yes|no
+  // tetap dibaca. Untuk menampilkan lagi: tambah field di FilterPanel yang
+  // memanggil urlState.set({ accurate }, { resetPage: true }).
+  const accurateFilter = urlState.get("accurate", "all");
+  const sortOrder = urlState.get("sort", "newest");
+  const setSortOrder = (v: string) =>
+    urlState.set({ sort: v === "newest" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   // Advanced Filters
-  const [locationFilters, setLocationFilters] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState<string>("");
-  const [dateTo, setDateTo] = useState<string>("");
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
 
   // Selected MR for Detail
@@ -519,23 +556,55 @@ export default function MaterialRequestPage() {
   };
 
   const resetFilters = () => {
-    setSearchQuery("");
-    setStatusFilters([]);
-    setPriorityFilters([]);
-    setAccurateFilter("all");
-    setLocationFilters([]);
-    setDateFrom("");
-    setDateTo("");
-    setSortOrder("newest");
-    setPage(1);
+    resetSearchQuery();
+    urlState.reset();
   };
 
   const setMyLocationFilter = () => {
     if (userProfile?.cabang_id) {
       setLocationFilters([userProfile.cabang_id.toString()]);
-      setPage(1);
     }
   };
+
+  const locationOptions = availableCabang.map((c) => ({
+    label: c.nama_cabang,
+    value: c.id.toString(),
+  }));
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+  const activeFilters: ActiveFilter[] = [];
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Lokasi",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (priorityFilters.length > 0)
+    activeFilters.push({
+      key: "prioritas",
+      label: "Prioritas",
+      value: priorityFilters.join(", "),
+      onRemove: () => setPriorityFilters([]),
+    });
+  if (statusFilters.length > 0)
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: optionLabels(MR_STATUS_OPTIONS, statusFilters),
+      onRemove: () => setStatusFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
 
   const getPriorityBadge = (p: string) => {
     switch (p) {
@@ -656,137 +725,81 @@ export default function MaterialRequestPage() {
 
       <Content>
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center gap-2">
-            <div className="relative min-w-0 flex-1 xl:min-w-70">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-              <Input
-                placeholder="Cari Kode MR atau PIC..."
-                className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  setPage(1);
-                }}
-              />
-            </div>
-
-            <MultiSelect
-              className="w-full sm:w-45"
-              placeholder="Semua Lokasi"
-              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
-              searchable
-              selected={locationFilters}
-              onChange={(vals) => {
-                setLocationFilters(vals);
-                setPage(1);
-              }}
-              options={availableCabang.map((c) => ({
-                label: c.nama_cabang,
-                value: c.id.toString(),
-              }))}
+          <div className="relative min-w-0">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <Input
+              placeholder="Cari Kode MR atau PIC..."
+              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
             />
-
-            <MultiSelect
-              className="w-full sm:w-42.5"
-              placeholder="Semua Prioritas"
-              icon={<AlertTriangle className="h-3 w-3 text-muted-foreground" />}
-              selected={priorityFilters}
-              onChange={(vals) => {
-                setPriorityFilters(vals);
-                setPage(1);
-              }}
-              options={[
-                { label: "P1 - EMERGENCY", value: "P1" },
-                { label: "P2 - HIGH", value: "P2" },
-                { label: "P3 - NORMAL", value: "P3" },
-                { label: "P4 - LOW", value: "P4" },
-              ]}
-            />
-
-            <MultiSelect
-              className="w-full sm:w-40"
-              placeholder="Semua Status"
-              selected={statusFilters}
-              onChange={(vals) => {
-                setStatusFilters(vals);
-                setPage(1);
-              }}
-              options={[
-                { label: "Open (Pending)", value: "open" },
-                { label: "Approved", value: "approved" },
-                { label: "Rejected", value: "rejected" },
-                { label: "Completed", value: "completed" },
-              ]}
-            />
-
-            {/* ACCURATE_HIDDEN: filter disembunyikan */}
-            {false && (
-              <Select
-                value={accurateFilter}
-                onValueChange={(val) => {
-                  setAccurateFilter(val);
-                  setPage(1);
-                }}
-              >
-                <SelectTrigger className="h-9 w-full sm:w-40 border-input bg-background text-xs font-bold text-foreground">
-                  <SelectValue placeholder="Accurate" />
-                </SelectTrigger>
-                <SelectContent className="rounded-md">
-                  <SelectItem value="all">Semua Accurate</SelectItem>
-                  <SelectItem value="yes">Sudah Input</SelectItem>
-                  <SelectItem value="no">Belum Input</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9 px-3 max-sm:w-full text-[10px] font-bold text-primary hover:text-primary hover:bg-primary/10 gap-1.5 uppercase"
-              onClick={setMyLocationFilter}
-              disabled={!userProfile?.cabang_id}
-            >
-              <Navigation2 className="h-3 w-3" />
-              LOKASI SAYA
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9 px-2 text-muted-foreground hover:text-destructive gap-1 transition-colors"
-              onClick={resetFilters}
-            >
-              <FilterX className="h-3.5 w-3.5" />
-            </Button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <CalendarIcon className="h-3 w-3 text-muted-foreground" />
-              <DatePickerString
-                value={dateFrom}
-                onChange={(value) => {
-                  setDateFrom(value);
-                  setPage(1);
-                }}
-                placeholder="Tanggal dari"
-                className="h-9 w-full text-xs font-medium sm:w-44"
-              />
-            </div>
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <label className="text-sm font-medium">Lokasi</label>
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
+                    onClick={setMyLocationFilter}
+                    disabled={!userProfile?.cabang_id}
+                  >
+                    <Navigation2 className="h-3 w-3" />
+                    Lokasi saya
+                  </button>
+                </div>
+                <MultiSelect
+                  placeholder="Semua Lokasi"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </div>
 
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <CalendarIcon className="h-3 w-3 text-muted-foreground" />
-              <DatePickerString
-                value={dateTo}
-                onChange={(value) => {
-                  setDateTo(value);
-                  setPage(1);
-                }}
-                placeholder="Tanggal sampai"
-                className="h-9 w-full text-xs font-medium sm:w-44"
-              />
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium">Prioritas</label>
+                <MultiSelect
+                  placeholder="Semua Prioritas"
+                  icon={<AlertTriangle className="h-3 w-3 text-muted-foreground" />}
+                  selected={priorityFilters}
+                  onChange={setPriorityFilters}
+                  options={MR_PRIORITY_OPTIONS}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium">Status</label>
+                <MultiSelect
+                  placeholder="Semua Status"
+                  selected={statusFilters}
+                  onChange={setStatusFilters}
+                  options={MR_STATUS_OPTIONS}
+                />
+              </div>
+
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium">Tanggal MR</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <DatePickerString
+                    value={dateFrom}
+                    onChange={setDateFrom}
+                    placeholder="Dari"
+                    className="h-9 w-full text-xs font-medium"
+                  />
+                  <DatePickerString
+                    value={dateTo}
+                    onChange={setDateTo}
+                    placeholder="Sampai"
+                    className="h-9 w-full text-xs font-medium"
+                  />
+                </div>
+              </div>
             </div>
-          </div>
+          </FilterPanel>
         </div>
       </Content>
 

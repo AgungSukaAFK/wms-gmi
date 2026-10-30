@@ -4,7 +4,7 @@
 // menu Profil. Profil diambil dari useAuthStore (diisi DailyResetGuard saat
 // login), jadi top bar tidak menambah query sendiri.
 
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import { useAuthStore } from "@/stores/auth-store";
 import { TopbarInbox } from "./topbar-inbox";
 import { TopbarProfile } from "./topbar-profile";
@@ -13,6 +13,8 @@ export type TopbarProfileData = {
   id: string;
   email: string;
   nama: string | null;
+  /** Bentuk sama dgn NavProfile (lib/sidebar/nav-config.ts). */
+  roles: { name: string }[];
 };
 
 const subscribeNoop = () => () => {};
@@ -27,12 +29,17 @@ export function useTopbarProfileData(): TopbarProfileData | null {
     () => true,
     () => false,
   );
-  if (!mounted || !profile) return null;
-  return {
-    id: profile.id,
-    email: profile.email ?? "",
-    nama: profile.nama ?? null,
-  };
+  return useMemo(() => {
+    if (!mounted || !profile) return null;
+    return {
+      id: profile.id,
+      email: profile.email ?? "",
+      nama: profile.nama ?? null,
+      roles: (profile.roles ?? [])
+        .filter((r) => !!r?.name)
+        .map((r) => ({ name: r.name })),
+    };
+  }, [mounted, profile]);
 }
 
 export function TopbarActions() {
