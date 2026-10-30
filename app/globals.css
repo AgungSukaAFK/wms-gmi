@@ -166,7 +166,9 @@
   html,
   body {
     max-width: 100%;
-    overflow-x: hidden;
+    /* clip, bukan hidden: hidden menjadikan body scroll container sehingga
+       position: sticky (top bar, toolbar editor) tidak menempel. */
+    overflow-x: clip;
   }
 
   main,

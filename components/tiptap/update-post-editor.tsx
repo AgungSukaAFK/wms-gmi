@@ -395,7 +395,7 @@ export const UpdatePostEditor = forwardRef<
         className="hidden"
         onChange={handleFileInputChange("video")}
       />
-      <div className="sticky top-0 z-10 flex flex-wrap items-center gap-1 rounded-md border bg-background/95 p-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <div className="sticky top-[var(--app-topbar-h,0px)] z-10 flex flex-wrap items-center gap-1 rounded-md border bg-background/95 p-1 backdrop-blur supports-[backdrop-filter]:bg-background/80">
         {toolbarButton(
           editor.isActive("bold"),
           () => editor.chain().focus().toggleBold().run(),

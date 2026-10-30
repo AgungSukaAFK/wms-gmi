@@ -27,6 +27,7 @@ import { useAuthStore } from "@/stores/auth-store";
 import { NotificationProvider } from "@/components/providers/NotificationProvider";
 import { FontSizeSync } from "@/components/font-size-sync";
 import { NavigationProgress } from "@/components/navigation-progress";
+import { TopbarActions } from "@/components/topbar/topbar";
 
 export default function DashboardLayout({ children }: { children: ReactNode }) {
   const [userId, setUserId] = useState<string | null>(null);
@@ -35,32 +36,37 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   function urlToBreadcrumb(pathname: string) {
     const parts = pathname.split("/").filter(Boolean);
+    // Segmen UUID di akhir URL tidak ditampilkan.
+    const crumbs = parts.filter(
+      (part, index) =>
+        !(index === parts.length - 1 && /^[0-9a-fA-F-]{36}$/.test(part)),
+    );
 
-    return parts.map((part, index) => {
-      const isLast = index === parts.length - 1;
+    return crumbs.map((part, index) => {
+      const isLast = index === crumbs.length - 1;
+      const isPage = isLast && crumbs.length === parts.length;
       const href = `/${parts.slice(0, index + 1).join("/")}`;
 
       const readablePart = decodeURIComponent(
         part.replace(/-/g, " ").replace(/\b\w/g, (s) => s.toUpperCase()),
       );
 
-      // 👉 skip kalau part terakhir adalah UUID
-      if (isLast && /^[0-9a-fA-F-]{36}$/.test(part)) {
-        return null;
-      }
-
+      // Mobile: cukup crumb terakhir (dipotong kalau kepanjangan), crumb
+      // sebelumnya baru muncul mulai md.
       return (
         <Fragment key={index}>
-          <BreadcrumbItem>
-            {isLast ? (
-              <BreadcrumbPage>{readablePart}</BreadcrumbPage>
+          <BreadcrumbItem
+            className={isLast ? "min-w-0" : "hidden shrink-0 md:inline-flex"}
+          >
+            {isPage ? (
+              <BreadcrumbPage className="truncate">{readablePart}</BreadcrumbPage>
             ) : (
-              <BreadcrumbLink asChild>
+              <BreadcrumbLink asChild className="truncate">
                 <Link href={href}>{readablePart}</Link>
               </BreadcrumbLink>
             )}
           </BreadcrumbItem>
-          {!isLast && <BreadcrumbSeparator />}
+          {!isLast && <BreadcrumbSeparator className="hidden md:block" />}
         </Fragment>
       );
     });
@@ -124,25 +130,37 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
       <NavigationProgress />
       <SidebarProvider>
         <AppSidebar className="shadow-lg" />
-        <SidebarInset>
-          <header className="flex h-16 shrink-0 items-center gap-2 transition-[width,height] ease-linear group-has-data-[collapsible=icon]/sidebar-wrapper:h-12">
-            <div className="flex min-w-0 items-center gap-2 px-4">
-              <SidebarTrigger className="-ml-1" />
-              <Separator
-                orientation="vertical"
-                className="mr-2 data-[orientation=vertical]:h-4"
-              />
-              <Breadcrumb className="min-w-0 flex-1 overflow-hidden">
-                <BreadcrumbList className="min-w-0 flex-nowrap overflow-x-auto">
-                  <BreadcrumbItem className="hidden md:block">
-                    <BreadcrumbLink asChild>
-                      <Link href="/dashboard">WMS-GMI</Link>
-                    </BreadcrumbLink>
-                  </BreadcrumbItem>
-                  <BreadcrumbSeparator className="hidden md:block" />
-                  {urlToBreadcrumb(pathname)}
-                </BreadcrumbList>
-              </Breadcrumb>
+        <SidebarInset className="[--app-topbar-h:3.5rem] md:[--app-topbar-h:4rem] md:group-has-data-[collapsible=icon]/sidebar-wrapper:[--app-topbar-h:3rem]">
+          {/* Sticky + blur; pemisah bawah = border + garis gradien aksen
+              (tanpa shadow). Blur dibuat ringan di mobile - repaint tiap
+              scroll berat di HP kelas bawah. Tinggi header juga dipakai
+              elemen sticky lain di halaman lewat var(--app-topbar-h). */}
+          <header
+            data-app-topbar
+            className="no-print sticky top-0 z-40 mb-4 flex shrink-0 flex-col border-b border-border/60 bg-background/90 backdrop-blur-md supports-[backdrop-filter]:bg-background/75 md:backdrop-blur-xl md:backdrop-saturate-150 md:supports-[backdrop-filter]:bg-background/60 after:pointer-events-none after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-gradient-to-r after:from-transparent after:via-primary/30 after:to-transparent"
+          >
+            <div className="flex h-(--app-topbar-h) items-center gap-2 transition-[height] ease-linear">
+              <div className="flex min-w-0 flex-1 items-center gap-2 pl-3 md:pl-4">
+                <SidebarTrigger className="-ml-1 shrink-0" />
+                <Separator
+                  orientation="vertical"
+                  className="mr-1 data-[orientation=vertical]:h-4 md:mr-2"
+                />
+                <Breadcrumb className="min-w-0">
+                  <BreadcrumbList className="flex-nowrap overflow-hidden">
+                    <BreadcrumbItem className="hidden shrink-0 md:inline-flex">
+                      <BreadcrumbLink asChild>
+                        <Link href="/dashboard">WMS-GMI</Link>
+                      </BreadcrumbLink>
+                    </BreadcrumbItem>
+                    <BreadcrumbSeparator className="hidden md:block" />
+                    {urlToBreadcrumb(pathname)}
+                  </BreadcrumbList>
+                </Breadcrumb>
+              </div>
+              <div className="shrink-0 pr-2 md:pr-3">
+                <TopbarActions />
+              </div>
             </div>
           </header>
           <div className="flex min-w-0 flex-1 flex-col gap-4 [overflow-x:clip] p-4 pt-0">

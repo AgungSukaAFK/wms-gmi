@@ -1,5 +1,6 @@
 import { clsx, type ClassValue } from "clsx";
-import { isValid } from "date-fns";
+import { formatDistanceToNow, isValid } from "date-fns";
+import { id as localeId } from "date-fns/locale";
 import { twMerge } from "tailwind-merge";
 
 export function cn(...inputs: ClassValue[]) {
@@ -198,3 +199,19 @@ export const getPriorityColor = (priority: string) => {
       return "secondary"; // Abu-abu
   }
 };
+
+/** "5 menit yang lalu". */
+export const formatRelativeTime = (date: string | Date): string =>
+  formatDistanceToNow(new Date(date), { addSuffix: true, locale: localeId });
+
+/** Inisial untuk fallback avatar: "Budi Santoso" -> "BS", email -> 2 huruf awal. */
+export function getInitials(name?: string | null): string {
+  const clean = (name || "").split("@")[0].trim();
+  if (!clean) return "?";
+  const words = clean.split(/\s+/).filter(Boolean);
+  const initials =
+    words.length > 1
+      ? words[0][0] + words[words.length - 1][0]
+      : clean.slice(0, 2);
+  return initials.toUpperCase();
+}

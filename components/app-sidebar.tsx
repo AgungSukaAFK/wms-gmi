@@ -12,204 +12,35 @@ import {
   SidebarFooter,
   SidebarHeader,
   SidebarRail,
-  SidebarGroupLabel,
-  SidebarInput,
 } from "@/components/ui/sidebar";
 import { NavMain } from "@/components/nav-main";
 import { NavUser } from "./nav-user";
 import { Button } from "@/components/ui/button";
+import { SidebarSearch } from "@/components/sidebar-search";
 import { useUpdateWebBadge } from "@/hooks/use-update-web-badge";
 import { useAuthStore } from "@/stores/auth-store";
 import { useNotification } from "@/components/providers/NotificationProvider";
+import { buildNavGroups } from "@/lib/sidebar/nav-config";
 import {
-  GalleryVerticalEnd,
-  Bot,
-  LayoutDashboard,
-  FileBox,
-  BaggageClaim,
-  Boxes,
-  BookOpen,
-  MessageSquareShare,
-  Info,
-  CheckCheck,
-  CheckCircle2,
-  FileSearch2,
-  BadgeDollarSign,
-  Briefcase,
-  PackagePlus,
-  ArchiveRestore,
-  Bell,
-  Users,
-  UsersRound,
-  Archive,
-  Building2,
-  PackageCheck,
-  Truck,
-  Handshake,
-  ArrowLeftRight,
-  FileText,
-  FileSpreadsheet,
-  ShoppingCart,
-  FileWarning,
-  Undo2,
-  Calculator,
-  FileSignature,
-  ReceiptText,
-  PackageSearch,
-  ClipboardList,
-  SlidersHorizontal,
-  Megaphone,
-  CalendarRange,
-  Warehouse,
-  Factory,
-  Gauge,
-  Snowflake,
-  Wrench,
-  Search,
-  X,
-  FileUp,
-  Scale,
-} from "lucide-react";
+  normalizeSearch,
+  scoreMenuItem,
+  searchMenuItems,
+  useSidebarSearch,
+} from "@/lib/sidebar/menu-search";
+import { setPendingNavUrl } from "@/lib/sidebar/nav-pending";
+import { SearchX } from "lucide-react";
 
-// Update the menu data
-const data = {
-  navAdmin: [
-    {
-      title: "User Management",
-      url: "/users",
-      icon: Users,
-    },
-    {
-      title: "Role & Permission",
-      url: "/role-management",
-      icon: CheckCheck,
-    },
-    {
-      title: "Approval Templates",
-      url: "/approval-templates",
-      icon: CheckCircle2,
-    },
-    {
-      title: "Trigger Level MR",
-      url: "/mr-level-settings",
-      icon: SlidersHorizontal,
-    },
-    {
-      title: "Import Data Excel",
-      url: "/import",
-      icon: FileUp,
-    },
-  ],
-  navMain: [
-    {
-      title: "Dashboard",
-      url: "/dashboard",
-      icon: LayoutDashboard,
-    },
-    {
-      title: "Notifikasi",
-      url: "/notifications",
-      icon: Bell,
-    },
-    {
-      title: "Signature Manager",
-      url: "/signatures",
-      icon: FileSignature,
-    },
-  ],
-  navMaster: [
-    { title: "Cabang", url: "/cabang", icon: Building2 },
-    { title: "Barang", url: "/barang", icon: Boxes },
-    { title: "Vendors", url: "/vendors", icon: Briefcase },
-    { title: "Customers", url: "/customers", icon: UsersRound },
-  ],
-  navInventory: [
-    { title: "Stock", url: "/stock", icon: Archive },
-    { title: "Request Stok", url: "/stock-requests", icon: ClipboardList },
-    { title: "Delivery", url: "/deliveries", icon: Truck },
-    { title: "Item Transfer", url: "/item-transfer", icon: ArrowLeftRight },
-    { title: "Share Stock", url: "/share-stock", icon: PackagePlus },
-    { title: "Barang dalam Pengiriman", url: "/planning-supply", icon: PackageSearch },
-    { title: "Job Costing", url: "/job-costing", icon: Calculator },
-  ],
-  navProcurement: [
-    { title: "Material Request", url: "/mr", icon: FileText },
-    { title: "Scheduled MR", url: "/mr/scheduled", icon: CalendarRange },
-    { title: "Purchase Request", url: "/pr", icon: FileSpreadsheet },
-    { title: "Purchase Order", url: "/po", icon: ShoppingCart },
-    { title: "PO Non-PR → Job Costing", url: "/po/non-pr", icon: Wrench },
-    { title: "Receive Item", url: "/receive", icon: PackageCheck },
-    { title: "Working Order", url: "/working-order", icon: Factory },
-  ],
-  navStockOut: [
-    { title: "Report SPB", url: "/spb/report", icon: FileBox },
-    { title: "SPB", url: "/spb", icon: FileWarning },
-    { title: "Purchase Order", url: "/spb/po", icon: ShoppingCart },
-    { title: "Delivery Order", url: "/spb/do", icon: Truck },
-    { title: "Invoice", url: "/spb/invoice", icon: BadgeDollarSign },
-    { title: "Return SPB", url: "/return-spb", icon: Undo2 },
-  ],
-  navSoReguler: [
-    { title: "DO Reguler", url: "/so-reguler/do", icon: Truck },
-    { title: "SO Reguler", url: "/so-reguler/so", icon: ReceiptText },
-  ],
-  navConsignment: [
-    {
-      title: "Dashboard Consignment",
-      url: "/so-reguler/consignment/dashboard",
-      icon: LayoutDashboard,
-    },
-    {
-      title: "Sales Order",
-      url: "/so-reguler/consignment/so",
-      icon: Handshake,
-    },
-    {
-      title: "Item Konsinyasi",
-      url: "/so-reguler/consignment/ik",
-      icon: ClipboardList,
-    },
-    {
-      title: "Penerimaan Konsinyasi",
-      url: "/so-reguler/consignment/penerimaan",
-      icon: PackageCheck,
-    },
-    {
-      title: "Stok di Customer",
-      url: "/so-reguler/consignment/customer-stock",
-      icon: Warehouse,
-    },
-  ],
-  // Konsinyasi vendor (supplier titip AC part di gudang GMI). IT & SPB
-  // konsinyasi dibuat dari menu Item Transfer / SPB biasa (toggle Konsinyasi).
-  navVendorConsignment: [
-    { title: "PR Konsinyasi", url: "/vendor-consignment/pr", icon: FileSpreadsheet },
-    { title: "GR Konsinyasi", url: "/vendor-consignment/gr", icon: PackageCheck },
-    { title: "Stok Konsinyasi", url: "/vendor-consignment/stock", icon: Warehouse },
-    { title: "Rekonsil & BAST", url: "/vendor-consignment/rekonsil", icon: Scale },
-  ],
-  navHmMaintenance: [
-    { title: "Periodic Maintenance", url: "/maintenance", icon: Gauge },
-    { title: "Forecasting AC", url: "/maintenance/forecast-ac", icon: Snowflake },
-  ],
-  navSecondary: [
-    {
-      title: "Update Web",
-      url: "/update-web",
-      icon: Megaphone,
-    },
-    {
-      title: "Dokumentasi",
-      url: "/dokumentasi",
-      icon: BookOpen,
-    },
-    {
-      title: "Tentang App",
-      url: "/tentang-app",
-      icon: Info,
-    },
-  ],
-};
+function saveCollapsed(updated: Record<string, boolean>) {
+  try {
+    window.localStorage.setItem(
+      "sidebarCollapsedGroups",
+      JSON.stringify(updated),
+    );
+  } catch {
+    // abaikan
+  }
+  return updated;
+}
 
 export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const currentPath = usePathname();
@@ -218,55 +49,21 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
   const [user, setUser] = React.useState<any>(null);
   const [profile, setProfile] = React.useState<any>(null);
   const { unreadCount } = useNotification();
-  type CollapsedGroups = {
-    admin: boolean;
-    main: boolean;
-    master: boolean;
-    inventory: boolean;
-    procurement: boolean;
-    stockOut: boolean;
-    soReguler: boolean;
-    consignment: boolean;
-    vendorConsignment: boolean;
-    hmMaintenance: boolean;
-    help: boolean;
-  };
-
-  // Default: all expanded (false)
-  const defaultCollapsedGroups: CollapsedGroups = {
-    admin: false,
-    main: false,
-    master: false,
-    inventory: false,
-    procurement: false,
-    stockOut: false,
-    soReguler: false,
-    consignment: false,
-    vendorConsignment: false,
-    hmMaintenance: false,
-    help: false,
-  };
+  // Grup yang dilipat, per kunci grup di lib/sidebar/nav-config.ts.
+  type CollapsedGroups = Record<string, boolean>;
   const [collapsedGroups, setCollapsedGroups] = React.useState<CollapsedGroups>(
-    defaultCollapsedGroups,
+    {},
   );
 
   // Load persisted sidebar state from localStorage after mount (client only)
   React.useEffect(() => {
-    const saved = window.localStorage.getItem("sidebarCollapsedGroups");
-    if (saved) {
-      try {
-        setCollapsedGroups((prev) => ({ ...prev, ...JSON.parse(saved) }));
-      } catch {
-        // ignore parse error
-      }
+    try {
+      const saved = window.localStorage.getItem("sidebarCollapsedGroups");
+      if (saved) setCollapsedGroups(JSON.parse(saved));
+    } catch {
+      // abaikan (parse error / localStorage diblokir)
     }
   }, []);
-
-  // Determine if all groups are collapsed
-  const allCollapsed = React.useMemo(
-    () => Object.values(collapsedGroups).every(Boolean),
-    [collapsedGroups],
-  );
 
   React.useEffect(() => {
     let isMounted = true;
@@ -333,22 +130,11 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     };
   }, [router]);
 
-  const isModerator = profile?.roles?.some((r: any) => r.name === "moderator");
-  const isAdmin = profile?.roles?.some((r: any) => r.name === "admin");
   const { isNew: hasNewUpdateWeb } = useUpdateWebBadge(user?.id);
 
-  const adminItems = data.navAdmin.filter((item) => {
-    // Halaman Role & Permission disembunyikan sementara (matrix belum dipakai).
-    // Untuk mengaktifkan kembali: hapus baris di bawah ini.
-    if (item.url === "/role-management") return false;
-    if (item.url === "/approval-templates") return isModerator || isAdmin;
-    return isModerator;
-  });
-
-  const masterItems = data.navMaster.filter((item) => {
-    if (item.url === "/cabang") return isModerator;
-    return true;
-  });
+  // Daftar menu per hak akses ada di lib/sidebar/nav-config.ts; di sini
+  // tinggal badge & status aktif.
+  const baseNavGroups = React.useMemo(() => buildNavGroups(profile), [profile]);
 
   const markActive = React.useCallback(
     (items: any[]) => {
@@ -371,162 +157,67 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
     [currentPath],
   );
 
-  const toggleGroup = React.useCallback((key: keyof typeof collapsedGroups) => {
-    setCollapsedGroups((prev) => {
-      const updated = { ...prev, [key]: !prev[key] };
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          "sidebarCollapsedGroups",
-          JSON.stringify(updated),
-        );
-      }
-      return updated;
-    });
+  const toggleGroup = React.useCallback((key: string) => {
+    setCollapsedGroups((prev) => saveCollapsed({ ...prev, [key]: !prev[key] }));
   }, []);
 
-  const collapseAll = React.useCallback(() => {
-    setCollapsedGroups((prev) => {
-      const updated = Object.fromEntries(
-        Object.keys(prev).map((k) => [k, true]),
-      ) as CollapsedGroups;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          "sidebarCollapsedGroups",
-          JSON.stringify(updated),
-        );
-      }
-      return updated;
-    });
-  }, []);
-
-  const expandAll = React.useCallback(() => {
-    setCollapsedGroups((prev) => {
-      const updated = Object.fromEntries(
-        Object.keys(prev).map((k) => [k, false]),
-      ) as CollapsedGroups;
-      if (typeof window !== "undefined") {
-        window.localStorage.setItem(
-          "sidebarCollapsedGroups",
-          JSON.stringify(updated),
-        );
-      }
-      return updated;
-    });
-  }, []);
-  const [searchQuery, setSearchQuery] = React.useState("");
-  const searchInputRef = React.useRef<HTMLInputElement>(null);
-  const normalizedQuery = searchQuery.trim().toLowerCase();
-  const isSearching = normalizedQuery.length > 0;
-
-  const navGroups = (() => {
-    const groups: {
-      key: keyof CollapsedGroups;
-      label?: string;
-      items: React.ComponentProps<typeof NavMain>["items"];
-    }[] = [
-      { key: "admin", label: "Admin", items: markActive(adminItems) },
-      {
-        key: "main",
-        items: markActive(data.navMain).map((item) =>
-          item.url === "/notifications"
-            ? { ...item, badge: unreadCount }
-            : item,
+  const setAllCollapsed = React.useCallback(
+    (collapsed: boolean) => {
+      setCollapsedGroups(() =>
+        saveCollapsed(
+          Object.fromEntries(baseNavGroups.map((g) => [g.key, collapsed])),
         ),
-      },
-      { key: "master", label: "Data Master", items: markActive(masterItems) },
-      {
-        key: "inventory",
-        label: "Inventory",
-        items: markActive(data.navInventory),
-      },
-      {
-        key: "procurement",
-        label: "Procurement",
-        items: markActive(data.navProcurement),
-      },
-      {
-        key: "stockOut",
-        label: "Stock Out Project",
-        items: markActive(data.navStockOut),
-      },
-      {
-        key: "soReguler",
-        label: "SO Reguler",
-        items: markActive(data.navSoReguler),
-      },
-      {
-        key: "consignment",
-        label: "Consignment",
-        items: markActive(data.navConsignment),
-      },
-      {
-        key: "vendorConsignment",
-        label: "Konsinyasi Vendor",
-        items: markActive(data.navVendorConsignment),
-      },
-      {
-        key: "hmMaintenance",
-        label: "HM Maintenance",
-        items: markActive(data.navHmMaintenance),
-      },
-      {
-        key: "help",
-        label: "Bantuan",
-        items: markActive(data.navSecondary).map((item) =>
-          item.url === "/update-web"
-            ? { ...item, dot: hasNewUpdateWeb }
-            : item,
-        ),
-      },
-    ];
-    return groups.filter((group) => group.items.length > 0);
-  })();
-
-  // Saat mencari: cocokkan judul menu atau nama grup, grup kosong disembunyikan,
-  // dan semua grup dipaksa terbuka biar hasilnya kelihatan.
-  const visibleGroups = (() => {
-    if (!isSearching) return navGroups;
-    return navGroups
-      .map((group) => {
-        const groupMatches = (group.label ?? "Menu")
-          .toLowerCase()
-          .includes(normalizedQuery);
-        return {
-          ...group,
-          items: groupMatches
-            ? group.items
-            : group.items.filter((item) =>
-                item.title.toLowerCase().includes(normalizedQuery),
-              ),
-        };
-      })
-      .filter((group) => group.items.length > 0);
-  })();
-
-  const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Escape") {
-      setSearchQuery("");
-      return;
-    }
-    if (e.key === "Enter" && isSearching) {
-      const first = visibleGroups[0]?.items[0];
-      if (first) {
-        e.preventDefault();
-        setSearchQuery("");
-        router.push(first.url);
-      }
-    }
-  };
-
-  // Sync localStorage if user reloads or navigates
-  React.useEffect(() => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem(
-        "sidebarCollapsedGroups",
-        JSON.stringify(collapsedGroups),
       );
+    },
+    [baseNavGroups],
+  );
+
+  const allCollapsed =
+    baseNavGroups.length > 0 &&
+    baseNavGroups.every((g) => collapsedGroups[g.key]);
+
+  const navGroups = React.useMemo(() => {
+    const badges: Record<string, { badge?: number; dot?: boolean }> = {
+      "/notifications": { badge: unreadCount },
+      "/update-web": { dot: hasNewUpdateWeb },
+    };
+    return baseNavGroups.map((g) => ({
+      ...g,
+      items: markActive(
+        g.items.map((item) =>
+          item.url in badges ? { ...item, ...badges[item.url] } : item,
+        ),
+      ),
+    }));
+  }, [baseNavGroups, markActive, unreadCount, hasNewUpdateWeb]);
+
+  const { query, setQuery } = useSidebarSearch();
+  const searching = normalizeSearch(query) !== "";
+
+  // Saat mencari: saring & urutkan tiap grup, grup tanpa hasil disembunyikan,
+  // dan semua grup dipaksa terbuka biar hasilnya kelihatan.
+  const shownGroups = React.useMemo(() => {
+    if (!searching) return navGroups;
+    return navGroups
+      .map((g) => ({ ...g, items: searchMenuItems(g.items, query, g.label) }))
+      .filter((g) => g.items.length > 0);
+  }, [navGroups, query, searching]);
+
+  const openTopResult = () => {
+    if (!searching) return;
+    // Hasil paling relevan di antara semua grup.
+    let best: { url: string; score: number } | null = null;
+    for (const g of navGroups) {
+      for (const item of g.items) {
+        const score = scoreMenuItem(query, item, g.label);
+        if (score > 0 && (!best || score > best.score))
+          best = { url: item.url, score };
+      }
     }
-  }, [collapsedGroups]);
+    if (!best) return;
+    if (best.url !== currentPath) setPendingNavUrl(best.url);
+    router.push(best.url);
+  };
 
   return (
     <Sidebar collapsible="icon" {...props}>
@@ -544,62 +235,57 @@ export function AppSidebar(props: React.ComponentProps<typeof Sidebar>) {
             </span>
           </div>
         </div>
-        <div className="relative group-data-[collapsible=icon]:hidden">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <SidebarInput
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            onKeyDown={handleSearchKeyDown}
-            placeholder="Cari menu..."
-            aria-label="Cari menu"
-            className="pl-8 pr-8"
-          />
-          {searchQuery && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearchQuery("");
-                searchInputRef.current?.focus();
-              }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm text-muted-foreground hover:text-foreground"
-              aria-label="Hapus pencarian"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
       </SidebarHeader>
 
+      <SidebarSearch
+        query={query}
+        onQueryChange={setQuery}
+        onSubmit={openTopResult}
+      />
+
       <SidebarContent>
-        {!isSearching && (
+        {!searching && (
           <div className="px-2 pb-2 flex gap-2">
             <Button
               type="button"
               variant="outline"
               size="sm"
               className="h-7 text-[10px] font-semibold"
-              onClick={allCollapsed ? expandAll : collapseAll}
+              onClick={() => setAllCollapsed(!allCollapsed)}
             >
-              {allCollapsed ? "Expand All" : "Collapse All"}
+              {allCollapsed ? "Buka Semua" : "Lipat Semua"}
             </Button>
           </div>
         )}
 
-        {visibleGroups.map((group) => (
+        {shownGroups.map((group) => (
           <NavMain
             key={group.key}
             label={group.label}
             items={group.items}
-            collapsed={isSearching ? false : collapsedGroups[group.key]}
+            hideable={group.hideable}
+            searching={searching}
+            collapsed={searching ? false : !!collapsedGroups[group.key]}
             onToggle={() => toggleGroup(group.key)}
           />
         ))}
 
-        {isSearching && visibleGroups.length === 0 && (
-          <p className="px-4 py-6 text-center text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-            Menu &quot;{searchQuery.trim()}&quot; tidak ditemukan
-          </p>
+        {searching && shownGroups.length === 0 && (
+          <div className="flex flex-col items-center gap-2 px-4 py-8 text-center text-sm text-muted-foreground group-data-[collapsible=icon]:hidden">
+            <SearchX className="h-6 w-6 opacity-60" />
+            <p>
+              Tidak ada menu untuk &ldquo;
+              <span className="font-medium text-foreground">{query}</span>
+              &rdquo;
+            </p>
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="text-xs font-medium text-primary underline-offset-4 hover:underline"
+            >
+              Hapus pencarian
+            </button>
+          </div>
         )}
       </SidebarContent>
 

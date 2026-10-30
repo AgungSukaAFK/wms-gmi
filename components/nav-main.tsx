@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import Link, { useLinkStatus } from "next/link";
 import { ChevronDown, Loader2, type LucideIcon } from "lucide-react";
 
@@ -12,7 +12,11 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { useSidebarGroupVisibility } from "@/lib/sidebar/menu-visibility";
 import { setPendingNavUrl, usePendingNavUrl } from "@/lib/sidebar/nav-pending";
 import { usePathname } from "next/navigation";
 
@@ -129,35 +133,120 @@ export function NavMain({
   label = "Menu",
   collapsed = false,
   onToggle,
+  hideable = true,
+  searching = false,
 }: {
   label?: string;
   collapsed?: boolean;
   onToggle?: () => void;
   items: NavItem[];
+  /**
+   * false = tombol "Atur" tidak muncul & semua item selalu tampil (grup
+   * Bantuan, lihat lib/sidebar/nav-config.ts).
+   */
+  hideable?: boolean;
+  /**
+   * Sedang mode pencarian: `items` sudah disaring & diurutkan oleh
+   * app-sidebar.tsx, jadi tampilkan apa adanya (termasuk menu yang
+   * disembunyikan lewat "Atur") & sembunyikan tombol "Atur".
+   */
+  searching?: boolean;
 }) {
+  const { hiddenUrls, toggleUrl } = useSidebarGroupVisibility(label);
+  // Popover Radix baru dirender setelah mount: id aria-controls dari useId
+  // bisa beda antara SSR & klien (hydration mismatch), jadi sebelum mount
+  // cukup tampilkan tombol biasa yang tampilannya sama.
+  const mounted = useSyncExternalStore(
+    subscribeNoop,
+    () => true,
+    () => false,
+  );
+  const showAtur = hideable && !searching && items.length > 0;
+  const visibleItems = showAtur
+    ? items.filter((item) => !hiddenUrls.includes(item.url))
+    : items;
+  const aturButton = (
+    <Button
+      type="button"
+      variant="ghost"
+      size="sm"
+      className="h-6 shrink-0 px-2 text-[11px] font-medium text-sidebar-foreground/60 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground group-data-[collapsible=icon]:hidden"
+    >
+      Atur
+    </Button>
+  );
+
   return (
     <SidebarGroup>
-      <button
-        type="button"
-        onClick={onToggle}
-        className="w-full flex items-center justify-between px-2"
-      >
-        <SidebarGroupLabel>{label}</SidebarGroupLabel>
-        <ChevronDown
-          className={cn(
-            "h-4 w-4 text-muted-foreground transition-transform",
-            collapsed && "-rotate-90",
-          )}
-        />
-      </button>
+      <div className="flex items-center gap-1 pr-1">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex min-w-0 flex-1 items-center justify-between px-2"
+        >
+          <SidebarGroupLabel>{label}</SidebarGroupLabel>
+          <ChevronDown
+            className={cn(
+              "h-4 w-4 text-muted-foreground transition-transform group-data-[collapsible=icon]:hidden",
+              collapsed && "-rotate-90",
+            )}
+          />
+        </button>
+        {showAtur && !mounted && aturButton}
+        {showAtur && mounted && (
+          <Popover>
+            <PopoverTrigger asChild>{aturButton}</PopoverTrigger>
+            <PopoverContent align="end" className="w-64 p-3">
+              <div className="mb-2 space-y-1">
+                <p className="text-sm font-medium leading-none">
+                  Atur menu {label}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Pilih menu yang ingin ditampilkan. Pengaturan ini hanya
+                  tersimpan di perangkat ini.
+                </p>
+              </div>
+              <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                {items.map((item) => {
+                  const hidden = hiddenUrls.includes(item.url);
+                  return (
+                    <label
+                      key={item.url}
+                      className="flex cursor-pointer items-center gap-2 text-sm"
+                    >
+                      <Checkbox
+                        checked={!hidden}
+                        onCheckedChange={(checked) =>
+                          toggleUrl(item.url, checked !== true)
+                        }
+                      />
+                      {item.icon && (
+                        <item.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      )}
+                      <span className="grow truncate">{item.title}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </PopoverContent>
+          </Popover>
+        )}
+      </div>
 
       {!collapsed && (
         <SidebarMenu>
-          {items.map((item) => (
-            <NavMainItem key={item.title} item={item} />
+          {visibleItems.map((item) => (
+            <NavMainItem key={item.url} item={item} />
           ))}
+          {visibleItems.length === 0 && (
+            <p className="px-2 py-1 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
+              Semua menu di grup ini disembunyikan.
+            </p>
+          )}
         </SidebarMenu>
       )}
     </SidebarGroup>
   );
 }
+
+const subscribeNoop = () => () => {};
