@@ -65,6 +65,7 @@ import {
 } from "@/components/ui/select";
 import { SignatureSelector } from "@/components/delivery/signature-selector";
 import { DatePickerString } from "@/components/date-picker-string";
+import { useGoBack } from "@/hooks/use-go-back";
 
 interface DeliveryItem {
   mr_item_id?: number;
@@ -78,6 +79,7 @@ interface DeliveryItem {
 
 export default function CreateDeliveryPage() {
   const router = useRouter();
+  const goBack = useGoBack("/deliveries");
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -517,7 +519,7 @@ export default function CreateDeliveryPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => router.back()}
+              onClick={goBack}
               className="h-8 w-8 rounded-full"
             >
               <ChevronLeft className="h-4 w-4" />

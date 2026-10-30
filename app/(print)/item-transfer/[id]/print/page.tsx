@@ -1,12 +1,13 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDateDocument, formatDateTime } from "@/lib/utils";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
+import { useGoBack } from "@/hooks/use-go-back";
 
 const TRACKING_LABEL: Record<string, string> = {
   created: "Item Transfer Dibuat",
@@ -27,7 +28,7 @@ const SHIPMENT_LABEL: Record<string, string> = {
 
 export default function ItemTransferPrintPage() {
   const { id } = useParams();
-  const router = useRouter();
+  const goBack = useGoBack("/item-transfer");
   const supabase = createClient();
 
   const [it, setIt] = useState<any>(null);
@@ -103,7 +104,7 @@ export default function ItemTransferPrintPage() {
     return (
       <div className="p-20 text-center">
         <h1 className="text-2xl font-bold">Dokumen Tidak Ditemukan</h1>
-        <Button onClick={() => router.back()} className="mt-4">
+        <Button onClick={goBack} className="mt-4">
           Kembali
         </Button>
       </div>
@@ -159,7 +160,7 @@ export default function ItemTransferPrintPage() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => router.back()}
+          onClick={goBack}
           className="gap-2"
         >
           <ChevronLeft className="h-4 w-4" /> Kembali

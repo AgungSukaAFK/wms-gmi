@@ -56,6 +56,7 @@ import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { Textarea } from "@/components/ui/textarea";
 import { normalizeDocumentStatus } from "@/lib/document-status";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
+import { StatusBadge } from "@/components/status-badge";
 
 interface DeliveryDetailSheetProps {
   deliveryId: number | null;
@@ -169,40 +170,6 @@ export function DeliveryDetailSheet({
       toast.error(err.message);
     } finally {
       setUpdating(false);
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-blue-600 border-blue-200 bg-blue-100 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-green-600 text-white font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-emerald-600 text-white font-bold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
     }
   };
 
@@ -349,7 +316,7 @@ export function DeliveryDetailSheet({
                     Delivery Overview
                   </span>
                 </div>
-                {delivery && getStatusBadge(delivery.status)}
+                {delivery && <StatusBadge status={delivery.status} tone="solid" />}
               </div>
               <div>
                 <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">

@@ -26,6 +26,7 @@ import { Content } from "@/components/content";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { getScheduledMaterialRequests } from "@/services/scheduled-mr-actions";
+import { StatusBadge } from "@/components/status-badge";
 
 export default function ScheduledMRPage() {
   const supabase = createClient();
@@ -69,46 +70,6 @@ export default function ScheduledMRPage() {
   const filtered = mrs.filter((mr) =>
     mr.mr_kode?.toLowerCase().includes(debouncedSearch.toLowerCase()),
   );
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-blue-600 border-blue-200 bg-blue-100 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-green-600 text-white font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge className="bg-destructive text-destructive-foreground font-bold text-[10px] uppercase">
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-emerald-600 text-white font-bold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
 
   return (
     <>
@@ -235,7 +196,7 @@ export default function ScheduledMRPage() {
                           <span className="text-muted-foreground/40 text-xs">-</span>
                         )}
                       </TableCell>
-                      <TableCell>{getStatusBadge(mr.mr_status)}</TableCell>
+                      <TableCell><StatusBadge status={mr.mr_status} /></TableCell>
                       <TableCell>
                         <Link href={`/mr/scheduled/${mr.id}`}>
                           <Button variant="ghost" size="sm" className="h-7 text-[11px] font-bold">

@@ -92,6 +92,9 @@ import {
   MrLevelAutoRules,
   DEFAULT_MR_LEVEL_AUTO_RULES,
 } from "@/lib/mr-level";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { done: "Done", closed: "Closed" };
 
 export default function MRDetailPage({
   params,
@@ -341,46 +344,6 @@ export default function MRDetailPage({
     }
 
     setLoading(false);
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-bold uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success/10 text-success border-none font-bold uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge variant="destructive" className="font-bold uppercase">
-            Rejected
-          </Badge>
-        );
-      case "done":
-        return <Badge className="font-bold uppercase">Done</Badge>;
-      case "closed":
-        return (
-          <Badge variant="secondary" className="font-bold uppercase">
-            Closed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold uppercase">
-            {status}
-          </Badge>
-        );
-    }
   };
 
   const getPriorityBadge = (p: string) => {
@@ -970,7 +933,7 @@ export default function MRDetailPage({
                 <h1 className="text-xl font-bold text-foreground tracking-tight">
                   {mr?.mr_kode}
                 </h1>
-                {getStatusBadge(mr?.mr_status)}
+                <StatusBadge status={mr?.mr_status} label={STATUS_LABELS[mr?.mr_status ?? ""]} tone="solid" />
                 {mr && mr.mr_status !== "open" && mr.mr_status !== "rejected" && (
                   <MrLevelBadge
                     mrId={mr.id}

@@ -40,6 +40,7 @@ import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { canCreateMR } from "@/lib/mr-permissions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 function addMonths(ymd: string, months: number): string {
   const d = new Date(ymd);
@@ -49,6 +50,7 @@ function addMonths(ymd: string, months: number): string {
 
 export default function CreateScheduledMRPage() {
   const router = useRouter();
+  const goBack = useGoBack("/mr/scheduled");
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -275,7 +277,7 @@ export default function CreateScheduledMRPage() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 rounded-full"
-              onClick={() => router.back()}
+              onClick={goBack}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>

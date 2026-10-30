@@ -76,6 +76,7 @@ import {
   fetchPrItemPoCoverage,
   type PrItemPoCoverage,
 } from "@/lib/pr-po-coverage";
+import { StatusBadge } from "@/components/status-badge";
 
 export default function PRDetailPage({
   params,
@@ -463,46 +464,6 @@ export default function PRDetailPage({
     setModSaving(false);
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge variant="destructive" className="font-bold text-[10px] uppercase">
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   const getItemStatusColor = (status: string) => {
     switch (status) {
       case "open":
@@ -586,7 +547,7 @@ export default function PRDetailPage({
                 <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
                   {pr?.pr_kode}
                 </h1>
-                {getStatusBadge(pr?.pr_status)}
+                <StatusBadge status={pr?.pr_status} tone="solid" />
                 {pr?.pr_jenis === "konsinyasi" && (
                   <Badge
                     variant="outline"

@@ -63,6 +63,9 @@ import {
   ShieldAlert,
   History,
 } from "lucide-react";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { open: "Menunggu Approval", completed: "Selesai", done: "Selesai" };
 
 export default function ItemTransferDetailPage({
   params,
@@ -249,45 +252,6 @@ export default function ItemTransferDetailPage({
     await fetchDetails();
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-bold text-[10px] uppercase"
-          >
-            Menunggu Approval
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success/10 text-success border-none font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge variant="destructive" className="font-bold text-[10px] uppercase">
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Selesai
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="secondary" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   if (loading && !it) {
     return (
       <div className="col-span-12 flex items-center justify-center min-h-[60vh]">
@@ -348,7 +312,7 @@ export default function ItemTransferDetailPage({
                 <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
                   {it?.it_kode}
                 </h1>
-                {getStatusBadge(it?.status)}
+                <StatusBadge status={it?.status} label={STATUS_LABELS[it?.status ?? ""]} tone="solid" />
                 {it?.it_is_consignment && (
                   <Badge variant="outline" className="text-[10px] font-bold border-violet-300 text-violet-700">
                     Konsinyasi · {it?.vendor?.vendor_name}

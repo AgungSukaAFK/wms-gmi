@@ -73,6 +73,8 @@ import {
   stockCoverage,
   usePartStock,
 } from "@/components/so-reguler/so-item-table";
+import { useConfirmDialog } from "@/components/confirm-dialog";
+import { useGoBack } from "@/hooks/use-go-back";
 
 type CustomerOption = {
   id: number;
@@ -169,8 +171,10 @@ const CUSTOMER_FIELDS =
  * dikunci kalau sudah ada DO.
  */
 export function SoForm({ editSoId }: { editSoId?: number }) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const isEdit = !!editSoId;
   const router = useRouter();
+  const goBack = useGoBack("/so-reguler/so");
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -649,17 +653,20 @@ export function SoForm({ editSoId }: { editSoId?: number }) {
     }
   };
 
-  const handleBack = () => {
+  const handleBack = async () => {
     if (
       isDirty &&
-      !confirm(
-        isEdit
-          ? "Perubahan SO belum disimpan. Tinggalkan halaman ini?"
-          : "Isian SO belum disimpan. Tinggalkan halaman ini?",
-      )
+      !(await confirm({
+        title: "Tinggalkan halaman ini?",
+        description: isEdit
+          ? "Perubahan SO belum disimpan dan akan hilang."
+          : "Isian SO belum disimpan dan akan hilang.",
+        confirmText: "Tinggalkan",
+        destructive: true,
+      }))
     )
       return;
-    router.back();
+    goBack();
   };
 
   if (initialLoading) {
@@ -676,6 +683,7 @@ export function SoForm({ editSoId }: { editSoId?: number }) {
 
   return (
     <>
+      {confirmDialog}
       {/* Header */}
       <Content>
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">

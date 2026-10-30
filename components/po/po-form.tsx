@@ -99,6 +99,7 @@ import {
   type PoCurrency,
 } from "@/lib/po-currency";
 import { PoMoneyInput } from "@/components/po/po-money-input";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 type Step = 1 | 2 | 3;
 
@@ -146,6 +147,7 @@ const PAYMENT_TERM_PRESETS = [
 ];
 
 export function PoForm({ editPoId }: { editPoId?: number } = {}) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const isEdit = Boolean(editPoId);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -877,15 +879,22 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     toast.success(`Vendor ${selectedVendor.vendor_name} diterapkan ke semua item.`);
   };
 
-  const switchVendorMode = (next: "single" | "item") => {
+  const switchVendorMode = async (next: "single" | "item") => {
     if (next === vendorMode) return;
     if (next === "single") {
       const distinct = new Set(
         poItems.filter((i) => i.selected && i.vendor_id).map((i) => i.vendor_id),
       );
-      if (distinct.size > 1 && !window.confirm(
-        "Item punya vendor berbeda-beda. Kembali ke satu vendor akan menyamakan semua item ke vendor dokumen. Lanjutkan?",
-      )) return;
+      if (
+        distinct.size > 1 &&
+        !(await confirm({
+          title: "Samakan vendor semua item?",
+          description:
+            "Item punya vendor berbeda-beda. Kembali ke satu vendor akan menyamakan semua item ke vendor dokumen.",
+          confirmText: "Samakan",
+        }))
+      )
+        return;
       if (selectedVendor) {
         setPoItems((prev) =>
           prev.map((item) => ({ ...item, vendor_id: selectedVendor.id, vendor: selectedVendor })),
@@ -1241,6 +1250,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
 
   return (
     <>
+      {confirmDialog}
       {/* Header */}
       <Content>
         <div className="flex items-center gap-3">

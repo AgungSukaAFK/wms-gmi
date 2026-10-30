@@ -43,6 +43,7 @@ import { createPurchaseRequest } from "@/services/procurement-actions";
 import { cn, toYmdLocal } from "@/lib/utils";
 import { Checkbox } from "@/components/ui/checkbox";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { useGoBack } from "@/hooks/use-go-back";
 
 interface DraftPrItem {
   mr_item_id: number;
@@ -61,6 +62,7 @@ interface DraftPrItem {
 
 export default function CreatePRPage() {
   const router = useRouter();
+  const goBack = useGoBack("/pr");
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -381,7 +383,7 @@ export default function CreatePRPage() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => router.back()}
+              onClick={goBack}
               className="h-9 w-9 shrink-0"
             >
               <ChevronLeft className="h-4 w-4" />

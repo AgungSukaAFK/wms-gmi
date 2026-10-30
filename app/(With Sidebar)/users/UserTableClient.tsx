@@ -64,6 +64,7 @@ import {
   createUserAccount,
 } from "@/services/user-actions";
 import type { Role } from "@/type";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 interface UserProfile {
   id: string;
@@ -92,6 +93,7 @@ export default function UserTableClient({
   cabangList,
   allRoles,
 }: UserTableClientProps) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [cabangFilters, setCabangFilters] = useState<string[]>([]);
@@ -206,7 +208,17 @@ export default function UserTableClient({
 
   const handleToggleStatus = async (user: UserProfile) => {
     const label = user.is_active ? "Nonaktifkan" : "Aktifkan";
-    if (!confirm(`${label} user ${user.nama}?`)) return;
+    if (
+      !(await confirm({
+        title: `${label} user ${user.nama}?`,
+        description: user.is_active
+          ? "User tidak akan bisa login sampai diaktifkan lagi."
+          : "User akan bisa login kembali.",
+        confirmText: label,
+        destructive: user.is_active,
+      }))
+    )
+      return;
 
     setLoadingUserId(user.id);
     const result = await toggleUserStatus(user.id, user.is_active);
@@ -263,7 +275,11 @@ export default function UserTableClient({
 
   const handleDelete = async (user: UserProfile) => {
     if (
-      !confirm(`Hapus user ${user.nama}? Tindakan ini tidak dapat dibatalkan.`)
+      !(await confirm({
+        title: `Hapus user ${user.nama}?`,
+        confirmText: "Hapus",
+        destructive: true,
+      }))
     )
       return;
 
@@ -388,6 +404,7 @@ export default function UserTableClient({
 
   return (
     <>
+      {confirmDialog}
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">

@@ -46,6 +46,7 @@ import {
   getStockByCabang,
 } from "@/services/consignment-ik-actions";
 import { getCustomerSites } from "@/services/master-actions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 type CabangOption = { id: number; nama_cabang: string };
 type SiteOption = { id: number; site_name: string };
@@ -66,6 +67,7 @@ interface ShipItemRow {
 export default function CreateConsignmentIkPage() {
   const supabase = createClient();
   const router = useRouter();
+  const goBack = useGoBack("/so-reguler/consignment/ik");
 
   const [loading, setLoading] = useState(false);
   const [cabangs, setCabangs] = useState<CabangOption[]>([]);
@@ -250,7 +252,7 @@ export default function CreateConsignmentIkPage() {
             variant="ghost"
             size="icon"
             className="h-8 w-8 rounded-full"
-            onClick={() => router.back()}
+            onClick={goBack}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>

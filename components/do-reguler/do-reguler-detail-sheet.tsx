@@ -49,6 +49,7 @@ import {
   updateDoRegulerTrackingModerator,
   cancelDoReguler,
 } from "@/services/do-reguler-actions";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 const TRACKING_ORDER = [
   "created",
@@ -86,6 +87,7 @@ export function DoRegulerDetailSheet({
   onOpenChange,
   onUpdate,
 }: Props) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [doRow, setDoRow] = useState<any>(null);
@@ -208,10 +210,13 @@ export function DoRegulerDetailSheet({
 
   const handleDelete = async () => {
     if (!doId || !doRow) return;
-    const ok = window.confirm(
-      `Hapus DO Reguler ${doRow.do_kode}?\n\n` +
+    const ok = await confirm({
+      title: `Hapus DO Reguler ${doRow.do_kode}?`,
+      description:
         "Semua item detail akan ikut terhapus. Jika stok sudah keluar, stok pengirim akan dikembalikan dulu sebelum DO dihapus.",
-    );
+      confirmText: "Hapus",
+      destructive: true,
+    });
     if (!ok) return;
     setBusy(true);
     const res = await deleteDoReguler(doId);
@@ -224,6 +229,7 @@ export function DoRegulerDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
+      {confirmDialog}
       <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 overflow-hidden">
         {loading || !doRow ? (
           <div className="flex-1 flex items-center justify-center">

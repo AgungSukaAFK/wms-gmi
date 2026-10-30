@@ -52,10 +52,12 @@ import {
   toggleWoFormulaEditor,
   WoFormulaComponentInput,
 } from "@/services/wo-formula-actions";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 type DraftComponent = WoFormulaComponentInput & { _key: string };
 
 export default function WoFormulaPage() {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const router = useRouter();
   const supabase = createClient();
 
@@ -235,11 +237,19 @@ export default function WoFormulaPage() {
   }
 
   async function handleDelete(formulaId: number) {
-    if (!confirm("Hapus formula ini? Aksi ini tidak bisa dibatalkan.")) return;
+    if (
+      !(await confirm({
+        title: "Hapus formula ini?",
+        confirmText: "Hapus",
+        destructive: true,
+      }))
+    )
+      return;
+    const toastId = toast.loading("Menghapus formula...");
     const result = await deleteWoFormula(formulaId);
-    if ((result as any).error) toast.error((result as any).error);
+    if ((result as any).error) toast.error((result as any).error, { id: toastId });
     else {
-      toast.success("Formula dihapus.");
+      toast.success("Formula dihapus.", { id: toastId });
       await refreshFormulas();
     }
   }
@@ -312,6 +322,7 @@ export default function WoFormulaPage() {
 
   return (
     <>
+      {confirmDialog}
       <Content size="lg">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">

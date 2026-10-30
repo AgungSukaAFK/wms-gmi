@@ -43,6 +43,8 @@ import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { MrItemFreezePanel } from "@/components/mr/mr-item-freeze-panel";
 import Link from "next/link";
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
+import { useGoBack } from "@/hooks/use-go-back";
+import { StatusBadge } from "@/components/status-badge";
 
 const PRIORITY_COLOR: Record<string, string> = {
   P1: "text-destructive border-destructive/30 bg-destructive/10",
@@ -54,6 +56,7 @@ const PRIORITY_COLOR: Record<string, string> = {
 export default function ScheduledMRDetailPage() {
   const { id: mrId } = useParams();
   const router = useRouter();
+  const goBack = useGoBack("/mr/scheduled");
   const supabase = createClient();
 
   const [loading, setLoading] = useState(true);
@@ -155,27 +158,6 @@ export default function ScheduledMRDetailPage() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge variant="outline" className="text-blue-600 border-blue-200 bg-blue-100 font-bold text-[10px] uppercase">
-            Open
-          </Badge>
-        );
-      case "approved":
-        return <Badge className="bg-green-600 text-white font-bold text-[10px] uppercase">Approved</Badge>;
-      case "rejected":
-        return <Badge className="bg-destructive text-destructive-foreground font-bold text-[10px] uppercase">Rejected</Badge>;
-      case "completed":
-      case "done":
-      case "closed":
-        return <Badge className="bg-emerald-600 text-white font-bold text-[10px] uppercase">Completed</Badge>;
-      default:
-        return <Badge variant="outline" className="font-bold text-[10px] uppercase">{status}</Badge>;
-    }
-  };
-
   if (loading || !mr) {
     return (
       <div className="col-span-12 flex items-center justify-center min-h-[50vh]">
@@ -191,7 +173,7 @@ export default function ScheduledMRDetailPage() {
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => router.back()}>
+            <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={goBack}>
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <div className="h-10 w-10 bg-primary rounded flex items-center justify-center shadow-sm text-primary-foreground">
@@ -202,7 +184,7 @@ export default function ScheduledMRDetailPage() {
                 <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
                   {mr.mr_kode}
                 </h1>
-                {getStatusBadge(mr.mr_status)}
+                <StatusBadge status={mr.mr_status} tone="solid" />
                 {Array.from(
                   new Set(
                     items.map((i: any) => i.item_priority).filter(Boolean),

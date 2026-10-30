@@ -32,6 +32,7 @@ import {
   createConsignmentGr,
   getConsignmentPrOptionsForGr,
 } from "@/services/vendor-consignment-actions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 interface GrLine {
   pr_item_id: number;
@@ -48,6 +49,7 @@ interface GrLine {
 
 function CreateConsignmentGrForm() {
   const router = useRouter();
+  const goBack = useGoBack("/vendor-consignment/gr");
   const searchParams = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -147,7 +149,7 @@ function CreateConsignmentGrForm() {
     <>
       <Content>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => router.back()}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="h-10 w-10 bg-primary rounded flex items-center justify-center text-primary-foreground">

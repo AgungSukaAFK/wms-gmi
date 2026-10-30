@@ -40,6 +40,7 @@ import {
   setOutstandingPoCabang,
   unlinkOutstandingPoItem,
 } from "@/services/po-outstanding-actions";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 // Panel khusus PO Outstanding (import ERP, lihat lib/po-outstanding.ts):
 // referensi Excel per item, lokasi PO, dan "Hubungkan ke PR" banyak item
@@ -91,6 +92,7 @@ export function PoOutstandingPanel({
   canEdit: boolean;
   onChanged?: () => void;
 }) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
   const [items, setItems] = useState<ItemRow[]>([]);
   const [locked, setLocked] = useState<Set<number>>(new Set());
@@ -162,9 +164,12 @@ export function PoOutstandingPanel({
 
   const handleUnlink = async (item: ItemRow) => {
     if (
-      !confirm(
-        `Lepas link ${item.part_number} dari ${item.pr_items?.prs?.pr_kode || "PR"}? Status konversi PR akan dihitung ulang.`,
-      )
+      !(await confirm({
+        title: `Lepas link ${item.part_number} dari ${item.pr_items?.prs?.pr_kode || "PR"}?`,
+        description: "Status konversi PR akan dihitung ulang.",
+        confirmText: "Lepas",
+        destructive: true,
+      }))
     )
       return;
     setUnlinkingId(item.id);
@@ -186,6 +191,7 @@ export function PoOutstandingPanel({
 
   return (
     <div className="space-y-3">
+      {confirmDialog}
       <div className="rounded-lg border border-primary/30 bg-primary/5 px-3 py-2.5 text-[11px] font-medium leading-relaxed text-foreground">
         PO ini hasil import <b>PO Outstanding</b> dari ERP lama. Lengkapi
         lokasi, hubungkan tiap item ke item PR di WMS (centang item lalu{" "}

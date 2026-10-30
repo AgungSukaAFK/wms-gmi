@@ -1,15 +1,16 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { formatDate, formatDateDocument, formatDateTime } from "@/lib/utils";
+import { useGoBack } from "@/hooks/use-go-back";
 
 export default function ScheduledMRPrintPage() {
   const { id } = useParams();
-  const router = useRouter();
+  const goBack = useGoBack("/mr/scheduled");
   const supabase = createClient();
 
   const [mr, setMr] = useState<any>(null);
@@ -58,7 +59,7 @@ export default function ScheduledMRPrintPage() {
     return (
       <div className="p-20 text-center">
         <h1 className="text-2xl font-bold">Dokumen Tidak Ditemukan</h1>
-        <Button onClick={() => router.back()} className="mt-4">
+        <Button onClick={goBack} className="mt-4">
           Kembali
         </Button>
       </div>
@@ -76,7 +77,7 @@ export default function ScheduledMRPrintPage() {
   return (
     <div className="bg-white min-h-screen text-slate-900 font-serif p-6 print:p-0">
       <div className="fixed top-4 left-4 print:hidden flex gap-2 z-10">
-        <Button variant="outline" size="sm" onClick={() => router.back()} className="gap-2">
+        <Button variant="outline" size="sm" onClick={goBack} className="gap-2">
           <ChevronLeft className="h-4 w-4" /> Kembali
         </Button>
         <Button size="sm" onClick={() => window.print()} className="gap-2 bg-blue-600 text-white">

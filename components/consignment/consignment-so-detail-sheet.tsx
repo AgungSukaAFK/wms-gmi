@@ -50,6 +50,7 @@ import {
   updateConsignmentSo,
 } from "@/services/consignment-so-actions";
 import { getCustomerSites } from "@/services/master-actions";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 const NO_SITE = "none";
 
@@ -66,6 +67,7 @@ export function ConsignmentSoDetailSheet({
   onOpenChange,
   onUpdate,
 }: Props) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [soRow, setSoRow] = useState<any>(null);
@@ -177,9 +179,12 @@ export function ConsignmentSoDetailSheet({
 
   const handleDelete = async () => {
     if (!soId || !soRow) return;
-    const ok = window.confirm(
-      `Hapus SO Consignment ${soRow.so_no}?\n\nSemua item detail akan ikut terhapus.`,
-    );
+    const ok = await confirm({
+      title: `Hapus SO Consignment ${soRow.so_no}?`,
+      description: "Semua item detail akan ikut terhapus.",
+      confirmText: "Hapus",
+      destructive: true,
+    });
     if (!ok) return;
     setBusy(true);
     const res = await deleteConsignmentSo(soId);
@@ -192,6 +197,7 @@ export function ConsignmentSoDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
+      {confirmDialog}
       <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 overflow-hidden">
         {loading || !soRow ? (
           <div className="flex-1 flex items-center justify-center">

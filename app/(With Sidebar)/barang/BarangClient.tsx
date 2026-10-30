@@ -81,6 +81,7 @@ import { toYmdLocal } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
 import { canEditStock } from "@/lib/stock-permissions";
 import { BarcodePrintDialog } from "@/components/barang/barcode-print-dialog";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 interface Barang {
   id: number;
@@ -123,6 +124,7 @@ export default function BarangClient({
   initialUpdatedFrom,
   initialUpdatedTo,
 }: BarangClientProps) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -298,12 +300,20 @@ export default function BarangClient({
   };
 
   const handleDelete = async (id: number, name: string) => {
-    if (!confirm(`Hapus barang ${name}?`)) return;
+    if (
+      !(await confirm({
+        title: `Hapus barang ${name}?`,
+        confirmText: "Hapus",
+        destructive: true,
+      }))
+    )
+      return;
+    const toastId = toast.loading(`Menghapus barang ${name}...`);
     const result = await deleteBarang(id);
     if (result.success) {
-      toast.success("Barang berhasil dihapus");
+      toast.success(`Barang ${name} berhasil dihapus`, { id: toastId });
     } else {
-      toast.error(result.error);
+      toast.error(`Gagal menghapus barang: ${result.error}`, { id: toastId });
     }
   };
 
@@ -326,6 +336,7 @@ export default function BarangClient({
 
   return (
     <>
+      {confirmDialog}
       {/* Section 1: Header */}
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">

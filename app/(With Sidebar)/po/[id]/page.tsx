@@ -76,6 +76,9 @@ import { PoTaxSummary } from "@/components/po/po-tax-summary";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 import { PoOutstandingPanel } from "@/components/po/po-outstanding-panel";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { open: "Pending Approval" };
 
 export default function PODetailPage({
   params,
@@ -388,45 +391,6 @@ export default function PODetailPage({
   const formatCurrency = (n: number) =>
     formatPoMoney(n, po?.po_currency);
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-bold text-[10px] uppercase"
-          >
-            Pending Approval
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success/10 text-success border-none font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge variant="destructive" className="font-bold text-[10px] uppercase">
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "closed":
-        return (
-          <Badge className="bg-success/10 text-success border-none font-bold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="secondary" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   const getReceiveBadge = (status: string) => {
     switch (status) {
       case "complete":
@@ -530,7 +494,7 @@ export default function PODetailPage({
                     Outstanding
                   </Badge>
                 )}
-                {getStatusBadge(po?.po_status)}
+                <StatusBadge status={po?.po_status} label={STATUS_LABELS[po?.po_status ?? ""]} tone="solid" />
                 {getReceiveBadge(po?.po_receive_status)}
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1 flex items-center gap-1.5">

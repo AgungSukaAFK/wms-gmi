@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Loader2, Printer, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,11 @@ import {
   itemTaxFromRow,
 } from "@/lib/po-tax";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
+import { useGoBack } from "@/hooks/use-go-back";
 
 export default function POPrintPage() {
   const { id } = useParams();
-  const router = useRouter();
+  const goBack = useGoBack("/po");
   const searchParams = useSearchParams();
   const supabase = createClient();
 
@@ -128,7 +129,7 @@ export default function POPrintPage() {
     return (
       <div className="p-20 text-center">
         <h1 className="text-2xl font-bold">Dokumen Tidak Ditemukan</h1>
-        <Button onClick={() => router.back()} className="mt-4">
+        <Button onClick={goBack} className="mt-4">
           Kembali
         </Button>
       </div>
@@ -148,7 +149,7 @@ export default function POPrintPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => router.back()}
+            onClick={goBack}
             className="gap-2"
           >
             <ChevronLeft className="h-4 w-4" /> Kembali

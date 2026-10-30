@@ -30,6 +30,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { formatDate, toYmdLocal } from "@/lib/utils";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 import { createRekonsil, getRekonsilCandidates } from "@/services/vendor-consignment-actions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 // Default periode rekonsil: 2 minggu terakhir s.d. hari ini.
 function twoWeeksAgo() {
@@ -41,6 +42,7 @@ function twoWeeksAgo() {
 export default function CreateRekonsilPage() {
   const supabase = createClient();
   const router = useRouter();
+  const goBack = useGoBack("/vendor-consignment/rekonsil");
   const [cabangs, setCabangs] = useState<any[]>([]);
   const [cabangId, setCabangId] = useState<string>("");
   const [vendor, setVendor] = useState<VendorOption | null>(null);
@@ -146,7 +148,7 @@ export default function CreateRekonsilPage() {
     <>
       <Content>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => router.back()}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="h-10 w-10 bg-primary rounded flex items-center justify-center text-primary-foreground">

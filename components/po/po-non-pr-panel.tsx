@@ -39,6 +39,7 @@ import {
   deletePoItemPrLink,
   linkPoItemToPrItem,
 } from "@/services/po-non-pr-actions";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 // Panel khusus PO Non-PR (dipakai di detail page & side sheet PO): referensi
 // PR teks, progres Job Costing per item, link manual ke item PR WMS
@@ -91,6 +92,7 @@ export function PoNonPrPanel({
   isModerator: boolean;
   compact?: boolean;
 }) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
   const [links, setLinks] = useState<LinkRow[]>([]);
   const [usage, setUsage] = useState<Map<number, PoItemJcUsage>>(new Map());
@@ -127,7 +129,15 @@ export function PoNonPrPanel({
   );
 
   const handleDeleteLink = async (linkId: number) => {
-    if (!confirm("Hapus link PO ke PR ini? Status konversi PR akan dihitung ulang.")) return;
+    if (
+      !(await confirm({
+        title: "Hapus link PO ke PR ini?",
+        description: "Status konversi PR akan dihitung ulang.",
+        confirmText: "Hapus",
+        destructive: true,
+      }))
+    )
+      return;
     setDeletingId(linkId);
     const res = await deletePoItemPrLink(linkId);
     setDeletingId(null);
@@ -138,6 +148,7 @@ export function PoNonPrPanel({
 
   return (
     <div className="space-y-3">
+      {confirmDialog}
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
           <div className="flex items-center gap-2">

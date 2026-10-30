@@ -1,18 +1,19 @@
 "use client";
 
 import { Suspense, useEffect, useMemo, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ChevronLeft, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/client";
 import { formatDateDocument } from "@/lib/utils";
+import { useGoBack } from "@/hooks/use-go-back";
 
 // BAST serah terima barang konsinyasi bulanan GMI - Supplier: rekap semua
 // GR Konsinyasi satu vendor dalam satu bulan (note #6 flowchart).
 function BastBulananContent() {
   const searchParams = useSearchParams();
-  const router = useRouter();
+  const goBack = useGoBack("/vendor-consignment/gr");
   const supabase = createClient();
   const vendorId = Number(searchParams.get("vendor"));
   const bulan = searchParams.get("bulan") || ""; // YYYY-MM
@@ -76,7 +77,7 @@ function BastBulananContent() {
     <Content>
       <div className="bg-white min-h-screen p-0 sm:p-8 text-black">
         <div className="fixed top-4 left-4 print:hidden flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => router.back()}>
+          <Button variant="outline" size="sm" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" /> Kembali
           </Button>
           <Button size="sm" onClick={() => window.print()}>

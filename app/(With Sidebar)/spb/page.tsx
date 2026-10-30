@@ -59,6 +59,7 @@ import {
 import { getCabangList } from "@/services/master-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { formatDate } from "@/lib/utils";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 type CabangOption = { id: number; nama_cabang: string };
 
@@ -83,6 +84,7 @@ type SpbTemplateOption = { id: number; name: string | null; cabang_id: number | 
 type SpbApprovalPreviewStep = { nama: string; position?: string | null };
 
 export default function SpbPage() {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const profile = useAuthStore((s) => s.profile);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SpbRow[]>([]);
@@ -271,20 +273,24 @@ export default function SpbPage() {
   };
 
   const onDelete = async (row: SpbRow) => {
-    const ok = window.confirm(
-      `Hapus SPB ${row.spb_no}?\n\n` +
-        "Detail SPB, SPB PO, SPB DO, SPB Invoice, dan Return SPB terkait akan ikut terhapus.\n" +
+    const ok = await confirm({
+      title: `Hapus SPB ${row.spb_no}?`,
+      description:
+        "Detail SPB, SPB PO, SPB DO, SPB Invoice, dan Return SPB terkait akan ikut terhapus. " +
         "Stok akan dikembalikan ke gudang asal.",
-    );
+      confirmText: "Hapus",
+      destructive: true,
+    });
     if (!ok) return;
 
+    const toastId = toast.loading(`Menghapus SPB ${row.spb_no}...`);
     const res = await deleteSpb(row.id);
     if (res.error) {
-      toast.error(res.error);
+      toast.error(`Gagal menghapus SPB: ${res.error}`, { id: toastId });
       return;
     }
 
-    toast.success("SPB berhasil dihapus.");
+    toast.success(`SPB ${row.spb_no} berhasil dihapus.`, { id: toastId });
     fetchData();
   };
 
@@ -304,6 +310,7 @@ export default function SpbPage() {
 
   return (
     <>
+      {confirmDialog}
       <Content>
         <div className="flex flex-col justify-between gap-4 md:flex-row md:items-center">
           <div className="flex items-center gap-3">

@@ -43,6 +43,7 @@ import {
   getIkForPenerimaan,
   getIkPendingPenerimaan,
 } from "@/services/consignment-penerimaan-actions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 interface PenerimaanItemRow {
   ik_item_id: number;
@@ -58,6 +59,7 @@ interface PenerimaanItemRow {
 
 export default function CreateConsignmentPenerimaanPage() {
   const router = useRouter();
+  const goBack = useGoBack("/so-reguler/consignment/penerimaan");
 
   const [loading, setLoading] = useState(false);
 
@@ -186,7 +188,7 @@ export default function CreateConsignmentPenerimaanPage() {
             variant="ghost"
             size="icon"
             className="h-8 w-8 rounded-full"
-            onClick={() => router.back()}
+            onClick={goBack}
           >
             <ChevronLeft className="h-4 w-4" />
           </Button>

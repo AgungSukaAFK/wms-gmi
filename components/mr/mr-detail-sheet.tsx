@@ -36,6 +36,7 @@ import {
   MrLevelAutoRules,
   DEFAULT_MR_LEVEL_AUTO_RULES,
 } from "@/lib/mr-level";
+import { StatusBadge } from "@/components/status-badge";
 
 interface MRDetailSheetProps {
   mrId: string | number | null;
@@ -117,52 +118,6 @@ export function MRDetailSheet({
     }
 
     setLoading(false);
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-semibold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-semibold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-semibold text-[10px] uppercase"
-          >
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge
-            variant="outline"
-            className="font-semibold text-[10px] uppercase"
-          >
-            {status}
-          </Badge>
-        );
-    }
   };
 
   const handleToggleAccurate = async () => {
@@ -277,7 +232,7 @@ export function MRDetailSheet({
                   ).map((p: any) => (
                     <React.Fragment key={p}>{getPriorityBadge(p)}</React.Fragment>
                   ))}
-                  {mr && getStatusBadge(mr.mr_status)}
+                  {mr && <StatusBadge status={mr.mr_status} tone="solid" />}
                   {mr &&
                     mr.mr_status !== "open" &&
                     mr.mr_status !== "rejected" && (

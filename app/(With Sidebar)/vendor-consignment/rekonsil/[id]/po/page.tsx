@@ -35,10 +35,12 @@ import { PPN_RATE_OPTIONS, computePoTotals } from "@/lib/po-tax";
 import { PO_CURRENCY_OPTIONS, formatPoMoney, type PoCurrency } from "@/lib/po-currency";
 import { getRekonsilPoPreview } from "@/services/vendor-consignment-actions";
 import { createPurchaseOrder } from "@/services/procurement-actions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 export default function RekonsilPoPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
+  const goBack = useGoBack("/vendor-consignment/rekonsil");
   const supabase = createClient();
   const rekonsilId = Number(params.id);
 
@@ -243,7 +245,7 @@ export default function RekonsilPoPage() {
     <>
       <Content>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => router.back()}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="h-10 w-10 bg-primary rounded flex items-center justify-center text-primary-foreground">

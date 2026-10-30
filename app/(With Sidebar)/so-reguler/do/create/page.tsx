@@ -64,6 +64,7 @@ import {
   computeSoItemRemaining,
   fetchSoItemFulfillment,
 } from "@/lib/so-reguler";
+import { useGoBack } from "@/hooks/use-go-back";
 
 interface DOItem {
   part_id: number;
@@ -93,6 +94,7 @@ export default function CreateDoRegulerPage() {
 function CreateDoRegulerForm() {
   const supabase = createClient();
   const router = useRouter();
+  const goBack = useGoBack("/so-reguler/do");
   const searchParams = useSearchParams();
   const initialSoId = Number(searchParams.get("so_id")) || null;
 
@@ -503,7 +505,7 @@ function CreateDoRegulerForm() {
     <>
       <Content>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => router.back()}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="h-10 w-10 bg-primary rounded flex items-center justify-center text-primary-foreground">

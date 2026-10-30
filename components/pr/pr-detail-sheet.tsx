@@ -80,13 +80,13 @@ import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log
 import { toast } from "sonner";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
-import { MyAlertDialog } from "@/components/dialog-confirm";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { normalizeDocumentStatus } from "@/lib/document-status";
 import {
   fetchPrItemPoCoverage,
   type PrItemPoCoverage,
 } from "@/lib/pr-po-coverage";
+import { StatusBadge } from "@/components/status-badge";
 
 interface PRDetailSheetProps {
   prId: string | number | null;
@@ -489,49 +489,6 @@ export function PRDetailSheet({
     setModSaving(false);
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-blue-600 border-blue-200 bg-blue-100 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-green-600 text-white font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-bold text-[10px] uppercase"
-          >
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-slate-900 text-white font-bold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   const getItemStatusColor = (status: string) => {
     switch (status) {
       case "open":
@@ -582,7 +539,7 @@ export function PRDetailSheet({
                   </span>
                 </div>
                 <div className="flex items-center gap-1.5">
-                  {pr && getStatusBadge(pr.pr_status)}
+                  {pr && <StatusBadge status={pr.pr_status} tone="solid" />}
                   {pr?.pr_convert_status && (
                     <Badge
                       variant="outline"

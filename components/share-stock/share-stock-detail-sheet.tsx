@@ -49,7 +49,10 @@ import { bypassShareStockCompletion } from "@/services/inventory-actions";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
-import { MyAlertDialog } from "@/components/dialog-confirm";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { done: "Done", closed: "Closed" };
 
 interface ShareStockDetailSheetProps {
   mrId: string | number | null;
@@ -243,56 +246,6 @@ export function ShareStockDetailSheet({
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-blue-600 border-blue-200 bg-blue-100 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-green-600 text-white font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-bold text-[10px] uppercase"
-          >
-            Rejected
-          </Badge>
-        );
-      case "done":
-        return (
-          <Badge className="bg-slate-900 text-white font-bold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
-      case "closed":
-        return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase text-slate-400"
-          >
-            Closed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   const getItemStatusColor = (status: string) => {
     switch (status) {
       case "open":
@@ -336,7 +289,7 @@ export function ShareStockDetailSheet({
                     Share Stock Management
                   </span>
                 </div>
-                {mr && getStatusBadge(mr.mr_status)}
+                {mr && <StatusBadge status={mr.mr_status} label={STATUS_LABELS[mr.mr_status ?? ""]} tone="solid" />}
               </div>
               <div>
                 <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
@@ -380,7 +333,7 @@ export function ShareStockDetailSheet({
                               {pr.pr_kode}
                             </span>
                           </div>
-                          {getStatusBadge(pr.pr_status)}
+                          <StatusBadge status={pr.pr_status} label={STATUS_LABELS[pr.pr_status ?? ""]} />
                         </div>
 
                         {/* PR Items Status */}
@@ -606,7 +559,7 @@ export function ShareStockDetailSheet({
       </SheetContent>
 
       {/* Status Change Confirmation Dialog */}
-      <MyAlertDialog
+      <ConfirmDialog
         open={isConfirmOpen}
         onOpenChange={handleConfirmDialogOpenChange}
         title={
@@ -621,11 +574,11 @@ export function ShareStockDetailSheet({
               : `Ubah status "${confirmAction.itemName}" dari ${confirmAction.currentStatus.toUpperCase()} ke ${confirmAction.newStatus.toUpperCase()}. Lanjutkan?`
             : ""
         }
-        actionText="Lanjutkan"
-        cancelText="Batal"
-        onAction={async () => {
+        confirmText="Lanjutkan"
+        onConfirm={async () => {
+          // Dialog tetap terbuka (spinner) sampai selesai, lalu menutup
+          // sendiri & onOpenChange mereset confirmAction.
           if (!confirmAction) return;
-          setIsConfirmOpen(false);
           if (confirmAction.newStatus === "bypass") {
             await handleBypass(confirmAction.itemId);
           } else {
@@ -634,7 +587,6 @@ export function ShareStockDetailSheet({
               confirmAction.newStatus,
             );
           }
-          setConfirmAction(null);
         }}
       />
     </Sheet>

@@ -31,7 +31,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { useDebounce } from "use-debounce";
@@ -42,6 +41,7 @@ import { formatDate } from "@/lib/utils";
 import { completedFilterStatuses } from "@/lib/document-status";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { StatusBadge } from "@/components/status-badge";
 
 const DELIVERY_SORT_COLUMNS: Record<string, string> = {
   dlv_kode: "dlv_kode",
@@ -163,40 +163,6 @@ export default function DeliveriesPage() {
   const handleSortChange = (nextSort: string) => {
     setSortOrder(nextSort);
     setPage(1);
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
   };
 
   return (
@@ -425,7 +391,7 @@ export default function DeliveriesPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      {getStatusBadge(dlv.status)}
+                      <StatusBadge status={dlv.status} />
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

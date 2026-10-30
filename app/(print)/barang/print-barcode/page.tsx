@@ -1,7 +1,7 @@
 "use client";
 
 import React, { Suspense, useEffect, useMemo } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { ChevronLeft, Printer, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { QrCodeSvg } from "@/components/barang/qr-code-svg";
@@ -11,12 +11,13 @@ import {
   computeStickerGrid,
   type Orientation,
 } from "@/lib/barcode-sheet";
+import { useGoBack } from "@/hooks/use-go-back";
 
 const clampMm = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
 function BarcodePrintContent() {
-  const router = useRouter();
+  const goBack = useGoBack("/barang");
   const searchParams = useSearchParams();
 
   const partNumber = searchParams.get("pn") || "";
@@ -51,7 +52,7 @@ function BarcodePrintContent() {
         <p className="text-sm text-muted-foreground mt-2">
           Buka halaman ini lewat tombol "Cetak QR Code" di list Barang.
         </p>
-        <Button onClick={() => router.back()} className="mt-4">
+        <Button onClick={goBack} className="mt-4">
           Kembali
         </Button>
       </div>
@@ -68,7 +69,7 @@ function BarcodePrintContent() {
           Sticker {width}mm x {height}mm tidak muat di kertas A4 (
           {orientation}). Perkecil ukuran sticker.
         </p>
-        <Button onClick={() => router.back()} className="mt-4">
+        <Button onClick={goBack} className="mt-4">
           Kembali
         </Button>
       </div>
@@ -105,7 +106,7 @@ function BarcodePrintContent() {
         <Button
           variant="outline"
           size="sm"
-          onClick={() => router.back()}
+          onClick={goBack}
           className="gap-2 bg-white"
         >
           <ChevronLeft className="h-4 w-4" /> Kembali

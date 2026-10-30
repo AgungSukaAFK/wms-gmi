@@ -1,16 +1,17 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { ChevronLeft, Loader2, Printer } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Content } from "@/components/content";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate, formatDateDocument } from "@/lib/utils";
+import { useGoBack } from "@/hooks/use-go-back";
 
 export default function SpbInvoicePrintPage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
+  const goBack = useGoBack("/spb/invoice");
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [header, setHeader] = useState<any>(null);
@@ -60,7 +61,7 @@ export default function SpbInvoicePrintPage() {
     <Content>
       <div className="bg-white min-h-screen p-0 sm:p-8">
         <div className="fixed top-4 left-4 print:hidden flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => router.back()}>
+          <Button variant="outline" size="sm" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" /> Kembali
           </Button>
           <Button size="sm" onClick={() => window.print()}>

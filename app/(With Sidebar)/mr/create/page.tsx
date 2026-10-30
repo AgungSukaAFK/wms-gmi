@@ -46,6 +46,7 @@ import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { canCreateMR } from "@/lib/mr-permissions";
+import { useGoBack } from "@/hooks/use-go-back";
 
 const MR_KATEGORI_OPTIONS = [
   "New Item",
@@ -56,6 +57,7 @@ const MR_KATEGORI_OPTIONS = [
 
 export default function CreateMRPage() {
   const router = useRouter();
+  const goBack = useGoBack("/mr");
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
@@ -272,7 +274,7 @@ export default function CreateMRPage() {
               variant="ghost"
               size="icon"
               className="h-8 w-8 rounded-full"
-              onClick={() => router.back()}
+              onClick={goBack}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>

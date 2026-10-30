@@ -47,6 +47,9 @@ import {
   downloadWorkbook,
   type ItExportItem,
 } from "@/lib/item-transfer-export";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { open: "Menunggu Approval", completed: "Selesai", done: "Selesai" };
 
 const IT_SORT_COLUMNS: Record<string, string> = {
   it_kode: "it_kode",
@@ -294,42 +297,6 @@ export default function ItemTransferPage() {
     setPage(1);
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge variant="outline" className="text-primary border-primary/30 bg-primary/10 font-bold text-[10px] uppercase">
-            Menunggu Approval
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge variant="destructive" className="font-bold text-[10px] uppercase">
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Selesai
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="secondary" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   return (
     <>
       <Content>
@@ -547,7 +514,7 @@ export default function ItemTransferPage() {
                             : null;
                         return (
                           <div className="flex flex-col items-center gap-0.5">
-                            {getStatusBadge(r.status)}
+                            <StatusBadge status={r.status} label={STATUS_LABELS[r.status ?? ""]} />
                             {pendingApprover && (
                               <span className="text-[9px] font-medium text-warning uppercase tracking-tight">
                                 Menunggu: {pendingApprover.nama}

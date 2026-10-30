@@ -66,6 +66,7 @@ import {
   DEFAULT_MR_LEVEL_AUTO_RULES,
 } from "@/lib/mr-level";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import { StatusBadge } from "@/components/status-badge";
 
 const MR_SORT_COLUMNS: Record<string, string> = {
   mr_kode: "mr_kode",
@@ -536,52 +537,6 @@ export default function MaterialRequestPage() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-semibold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-semibold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-semibold text-[10px] uppercase"
-          >
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge
-            variant="outline"
-            className="font-semibold text-[10px] uppercase"
-          >
-            {status}
-          </Badge>
-        );
-    }
-  };
-
   const getPriorityBadge = (p: string) => {
     switch (p) {
       case "P1":
@@ -979,7 +934,7 @@ export default function MaterialRequestPage() {
                       </TableCell>
                       <TableCell className="text-center">
                         <div className="flex flex-col items-center gap-1.5">
-                          {getStatusBadge(mr.mr_status)}
+                          <StatusBadge status={mr.mr_status} />
                           {mr.mr_status !== "open" &&
                             mr.mr_status !== "rejected" &&
                             levelExtraByMrId[mr.id] && (

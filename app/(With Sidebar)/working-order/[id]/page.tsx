@@ -53,6 +53,7 @@ import {
   editWorkingOrder,
 } from "@/services/working-order-actions";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 const STATUS_VARIANT: Record<string, "default" | "secondary" | "destructive" | "outline"> = {
   "Pending Approval": "secondary",
@@ -66,6 +67,7 @@ export default function WorkingOrderDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const { id } = usePromise(params);
   const woId = Number(id);
   const router = useRouter();
@@ -174,11 +176,19 @@ export default function WorkingOrderDetailPage({
   }
 
   async function handleClose() {
-    if (!confirm("Selesaikan WO ini? Qty produksi akan terdistribusi ke MR.")) return;
+    if (
+      !(await confirm({
+        title: "Selesaikan WO ini?",
+        description: "Qty produksi akan terdistribusi ke MR.",
+        confirmText: "Selesaikan",
+      }))
+    )
+      return;
+    const toastId = toast.loading("Menyelesaikan WO...");
     const result = await closeWorkingOrder(woId);
-    if ((result as any).error) toast.error((result as any).error);
+    if ((result as any).error) toast.error((result as any).error, { id: toastId });
     else {
-      toast.success("WO diselesaikan.");
+      toast.success("WO diselesaikan.", { id: toastId });
       await load();
     }
   }
@@ -221,6 +231,7 @@ export default function WorkingOrderDetailPage({
 
   return (
     <>
+      {confirmDialog}
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">

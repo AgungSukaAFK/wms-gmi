@@ -52,6 +52,7 @@ import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor"
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
+import { StatusBadge } from "@/components/status-badge";
 
 interface ReceiveDetailSheetProps {
   receiveId: number | null;
@@ -165,33 +166,6 @@ export function ReceiveDetailSheet({
     Boolean(currentUser?.id) &&
     Boolean(nextPendingApproval) &&
     nextPendingApproval.userid === currentUser.id;
-
-  const getStatusBadge = (status?: string) => {
-    if (status === "completed") {
-      return (
-        <Badge className="text-[10px] font-bold uppercase bg-green-600 text-white">
-          Completed
-        </Badge>
-      );
-    }
-
-    if (status === "rejected") {
-      return (
-        <Badge
-          variant="destructive"
-          className="text-[10px] font-bold uppercase"
-        >
-          Rejected
-        </Badge>
-      );
-    }
-
-    return (
-      <Badge variant="secondary" className="text-[10px] font-bold uppercase">
-        Open
-      </Badge>
-    );
-  };
 
   const openApproveFlow = () => {
     setPendingAction("approve");
@@ -441,7 +415,7 @@ export function ReceiveDetailSheet({
                     <p className="font-black text-lg text-foreground font-mono uppercase tracking-wide">
                       {receive.ri_kode}
                     </p>
-                    {getStatusBadge(receive.ri_status)}
+                    <StatusBadge status={receive.ri_status === "completed" || receive.ri_status === "rejected" ? receive.ri_status : "open"} tone="solid" />
                   </div>
                 </div>
 

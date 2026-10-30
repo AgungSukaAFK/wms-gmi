@@ -73,6 +73,7 @@ import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { createItemTransfer } from "@/services/item-transfer-actions";
 import { getConsignmentMrOutstanding } from "@/services/vendor-consignment-actions";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
+import { useGoBack } from "@/hooks/use-go-back";
 
 interface ITItem {
   part_id: number;
@@ -124,6 +125,7 @@ interface RiLine {
 export default function CreateItemTransferPage() {
   const supabase = createClient();
   const router = useRouter();
+  const goBack = useGoBack("/item-transfer");
 
   const [initialLoading, setInitialLoading] = useState(true);
   const [loading, setLoading] = useState(false);
@@ -790,7 +792,7 @@ export default function CreateItemTransferPage() {
     <>
       <Content>
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={() => router.back()}>
+          <Button variant="ghost" size="icon" className="h-8 w-8 rounded-full" onClick={goBack}>
             <ChevronLeft className="h-4 w-4" />
           </Button>
           <div className="h-10 w-10 bg-primary rounded flex items-center justify-center text-primary-foreground">

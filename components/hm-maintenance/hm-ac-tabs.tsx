@@ -80,6 +80,7 @@ import {
 } from "@/components/hm-maintenance/hm-ac-dialogs";
 import { errorMessage, HmDeleteDialog } from "@/components/hm-maintenance/hm-dialogs";
 import { AcForecastGrid } from "@/components/hm-maintenance/hm-ac-grid";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 function omitKey<T>(obj: Record<number, T>, key: number): Record<number, T> {
   const next = { ...obj };
@@ -183,6 +184,7 @@ export function AcForecastTab({
   siteName: string | null;
   onChanged: () => Promise<void>;
 }) {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const [stock, setStock] = useState<{ part_id: number; cabang_id: number; qty: number }[]>([]);
   const [edits, setEdits] = useState<Record<number, AcScheduleDraft>>({});
   const [manualIds, setManualIds] = useState<number[]>([]);
@@ -282,9 +284,17 @@ export function AcForecastTab({
     setManualIds([]);
   };
 
-  const changePeriod = (key: string) => {
+  const changePeriod = async (key: string) => {
     if (key === periodKey) return;
-    if (dirtyIds.size > 0 && !window.confirm("Ada isian yang belum disimpan. Pindah bulan dan buang perubahan?")) {
+    if (
+      dirtyIds.size > 0 &&
+      !(await confirm({
+        title: "Buang perubahan?",
+        description: "Ada isian yang belum disimpan. Pindah bulan dan buang perubahan?",
+        confirmText: "Pindah bulan",
+        destructive: true,
+      }))
+    ) {
       return;
     }
     discardEdits();
@@ -353,6 +363,7 @@ export function AcForecastTab({
 
   return (
     <div className="grid grid-cols-12 gap-4">
+      {confirmDialog}
       {/* Toolbar */}
       <div className="col-span-12 flex flex-wrap items-center gap-2 rounded-lg border bg-card p-2">
         <div className="flex items-center gap-1">

@@ -12,7 +12,6 @@ import {
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
@@ -31,6 +30,9 @@ import {
 } from "lucide-react";
 import { DoRegulerDetailSheet } from "@/components/do-reguler/do-reguler-detail-sheet";
 import { formatDate } from "@/lib/utils";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { completed: "Selesai" };
 
 const SORT_COLUMNS: Record<string, string> = {
   do_kode: "do_kode",
@@ -108,41 +110,6 @@ export default function DoRegulerPage() {
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
     setPage(1);
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "active":
-        return (
-          <Badge className="bg-success text-success-foreground font-bold text-[10px] uppercase">
-            Aktif
-          </Badge>
-        );
-      case "completed":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Selesai
-          </Badge>
-        );
-      case "cancelled":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-bold text-[10px] uppercase"
-          >
-            Dibatalkan
-          </Badge>
-        );
-      default:
-        return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase"
-          >
-            {status}
-          </Badge>
-        );
-    }
   };
 
   return (
@@ -313,7 +280,7 @@ export default function DoRegulerPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      {getStatusBadge(r.status)}
+                      <StatusBadge status={r.status} label={STATUS_LABELS[r.status ?? ""]} />
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-1">

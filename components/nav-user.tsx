@@ -19,7 +19,7 @@ import {
 import { useState } from "react";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
-import { MyAlertDialog } from "./dialog-confirm";
+import { ConfirmDialog } from "./confirm-dialog";
 import { redirect } from "next/navigation";
 
 export function NavUser({
@@ -43,11 +43,15 @@ export function NavUser({
 
   return (
     <>
-      <MyAlertDialog
+      <ConfirmDialog
         open={logoutDialog}
         onOpenChange={setLogoutDialog}
-        onAction={handleLogout}
-      ></MyAlertDialog>
+        title="Keluar dari aplikasi?"
+        description="Anda perlu login lagi untuk masuk."
+        confirmText="Log out"
+        destructive
+        onConfirm={handleLogout}
+      />
 
       <SidebarMenu>
         <SidebarMenuItem>

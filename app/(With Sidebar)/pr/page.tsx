@@ -55,6 +55,7 @@ import {
   PrConvertStatusBadge,
   PR_CONVERT_STATUS_LABEL,
 } from "@/components/pr/pr-convert-status-badge";
+import { StatusBadge } from "@/components/status-badge";
 
 const PR_SORT_COLUMNS: Record<string, string> = {
   pr_kode: "pr_kode",
@@ -316,52 +317,6 @@ export default function PRListPage() {
     dateFrom !== "" ||
     dateTo !== "" ||
     sortOrder !== "newest";
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-semibold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-semibold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-semibold text-[10px] uppercase"
-          >
-            Rejected
-          </Badge>
-        );
-      case "completed":
-      case "done":
-      case "closed":
-        return (
-          <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
-            Completed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge
-            variant="secondary"
-            className="font-semibold text-[10px] uppercase"
-          >
-            {status}
-          </Badge>
-        );
-    }
-  };
 
   return (
     <>
@@ -666,7 +621,7 @@ export default function PRListPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      {getStatusBadge(pr.pr_status)}
+                      <StatusBadge status={pr.pr_status} />
                     </TableCell>
                     <TableCell className="text-center">
                       {(() => {

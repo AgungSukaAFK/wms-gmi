@@ -51,6 +51,7 @@ import {
   toggleVendorStatus,
   updateVendor,
 } from "@/services/master-actions";
+import { useConfirmDialog } from "@/components/confirm-dialog";
 
 type VendorFormState = {
   vendor_name: string;
@@ -71,6 +72,7 @@ const emptyVendorForm: VendorFormState = {
 };
 
 export default function VendorsPage() {
+  const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [vendors, setVendors] = useState<any[]>([]);
@@ -234,22 +236,30 @@ export default function VendorsPage() {
   };
 
   const handleDelete = async (vendorId: number) => {
-    if (!confirm("Hapus vendor ini? Tindakan ini tidak bisa dibatalkan.")) {
+    if (
+      !(await confirm({
+        title: "Hapus vendor ini?",
+        confirmText: "Hapus",
+        destructive: true,
+      }))
+    ) {
       return;
     }
 
+    const toastId = toast.loading("Menghapus vendor...");
     const result = await deleteVendor(vendorId);
     if (!result.success) {
-      toast.error(result.error || "Gagal menghapus vendor");
+      toast.error(result.error || "Gagal menghapus vendor", { id: toastId });
       return;
     }
 
-    toast.success("Vendor berhasil dihapus");
+    toast.success("Vendor berhasil dihapus", { id: toastId });
     await fetchVendors();
   };
 
   return (
     <>
+      {confirmDialog}
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">

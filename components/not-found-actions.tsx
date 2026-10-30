@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { ArrowLeft, Home } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useGoBack } from "@/hooks/use-go-back";
 
 export function NotFoundActions() {
-  const router = useRouter();
+  const goBack = useGoBack("/dashboard");
 
   return (
     <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
@@ -14,10 +14,10 @@ export function NotFoundActions() {
         type="button"
         variant="outline"
         className="font-semibold"
-        onClick={() => router.back()}
+        onClick={goBack}
       >
         <ArrowLeft className="mr-2 h-4 w-4" />
-        Back
+        Kembali
       </Button>
       <Button asChild className="font-semibold">
         <Link href="/dashboard">

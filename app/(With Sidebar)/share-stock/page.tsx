@@ -43,6 +43,9 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { formatDate } from "@/lib/utils";
+import { StatusBadge } from "@/components/status-badge";
+
+const STATUS_LABELS: Record<string, string> = { done: "Done", closed: "Closed" };
 
 const SHARE_STOCK_SORT_COLUMNS: Record<string, string> = {
   mr_kode: "mr_kode",
@@ -171,56 +174,6 @@ export default function ShareStockPage() {
   const handleSortChange = (nextSort: string) => {
     setSortOrder(nextSort);
     setPage(1);
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "open":
-        return (
-          <Badge
-            variant="outline"
-            className="text-primary border-primary/30 bg-primary/10 font-bold text-[10px] uppercase"
-          >
-            Open
-          </Badge>
-        );
-      case "approved":
-        return (
-          <Badge className="bg-success text-success-foreground font-bold text-[10px] uppercase">
-            Approved
-          </Badge>
-        );
-      case "rejected":
-        return (
-          <Badge
-            variant="destructive"
-            className="font-bold text-[10px] uppercase"
-          >
-            Rejected
-          </Badge>
-        );
-      case "done":
-        return (
-          <Badge className="bg-foreground text-background font-bold text-[10px] uppercase">
-            Done
-          </Badge>
-        );
-      case "closed":
-        return (
-          <Badge
-            variant="secondary"
-            className="font-bold text-[10px] uppercase text-muted-foreground"
-          >
-            Closed
-          </Badge>
-        );
-      default:
-        return (
-          <Badge variant="outline" className="font-bold text-[10px] uppercase">
-            {status}
-          </Badge>
-        );
-    }
   };
 
   const getPriorityBadge = (p: string) => {
@@ -526,7 +479,7 @@ export default function ShareStockPage() {
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      {getStatusBadge(mr.mr_status)}
+                      <StatusBadge status={mr.mr_status} label={STATUS_LABELS[mr.mr_status ?? ""]} />
                     </TableCell>
                     <TableCell className="text-right">
                       <Button

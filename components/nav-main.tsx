@@ -13,6 +13,8 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar";
 import { cn } from "@/lib/utils";
+import { setPendingNavUrl, usePendingNavUrl } from "@/lib/sidebar/nav-pending";
+import { usePathname } from "next/navigation";
 
 type NavItem = {
   label?: string;
@@ -30,9 +32,15 @@ type NavItem = {
 
 // Ikon diganti spinner selama navigasi pending (prefetch belum selesai /
 // route dinamis), ukuran slot tetap jadi tidak ada layout shift.
-function NavItemIcon({ icon: Icon }: { icon?: LucideIcon }) {
+function NavItemIcon({
+  icon: Icon,
+  pending: navPending,
+}: {
+  icon?: LucideIcon;
+  pending?: boolean;
+}) {
   const { pending } = useLinkStatus();
-  if (pending) {
+  if (pending || navPending) {
     return <Loader2 className="h-4 w-4 shrink-0 animate-spin" />;
   }
   return Icon ? <Icon className="h-4 w-4 shrink-0" /> : null;
@@ -51,6 +59,12 @@ function NavMainItem({ item }: { item: NavItem }) {
     undefined,
   );
   const { isMobile, setOpenMobile } = useSidebar();
+  const pathname = usePathname();
+  const pendingUrl = usePendingNavUrl();
+  const isPending = pendingUrl === item.url;
+  // Selama ada navigasi berjalan, highlight pindah ke menu yang diklik
+  // supaya terasa responsif.
+  const isActive = pendingUrl ? isPending : item.isActive;
   const markIntent = () => setIntent(true);
 
   useEffect(() => () => clearTimeout(hoverTimer.current), []);
@@ -68,18 +82,32 @@ function NavMainItem({ item }: { item: NavItem }) {
           onMouseLeave={() => clearTimeout(hoverTimer.current)}
           onTouchStart={markIntent}
           onFocus={markIntent}
-          onClick={() => {
+          aria-busy={isPending || undefined}
+          onClick={(e) => {
+            // Buka di tab baru / klik tengah: tidak ada navigasi di tab ini,
+            // jadi jangan tampilkan loading.
+            if (
+              e.defaultPrevented ||
+              e.button !== 0 ||
+              e.metaKey ||
+              e.ctrlKey ||
+              e.shiftKey ||
+              e.altKey
+            )
+              return;
             // Navigasi client-side tidak reload halaman, jadi sheet sidebar
             // mobile harus ditutup manual.
             if (isMobile) setOpenMobile(false);
+            if (item.url !== pathname) setPendingNavUrl(item.url);
           }}
           className={cn(
-            "w-full flex gap-4 items-center rounded-md px-3 py-2 transition-colors hover:bg-accent",
-            item.isActive && "bg-primary/5",
+            "w-full flex gap-4 items-center rounded-md px-3 py-2 transition-colors hover:bg-accent active:scale-[0.98] active:bg-accent",
+            isActive && "bg-primary/5",
+            isPending && "bg-primary/10",
           )}
         >
           <span className="relative inline-flex h-4 w-4 shrink-0 items-center justify-center">
-            <NavItemIcon icon={item.icon} />
+            <NavItemIcon icon={item.icon} pending={isPending} />
             {item.dot && (
               <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-destructive" />
             )}
