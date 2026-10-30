@@ -255,35 +255,35 @@ export function ShareStockDetailSheet({
       case "rejected":
         return "text-red-600";
       case "done":
-        return "text-slate-900";
+        return "text-foreground";
       case "closed":
-        return "text-slate-400";
+        return "text-muted-foreground/80";
       default:
-        return "text-slate-600";
+        return "text-foreground/70";
     }
   };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 overflow-hidden text-slate-900 shadow-2xl">
+      <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-border overflow-hidden text-foreground shadow-2xl">
         {loading && !mr ? (
-          <div className="flex-1 flex items-center justify-center bg-white">
+          <div className="flex-1 flex items-center justify-center bg-card">
             <SheetTitle className="sr-only">Memuat Data Share Stock</SheetTitle>
             <SheetDescription className="sr-only">
               Sedang memuat detail share stock.
             </SheetDescription>
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-green-600" />
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+              <span className="text-xs font-bold text-muted-foreground/80 uppercase tracking-widest">
                 Memuat Data Share Stock...
               </span>
             </div>
           </div>
         ) : (
           <>
-            <SheetHeader className="p-6 bg-slate-50 border-b border-slate-100 space-y-4">
+            <SheetHeader className="p-6 bg-muted/50 border-b border-border/60 space-y-4">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-400">
+                <div className="flex items-center gap-2 text-muted-foreground/80">
                   <Truck className="h-4 w-4" />
                   <span className="text-[10px] font-bold uppercase tracking-widest">
                     Share Stock Management
@@ -292,15 +292,15 @@ export function ShareStockDetailSheet({
                 {mr && <StatusBadge status={mr.mr_status} label={STATUS_LABELS[mr.mr_status ?? ""]} tone="solid" />}
               </div>
               <div>
-                <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
+                <SheetTitle className="text-xl font-bold text-foreground tracking-tight uppercase leading-none">
                   {mr?.mr_kode}
                 </SheetTitle>
                 <SheetDescription className="sr-only">
                   Detail share stock untuk {mr?.mr_kode}.
                 </SheetDescription>
                 <div className="flex flex-col gap-1.5 mt-3">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-                    <User className="h-3.5 w-3.5 text-slate-400" /> {mr?.mr_pic}
+                  <div className="flex items-center gap-2 text-xs font-bold text-foreground/80">
+                    <User className="h-3.5 w-3.5 text-muted-foreground/80" /> {mr?.mr_pic}
                   </div>
                   <div className="flex items-center gap-2 text-[10px] font-bold text-green-600 uppercase tracking-tight">
                     <Building2 className="h-3.5 w-3.5 text-green-500/50" />{" "}
@@ -310,13 +310,13 @@ export function ShareStockDetailSheet({
               </div>
             </SheetHeader>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-white transition-all">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-card transition-all">
               {/* Linked PR Section (Read Only) */}
               {prRecords.length > 0 && (
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="h-4 w-1 bg-blue-500 rounded-full" />
-                    <h3 className="text-[11px] font-bold text-slate-900 uppercase">
+                    <h3 className="text-[11px] font-bold text-foreground uppercase">
                       Status Pengadaan (PR)
                     </h3>
                   </div>
@@ -324,12 +324,12 @@ export function ShareStockDetailSheet({
                     {prRecords.map((pr) => (
                       <div
                         key={pr.pr_kode}
-                        className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 space-y-3 shadow-sm"
+                        className="bg-blue-50/50 border border-blue-100 rounded-xl p-4 space-y-3 shadow-sm dark:bg-blue-900/30 dark:border-blue-800"
                       >
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2">
                             <ShoppingCart className="h-3.5 w-3.5 text-blue-500" />
-                            <span className="text-xs font-bold text-slate-800 uppercase leading-none">
+                            <span className="text-xs font-bold text-foreground uppercase leading-none">
                               {pr.pr_kode}
                             </span>
                           </div>
@@ -345,11 +345,11 @@ export function ShareStockDetailSheet({
                                 key={item.id}
                                 className="flex items-center justify-between text-[10px]"
                               >
-                                <span className="font-bold text-slate-600 uppercase tracking-tight">
+                                <span className="font-bold text-foreground/70 uppercase tracking-tight">
                                   {item.part_name}
                                 </span>
                                 <div className="flex items-center gap-2">
-                                  <span className="text-slate-400 font-medium">
+                                  <span className="text-muted-foreground/80 font-medium">
                                     Qty: {item.qty}
                                   </span>
                                   <Badge
@@ -376,7 +376,7 @@ export function ShareStockDetailSheet({
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
                     <div className="h-4 w-1 bg-green-600 rounded-full" />
-                    <h3 className="text-[11px] font-bold text-slate-900 uppercase">
+                    <h3 className="text-[11px] font-bold text-foreground uppercase">
                       Alokasi Share Stock (Editable)
                     </h3>
                   </div>
@@ -384,9 +384,9 @@ export function ShareStockDetailSheet({
 
                 <div className="space-y-4">
                   {items.length === 0 ? (
-                    <div className="h-40 flex flex-col items-center justify-center border-2 border-dashed border-slate-100 rounded-2xl gap-3">
-                      <Inbox className="h-8 w-8 text-slate-200" />
-                      <p className="text-[10px] font-bold text-slate-300 uppercase tracking-widest">
+                    <div className="h-40 flex flex-col items-center justify-center border-2 border-dashed border-border/60 rounded-2xl gap-3">
+                      <Inbox className="h-8 w-8 text-muted-foreground/40" />
+                      <p className="text-[10px] font-bold text-muted-foreground/60 uppercase tracking-widest">
                         Tidak ada alokasi share stock
                       </p>
                     </div>
@@ -399,19 +399,19 @@ export function ShareStockDetailSheet({
                       return (
                         <div
                           key={item.id}
-                          className="bg-slate-50 border border-slate-100 rounded-xl p-4 space-y-4 shadow-sm hover:border-green-200 transition-all group"
+                          className="bg-muted/50 border border-border/60 rounded-xl p-4 space-y-4 shadow-sm hover:border-green-200 transition-all group"
                         >
                           <div className="flex justify-between items-start">
                             <div className="space-y-1">
-                              <p className="text-[10px] font-mono font-bold text-slate-400 leading-none group-hover:text-green-600 transition-colors uppercase tracking-tight">
+                              <p className="text-[10px] font-mono font-bold text-muted-foreground/80 leading-none group-hover:text-green-600 transition-colors uppercase tracking-tight">
                                 {item.part_number}
                               </p>
-                              <p className="text-[11px] font-bold text-slate-800 uppercase line-clamp-1 leading-snug">
+                              <p className="text-[11px] font-bold text-foreground uppercase line-clamp-1 leading-snug">
                                 {item.part_name}
                               </p>
-                              <p className="text-[12px] font-black text-slate-900 mt-1">
+                              <p className="text-[12px] font-black text-foreground mt-1">
                                 {item.qty_sharestock_total}{" "}
-                                <span className="text-[9px] font-bold text-slate-400 uppercase tracking-tighter">
+                                <span className="text-[9px] font-bold text-muted-foreground/80 uppercase tracking-tighter">
                                   {item.satuan}
                                 </span>
                               </p>
@@ -431,7 +431,7 @@ export function ShareStockDetailSheet({
                             >
                               <SelectTrigger
                                 className={cn(
-                                  "h-8 w-28 bg-white border-slate-200 font-bold text-[9px] uppercase rounded-lg px-2 shadow-sm",
+                                  "h-8 w-28 bg-card border-border font-bold text-[9px] uppercase rounded-lg px-2 shadow-sm",
                                   getItemStatusColor(item.ss_status || "open"),
                                 )}
                               >
@@ -462,13 +462,13 @@ export function ShareStockDetailSheet({
                                 </SelectItem>
                                 <SelectItem
                                   value="done"
-                                  className="text-[10px] font-bold uppercase text-slate-900"
+                                  className="text-[10px] font-bold uppercase text-foreground"
                                 >
                                   Done
                                 </SelectItem>
                                 <SelectItem
                                   value="closed"
-                                  className="text-[10px] font-bold uppercase text-slate-400"
+                                  className="text-[10px] font-bold uppercase text-muted-foreground/80"
                                 >
                                   Closed
                                 </SelectItem>
@@ -477,8 +477,8 @@ export function ShareStockDetailSheet({
                           </div>
 
                           {/* Branch Sources */}
-                          <div className="pt-3 border-t border-slate-200/50 space-y-2">
-                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                          <div className="pt-3 border-t border-border/50 space-y-2">
+                            <p className="text-[9px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-1.5">
                               <MapPin className="h-3 w-3" /> Gudang Sumber
                               Pasokan
                             </p>
@@ -486,12 +486,12 @@ export function ShareStockDetailSheet({
                               {itemAllocs.map((alloc, idx) => (
                                 <div
                                   key={idx}
-                                  className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1 rounded-lg shadow-sm"
+                                  className="flex items-center gap-1.5 bg-card border border-border px-2.5 py-1 rounded-lg shadow-sm"
                                 >
-                                  <span className="text-[9px] font-bold text-slate-700 uppercase">
+                                  <span className="text-[9px] font-bold text-foreground/80 uppercase">
                                     {alloc.cabang?.nama_cabang}
                                   </span>
-                                  <span className="h-3 w-px bg-slate-100" />
+                                  <span className="h-3 w-px bg-muted" />
                                   <span className="text-[10px] font-black text-blue-600">
                                     {alloc.qty}
                                   </span>
@@ -502,7 +502,7 @@ export function ShareStockDetailSheet({
 
                           {/* Bypass button */}
                           {item.ss_status !== "closed" && isModeratorOrAdmin && (
-                            <div className="pt-3 border-t border-slate-200/50">
+                            <div className="pt-3 border-t border-border/50">
                               <Button
                                 variant="outline"
                                 size="sm"
@@ -535,10 +535,10 @@ export function ShareStockDetailSheet({
               </div>
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50/50 flex gap-3 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
+            <div className="p-6 border-t border-border/60 bg-muted/30 flex gap-3 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
               <Button
                 variant="outline"
-                className="flex-1 h-11 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
+                className="flex-1 h-11 border-border text-foreground/70 font-bold text-xs uppercase rounded-xl hover:bg-card transition-all gap-2"
                 onClick={() => onOpenChange(false)}
               >
                 <X className="h-3.5 w-3.5" /> Tutup Panel
@@ -546,7 +546,7 @@ export function ShareStockDetailSheet({
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-11 w-11 border border-slate-200 text-slate-400 hover:text-green-600 rounded-xl hover:bg-white transition-all shadow-sm"
+                className="h-11 w-11 border border-border text-muted-foreground/80 hover:text-green-600 rounded-xl hover:bg-card transition-all shadow-sm"
                 onClick={fetchDetails}
               >
                 <RefreshCw

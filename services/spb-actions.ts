@@ -541,6 +541,37 @@ export async function getSpbById(id: number) {
   return { data };
 }
 
+// Kode/Tipe/Brand unit SPB wajib dari Data Master Unit (public.units): tipe &
+// brand selalu diambil dari master, nilai ketikan dari client diabaikan.
+async function resolveMasterUnit(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  kodeUnit: string | undefined,
+) {
+  const kode = kodeUnit?.trim();
+  if (!kode) return { error: "Kode unit wajib dipilih." };
+
+  const { data, error } = await supabase
+    .from("units")
+    .select("kode_unit, tipe_unit, brand")
+    .eq("kode_unit", kode)
+    .eq("is_active", true)
+    .maybeSingle();
+
+  if (error) return { error: error.message };
+  if (!data) {
+    return {
+      error: `Kode unit "${kode}" tidak terdaftar / nonaktif di Data Master Unit.`,
+    };
+  }
+  return {
+    unit: {
+      spb_kode_unit: data.kode_unit as string,
+      spb_tipe_unit: data.tipe_unit as string,
+      spb_brand: (data.brand as string | null) || null,
+    },
+  };
+}
+
 export async function createSpb(payload: CreateSpbPayload) {
   const supabase = await createClient();
   const me = await getCurrentUserProfile();
@@ -605,6 +636,9 @@ export async function createSpb(payload: CreateSpbPayload) {
     return { error: "Vendor konsinyasi wajib dipilih untuk SPB Konsinyasi." };
   }
 
+  const masterUnit = await resolveMasterUnit(supabase, payload.spb_kode_unit);
+  if (!masterUnit.unit) return { error: masterUnit.error };
+
   const nowIsoStr = new Date().toISOString();
 
   const { data: spbHeader, error: spbErr } = await supabase
@@ -616,9 +650,7 @@ export async function createSpb(payload: CreateSpbPayload) {
       spb_section: payload.spb_section || null,
       spb_pic_gmi: payload.spb_pic_gmi || me.profile?.nama || null,
       spb_pic_ppa: payload.spb_pic_ppa || null,
-      spb_kode_unit: payload.spb_kode_unit || null,
-      spb_tipe_unit: payload.spb_tipe_unit || null,
-      spb_brand: payload.spb_brand || null,
+      ...masterUnit.unit,
       spb_hm: payload.spb_hm || null,
       spb_problem_remark: payload.spb_problem_remark || null,
       spb_status: "DONE QUOT",
@@ -694,7 +726,33 @@ export async function updateSpb(
   if ("error" in auth) return { error: auth.error };
 
   const { supabase } = auth;
-  const { error } = await supabase.from("spb").update(payload).eq("id", id);
+
+  // Unit: tipe/brand tidak pernah dari ketikan client. Kode diganti -> wajib
+  // dari master & tipe/brand ikut master; kode tetap (termasuk kode lama yang
+  // belum ada di master) -> unit SPB dibiarkan apa adanya.
+  const { spb_kode_unit, ...rest } = payload;
+  delete rest.spb_tipe_unit;
+  delete rest.spb_brand;
+  let unitPatch = {};
+  if (spb_kode_unit !== undefined) {
+    const { data: current, error: currentErr } = await supabase
+      .from("spb")
+      .select("spb_kode_unit")
+      .eq("id", id)
+      .single();
+    if (currentErr || !current) return { error: "SPB tidak ditemukan." };
+
+    if (spb_kode_unit.trim() !== (current.spb_kode_unit || "").trim()) {
+      const masterUnit = await resolveMasterUnit(supabase, spb_kode_unit);
+      if (!masterUnit.unit) return { error: masterUnit.error };
+      unitPatch = masterUnit.unit;
+    }
+  }
+
+  const { error } = await supabase
+    .from("spb")
+    .update({ ...rest, ...unitPatch })
+    .eq("id", id);
 
   if (error) return { error: error.message };
   revalidateStockOutPaths();

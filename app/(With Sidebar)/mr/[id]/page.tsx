@@ -417,6 +417,7 @@ export default function MRDetailPage({
       let query = supabase
         .from("barang")
         .select("id, part_number, part_name, part_satuan")
+        .is("deleted_at", null)
         .order("part_name")
         .limit(15);
       if (debouncedBarangSearch) {
@@ -1093,7 +1094,7 @@ export default function MRDetailPage({
         <div className="col-span-12 lg:col-span-8 space-y-4 md:space-y-6">
           <Content title="Informasi Utama">
             {editMode && (
-              <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-2.5">
+              <div className="mb-5 rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-2.5 dark:bg-blue-900/30 dark:border-blue-800">
                 <p className="text-[11px] font-semibold text-blue-700">
                   Mode Edit aktif — ubah field yang diperlukan lalu klik{" "}
                   <strong>Simpan Perubahan</strong>.
@@ -1278,7 +1279,7 @@ export default function MRDetailPage({
                       editItemsList.map((item, idx) => (
                         <TableRow
                           key={item.id ?? `new-${idx}`}
-                          className={`h-14 hover:bg-muted/30 ${item.id === undefined ? "bg-blue-50/30" : ""}`}
+                          className={`h-14 hover:bg-muted/30 ${item.id === undefined ? "bg-blue-50/30 dark:bg-blue-900/30" : ""}`}
                         >
                           <TableCell className="text-center w-10">
                             <Button
@@ -1296,7 +1297,7 @@ export default function MRDetailPage({
                           <TableCell className="font-mono text-sm font-black text-foreground uppercase tracking-wide">
                             {item.part_number}
                             {item.id === undefined && (
-                              <Badge className="ml-1.5 text-[7px] h-3.5 bg-blue-100 text-blue-600 border-none font-black uppercase">
+                              <Badge className="ml-1.5 text-[7px] h-3.5 bg-blue-100 text-blue-600 border-none font-black uppercase dark:bg-blue-900/40 dark:text-blue-300">
                                 Baru
                               </Badge>
                             )}

@@ -1,71 +1,128 @@
 "use client";
 
 import { createContext, useContext, useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
 import {
   ThemeProvider as NextThemesProvider,
   ThemeProviderProps,
 } from "next-themes";
+import {
+  ACCENT_STORAGE_KEY,
+  accentThemes,
+  applyAccent,
+  applyFontFamily,
+  DEFAULT_ACCENT,
+  DEFAULT_FONT_FAMILY,
+  FONT_FAMILY_STORAGE_KEY,
+  fontFamilies,
+  isPrintPath,
+  type AccentTheme,
+  type FontFamily,
+} from "@/lib/appearance";
+import { runViewTransition } from "@/lib/view-transition";
 
-// Definisikan tema aksen yang tersedia (sesuai CSS di globals.css)
-export const accentThemes = [
-  { name: "zinc", label: "Zinc (Default)" },
-  { name: "blue", label: "Blue" },
-  { name: "rose", label: "Rose" },
-  { name: "green", label: "Green" },
-];
-
-type AccentTheme = (typeof accentThemes)[number]["name"];
+export { accentThemes };
 
 interface CustomThemeContextType {
   accent: AccentTheme;
   setAccent: (accent: AccentTheme) => void;
+  fontFamily: FontFamily;
+  setFontFamily: (font: FontFamily) => void;
 }
 
-// Konteks untuk menyimpan tema aksen
 const CustomThemeContext = createContext<CustomThemeContextType | undefined>(
-  undefined
+  undefined,
 );
 
+function readStored<T extends string>(
+  key: string,
+  options: readonly { name: string }[],
+  fallback: T,
+): T {
+  try {
+    const v = localStorage.getItem(key);
+    return (options.find((o) => o.name === v)?.name as T) ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStored(key: string, value: string) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // localStorage diblokir - berlaku di sesi ini saja
+  }
+}
+
+/**
+ * Tema per perangkat: mode terang/gelap (next-themes), warna aksen, dan
+ * jenis font. Halaman cetak (lib/font-size.ts isPrintPath) selalu Light +
+ * aksen & font standar, apa pun pilihan user.
+ */
 export function CustomThemeProvider({
   children,
   ...props
 }: ThemeProviderProps) {
-  const [accent, setAccent] = useState<AccentTheme>("zinc"); // Default ke zinc
+  const pathname = usePathname();
+  const printing = isPrintPath(pathname);
+  // null = belum dibaca dari localStorage, supaya nilai yang sudah dipasang
+  // script anti-kedip (lib/appearance.ts) tidak tertimpa default dulu.
+  const [accent, setAccentState] = useState<AccentTheme | null>(null);
+  const [fontFamily, setFontFamilyState] = useState<FontFamily | null>(null);
 
-  // Saat komponen dimuat, cek local storage untuk tema aksen yang disimpan
   useEffect(() => {
-    const storedAccent = localStorage.getItem("accent-theme") as AccentTheme;
-    if (storedAccent && accentThemes.find((t) => t.name === storedAccent)) {
-      setAccent(storedAccent);
-    }
+    // Sinkron dari localStorage sekali setelah mount (nilainya sudah
+    // terpasang di <html> oleh boot script, jadi tidak ada kedipan).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAccentState(readStored(ACCENT_STORAGE_KEY, accentThemes, DEFAULT_ACCENT));
+    setFontFamilyState(
+      readStored(FONT_FAMILY_STORAGE_KEY, fontFamilies, DEFAULT_FONT_FAMILY),
+    );
   }, []);
 
-  // Saat tema aksen berubah, terapkan kelas CSS ke tag <html>
   useEffect(() => {
-    const root = window.document.documentElement;
+    if (!accent) return;
+    applyAccent(printing ? null : accent);
+  }, [accent, printing]);
 
-    // Hapus semua kelas tema aksen yang lama
-    accentThemes.forEach((theme) => {
-      root.classList.remove(`theme-${theme.name}`);
+  useEffect(() => {
+    if (!fontFamily) return;
+    applyFontFamily(printing ? null : fontFamily);
+  }, [fontFamily, printing]);
+
+  const setAccent = (next: AccentTheme) =>
+    // Cross-fade; flushSync di runViewTransition memastikan class <html>
+    // sudah terpasang sebelum potret "sesudah" diambil.
+    runViewTransition(() => {
+      setAccentState(next);
+      writeStored(ACCENT_STORAGE_KEY, next);
+      applyAccent(next);
     });
 
-    // Tambahkan kelas tema aksen yang baru (kecuali jika 'zinc' default)
-    if (accent !== "zinc") {
-      root.classList.add(`theme-${accent}`);
-    }
-
-    // Simpan pilihan ke local storage
-    localStorage.setItem("accent-theme", accent);
-  }, [accent]);
+  const setFontFamily = (next: FontFamily) =>
+    runViewTransition(() => {
+      setFontFamilyState(next);
+      writeStored(FONT_FAMILY_STORAGE_KEY, next);
+      applyFontFamily(next);
+    });
 
   return (
-    <CustomThemeContext.Provider value={{ accent, setAccent }}>
-      <NextThemesProvider {...props}>{children}</NextThemesProvider>
+    <CustomThemeContext.Provider
+      value={{
+        accent: accent ?? DEFAULT_ACCENT,
+        setAccent,
+        fontFamily: fontFamily ?? DEFAULT_FONT_FAMILY,
+        setFontFamily,
+      }}
+    >
+      <NextThemesProvider {...props} forcedTheme={printing ? "light" : undefined}>
+        {children}
+      </NextThemesProvider>
     </CustomThemeContext.Provider>
   );
 }
 
-// Hook kustom untuk mempermudah penggunaan konteks tema aksen
 export const useCustomTheme = () => {
   const context = useContext(CustomThemeContext);
   if (context === undefined) {

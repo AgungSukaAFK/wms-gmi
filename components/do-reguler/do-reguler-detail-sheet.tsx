@@ -383,7 +383,7 @@ export function DoRegulerDetailSheet({
                     <Clock className="h-3.5 w-3.5" /> Status Pengiriman
                   </h4>
                 </div>
-                <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3">
+                <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3 dark:bg-orange-900/30 dark:border-orange-800">
                   <div className="space-y-2.5">
                     {TRACKING_ORDER.map((stepId, idx) => {
                       const completed = isTrackingStepCompleted(
@@ -400,7 +400,7 @@ export function DoRegulerDetailSheet({
                                 ? "bg-green-500 text-white"
                                 : current
                                   ? "bg-orange-500 text-white"
-                                  : "bg-slate-100 text-slate-400",
+                                  : "bg-muted text-muted-foreground/80",
                             )}
                           >
                             {completed ? (
@@ -416,13 +416,13 @@ export function DoRegulerDetailSheet({
                                 ? "text-orange-600"
                                 : completed
                                   ? "text-green-600"
-                                  : "text-slate-400",
+                                  : "text-muted-foreground/80",
                             )}
                           >
                             {TRACKING_LABEL[stepId]}
                           </span>
                           {current && (
-                            <Badge className="text-[9px] font-bold bg-orange-100 text-orange-700 border-0">
+                            <Badge className="text-[9px] font-bold bg-orange-100 text-orange-700 border-0 dark:bg-orange-900/40 dark:text-orange-300">
                               Sekarang
                             </Badge>
                           )}
@@ -449,7 +449,7 @@ export function DoRegulerDetailSheet({
                   )}
 
                   {doRow.status === "cancelled" && (
-                    <p className="text-[10px] font-medium text-destructive bg-white border border-destructive/30 rounded-lg p-2.5">
+                    <p className="text-[10px] font-medium text-destructive bg-card border border-destructive/30 rounded-lg p-2.5">
                       DO ini sudah dibatalkan. Stok telah dikembalikan ke gudang
                       pengirim.
                       {doRow.cancel_reason
@@ -459,11 +459,11 @@ export function DoRegulerDetailSheet({
                   )}
 
                   {doRow.tracking_note && (
-                    <div className="rounded-lg border border-orange-200 bg-white p-3">
+                    <div className="rounded-lg border border-orange-200 bg-card p-3">
                       <p className="text-[9px] font-bold text-orange-700 uppercase mb-1">
                         Catatan Tracking
                       </p>
-                      <p className="text-[11px] font-medium text-slate-700 whitespace-pre-wrap">
+                      <p className="text-[11px] font-medium text-foreground/80 whitespace-pre-wrap">
                         {doRow.tracking_note}
                       </p>
                     </div>
@@ -480,13 +480,13 @@ export function DoRegulerDetailSheet({
                       Tracking Moderator/Admin
                     </h4>
                   </div>
-                  <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3">
+                  <div className="p-4 bg-indigo-50/50 border border-indigo-100 rounded-xl space-y-3 dark:bg-indigo-900/30 dark:border-indigo-800">
                     <Select
                       value={moderatorTrackingStatus}
                       onValueChange={setModeratorTrackingStatus}
                       disabled={busy}
                     >
-                      <SelectTrigger className="h-10 bg-white border-indigo-200 font-bold text-xs uppercase rounded-lg">
+                      <SelectTrigger className="h-10 bg-card border-indigo-200 font-bold text-xs uppercase rounded-lg">
                         <SelectValue placeholder="Pilih status tracking" />
                       </SelectTrigger>
                       <SelectContent>
@@ -506,7 +506,7 @@ export function DoRegulerDetailSheet({
                       value={moderatorTrackingNote}
                       onChange={(e) => setModeratorTrackingNote(e.target.value)}
                       placeholder="Catatan tracking custom (opsional)"
-                      className="min-h-20 bg-white border-indigo-200 text-xs"
+                      className="min-h-20 bg-card border-indigo-200 text-xs"
                       disabled={busy}
                     />
 

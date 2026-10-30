@@ -103,6 +103,7 @@ export async function createConsignmentPr(data: {
   const { data: parts } = await supabase
     .from("barang")
     .select("id, part_number, part_name, part_satuan")
+    .is("deleted_at", null)
     .in(
       "id",
       data.items.map((i) => i.part_id),

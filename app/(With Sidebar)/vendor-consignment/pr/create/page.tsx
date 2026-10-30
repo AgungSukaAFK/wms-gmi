@@ -124,7 +124,7 @@ export default function CreateConsignmentPrPage() {
   useEffect(() => {
     if (!searchOpen) return;
     const run = async () => {
-      let q = supabase.from("barang").select("id, part_number, part_name, part_satuan").order("part_name").limit(15);
+      let q = supabase.from("barang").select("id, part_number, part_name, part_satuan").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedSearch)
         q = q.or(`part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`);
       const { data } = await q;

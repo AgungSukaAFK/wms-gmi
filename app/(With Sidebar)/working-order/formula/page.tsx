@@ -124,7 +124,7 @@ export default function WoFormulaPage() {
   useEffect(() => {
     if (!targetPopoverOpen) return;
     const run = async () => {
-      let q = supabase.from("barang").select("*").order("part_name").limit(15);
+      let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedTargetSearch)
         q = q.or(
           `part_number.ilike.%${debouncedTargetSearch}%,part_name.ilike.%${debouncedTargetSearch}%`,
@@ -139,7 +139,7 @@ export default function WoFormulaPage() {
   useEffect(() => {
     if (!componentPopoverOpen) return;
     const run = async () => {
-      let q = supabase.from("barang").select("*").order("part_name").limit(15);
+      let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedComponentSearch)
         q = q.or(
           `part_number.ilike.%${debouncedComponentSearch}%,part_name.ilike.%${debouncedComponentSearch}%`,

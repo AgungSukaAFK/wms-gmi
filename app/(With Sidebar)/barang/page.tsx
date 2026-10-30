@@ -9,7 +9,11 @@ interface SearchParams {
   view?: string;
   updated_from?: string;
   updated_to?: string;
+  status?: string;
 }
+
+// Pilihan "Show" di BarangClient; maks. 1000 baris per halaman.
+const MAX_LIMIT = 1000;
 
 export default async function BarangPage({
   searchParams,
@@ -19,11 +23,16 @@ export default async function BarangPage({
   const params = await searchParams;
   const q = params.q || "";
   const page = parseInt(params.page || "1");
-  const limit = parseInt(params.limit || "25");
+  const limit = Math.min(
+    MAX_LIMIT,
+    Math.max(1, parseInt(params.limit || "25") || 25),
+  );
   const sort = params.sort || "name_asc";
   const view = (params.view as "table" | "grid") || "table";
   const updatedFrom = params.updated_from || "";
   const updatedTo = params.updated_to || "";
+  // "deleted" = barang yang sudah dihapus (soft delete), untuk dipulihkan moderator.
+  const status = params.status === "deleted" ? "deleted" : "active";
 
   const supabase = await createClient();
 
@@ -31,6 +40,11 @@ export default async function BarangPage({
   const to = from + limit - 1;
 
   let query = supabase.from("barang").select("*", { count: "exact" });
+
+  query =
+    status === "deleted"
+      ? query.not("deleted_at", "is", null)
+      : query.is("deleted_at", null);
 
   if (q) {
     query = query.or(`part_number.ilike.%${q}%,part_name.ilike.%${q}%`);
@@ -90,6 +104,7 @@ export default async function BarangPage({
       initialView={view}
       initialUpdatedFrom={updatedFrom}
       initialUpdatedTo={updatedTo}
+      initialStatus={status}
     />
   );
 }

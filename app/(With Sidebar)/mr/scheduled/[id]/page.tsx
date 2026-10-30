@@ -311,7 +311,7 @@ export default function ScheduledMRDetailPage() {
                       </TableCell>
                       <TableCell className="text-center">
                         {item.is_item_frozen ? (
-                          <Badge className="gap-1 bg-sky-100 text-sky-700 border border-sky-200 font-bold text-[9px]">
+                          <Badge className="gap-1 bg-sky-100 text-sky-700 border border-sky-200 font-bold text-[9px] dark:bg-sky-900/40 dark:text-sky-300 dark:border-sky-800">
                             <Snowflake className="h-3 w-3" /> Frozen
                           </Badge>
                         ) : (

@@ -4,8 +4,7 @@ export default function AuthLayout({ children }: { children: React.ReactNode }) 
   return (
     <>
       {children}
-      {/* App belum memasang ThemeProvider, jadi kunci toast ke light. */}
-      <Toaster richColors position="bottom-right" theme="light" />
+      <Toaster richColors position="bottom-right" />
     </>
   );
 }

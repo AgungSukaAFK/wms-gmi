@@ -192,7 +192,7 @@ export function MRDetailSheet({
     return (
       <Badge
         variant="outline"
-        className="h-3.5 px-1.5 text-[8px] text-blue-600 border-blue-200 bg-blue-50 font-bold uppercase shrink-0"
+        className="h-3.5 px-1.5 text-[8px] text-blue-600 border-blue-200 bg-blue-50 font-bold uppercase shrink-0 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800"
       >
         Menyetujui
       </Badge>
@@ -495,7 +495,7 @@ export function MRDetailSheet({
                   disabled={updatingAccurate}
                   className={`w-full flex items-center gap-3 p-3 rounded-lg border transition-all ${
                     mr?.accurate
-                      ? "bg-amber-50 border-amber-200 hover:bg-amber-100"
+                      ? "bg-amber-50 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/30 dark:border-amber-800"
                       : "bg-muted/30 border-border hover:bg-muted/60"
                   }`}
                 >

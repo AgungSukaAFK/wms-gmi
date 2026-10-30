@@ -1,12 +1,13 @@
 "use client";
 
-// Aksi di sisi kanan top bar (layout "With Sidebar"): Inbox notifikasi dan
-// menu Profil. Profil diambil dari useAuthStore (diisi DailyResetGuard saat
+// Aksi di sisi kanan top bar (layout "With Sidebar"): Inbox notifikasi,
+// pengaturan Tampilan (tema/aksen/font), dan menu Profil. Profil diambil dari useAuthStore (diisi DailyResetGuard saat
 // login), jadi top bar tidak menambah query sendiri.
 
 import { useMemo, useSyncExternalStore } from "react";
 import { useAuthStore } from "@/stores/auth-store";
 import { TopbarInbox } from "./topbar-inbox";
+import { TopbarAppearance } from "./topbar-appearance";
 import { TopbarProfile } from "./topbar-profile";
 
 export type TopbarProfileData = {
@@ -48,6 +49,7 @@ export function TopbarActions() {
   return (
     <div className="flex items-center gap-1 sm:gap-0.5">
       <TopbarInbox userId={profile?.id ?? null} />
+      <TopbarAppearance />
       <div className="mx-1 h-5 w-px bg-border sm:mx-1.5" aria-hidden />
       <TopbarProfile profile={profile} />
     </div>

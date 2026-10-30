@@ -10,8 +10,8 @@ export const PR_CONVERT_STATUS_LABEL: Record<string, string> = {
 };
 
 const PR_CONVERT_STATUS_CLASS: Record<string, string> = {
-  pending: "bg-slate-100 text-slate-600 border-slate-300",
-  partial: "bg-amber-100 text-amber-700 border-amber-300",
+  pending: "bg-muted text-foreground/70 border-border",
+  partial: "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
   complete: "bg-success/10 text-success border-success/30",
 };
 

@@ -498,11 +498,11 @@ export function PRDetailSheet({
       case "rejected":
         return "text-red-600";
       case "done":
-        return "text-slate-900";
+        return "text-foreground";
       case "closed":
-        return "text-slate-400";
+        return "text-muted-foreground/80";
       default:
-        return "text-slate-600";
+        return "text-foreground/70";
     }
   };
 
@@ -516,23 +516,23 @@ export function PRDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 overflow-hidden text-slate-900 shadow-2xl">
+      <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-border overflow-hidden text-foreground shadow-2xl">
         {/* Always-present title for screen reader accessibility */}
         <SheetTitle className="sr-only">Purchase Request Detail</SheetTitle>
         {loading && !pr ? (
-          <div className="flex-1 flex items-center justify-center bg-white">
+          <div className="flex-1 flex items-center justify-center bg-card">
             <div className="flex flex-col items-center gap-4">
               <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-              <span className="text-xs font-bold text-slate-400 uppercase tracking-widest">
+              <span className="text-xs font-bold text-muted-foreground/80 uppercase tracking-widest">
                 Memuat Data Dokumen...
               </span>
             </div>
           </div>
         ) : (
           <>
-            <SheetHeader className="p-6 bg-slate-50 border-b border-slate-100 space-y-4">
+            <SheetHeader className="p-6 bg-muted/50 border-b border-border/60 space-y-4">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2 text-slate-400">
+                <div className="flex items-center gap-2 text-muted-foreground/80">
                   <FileText className="h-4 w-4" />
                   <span className="text-[10px] font-bold uppercase tracking-widest">
                     Document Overview
@@ -548,9 +548,9 @@ export function PRDetailSheet({
                         pr.pr_convert_status === "complete" &&
                           "bg-success/10 text-success border-success/30",
                         pr.pr_convert_status === "partial" &&
-                          "bg-amber-100 text-amber-700 border-amber-300",
+                          "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
                         pr.pr_convert_status === "pending" &&
-                          "bg-slate-100 text-slate-500 border-slate-300",
+                          "bg-muted text-muted-foreground border-border",
                       )}
                     >
                       PO: {pr.pr_convert_status}
@@ -560,7 +560,7 @@ export function PRDetailSheet({
               </div>
               <div>
                 <div className="flex items-center justify-between gap-2">
-                  <SheetTitle className="text-xl font-bold text-slate-900 tracking-tight uppercase leading-none">
+                  <SheetTitle className="text-xl font-bold text-foreground tracking-tight uppercase leading-none">
                     {pr?.pr_kode}
                   </SheetTitle>
                   {isModerator && !modEditMode && (
@@ -578,7 +578,7 @@ export function PRDetailSheet({
                       <Button
                         size="sm"
                         variant="ghost"
-                        className="h-7 gap-1.5 text-[10px] font-bold text-slate-500"
+                        className="h-7 gap-1.5 text-[10px] font-bold text-muted-foreground"
                         onClick={() => setModEditMode(false)}
                         disabled={modSaving}
                       >
@@ -606,15 +606,15 @@ export function PRDetailSheet({
                   )}
                 </div>
                 <div className="flex flex-col gap-1.5 mt-3">
-                  <div className="flex items-center gap-2 text-xs font-bold text-slate-700">
-                    <User className="h-3.5 w-3.5 text-slate-400" />{" "}
+                  <div className="flex items-center gap-2 text-xs font-bold text-foreground/80">
+                    <User className="h-3.5 w-3.5 text-muted-foreground/80" />{" "}
                     {pr?.profiles?.nama}
                   </div>
                   {modEditMode ? (
                     <div className="flex items-center gap-2">
                       <Building2 className="h-3.5 w-3.5 text-blue-500/50 shrink-0" />
                       <Select value={modCabangId} onValueChange={setModCabangId}>
-                        <SelectTrigger className="h-8 text-[11px] font-bold bg-white">
+                        <SelectTrigger className="h-8 text-[11px] font-bold bg-card">
                           <SelectValue placeholder="Pilih cabang..." />
                         </SelectTrigger>
                         <SelectContent>
@@ -639,7 +639,7 @@ export function PRDetailSheet({
                         type="date"
                         value={modTanggal}
                         onChange={(e) => setModTanggal(e.target.value)}
-                        className="h-8 text-[11px] font-bold bg-white"
+                        className="h-8 text-[11px] font-bold bg-card"
                       />
                     </div>
                   )}
@@ -649,7 +649,7 @@ export function PRDetailSheet({
 
             {modEditMode && (
               <div className="px-6 pt-4 -mb-4">
-                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2">
+                <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 dark:bg-amber-900/30 dark:border-amber-800">
                   <p className="text-[10px] font-semibold text-amber-700">
                     Mode Moderator Edit aktif — semua field (termasuk jalur & status
                     approval) bisa diubah bebas, di luar giliran approval normal.
@@ -660,37 +660,37 @@ export function PRDetailSheet({
               </div>
             )}
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-white transition-all">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 bg-card transition-all">
               {/* Linked MR Reference(s) */}
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-1 bg-red-500 rounded-full" />
-                  <h3 className="text-[11px] font-bold text-slate-900 uppercase">
+                  <h3 className="text-[11px] font-bold text-foreground uppercase">
                     Referensi Material Request{" "}
                     {linkedMrs.length > 1 && `(${linkedMrs.length})`}
                   </h3>
                 </div>
                 {linkedMrs.length === 0 ? (
-                  <div className="bg-slate-50 border border-slate-100 rounded-xl p-4 text-xs text-slate-400 italic">
+                  <div className="bg-muted/50 border border-border/60 rounded-xl p-4 text-xs text-muted-foreground/80 italic">
                     Loading...
                   </div>
                 ) : (
                   linkedMrs.map((mr) => (
                     <div
                       key={mr.id}
-                      className="bg-slate-50 border border-slate-100 rounded-xl p-4 flex items-center justify-between group hover:bg-white hover:border-red-200 transition-all cursor-pointer shadow-sm"
+                      className="bg-muted/50 border border-border/60 rounded-xl p-4 flex items-center justify-between group hover:bg-card hover:border-red-200 transition-all cursor-pointer shadow-sm"
                       onClick={() => window.open(`/mr/${mr.id}`, "_blank")}
                     >
                       <div>
-                        <p className="text-xs font-bold text-slate-800 uppercase leading-none">
+                        <p className="text-xs font-bold text-foreground uppercase leading-none">
                           {mr.mr_kode}
                         </p>
-                        <p className="text-[10px] text-slate-400 font-medium uppercase mt-1.5 flex items-center gap-1.5">
+                        <p className="text-[10px] text-muted-foreground/80 font-medium uppercase mt-1.5 flex items-center gap-1.5">
                           <Calendar className="h-3 w-3" />
                           {formatDate(mr.mr_tanggal)}
                         </p>
                       </div>
-                      <ExternalLink className="h-4 w-4 text-slate-300 group-hover:text-red-500 transition-colors" />
+                      <ExternalLink className="h-4 w-4 text-muted-foreground/60 group-hover:text-red-500 transition-colors" />
                     </div>
                   ))
                 )}
@@ -701,7 +701,7 @@ export function PRDetailSheet({
                 <div className="space-y-3">
                   <div className="flex items-center gap-2">
                     <div className="h-4 w-1 bg-violet-500 rounded-full" />
-                    <h3 className="text-[11px] font-bold text-slate-900 uppercase tracking-tight">
+                    <h3 className="text-[11px] font-bold text-foreground uppercase tracking-tight">
                       Alur Approval
                     </h3>
                   </div>
@@ -712,8 +712,8 @@ export function PRDetailSheet({
                           className={cn(
                             "rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed",
                             modBlockedDowngrade
-                              ? "border-red-300 bg-red-50 text-red-700"
-                              : "border-amber-300 bg-amber-50 text-amber-700",
+                              ? "border-red-300 bg-red-50 text-red-700 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800"
+                              : "border-amber-300 bg-amber-50 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800",
                           )}
                         >
                           {modBlockedDowngrade ? (
@@ -742,11 +742,11 @@ export function PRDetailSheet({
                       />
                     </div>
                   ) : (
-                  <div className="border border-slate-100 rounded-xl overflow-hidden shadow-sm divide-y divide-slate-50">
+                  <div className="border border-border/60 rounded-xl overflow-hidden shadow-sm divide-y divide-border">
                     {approvals.map((step: any, idx: number) => (
                       <div
                         key={idx}
-                        className="flex items-center gap-3 px-4 py-3 bg-white"
+                        className="flex items-center gap-3 px-4 py-3 bg-card"
                       >
                         <div className="shrink-0">
                           {step.status === "approved" ? (
@@ -754,37 +754,37 @@ export function PRDetailSheet({
                           ) : step.status === "rejected" ? (
                             <XCircle className="h-4 w-4 text-red-500" />
                           ) : (
-                            <Clock className="h-4 w-4 text-slate-300" />
+                            <Clock className="h-4 w-4 text-muted-foreground/60" />
                           )}
                         </div>
                         <div className="flex-1 min-w-0">
-                          <p className="text-[11px] font-bold text-slate-800 uppercase leading-none truncate">
+                          <p className="text-[11px] font-bold text-foreground uppercase leading-none truncate">
                             {step.nama}
                           </p>
                           {step.status !== "pending" && step.processed_at && (
-                            <p className="text-[9px] text-slate-400 font-medium mt-0.5">
+                            <p className="text-[9px] text-muted-foreground/80 font-medium mt-0.5">
                               {formatDateTime(step.processed_at)}
                             </p>
                           )}
                           {step.notes && (
-                            <p className="text-[9px] text-slate-500 italic mt-0.5 truncate">
+                            <p className="text-[9px] text-muted-foreground italic mt-0.5 truncate">
                               &ldquo;{step.notes}&rdquo;
                             </p>
                           )}
                         </div>
                         <div>
                           {step.status === "approved" ? (
-                            <Badge className="bg-green-100 text-green-700 border-none text-[8px] font-bold uppercase h-4 px-1.5">
+                            <Badge className="bg-green-100 text-green-700 border-none text-[8px] font-bold uppercase h-4 px-1.5 dark:bg-green-900/40 dark:text-green-300">
                               Setuju
                             </Badge>
                           ) : step.status === "rejected" ? (
-                            <Badge className="bg-red-100 text-red-700 border-none text-[8px] font-bold uppercase h-4 px-1.5">
+                            <Badge className="bg-red-100 text-red-700 border-none text-[8px] font-bold uppercase h-4 px-1.5 dark:bg-red-900/40 dark:text-red-300">
                               Tolak
                             </Badge>
                           ) : (
                             <Badge
                               variant="outline"
-                              className="text-slate-400 text-[8px] font-bold uppercase h-4 px-1.5"
+                              className="text-muted-foreground/80 text-[8px] font-bold uppercase h-4 px-1.5"
                             >
                               Menunggu
                             </Badge>
@@ -826,17 +826,17 @@ export function PRDetailSheet({
               <div className="space-y-3">
                 <div className="flex items-center gap-2">
                   <div className="h-4 w-1 bg-blue-600 rounded-full" />
-                  <h3 className="text-[11px] font-bold text-slate-900 uppercase tracking-tight">
+                  <h3 className="text-[11px] font-bold text-foreground uppercase tracking-tight">
                     Status Dokumen PR
                   </h3>
                 </div>
-                <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-3 shadow-inner">
+                <div className="p-4 bg-blue-50/50 border border-blue-100 rounded-xl space-y-3 shadow-inner dark:bg-blue-900/30 dark:border-blue-800">
                   <Select
                     value={normalizeDocumentStatus(pr?.pr_status)}
                     onValueChange={handleStatusChange}
                     disabled={updating || !isModerator}
                   >
-                    <SelectTrigger className="h-10 bg-white border-blue-200 font-bold text-xs uppercase text-slate-700 rounded-lg">
+                    <SelectTrigger className="h-10 bg-card border-blue-200 font-bold text-xs uppercase text-foreground/80 rounded-lg">
                       {updating ? (
                         <div className="flex items-center gap-2">
                           <Loader2 className="h-3 w-3 animate-spin" /> Sedang
@@ -867,7 +867,7 @@ export function PRDetailSheet({
                       </SelectItem>
                       <SelectItem
                         value="completed"
-                        className="text-xs font-bold uppercase text-slate-900"
+                        className="text-xs font-bold uppercase text-foreground"
                       >
                         Completed
                       </SelectItem>
@@ -881,26 +881,26 @@ export function PRDetailSheet({
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <div className="h-4 w-1 bg-slate-900 rounded-full" />
-                    <h3 className="text-[11px] font-bold text-slate-900 uppercase">
+                    <div className="h-4 w-1 bg-foreground rounded-full" />
+                    <h3 className="text-[11px] font-bold text-foreground uppercase">
                       Item Pembelian (Edit Status Per Item)
                     </h3>
                   </div>
                 </div>
-                <div className="border border-slate-100 rounded-xl overflow-hidden shadow-sm">
+                <div className="border border-border/60 rounded-xl overflow-hidden shadow-sm">
                   <Table className="table-fixed w-full">
-                    <TableHeader className="bg-slate-50/50">
-                      <TableRow className="h-10 hover:bg-transparent border-b border-slate-100">
-                        <TableHead className="text-[9px] font-bold uppercase text-slate-400 pl-4 w-30">
+                    <TableHeader className="bg-muted/30">
+                      <TableRow className="h-10 hover:bg-transparent border-b border-border/60">
+                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground/80 pl-4 w-30">
                           Part Info
                         </TableHead>
-                        <TableHead className="text-[9px] font-bold uppercase text-slate-400">
+                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground/80">
                           Nama Barang
                         </TableHead>
-                        <TableHead className="text-[9px] font-bold uppercase text-slate-400 text-right w-24">
+                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground/80 text-right w-24">
                           Status Item
                         </TableHead>
-                        <TableHead className="text-[9px] font-bold uppercase text-slate-400 text-right pr-4 w-32">
+                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground/80 text-right pr-4 w-32">
                           Status PO
                         </TableHead>
                       </TableRow>
@@ -909,11 +909,11 @@ export function PRDetailSheet({
                       {prItems.map((item) => (
                         <TableRow
                           key={item.id}
-                          className="hover:bg-blue-50/30 border-b border-slate-50 transition-colors align-top"
+                          className="hover:bg-blue-50/30 border-b border-border/60 transition-colors align-top"
                         >
                           <TableCell className="pl-4 py-3 align-top">
                             <div className="flex flex-col gap-1">
-                              <span className="text-sm font-black font-mono text-slate-900 uppercase tracking-wide leading-none">
+                              <span className="text-sm font-black font-mono text-foreground uppercase tracking-wide leading-none">
                                 {item.part_number}
                               </span>
                               {modEditMode ? (
@@ -938,26 +938,26 @@ export function PRDetailSheet({
                                       }
                                       className="h-7 w-16 text-[11px] font-bold px-1.5"
                                     />
-                                    <span className="text-[10px] font-bold text-slate-500">
+                                    <span className="text-[10px] font-bold text-muted-foreground">
                                       {item.satuan}
                                     </span>
                                     <button
                                       onClick={() => modDeleteItem(item.id)}
-                                      className="text-slate-300 hover:text-red-500 transition-colors"
+                                      className="text-muted-foreground/60 hover:text-red-500 transition-colors"
                                     >
                                       <Trash2 className="h-3.5 w-3.5" />
                                     </button>
                                   </div>
                                 )
                               ) : (
-                                <span className="text-[11px] font-bold text-slate-900 mt-1">
+                                <span className="text-[11px] font-bold text-foreground mt-1">
                                   {item.qty} {item.satuan}
                                 </span>
                               )}
                             </div>
                           </TableCell>
                           <TableCell className="py-3 align-top">
-                            <span className="block whitespace-normal wrap-break-word text-[10px] font-medium text-slate-400 uppercase leading-tight">
+                            <span className="block whitespace-normal wrap-break-word text-[10px] font-medium text-muted-foreground/80 uppercase leading-tight">
                               {item.part_name}
                             </span>
                             {item.over_mr_note && (
@@ -976,7 +976,7 @@ export function PRDetailSheet({
                             >
                               <SelectTrigger
                                 className={cn(
-                                  "h-7 w-24 ml-auto bg-white border-slate-200 font-bold text-[8px] uppercase rounded-md px-2",
+                                  "h-7 w-24 ml-auto bg-card border-border font-bold text-[8px] uppercase rounded-md px-2",
                                   getItemStatusColor(item.status || "open"),
                                 )}
                               >
@@ -1007,13 +1007,13 @@ export function PRDetailSheet({
                                 </SelectItem>
                                 <SelectItem
                                   value="done"
-                                  className="text-[10px] font-bold uppercase text-slate-900"
+                                  className="text-[10px] font-bold uppercase text-foreground"
                                 >
                                   Done
                                 </SelectItem>
                                 <SelectItem
                                   value="closed"
-                                  className="text-[10px] font-bold uppercase text-slate-400"
+                                  className="text-[10px] font-bold uppercase text-muted-foreground/80"
                                 >
                                   Closed
                                 </SelectItem>
@@ -1028,7 +1028,7 @@ export function PRDetailSheet({
                                 return (
                                   <Badge
                                     variant="outline"
-                                    className="text-[9px] font-bold uppercase text-slate-400"
+                                    className="text-[9px] font-bold uppercase text-muted-foreground/80"
                                   >
                                     Belum PO
                                   </Badge>
@@ -1042,8 +1042,8 @@ export function PRDetailSheet({
                                     className={cn(
                                       "text-[9px] font-bold uppercase",
                                       isFull
-                                        ? "bg-green-100 text-green-700 border-green-300"
-                                        : "bg-amber-100 text-amber-700 border-amber-300",
+                                        ? "bg-green-100 text-green-700 border-green-300 dark:bg-green-900/40 dark:text-green-300 dark:border-green-800"
+                                        : "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
                                     )}
                                   >
                                     {isFull ? "Sudah PO" : "Partial PO"}
@@ -1084,7 +1084,7 @@ export function PRDetailSheet({
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <div className="h-4 w-1 bg-green-500 rounded-full" />
-                      <h3 className="text-[11px] font-bold text-slate-900 uppercase">
+                      <h3 className="text-[11px] font-bold text-foreground uppercase">
                         Share Stock Fulfillment
                       </h3>
                     </div>
@@ -1099,14 +1099,14 @@ export function PRDetailSheet({
                       return (
                         <div
                           key={item.id}
-                          className="bg-slate-50 border border-slate-100 rounded-xl p-4 space-y-3 shadow-sm hover:border-green-200 transition-all group"
+                          className="bg-muted/50 border border-border/60 rounded-xl p-4 space-y-3 shadow-sm hover:border-green-200 transition-all group"
                         >
                           <div className="flex justify-between items-start">
                             <div className="space-y-1">
-                              <p className="text-sm font-black font-mono text-slate-900 leading-none group-hover:text-green-600 transition-colors uppercase tracking-wide">
+                              <p className="text-sm font-black font-mono text-foreground leading-none group-hover:text-green-600 transition-colors uppercase tracking-wide">
                                 {item.part_number}
                               </p>
-                              <p className="text-[10px] font-medium text-slate-400 uppercase line-clamp-1 leading-snug">
+                              <p className="text-[10px] font-medium text-muted-foreground/80 uppercase line-clamp-1 leading-snug">
                                 {item.part_name}
                               </p>
                             </div>
@@ -1115,14 +1115,14 @@ export function PRDetailSheet({
                                 Processed
                               </Badge>
                             ) : (
-                              <Badge className="bg-slate-200 text-slate-500 font-black text-[8px] uppercase border-none px-1 h-3.5">
+                              <Badge className="bg-muted text-muted-foreground font-black text-[8px] uppercase border-none px-1 h-3.5">
                                 Not Processed
                               </Badge>
                             )}
                           </div>
 
-                          <div className="pt-2 border-t border-slate-200/50 space-y-2">
-                            <p className="text-[9px] font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                          <div className="pt-2 border-t border-border/50 space-y-2">
+                            <p className="text-[9px] font-bold text-muted-foreground/80 uppercase tracking-widest flex items-center gap-2">
                               <MapPin className="h-2.5 w-2.5" /> Sumber Alokasi
                               ({item.qty_sharestock_total} {item.satuan})
                             </p>
@@ -1130,12 +1130,12 @@ export function PRDetailSheet({
                               {itemAllocs.map((alloc, idx) => (
                                 <div
                                   key={idx}
-                                  className="flex items-center gap-1.5 bg-white border border-slate-200 px-2 py-1 rounded-md shadow-sm"
+                                  className="flex items-center gap-1.5 bg-card border border-border px-2 py-1 rounded-md shadow-sm"
                                 >
-                                  <span className="text-[9px] font-bold text-slate-700 uppercase">
+                                  <span className="text-[9px] font-bold text-foreground/80 uppercase">
                                     {alloc.cabang?.nama_cabang}
                                   </span>
-                                  <span className="h-3 w-px bg-slate-200" />
+                                  <span className="h-3 w-px bg-muted" />
                                   <span className="text-[9px] font-black text-green-600">
                                     {alloc.qty}
                                   </span>
@@ -1151,21 +1151,21 @@ export function PRDetailSheet({
               )}
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50/50 space-y-3 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
+            <div className="p-6 border-t border-border/60 bg-muted/30 space-y-3 shadow-[0_-4px_10px_rgba(0,0,0,0.02)]">
               <button
                 onClick={handleToggleAccurate}
                 disabled={updatingAccurate}
                 className={`w-full flex items-center gap-3 p-3 rounded-xl border transition-all ${
                   pr?.accurate
-                    ? "bg-amber-50 border-amber-200 hover:bg-amber-100"
-                    : "bg-slate-50 border-slate-200 hover:bg-white"
+                    ? "bg-amber-50 border-amber-200 hover:bg-amber-100 dark:bg-amber-900/30 dark:border-amber-800"
+                    : "bg-muted/50 border-border hover:bg-card"
                 }`}
               >
                 <div
                   className={`h-4 w-4 rounded border-2 flex items-center justify-center shrink-0 ${
                     pr?.accurate
                       ? "bg-amber-500 border-amber-500"
-                      : "border-slate-300"
+                      : "border-border"
                   }`}
                 >
                   {pr?.accurate && (
@@ -1187,26 +1187,26 @@ export function PRDetailSheet({
                 <div className="flex-1 text-left">
                   <p
                     className={`text-[10px] font-bold uppercase tracking-tight leading-none ${
-                      pr?.accurate ? "text-amber-700" : "text-slate-500"
+                      pr?.accurate ? "text-amber-700" : "text-muted-foreground"
                     }`}
                   >
                     {pr?.accurate
                       ? "Sudah Input ke Accurate"
                       : "Belum Input ke Accurate"}
                   </p>
-                  <p className="text-[9px] text-slate-400 font-medium mt-0.5">
+                  <p className="text-[9px] text-muted-foreground/80 font-medium mt-0.5">
                     Klik untuk{" "}
                     {pr?.accurate ? "hapus tanda" : "tandai sudah input"}
                   </p>
                 </div>
                 {updatingAccurate && (
-                  <Loader2 className="h-3 w-3 animate-spin text-slate-400 shrink-0" />
+                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground/80 shrink-0" />
                 )}
               </button>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <Button
                   variant="outline"
-                  className="h-11 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
+                  className="h-11 border-border text-foreground/70 font-bold text-xs uppercase rounded-xl hover:bg-card transition-all gap-2"
                   onClick={() => onOpenChange(false)}
                 >
                   <X className="h-3.5 w-3.5" /> Tutup Panel
@@ -1224,7 +1224,7 @@ export function PRDetailSheet({
               <div className="flex gap-3">
                 <Button
                   variant="outline"
-                  className="flex-1 h-11 border-slate-200 text-slate-600 font-bold text-xs uppercase rounded-xl hover:bg-white transition-all gap-2"
+                  className="flex-1 h-11 border-border text-foreground/70 font-bold text-xs uppercase rounded-xl hover:bg-card transition-all gap-2"
                   onClick={handlePrint}
                 >
                   <Printer className="h-3.5 w-3.5" /> Cetak PR
@@ -1232,7 +1232,7 @@ export function PRDetailSheet({
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-11 w-11 border border-slate-200 text-slate-400 hover:text-blue-600 rounded-xl hover:bg-white transition-all shadow-sm"
+                  className="h-11 w-11 border border-border text-muted-foreground/80 hover:text-blue-600 rounded-xl hover:bg-card transition-all shadow-sm"
                   onClick={fetchDetails}
                 >
                   <RefreshCw
@@ -1257,29 +1257,29 @@ export function PRDetailSheet({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="border border-slate-100 rounded-xl overflow-y-auto flex-1 min-h-0">
+          <div className="border border-border/60 rounded-xl overflow-y-auto flex-1 min-h-0">
             <table className="w-full text-xs">
-              <thead className="bg-slate-50 border-b border-slate-100 sticky top-0">
+              <thead className="bg-muted/50 border-b border-border/60 sticky top-0">
                 <tr>
-                  <th className="text-left px-3 py-2 text-[9px] font-bold uppercase text-slate-400">
+                  <th className="text-left px-3 py-2 text-[9px] font-bold uppercase text-muted-foreground/80">
                     Item
                   </th>
-                  <th className="text-right px-3 py-2 text-[9px] font-bold uppercase text-slate-400 w-32">
+                  <th className="text-right px-3 py-2 text-[9px] font-bold uppercase text-muted-foreground/80 w-32">
                     Keputusan
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50">
+              <tbody className="divide-y divide-border">
                 {prItems.map((item) => (
-                  <tr key={item.id} className="bg-white">
+                  <tr key={item.id} className="bg-card">
                     <td className="px-3 py-2.5">
-                      <p className="font-black text-slate-900 uppercase text-sm font-mono leading-tight tracking-wide">
+                      <p className="font-black text-foreground uppercase text-sm font-mono leading-tight tracking-wide">
                         {item.part_number}
                       </p>
-                      <p className="text-[10px] font-medium text-slate-400 uppercase mt-0.5 leading-tight">
+                      <p className="text-[10px] font-medium text-muted-foreground/80 uppercase mt-0.5 leading-tight">
                         {item.part_name}
                       </p>
-                      <p className="text-[9px] text-slate-400 font-mono mt-0.5">
+                      <p className="text-[9px] text-muted-foreground/80 font-mono mt-0.5">
                         {item.qty} {item.satuan}
                       </p>
                     </td>
@@ -1360,7 +1360,7 @@ export function PRDetailSheet({
           </DialogHeader>
 
           <div className="space-y-2">
-            <label className="text-[10px] font-bold uppercase text-slate-500">
+            <label className="text-[10px] font-bold uppercase text-muted-foreground">
               Alasan Penolakan
             </label>
             <Textarea

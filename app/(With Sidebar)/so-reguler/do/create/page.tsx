@@ -339,7 +339,7 @@ function CreateDoRegulerForm() {
   useEffect(() => {
     if (!searchOpen) return;
     const run = async () => {
-      let q = supabase.from("barang").select("*").order("part_name").limit(15);
+      let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedSearch)
         q = q.or(
           `part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`,

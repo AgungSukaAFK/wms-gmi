@@ -220,42 +220,42 @@ export function StockDetailSheet({
       case "ADJUSTMENT":
         return <Settings2 className="h-3 w-3 text-amber-500" />;
       default:
-        return <Minus className="h-3 w-3 text-slate-300" />;
+        return <Minus className="h-3 w-3 text-muted-foreground/60" />;
     }
   };
 
   return (
     <>
       <Sheet open={open} onOpenChange={onOpenChange}>
-        <SheetContent className="w-full sm:max-w-2xl p-0 flex flex-col gap-0 border-l border-slate-200 shadow-2xl overflow-hidden">
+        <SheetContent className="w-full sm:max-w-2xl p-0 flex flex-col gap-0 border-l border-border shadow-2xl overflow-hidden">
           {loading && !part ? (
-            <div className="flex-1 flex items-center justify-center bg-white">
+            <div className="flex-1 flex items-center justify-center bg-card">
               <SheetTitle className="sr-only">Memuat Detail Stok</SheetTitle>
               <SheetDescription className="sr-only">
                 Sedang memuat detail stok barang.
               </SheetDescription>
-              <Loader2 className="h-8 w-8 animate-spin text-slate-200" />
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground/40" />
             </div>
           ) : (
             <>
-              <SheetHeader className="p-6 bg-slate-50 border-b border-slate-200">
+              <SheetHeader className="p-6 bg-muted/50 border-b border-border">
                 <div className="flex items-center gap-2 text-primary mb-1">
                   <Package className="h-4 w-4" />
-                  <span className="text-[10px] font-black uppercase tracking-widest text-slate-400">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-muted-foreground/80">
                     Inventory Status
                   </span>
                 </div>
-                <SheetTitle className="text-xl font-bold text-slate-900 leading-tight">
+                <SheetTitle className="text-xl font-bold text-foreground leading-tight">
                   {part?.part_number}
                 </SheetTitle>
                 <SheetDescription className="sr-only">
                   Detail stok dan riwayat mutasi untuk {part?.part_number}.
                 </SheetDescription>
                 <div className="flex items-center gap-2 mt-2">
-                  <code className="bg-white px-1.5 py-0.5 rounded border border-slate-200 text-slate-600 font-mono text-xs">
+                  <code className="bg-card px-1.5 py-0.5 rounded border border-border text-foreground/70 font-mono text-xs">
                     {part?.id}
                   </code>
-                  <p className="text-xs font-medium text-slate-500 line-clamp-1">
+                  <p className="text-xs font-medium text-muted-foreground line-clamp-1">
                     {part?.part_name}
                   </p>
                 </div>
@@ -265,24 +265,24 @@ export function StockDetailSheet({
                 defaultValue="locations"
                 className="flex-1 flex flex-col overflow-hidden"
               >
-                <div className="px-6 border-b border-slate-100">
+                <div className="px-6 border-b border-border/60">
                   <TabsList className="bg-transparent h-10 w-full justify-start gap-4 border-none p-0">
                     <TabsTrigger
                       value="locations"
-                      className="h-10 border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent rounded-none px-0 text-xs font-bold text-slate-500 data-[state=active]:text-slate-900"
+                      className="h-10 border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent rounded-none px-0 text-xs font-bold text-muted-foreground data-[state=active]:text-slate-900"
                     >
                       Lokasi
                     </TabsTrigger>
                     <TabsTrigger
                       value="history"
-                      className="h-10 border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent rounded-none px-0 text-xs font-bold text-slate-500 data-[state=active]:text-slate-900"
+                      className="h-10 border-b-2 border-transparent data-[state=active]:border-primary data-[state=active]:bg-transparent rounded-none px-0 text-xs font-bold text-muted-foreground data-[state=active]:text-slate-900"
                     >
                       Riwayat
                     </TabsTrigger>
                   </TabsList>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-5 bg-white">
+                <div className="flex-1 overflow-y-auto p-5 bg-card">
                   <TabsContent value="locations" className="m-0 space-y-3">
                     {[...locations]
                       .sort(
@@ -294,13 +294,13 @@ export function StockDetailSheet({
                         <div
                           key={loc.id}
                           className={cn(
-                            "bg-white border border-slate-200 p-3 rounded-xl flex items-center justify-between hover:border-primary/30 transition-all",
+                            "bg-card border border-border p-3 rounded-xl flex items-center justify-between hover:border-primary/30 transition-all",
                             highlightCabangIds.includes(loc.cabang_id) &&
                               "border-primary/40 bg-primary/5",
                           )}
                         >
                           <div className="space-y-1">
-                            <h4 className="flex items-center gap-1.5 text-sm font-bold text-slate-700">
+                            <h4 className="flex items-center gap-1.5 text-sm font-bold text-foreground/80">
                               {loc.nama_cabang}
                               {highlightCabangIds.includes(loc.cabang_id) && (
                                 <Badge
@@ -311,14 +311,14 @@ export function StockDetailSheet({
                                 </Badge>
                               )}
                             </h4>
-                            <div className="flex items-center gap-3 text-[10px] text-slate-400 font-medium">
+                            <div className="flex items-center gap-3 text-[10px] text-muted-foreground/80 font-medium">
                               <span>Min: {loc.min_qty}</span>
                               <span>Max: {loc.max_qty}</span>
                             </div>
                           </div>
                           <div className="flex items-center gap-4">
                             <div className="text-right">
-                              <p className="text-lg font-black text-slate-900 leading-none">
+                              <p className="text-lg font-black text-foreground leading-none">
                                 {loc.qty}
                               </p>
                               <Badge
@@ -326,10 +326,10 @@ export function StockDetailSheet({
                                 className={cn(
                                   "mt-1 text-[8px] h-3.5 px-1 font-black uppercase tracking-widest border-none",
                                   loc.status === "low"
-                                    ? "bg-red-50 text-red-600"
+                                    ? "bg-red-50 text-red-600 dark:bg-red-900/30 dark:text-red-300"
                                     : loc.status === "overstock"
-                                      ? "bg-amber-50 text-amber-600"
-                                      : "bg-green-50 text-green-600",
+                                      ? "bg-amber-50 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300"
+                                      : "bg-green-50 text-green-600 dark:bg-green-900/30 dark:text-green-300",
                                 )}
                               >
                                 {loc.status}
@@ -339,7 +339,7 @@ export function StockDetailSheet({
                               <Button
                                 variant="ghost"
                                 size="icon"
-                                className="h-8 w-8 hover:bg-slate-100 rounded-lg text-slate-400"
+                                className="h-8 w-8 hover:bg-muted rounded-lg text-muted-foreground/80"
                                 onClick={() => {
                                   setEditingStock(loc);
                                   setIsEditOpen(true);
@@ -365,7 +365,7 @@ export function StockDetailSheet({
                 </div>
               </Tabs>
 
-              <div className="p-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50">
+              <div className="p-4 border-t border-border/60 flex justify-end gap-2 bg-muted/50">
                 <Button
                   variant="outline"
                   size="sm"
@@ -393,8 +393,8 @@ export function StockDetailSheet({
             </DialogHeader>
 
             <div className="space-y-6">
-              <div className="p-4 bg-slate-50 rounded-xl border border-slate-100 flex flex-col items-center">
-                <Label className="text-[10px] font-black uppercase text-slate-400 mb-2">
+              <div className="p-4 bg-muted/50 rounded-xl border border-border/60 flex flex-col items-center">
+                <Label className="text-[10px] font-black uppercase text-muted-foreground/80 mb-2">
                   Quantity Fisik
                 </Label>
                 <Input
@@ -408,7 +408,7 @@ export function StockDetailSheet({
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">
+                  <Label className="text-[10px] font-black uppercase text-muted-foreground/80 ml-1">
                     Safety Stock
                   </Label>
                   <Input
@@ -416,11 +416,11 @@ export function StockDetailSheet({
                     type="number"
                     min="0"
                     defaultValue={editingStock?.min_qty}
-                    className="h-9 font-bold border-slate-200"
+                    className="h-9 font-bold border-border"
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <Label className="text-[10px] font-black uppercase text-slate-400 ml-1">
+                  <Label className="text-[10px] font-black uppercase text-muted-foreground/80 ml-1">
                     Maks Kap.
                   </Label>
                   <Input
@@ -428,7 +428,7 @@ export function StockDetailSheet({
                     type="number"
                     min="0"
                     defaultValue={editingStock?.max_qty}
-                    className="h-9 font-bold border-slate-200"
+                    className="h-9 font-bold border-border"
                   />
                 </div>
               </div>
@@ -437,7 +437,7 @@ export function StockDetailSheet({
                 <Button
                   type="button"
                   variant="ghost"
-                  className="flex-1 h-10 font-bold text-slate-400"
+                  className="flex-1 h-10 font-bold text-muted-foreground/80"
                   onClick={() => setIsEditOpen(false)}
                 >
                   Batal

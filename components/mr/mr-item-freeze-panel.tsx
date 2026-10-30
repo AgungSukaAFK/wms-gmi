@@ -107,7 +107,7 @@ export function MrItemFreezePanel({ mrItemId, currentUserId, onChanged }: Props)
   };
 
   return (
-    <div className="rounded-lg border border-sky-200 bg-sky-50/60 p-3 space-y-3">
+    <div className="rounded-lg border border-sky-200 bg-sky-50/60 p-3 space-y-3 dark:bg-sky-900/30 dark:border-sky-800">
       <div className="flex items-start gap-2">
         <Snowflake className="h-4 w-4 text-sky-600 shrink-0 mt-0.5" />
         <div className="space-y-0.5">
@@ -135,7 +135,7 @@ export function MrItemFreezePanel({ mrItemId, currentUserId, onChanged }: Props)
           {info.reports.map((r: any) => (
             <div
               key={r.id}
-              className="rounded-md border border-sky-100 bg-white p-2 text-[11px]"
+              className="rounded-md border border-sky-100 bg-card p-2 text-[11px]"
             >
               <div className="flex items-center justify-between">
                 <span className="font-bold text-foreground">
@@ -171,7 +171,7 @@ export function MrItemFreezePanel({ mrItemId, currentUserId, onChanged }: Props)
                 value={kendala}
                 onChange={(e) => setKendala(e.target.value)}
                 placeholder="Jelaskan kendala item ini..."
-                className="h-16 resize-none text-xs bg-white"
+                className="h-16 resize-none text-xs bg-card"
               />
               <Button
                 size="sm"
@@ -193,7 +193,7 @@ export function MrItemFreezePanel({ mrItemId, currentUserId, onChanged }: Props)
               type="date"
               value={resetDueDate}
               onChange={(e) => setResetDueDate(e.target.value)}
-              className="h-8 text-xs bg-white"
+              className="h-8 text-xs bg-card"
             />
             <Button
               size="sm"

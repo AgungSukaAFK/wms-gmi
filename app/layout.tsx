@@ -1,18 +1,10 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
 import { FONT_SIZE_BOOT_SCRIPT } from "@/lib/font-size";
+import { APPEARANCE_BOOT_SCRIPT, THEME_STORAGE_KEY, THEME_VALUES } from "@/lib/appearance";
+import { fontVariables } from "@/lib/fonts";
+import { CustomThemeProvider } from "@/lib/theme-provider";
 import { SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from "@/lib/site";
 import "./globals.css";
-
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-});
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-});
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
@@ -59,7 +51,7 @@ export default function RootLayout({
   return (
     <html
       lang="id"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${fontVariables} h-full antialiased`}
       // data-font-size dipasang FONT_SIZE_BOOT_SCRIPT sebelum hydration.
       suppressHydrationWarning
     >
@@ -67,8 +59,22 @@ export default function RootLayout({
         {/* Inline (bukan next/script) & di dalam <head>: React 19 menolak
             <script> sebagai anak langsung <html>. Jalan sinkron sebelum paint. */}
         <script dangerouslySetInnerHTML={{ __html: FONT_SIZE_BOOT_SCRIPT }} />
+        <script dangerouslySetInnerHTML={{ __html: APPEARANCE_BOOT_SCRIPT }} />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        {/* Tema per perangkat (lib/theme-provider.tsx). Default Light supaya
+            tampilan tidak berubah sampai user sendiri memilih tema lain. */}
+        <CustomThemeProvider
+          attribute="class"
+          defaultTheme="light"
+          enableSystem
+          themes={[...THEME_VALUES]}
+          storageKey={THEME_STORAGE_KEY}
+          disableTransitionOnChange
+        >
+          {children}
+        </CustomThemeProvider>
+      </body>
     </html>
   );
 }

@@ -116,8 +116,8 @@ export function MRSignatureDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-[450px] p-0 rounded-xl border-slate-200 shadow-2xl overflow-hidden">
-        <DialogHeader className="p-5 bg-slate-50 border-b border-slate-100">
+      <DialogContent className="max-w-[450px] p-0 rounded-xl border-border shadow-2xl overflow-hidden">
+        <DialogHeader className="p-5 bg-muted/50 border-b border-border/60">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-100">
@@ -125,7 +125,7 @@ export function MRSignatureDialog({
               </div>
               <div>
                 <DialogTitle className="text-lg font-bold tracking-tight">Konfirmasi Tanda Tangan</DialogTitle>
-                <DialogDescription className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-0.5">
+                <DialogDescription className="text-[10px] font-semibold text-muted-foreground/80 uppercase tracking-wider mt-0.5">
                   Sign & Submit Material Request
                 </DialogDescription>
               </div>
@@ -133,7 +133,7 @@ export function MRSignatureDialog({
             <Button
               variant="ghost"
               size="icon"
-              className="h-9 w-9 text-slate-400 hover:text-blue-600 rounded-md"
+              className="h-9 w-9 text-muted-foreground/80 hover:text-blue-600 rounded-md"
               onClick={fetchSignatures}
               disabled={loading || verifying}
             >
@@ -142,9 +142,9 @@ export function MRSignatureDialog({
           </div>
         </DialogHeader>
 
-        <div className="p-5 space-y-5 max-h-[500px] overflow-y-auto bg-white">
+        <div className="p-5 space-y-5 max-h-[500px] overflow-y-auto bg-card">
           <div className="space-y-3">
-             <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">Pilih Tanda Tangan</Label>
+             <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest pl-1">Pilih Tanda Tangan</Label>
              {signatures.length > 0 ? (
                <div className="grid grid-cols-1 gap-3">
                  {signatures.map((sig) => (
@@ -154,8 +154,8 @@ export function MRSignatureDialog({
                      disabled={verifying}
                      className={`relative flex flex-col items-center p-3 rounded-xl border-2 transition-all group ${
                        selectedId === sig.id
-                         ? "border-blue-600 bg-blue-50/50"
-                         : "border-slate-100 hover:border-slate-200"
+                         ? "border-blue-600 bg-blue-50/50 dark:bg-blue-900/30"
+                         : "border-border/60 hover:border-border"
                      } ${verifying ? 'opacity-50 cursor-not-allowed' : ''}`}
                    >
                      <div className="w-full bg-white rounded-lg border border-slate-50 p-3 mb-2 shadow-sm flex items-center justify-center min-h-[90px]">
@@ -166,7 +166,7 @@ export function MRSignatureDialog({
                        />
                      </div>
                      <span className={`text-[10px] font-bold uppercase tracking-wider ${
-                       selectedId === sig.id ? "text-blue-600" : "text-slate-400"
+                       selectedId === sig.id ? "text-blue-600" : "text-muted-foreground/80"
                      }`}>
                        {sig.label}
                      </span>
@@ -180,12 +180,12 @@ export function MRSignatureDialog({
                  ))}
                </div>
              ) : (
-               <div className="h-40 flex flex-col items-center justify-center text-center p-6 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
-                  <div className="h-10 w-10 bg-white rounded-xl flex items-center justify-center shadow-sm border border-slate-100 mb-3">
-                     <ImageIcon className="h-5 w-5 text-slate-200" />
+               <div className="h-40 flex flex-col items-center justify-center text-center p-6 border border-dashed border-border rounded-xl bg-muted/30">
+                  <div className="h-10 w-10 bg-card rounded-xl flex items-center justify-center shadow-sm border border-border/60 mb-3">
+                     <ImageIcon className="h-5 w-5 text-muted-foreground/40" />
                   </div>
-                  <p className="text-sm font-semibold text-slate-500 mb-1">Belum ada tanda tangan</p>
-                  <p className="text-[10px] text-slate-400 font-medium max-w-[220px]">
+                  <p className="text-sm font-semibold text-muted-foreground mb-1">Belum ada tanda tangan</p>
+                  <p className="text-[10px] text-muted-foreground/80 font-medium max-w-[220px]">
                     Anda perlu membuat tanda tangan di Signature Manager terlebih dahulu.
                   </p>
                </div>
@@ -194,13 +194,13 @@ export function MRSignatureDialog({
 
           {selectedId && (
             <div className="space-y-2 pt-2 animate-in fade-in slide-in-from-top-2 duration-300">
-              <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1 flex items-center gap-1.5">
+              <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest pl-1 flex items-center gap-1.5">
                 <Lock className="h-3 w-3" /> Password Signature
               </Label>
               <Input 
                 type="password"
                 placeholder="Masukkan password khusus signature..."
-                className="h-10 border-slate-200 bg-slate-50/50 focus:bg-white text-sm font-medium"
+                className="h-10 border-border bg-muted/30 focus:bg-card text-sm font-medium"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={verifying}
@@ -214,17 +214,17 @@ export function MRSignatureDialog({
 
           <div className="pt-1">
             <Link href="/signatures" target="_blank">
-               <Button variant="outline" className="w-full h-10 border-slate-200 text-slate-600 font-semibold text-xs rounded-lg gap-2 hover:bg-slate-50 transition-all border-dashed" disabled={verifying}>
+               <Button variant="outline" className="w-full h-10 border-border text-foreground/70 font-semibold text-xs rounded-lg gap-2 hover:bg-muted/50 transition-all border-dashed" disabled={verifying}>
                   <Plus className="h-3.5 w-3.5" /> Buka Signature Manager
                </Button>
             </Link>
           </div>
         </div>
 
-        <DialogFooter className="p-5 bg-slate-50/50 border-t border-slate-100 gap-2 sm:flex-row">
+        <DialogFooter className="p-5 bg-muted/30 border-t border-border/60 gap-2 sm:flex-row">
           <Button
             variant="ghost"
-            className="flex-1 h-10 text-slate-400 font-semibold text-sm hover:text-slate-600 rounded-lg order-2 sm:order-1"
+            className="flex-1 h-10 text-muted-foreground/80 font-semibold text-sm hover:text-foreground/70 rounded-lg order-2 sm:order-1"
             onClick={() => onOpenChange(false)}
             disabled={verifying}
           >

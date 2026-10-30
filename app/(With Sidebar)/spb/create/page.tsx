@@ -39,6 +39,7 @@ import {
 import { useRouter } from "next/navigation";
 import { toYmdLocal } from "@/lib/utils";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
+import { UnitPicker, type UnitOption } from "@/components/units/unit-picker";
 
 type Barang = {
   id: number;
@@ -93,9 +94,8 @@ export default function SpbCreatePage() {
   const [noWo, setNoWo] = useState("");
   const [picGmi, setPicGmi] = useState("");
   const [picPpa, setPicPpa] = useState("");
-  const [kodeUnit, setKodeUnit] = useState("");
-  const [tipeUnit, setTipeUnit] = useState("");
-  const [brand, setBrand] = useState("");
+  // Kode/Tipe/Brand unit diambil dari Data Master Unit, tidak diketik manual.
+  const [unit, setUnit] = useState<UnitOption | null>(null);
   const [hm, setHm] = useState("");
   const [remark, setRemark] = useState("");
   const [gudang, setGudang] = useState("");
@@ -288,6 +288,7 @@ export default function SpbCreatePage() {
       let query = supabase
         .from("barang")
         .select("id, part_number, part_name, part_satuan")
+        .is("deleted_at", null)
         .order("part_name", { ascending: true })
         .limit(15);
 
@@ -404,9 +405,7 @@ export default function SpbCreatePage() {
     if (!spbTanggal) return toast.error("Tanggal SPB wajib diisi.");
     if (!section.trim()) return toast.error("Section wajib diisi.");
     if (!picPpa.trim()) return toast.error("PIC PPA wajib diisi.");
-    if (!kodeUnit.trim()) return toast.error("Kode Unit wajib diisi.");
-    if (!tipeUnit.trim()) return toast.error("Tipe Unit wajib diisi.");
-    if (!brand.trim()) return toast.error("Brand wajib diisi.");
+    if (!unit) return toast.error("Kode Unit wajib dipilih.");
     if (!hm || Number(hm) <= 0) return toast.error("HM harus lebih dari 0.");
     if (!items.length) return toast.error("Tambahkan minimal 1 item.");
     if (!approvalTemplateId)
@@ -424,9 +423,7 @@ export default function SpbCreatePage() {
       spb_section: section,
       spb_pic_gmi: picGmi,
       spb_pic_ppa: picPpa,
-      spb_kode_unit: kodeUnit,
-      spb_tipe_unit: tipeUnit,
-      spb_brand: brand,
+      spb_kode_unit: unit.kode_unit,
       spb_hm: Number(hm),
       spb_problem_remark: remark || undefined,
       spb_gudang: gudang || undefined,
@@ -625,23 +622,27 @@ export default function SpbCreatePage() {
 
           <div className="space-y-2">
             <Label>Kode Unit</Label>
-            <Input
-              value={kodeUnit}
-              onChange={(e) => setKodeUnit(e.target.value)}
-            />
+            <UnitPicker value={unit} onChange={setUnit} />
           </div>
 
           <div className="space-y-2">
             <Label>Tipe Unit</Label>
             <Input
-              value={tipeUnit}
-              onChange={(e) => setTipeUnit(e.target.value)}
+              value={unit?.tipe_unit ?? ""}
+              placeholder="Otomatis dari kode unit"
+              readOnly
+              disabled
             />
           </div>
 
           <div className="space-y-2">
             <Label>Brand</Label>
-            <Input value={brand} onChange={(e) => setBrand(e.target.value)} />
+            <Input
+              value={unit ? unit.brand || "-" : ""}
+              placeholder="Otomatis dari kode unit"
+              readOnly
+              disabled
+            />
           </div>
 
           <div className="space-y-2">

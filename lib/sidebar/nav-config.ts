@@ -44,6 +44,7 @@ import {
   ShoppingCart,
   SlidersHorizontal,
   Snowflake,
+  Tractor,
   Truck,
   Undo2,
   Users,
@@ -128,6 +129,7 @@ export function buildNavGroups(profile: NavProfile): NavGroup[] {
         { title: "Barang", url: "/barang", icon: Boxes },
         { title: "Vendors", url: "/vendors", icon: Briefcase },
         { title: "Customers", url: "/customers", icon: UsersRound },
+        { title: "Unit", url: "/units", icon: Tractor },
       ]),
     },
     {

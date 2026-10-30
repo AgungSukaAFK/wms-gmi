@@ -28,6 +28,7 @@ const MENU_KEYWORDS: Record<string, string[]> = {
   "/barang": ["item", "produk", "material", "katalog", "part", "part number", "pn", "sparepart"],
   "/vendors": ["vendor", "supplier", "pemasok", "rekanan"],
   "/customers": ["customer", "pelanggan", "klien", "site customer"],
+  "/units": ["unit", "kode unit", "tipe unit", "brand", "merk", "alat berat", "armada", "dump truck"],
   "/stock": ["stok", "soh", "persediaan", "inventory", "gudang", "min max", "kartu stok"],
   "/stock-requests": ["request stok", "atur min max", "permintaan stok", "setting stok"],
   "/deliveries": ["delivery", "pengiriman", "kirim", "surat jalan", "ekspedisi", "kurir"],

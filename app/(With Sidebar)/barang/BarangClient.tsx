@@ -62,6 +62,8 @@ import {
   SortAsc,
   CalendarIcon,
   QrCode,
+  RotateCcw,
+  X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useDebounce } from "use-debounce";
@@ -72,8 +74,12 @@ import {
   createBarang,
   updateBarang,
   deleteBarang,
+  bulkDeleteBarang,
+  restoreBarang,
   getBarangStockDetails,
 } from "@/services/barang-actions";
+import { Checkbox } from "@/components/ui/checkbox";
+import { BulkEditBarangDialog } from "@/components/barang/bulk-edit-barang-dialog";
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
 import { DatePickerString } from "@/components/date-picker-string";
@@ -89,7 +95,10 @@ interface Barang {
   part_name: string;
   part_satuan: string;
   created_at: string;
+  deleted_at?: string | null;
 }
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 1000];
 
 interface StockDetail {
   id: number;
@@ -111,6 +120,7 @@ interface BarangClientProps {
   initialView: "table" | "grid";
   initialUpdatedFrom: string;
   initialUpdatedTo: string;
+  initialStatus: "active" | "deleted";
 }
 
 export default function BarangClient({
@@ -123,6 +133,7 @@ export default function BarangClient({
   initialView,
   initialUpdatedFrom,
   initialUpdatedTo,
+  initialStatus,
 }: BarangClientProps) {
   const { confirm, confirmDialog } = useConfirmDialog();
   const router = useRouter();
@@ -135,6 +146,49 @@ export default function BarangClient({
   const [updatedTo, setUpdatedTo] = useState(initialUpdatedTo);
 
   const profile = useAuthStore((s) => s.profile);
+  const isModerator = (profile?.roles || []).some(
+    (r) => r?.name === "moderator",
+  );
+  const isDeletedView = initialStatus === "deleted";
+
+  // Pilih banyak (moderator): edit massal / hapus / pulihkan. Pilihan bertahan
+  // saat ganti halaman, direset saat filter berubah supaya tidak ada barang
+  // tersembunyi ikut terproses.
+  const [selectedRows, setSelectedRows] = useState<Record<number, Barang>>({});
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const selectedList = Object.values(selectedRows);
+  const pageAllSelected =
+    initialData.length > 0 && initialData.every((b) => selectedRows[b.id]);
+
+  const filterKey = [
+    initialQuery,
+    initialUpdatedFrom,
+    initialUpdatedTo,
+    initialStatus,
+  ].join("|");
+  const [selectionFilterKey, setSelectionFilterKey] = useState(filterKey);
+  if (selectionFilterKey !== filterKey) {
+    setSelectionFilterKey(filterKey);
+    setSelectedRows({});
+  }
+
+  const toggleRow = (barang: Barang, checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      if (checked) next[barang.id] = barang;
+      else delete next[barang.id];
+      return next;
+    });
+
+  const togglePage = (checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      for (const b of initialData) {
+        if (checked) next[b.id] = b;
+        else delete next[b.id];
+      }
+      return next;
+    });
 
   // Modals & States
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
@@ -193,6 +247,14 @@ export default function BarangClient({
   const handleSortChange = (newSort: string) => {
     const params = new URLSearchParams(searchParams.toString());
     params.set("sort", newSort);
+    params.set("page", "1");
+    router.push(`/barang?${params.toString()}`);
+  };
+
+  const handleStatusChange = (newStatus: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (newStatus === "deleted") params.set("status", "deleted");
+    else params.delete("status");
     params.set("page", "1");
     router.push(`/barang?${params.toString()}`);
   };
@@ -299,10 +361,14 @@ export default function BarangClient({
     }
   };
 
+  const DELETE_NOTE =
+    "Barang disembunyikan dari master & pilihan dokumen baru. Dokumen yang sudah memakai barang ini tetap utuh dan tidak berubah.";
+
   const handleDelete = async (id: number, name: string) => {
     if (
       !(await confirm({
         title: `Hapus barang ${name}?`,
+        description: DELETE_NOTE,
         confirmText: "Hapus",
         destructive: true,
       }))
@@ -315,6 +381,55 @@ export default function BarangClient({
     } else {
       toast.error(`Gagal menghapus barang: ${result.error}`, { id: toastId });
     }
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = selectedList.map((b) => b.id);
+    if (
+      !(await confirm({
+        title: `Hapus ${ids.length} barang terpilih?`,
+        description: `${DELETE_NOTE} Barang yang masih punya stok akan dilewati.`,
+        confirmText: "Hapus",
+        destructive: true,
+      }))
+    )
+      return;
+    const toastId = toast.loading(`Menghapus ${ids.length} barang...`);
+    const result = await bulkDeleteBarang(ids);
+    if (!result.success) {
+      toast.error(`Gagal menghapus barang: ${result.error}`, { id: toastId });
+      return;
+    }
+    const skipped = result.skipped || [];
+    if (skipped.length > 0) {
+      const preview = skipped
+        .slice(0, 5)
+        .map((s) => `${s.part_number} (${s.reason.toLowerCase()})`)
+        .join(", ");
+      toast.warning(
+        `${result.deleted} barang dihapus, ${skipped.length} dilewati`,
+        {
+          id: toastId,
+          description:
+            preview + (skipped.length > 5 ? `, dan ${skipped.length - 5} lainnya` : ""),
+          duration: 10000,
+        },
+      );
+    } else {
+      toast.success(`${result.deleted} barang berhasil dihapus`, { id: toastId });
+    }
+    setSelectedRows({});
+  };
+
+  const handleRestore = async (ids: number[]) => {
+    const toastId = toast.loading(`Memulihkan ${ids.length} barang...`);
+    const result = await restoreBarang(ids);
+    if (!result.success) {
+      toast.error(`Gagal memulihkan barang: ${result.error}`, { id: toastId });
+      return;
+    }
+    toast.success(`${result.restored} barang berhasil dipulihkan`, { id: toastId });
+    setSelectedRows({});
   };
 
   const handleExport = () => {
@@ -428,6 +543,18 @@ export default function BarangClient({
               </Select>
             </div>
 
+            {isModerator && (
+              <Select value={initialStatus} onValueChange={handleStatusChange}>
+                <SelectTrigger className="h-8 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="active">Aktif</SelectItem>
+                  <SelectItem value="deleted">Terhapus</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
+
             <div className="flex w-full items-center gap-2 sm:w-auto">
               <CalendarIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
               <DatePickerString
@@ -459,12 +586,67 @@ export default function BarangClient({
 
       {/* Section 3: Content View + Pagination */}
       <Content className="overflow-hidden">
+        {isModerator && selectedList.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+            <span className="text-xs font-bold text-foreground">
+              {selectedList.length} barang dipilih
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-semibold"
+                onClick={() => setSelectedRows({})}
+              >
+                <X className="h-3.5 w-3.5" /> Batal Pilih
+              </Button>
+              {isDeletedView ? (
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs font-bold"
+                  onClick={() => handleRestore(selectedList.map((b) => b.id))}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" /> Pulihkan Terpilih
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs font-bold"
+                    onClick={() => setIsBulkEditOpen(true)}
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit Massal
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs font-bold"
+                    onClick={handleBulkDelete}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Hapus Terpilih
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
         {/* Table View */}
         {initialView === "table" ? (
           <div className="overflow-x-auto">
             <Table className="table-fixed">
               <TableHeader className="bg-muted/50">
                 <TableRow className="hover:bg-transparent border-b border-border h-10">
+                  {isModerator && (
+                    <TableHead className="w-10 pl-4">
+                      <Checkbox
+                        checked={pageAllSelected}
+                        onCheckedChange={(v) => togglePage(v === true)}
+                        disabled={initialData.length === 0}
+                        aria-label="Pilih semua di halaman ini"
+                      />
+                    </TableHead>
+                  )}
                   <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
                     No
                   </TableHead>
@@ -505,6 +687,18 @@ export default function BarangClient({
                       className="group cursor-pointer hover:bg-muted/30 transition-colors border-b border-border/50 h-14"
                       onClick={() => handleRowClick(barang)}
                     >
+                      {isModerator && (
+                        <TableCell
+                          className="pl-4"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <Checkbox
+                            checked={!!selectedRows[barang.id]}
+                            onCheckedChange={(v) => toggleRow(barang, v === true)}
+                            aria-label={`Pilih ${barang.part_number}`}
+                          />
+                        </TableCell>
+                      )}
                       <TableCell className="text-center text-muted-foreground text-xs font-medium font-mono">
                         {(currentPage - 1) * pageSize + index + 1}
                       </TableCell>
@@ -517,6 +711,12 @@ export default function BarangClient({
                         <div className="text-muted-foreground text-xs font-medium truncate">
                           {barang.part_name}
                         </div>
+                        {barang.deleted_at && (
+                          <div className="text-[10px] font-semibold text-destructive">
+                            Dihapus{" "}
+                            {new Date(barang.deleted_at).toLocaleDateString("id-ID")}
+                          </div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <span className="text-xs text-muted-foreground uppercase font-semibold">
@@ -540,34 +740,45 @@ export default function BarangClient({
                             align="end"
                             className="w-40 p-1.5 rounded-lg border-border"
                           >
-                            <DropdownMenuItem
-                              onClick={() => {
-                                setEditingBarang(barang);
-                                setIsEditModalOpen(true);
-                              }}
-                              className="text-xs rounded-md"
-                            >
-                              <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-                            </DropdownMenuItem>
-                            <DropdownMenuItem
-                              onClick={() => {
-                                setBarcodeBarang(barang);
-                                setIsBarcodeDialogOpen(true);
-                              }}
-                              className="text-xs rounded-md"
-                            >
-                              <QrCode className="mr-2 h-3.5 w-3.5" /> Cetak
-                              QR Code
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              className="text-xs text-destructive focus:text-destructive rounded-md"
-                              onClick={() =>
-                                handleDelete(barang.id, barang.part_name)
-                              }
-                            >
-                              <Trash2 className="mr-2 h-3.5 w-3.5" /> Hapus
-                            </DropdownMenuItem>
+                            {isDeletedView ? (
+                              <DropdownMenuItem
+                                onClick={() => handleRestore([barang.id])}
+                                className="text-xs rounded-md"
+                              >
+                                <RotateCcw className="mr-2 h-3.5 w-3.5" /> Pulihkan
+                              </DropdownMenuItem>
+                            ) : (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setEditingBarang(barang);
+                                    setIsEditModalOpen(true);
+                                  }}
+                                  className="text-xs rounded-md"
+                                >
+                                  <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setBarcodeBarang(barang);
+                                    setIsBarcodeDialogOpen(true);
+                                  }}
+                                  className="text-xs rounded-md"
+                                >
+                                  <QrCode className="mr-2 h-3.5 w-3.5" /> Cetak
+                                  QR Code
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="text-xs text-destructive focus:text-destructive rounded-md"
+                                  onClick={() =>
+                                    handleDelete(barang.id, barang.part_name)
+                                  }
+                                >
+                                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Hapus
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </TableCell>
@@ -576,11 +787,13 @@ export default function BarangClient({
                 ) : (
                   <TableRow>
                     <TableCell
-                      colSpan={5}
+                      colSpan={isModerator ? 6 : 5}
                       className="h-32 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[10px]"
                     >
                       <Package className="h-8 w-8 mx-auto mb-2 opacity-10" />
-                      BELUM ADA DATA BARANG
+                      {isDeletedView
+                        ? "TIDAK ADA BARANG TERHAPUS"
+                        : "BELUM ADA DATA BARANG"}
                     </TableCell>
                   </TableRow>
                 )}
@@ -601,18 +814,20 @@ export default function BarangClient({
                     <div className="bg-primary/5 p-1.5 rounded-lg group-hover:bg-primary/10 transition-colors">
                       <Package className="h-3.5 w-3.5 text-primary/60" />
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setEditingBarang(barang);
-                        setIsEditModalOpen(true);
-                      }}
-                    >
-                      <Pencil className="h-3 w-3" />
-                    </Button>
+                    {!isDeletedView && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setEditingBarang(barang);
+                          setIsEditModalOpen(true);
+                        }}
+                      >
+                        <Pencil className="h-3 w-3" />
+                      </Button>
+                    )}
                   </div>
                   <div className="space-y-1">
                     <div className="text-xs font-bold text-foreground truncate group-hover:text-primary transition-colors leading-tight uppercase">
@@ -660,13 +875,15 @@ export default function BarangClient({
                 value={pageSize.toString()}
                 onValueChange={handleLimitChange}
               >
-                <SelectTrigger className="h-7 w-15 bg-muted/40 border-input text-[10px] font-bold">
+                <SelectTrigger className="h-7 w-18 bg-muted/40 border-input text-[10px] font-bold">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="25">25</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
+                  {PAGE_SIZE_OPTIONS.map((size) => (
+                    <SelectItem key={size} value={size.toString()}>
+                      {size}
+                    </SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
             </div>
@@ -1103,6 +1320,18 @@ export default function BarangClient({
         onOpenChange={setIsBarcodeDialogOpen}
         barang={barcodeBarang}
       />
+
+      {isBulkEditOpen && (
+        <BulkEditBarangDialog
+          open={isBulkEditOpen}
+          onOpenChange={setIsBulkEditOpen}
+          rows={selectedList}
+          onSaved={() => {
+            setIsBulkEditOpen(false);
+            setSelectedRows({});
+          }}
+        />
+      )}
     </>
   );
 }

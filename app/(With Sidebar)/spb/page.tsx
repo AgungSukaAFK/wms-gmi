@@ -57,6 +57,7 @@ import {
   updateSpb,
 } from "@/services/spb-actions";
 import { getCabangList } from "@/services/master-actions";
+import { UnitPicker } from "@/components/units/unit-picker";
 import { useAuthStore } from "@/stores/auth-store";
 import { formatDate } from "@/lib/utils";
 import { useConfirmDialog } from "@/components/confirm-dialog";
@@ -251,9 +252,8 @@ export default function SpbPage() {
       spb_no_wo: editForm.spb_no_wo || undefined,
       spb_section: editForm.spb_section || undefined,
       spb_pic_ppa: editForm.spb_pic_ppa || undefined,
+      // Tipe & brand ditentukan server dari master Unit berdasarkan kode.
       spb_kode_unit: editForm.spb_kode_unit || undefined,
-      spb_tipe_unit: editForm.spb_tipe_unit || undefined,
-      spb_brand: editForm.spb_brand || undefined,
       spb_hm: editForm.spb_hm ? Number(editForm.spb_hm) : undefined,
       spb_problem_remark: editForm.spb_problem_remark || undefined,
       spb_status: editForm.spb_status,
@@ -534,7 +534,7 @@ export default function SpbPage() {
                     <TableCell className="font-medium">
                       {row.spb_no}
                       {row.spb_is_consignment && (
-                        <span className="ml-1.5 rounded border border-violet-300 bg-violet-50 px-1 text-[9px] font-bold uppercase text-violet-700">
+                        <span className="ml-1.5 rounded border border-violet-300 bg-violet-50 px-1 text-[9px] font-bold uppercase text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800">
                           Konsinyasi
                         </span>
                       )}
@@ -666,13 +666,23 @@ export default function SpbPage() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="spb_kode_unit">Kode Unit</Label>
-              <Input
-                id="spb_kode_unit"
-                value={editForm.spb_kode_unit}
-                onChange={(e) =>
+              <UnitPicker
+                value={
+                  editForm.spb_kode_unit
+                    ? {
+                        id: null,
+                        kode_unit: editForm.spb_kode_unit,
+                        tipe_unit: editForm.spb_tipe_unit,
+                        brand: editForm.spb_brand || null,
+                      }
+                    : null
+                }
+                onChange={(unit) =>
                   setEditForm((prev) => ({
                     ...prev,
-                    spb_kode_unit: e.target.value,
+                    spb_kode_unit: unit.kode_unit,
+                    spb_tipe_unit: unit.tipe_unit,
+                    spb_brand: unit.brand || "",
                   }))
                 }
               />
@@ -681,26 +691,18 @@ export default function SpbPage() {
               <Label htmlFor="spb_tipe_unit">Tipe Unit</Label>
               <Input
                 id="spb_tipe_unit"
-                value={editForm.spb_tipe_unit}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    spb_tipe_unit: e.target.value,
-                  }))
-                }
+                value={editForm.spb_tipe_unit || "-"}
+                readOnly
+                disabled
               />
             </div>
             <div className="space-y-2">
               <Label htmlFor="spb_brand">Brand</Label>
               <Input
                 id="spb_brand"
-                value={editForm.spb_brand}
-                onChange={(e) =>
-                  setEditForm((prev) => ({
-                    ...prev,
-                    spb_brand: e.target.value,
-                  }))
-                }
+                value={editForm.spb_brand || "-"}
+                readOnly
+                disabled
               />
             </div>
             <div className="space-y-2">

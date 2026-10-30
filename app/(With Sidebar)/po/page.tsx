@@ -525,7 +525,7 @@ export default function POListPage() {
         return (
           <Badge
             variant="outline"
-            className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30 font-semibold text-[10px] uppercase"
+            className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30 font-semibold text-[10px] uppercase dark:text-amber-300 dark:border-amber-800"
           >
             Partial
           </Badge>
@@ -805,7 +805,7 @@ export default function POListPage() {
                               {po.po_jenis === "konsinyasi" && (
                                 <Badge
                                   variant="outline"
-                                  className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700"
+                                  className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800"
                                 >
                                   Rekonsil Konsinyasi
                                 </Badge>

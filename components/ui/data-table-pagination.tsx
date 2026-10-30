@@ -50,10 +50,10 @@ export function DataTablePagination({
   };
 
   return (
-    <div className="flex flex-col items-start justify-between gap-4 rounded-xl border bg-white p-3 shadow-sm md:flex-row md:items-center">
+    <div className="flex flex-col items-start justify-between gap-4 rounded-xl border bg-card p-3 shadow-sm md:flex-row md:items-center">
       <p className="text-xs font-medium text-muted-foreground">
         Ditemukan{" "}
-        <span className="font-bold text-slate-900">
+        <span className="font-bold text-foreground">
           {totalCount} {itemLabel}
         </span>
       </p>
@@ -61,11 +61,11 @@ export function DataTablePagination({
       <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:flex-nowrap">
         {/* Rows Per Page */}
         <div className="flex items-center gap-1.5 pr-3 md:border-r md:border-slate-100">
-          <span className="text-[10px] uppercase font-black text-slate-300">
+          <span className="text-[10px] uppercase font-black text-muted-foreground/60">
             BARIS:
           </span>
           <Select value={pageSize.toString()} onValueChange={onPageSizeChange}>
-            <SelectTrigger className="h-7 w-[65px] bg-slate-50 border-slate-200 text-xs font-bold">
+            <SelectTrigger className="h-7 w-[65px] bg-muted/50 border-border text-xs font-bold">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -84,21 +84,21 @@ export function DataTablePagination({
           className="flex items-center gap-1.5 focus-within:opacity-100 transition-opacity"
         >
           <Input
-            className="h-7 w-12 text-center bg-slate-50 border-slate-200 text-xs font-bold"
+            className="h-7 w-12 text-center bg-muted/50 border-border text-xs font-bold"
             value={jumpPage}
             onChange={(e) => setJumpPage(e.target.value)}
           />
-          <span className="text-[10px] uppercase font-black text-slate-300">
+          <span className="text-[10px] uppercase font-black text-muted-foreground/60">
             / {totalPages || 1}
           </span>
         </form>
 
         {/* Navigation Buttons */}
-        <div className="flex items-center rounded-lg border border-slate-200 bg-slate-50 overflow-hidden ml-2 transition-all">
+        <div className="flex items-center rounded-lg border border-border bg-muted/50 overflow-hidden ml-2 transition-all">
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-3 hover:bg-white transition-colors disabled:opacity-30"
+            className="h-7 px-3 hover:bg-card transition-colors disabled:opacity-30"
             onClick={() => onPageChange(currentPage - 1)}
             disabled={currentPage <= 1 || totalPages === 0}
           >
@@ -107,7 +107,7 @@ export function DataTablePagination({
           <Button
             variant="ghost"
             size="sm"
-            className="h-7 px-3 border-l border-slate-200 hover:bg-white transition-colors disabled:opacity-30"
+            className="h-7 px-3 border-l border-border hover:bg-card transition-colors disabled:opacity-30"
             onClick={() => onPageChange(currentPage + 1)}
             disabled={currentPage >= totalPages || totalPages === 0}
           >

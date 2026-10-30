@@ -50,6 +50,7 @@ export function PoVendorPicker({
     let q = supabase
       .from("vendors")
       .select("id, vendor_name, vendor_no")
+      .is("deleted_at", null)
       .order("vendor_name")
       .limit(15);
     if (query.trim()) {

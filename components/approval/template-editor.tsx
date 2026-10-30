@@ -395,7 +395,7 @@ export function TemplateEditor({
 
         <div className="p-6 space-y-4 flex-1 overflow-hidden flex flex-col">
           <div className="space-y-2 shrink-0">
-            <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+            <Label className="text-xs text-muted-foreground font-bold uppercase tracking-wider">
               Nama Template
             </Label>
             <Input
@@ -408,7 +408,7 @@ export function TemplateEditor({
 
           <div className="grid grid-cols-2 gap-4 shrink-0">
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+              <Label className="text-xs text-muted-foreground font-bold uppercase tracking-wider">
                 Lokasi
               </Label>
               <Select
@@ -434,7 +434,7 @@ export function TemplateEditor({
               </Select>
             </div>
             <div className="space-y-2">
-              <Label className="text-xs text-slate-500 font-bold uppercase tracking-wider">
+              <Label className="text-xs text-muted-foreground font-bold uppercase tracking-wider">
                 Jenis Dokumen
               </Label>
               <Select value={type} onValueChange={(val: any) => setType(val)}>
@@ -468,7 +468,7 @@ export function TemplateEditor({
 
           <div className="flex-1 min-h-0 flex flex-col gap-3 overflow-hidden">
             <div className="flex items-center justify-between shrink-0 px-1">
-              <h3 className="text-sm font-semibold flex items-center gap-2 text-slate-700">
+              <h3 className="text-sm font-semibold flex items-center gap-2 text-foreground/80">
                 <Settings2 className="h-4 w-4 text-blue-500" /> Tahap Approval
               </h3>
               <div className="flex gap-2">
@@ -491,16 +491,16 @@ export function TemplateEditor({
               </div>
             </div>
 
-            <div className="flex-1 min-h-0 border rounded-xl bg-slate-100/30 flex flex-col overflow-hidden shadow-inner">
-              <div className="flex items-center gap-3 pl-[58px] pr-12 pt-3 pb-2 shrink-0 border-b bg-white/50 backdrop-blur-sm">
-                <div className="flex-1 text-[10px] uppercase font-extrabold text-slate-400 tracking-widest px-1">
+            <div className="flex-1 min-h-0 border rounded-xl bg-muted/30 flex flex-col overflow-hidden shadow-inner">
+              <div className="flex items-center gap-3 pl-[58px] pr-12 pt-3 pb-2 shrink-0 border-b bg-card/50 backdrop-blur-sm">
+                <div className="flex-1 text-[10px] uppercase font-extrabold text-muted-foreground/80 tracking-widest px-1">
                   Penyetuju
                 </div>
               </div>
 
               <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
                 {steps.length === 0 ? (
-                  <div className="text-center py-16 border-2 border-dashed rounded-lg text-muted-foreground text-sm bg-white mx-1 my-1">
+                  <div className="text-center py-16 border-2 border-dashed rounded-lg text-muted-foreground text-sm bg-card mx-1 my-1">
                     Belum ada tahap approval. <br /> Klik "Tambah" di atas untuk
                     memulai.
                   </div>
@@ -508,26 +508,26 @@ export function TemplateEditor({
                   steps.map((step, index) => (
                     <div
                       key={step.local_id}
-                      className="flex flex-col gap-2.5 bg-white p-3 rounded-lg border border-slate-200 group shadow-sm transition-all hover:border-blue-200"
+                      className="flex flex-col gap-2.5 bg-card p-3 rounded-lg border border-border group shadow-sm transition-all hover:border-blue-200"
                     >
                       <div className="flex items-center gap-3">
                         <div className="flex flex-col items-center min-w-[32px] shrink-0">
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
+                            className="h-5 w-5 hover:bg-muted text-muted-foreground/80 transition-colors"
                             onClick={() => moveStep(index, "up")}
                             disabled={index === 0}
                           >
                             <ChevronUp className="h-3 w-3" />
                           </Button>
-                          <span className="text-[11px] font-black text-slate-500 my-0.5">
+                          <span className="text-[11px] font-black text-muted-foreground my-0.5">
                             {index + 1}
                           </span>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-5 w-5 hover:bg-slate-100 text-slate-400 transition-colors"
+                            className="h-5 w-5 hover:bg-muted text-muted-foreground/80 transition-colors"
                             onClick={() => moveStep(index, "down")}
                             disabled={index === steps.length - 1}
                           >
@@ -537,7 +537,7 @@ export function TemplateEditor({
 
                         <div className="flex-1 min-w-0">
                           {step.approver_type === "requester" ? (
-                            <div className="h-9 px-3 w-full flex items-center bg-blue-50/50 border border-blue-200 rounded-md text-[12px] font-bold text-blue-700 whitespace-nowrap">
+                            <div className="h-9 px-3 w-full flex items-center bg-blue-50/50 border border-blue-200 rounded-md text-[12px] font-bold text-blue-700 whitespace-nowrap dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800">
                               <Bot className="h-4 w-4 mr-2 shrink-0 text-blue-500" />{" "}
                               Requester
                             </div>
@@ -555,7 +555,7 @@ export function TemplateEditor({
                                 <Button
                                   variant="outline"
                                   role="combobox"
-                                  className="w-full h-9 justify-between bg-white text-[12px] border-slate-200 px-3 hover:bg-slate-50 transition-colors rounded-md font-bold text-slate-700"
+                                  className="w-full h-9 justify-between bg-card text-[12px] border-border px-3 hover:bg-muted/50 transition-colors rounded-md font-bold text-foreground/80"
                                 >
                                   <span className="truncate flex-1 text-left">
                                     {step.user_id
@@ -572,11 +572,11 @@ export function TemplateEditor({
                                 </Button>
                               </PopoverTrigger>
                               <PopoverContent
-                                className="w-[calc(100vw-2rem)] max-w-[320px] p-0 shadow-xl border-slate-200 rounded-lg overflow-hidden"
+                                className="w-[calc(100vw-2rem)] max-w-[320px] p-0 shadow-xl border-border rounded-lg overflow-hidden"
                                 align="start"
                                 onOpenAutoFocus={(e) => e.preventDefault()}
                               >
-                                <div className="flex items-center border-b px-3 bg-slate-50">
+                                <div className="flex items-center border-b px-3 bg-muted/50">
                                   <Search className="mr-2 h-4 w-4 shrink-0 opacity-40" />
                                   <input
                                     className="flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
@@ -597,7 +597,7 @@ export function TemplateEditor({
                                   )}
                                 </div>
 
-                                <div className="max-h-[250px] overflow-y-auto p-1 space-y-0.5 custom-scrollbar bg-white">
+                                <div className="max-h-[250px] overflow-y-auto p-1 space-y-0.5 custom-scrollbar bg-card">
                                   {type === "Stock Out - SPB" && (
                                     <div
                                       onClick={() => {
@@ -608,10 +608,10 @@ export function TemplateEditor({
                                         setActiveStepId(null);
                                       }}
                                       className={cn(
-                                        "flex items-center gap-2 px-3 py-2 cursor-pointer transition-all rounded-md border border-dashed mb-0.5 text-[12px] font-semibold italic text-slate-500",
+                                        "flex items-center gap-2 px-3 py-2 cursor-pointer transition-all rounded-md border border-dashed mb-0.5 text-[12px] font-semibold italic text-muted-foreground",
                                         !step.user_id
-                                          ? "bg-blue-50 border-blue-200 text-blue-600"
-                                          : "border-slate-200 hover:bg-slate-50",
+                                          ? "bg-blue-50 border-blue-200 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300 dark:border-blue-800"
+                                          : "border-border hover:bg-muted/50",
                                       )}
                                     >
                                       Kosongkan (TTD eksternal, tanpa nama)
@@ -619,7 +619,7 @@ export function TemplateEditor({
                                   )}
 
                                   {profiles.length === 0 && !searching && (
-                                    <div className="py-12 text-center text-[12px] text-slate-500 font-medium">
+                                    <div className="py-12 text-center text-[12px] text-muted-foreground font-medium">
                                       User tidak ditemukan.
                                     </div>
                                   )}
@@ -640,12 +640,12 @@ export function TemplateEditor({
                                       className={cn(
                                         "flex flex-col items-start gap-1 px-3 py-2 cursor-pointer transition-all rounded-md border border-transparent mb-0.5 last:mb-0",
                                         step.user_id === p.id
-                                          ? "bg-blue-50 border-blue-100"
-                                          : "hover:bg-slate-50 hover:border-slate-100",
+                                          ? "bg-blue-50 border-blue-100 dark:bg-blue-900/30 dark:border-blue-800"
+                                          : "hover:bg-muted/50 hover:border-border/60",
                                       )}
                                     >
                                       <div className="flex items-center justify-between w-full gap-2">
-                                        <span className="font-bold text-[13px] text-slate-800 tracking-tight truncate">
+                                        <span className="font-bold text-[13px] text-foreground tracking-tight truncate">
                                           {p.nama}
                                         </span>
                                         <div className="flex gap-1 shrink-0">
@@ -654,7 +654,7 @@ export function TemplateEditor({
                                               <Badge
                                                 key={i}
                                                 variant="secondary"
-                                                className="text-[8px] px-1.5 py-0 h-3.5 bg-blue-100/50 text-blue-600 border-0 font-bold uppercase tracking-tighter"
+                                                className="text-[8px] px-1.5 py-0 h-3.5 bg-blue-100/50 text-blue-600 border-0 font-bold uppercase tracking-tighter dark:bg-blue-900/40 dark:text-blue-300"
                                               >
                                                 {r.roles.label}
                                               </Badge>
@@ -666,14 +666,14 @@ export function TemplateEditor({
                                         )}
                                       </div>
 
-                                      <div className="flex items-center gap-2 text-[10px] text-slate-400 w-full overflow-hidden font-medium">
+                                      <div className="flex items-center gap-2 text-[10px] text-muted-foreground/80 w-full overflow-hidden font-medium">
                                         <span className="truncate max-w-[150px]">
                                           {p.email}
                                         </span>
                                         <span className="opacity-30">•</span>
                                         {p.cabang && (
                                           <div className="flex items-center truncate">
-                                            <Building2 className="w-2.5 h-2.5 mr-1 opacity-50 text-slate-400" />
+                                            <Building2 className="w-2.5 h-2.5 mr-1 opacity-50 text-muted-foreground/80" />
                                             <span className="truncate">
                                               {p.cabang.nama_cabang}
                                             </span>
@@ -692,7 +692,7 @@ export function TemplateEditor({
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="h-8 w-8 text-slate-200 hover:text-red-500 hover:bg-red-50 transition-all"
+                            className="h-8 w-8 text-muted-foreground/40 hover:text-red-500 hover:bg-red-50 transition-all"
                             onClick={() => removeStep(step.local_id)}
                           >
                             <Trash2 className="h-4 w-4" />
@@ -702,7 +702,7 @@ export function TemplateEditor({
 
                       <div className="flex flex-wrap items-end gap-3 pl-11">
                         <div className="w-40 shrink-0 space-y-1">
-                          <Label className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                          <Label className="text-[10px] uppercase font-bold text-muted-foreground/80 tracking-wider">
                             Level
                           </Label>
                           <Select
@@ -711,7 +711,7 @@ export function TemplateEditor({
                               updateStep(step.local_id, { level: val })
                             }
                           >
-                            <SelectTrigger className="bg-white h-9 text-[12px] border-slate-200 font-bold text-slate-700 rounded-md shadow-none hover:bg-slate-50 transition-colors">
+                            <SelectTrigger className="bg-card h-9 text-[12px] border-border font-bold text-foreground/80 rounded-md shadow-none hover:bg-muted/50 transition-colors">
                               <SelectValue />
                             </SelectTrigger>
                             <SelectContent className="text-[12px]">
@@ -726,7 +726,7 @@ export function TemplateEditor({
                         </div>
 
                         <div className="flex-1 min-w-[160px] space-y-1">
-                          <Label className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">
+                          <Label className="text-[10px] uppercase font-bold text-muted-foreground/80 tracking-wider">
                             Jabatan (Cetak)
                           </Label>
                           <Input
@@ -737,7 +737,7 @@ export function TemplateEditor({
                                 position_label: e.target.value,
                               })
                             }
-                            className="h-9 bg-white text-[12px] border-slate-200 font-semibold text-slate-700 rounded-md shadow-none"
+                            className="h-9 bg-card text-[12px] border-border font-semibold text-foreground/80 rounded-md shadow-none"
                           />
                         </div>
                       </div>
@@ -749,11 +749,11 @@ export function TemplateEditor({
           </div>
         </div>
 
-        <DialogFooter className="p-6 pt-3 shrink-0 border-t bg-slate-50/50">
+        <DialogFooter className="p-6 pt-3 shrink-0 border-t bg-muted/30">
           <Button
             variant="ghost"
             onClick={() => onOpenChange(false)}
-            className="font-bold text-slate-500 hover:text-slate-800 transition-colors"
+            className="font-bold text-muted-foreground hover:text-foreground transition-colors"
           >
             Batal
           </Button>

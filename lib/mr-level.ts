@@ -101,14 +101,14 @@ export const MR_LEVEL_BY_CODE: Record<MrLevelCode, MrLevelDefinition> =
 
 export const MR_LEVEL_BADGE_CLASS: Record<MrLevelCode, string> = {
   OPEN_1: "bg-muted text-muted-foreground border-border",
-  OPEN_2: "bg-amber-100 text-amber-700 border-amber-300",
-  OPEN_3A: "bg-orange-100 text-orange-700 border-orange-300",
-  OPEN_3B: "bg-red-100 text-red-700 border-red-300",
-  OPEN_3C: "bg-red-100 text-red-700 border-red-300",
-  OPEN_4: "bg-sky-100 text-sky-700 border-sky-300",
-  OPEN_5: "bg-blue-100 text-blue-700 border-blue-300",
-  CLOSE_1: "bg-orange-100 text-orange-700 border-orange-300",
-  CLOSE_2A: "bg-lime-100 text-lime-700 border-lime-300",
+  OPEN_2: "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
+  OPEN_3A: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-800",
+  OPEN_3B: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-800",
+  OPEN_3C: "bg-red-100 text-red-700 border-red-300 dark:bg-red-900/40 dark:text-red-300 dark:border-red-800",
+  OPEN_4: "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/40 dark:text-sky-300 dark:border-sky-800",
+  OPEN_5: "bg-blue-100 text-blue-700 border-blue-300 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800",
+  CLOSE_1: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-800",
+  CLOSE_2A: "bg-lime-100 text-lime-700 border-lime-300 dark:bg-lime-900/40 dark:text-lime-300 dark:border-lime-800",
   CLOSE_2B: "bg-success/10 text-success border-success/30",
 };
 
@@ -144,9 +144,9 @@ export const MR_AUTO_BUCKET_LABEL: Record<MrAutoBucket, string> = {
 
 export const MR_AUTO_BUCKET_BADGE_CLASS: Record<MrAutoBucket, string> = {
   OPEN_1: "bg-muted text-muted-foreground border-border",
-  OPEN_2: "bg-amber-100 text-amber-700 border-amber-300",
-  OPEN_3_5: "bg-sky-100 text-sky-700 border-sky-300",
-  CLOSE_1: "bg-orange-100 text-orange-700 border-orange-300",
+  OPEN_2: "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
+  OPEN_3_5: "bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-900/40 dark:text-sky-300 dark:border-sky-800",
+  CLOSE_1: "bg-orange-100 text-orange-700 border-orange-300 dark:bg-orange-900/40 dark:text-orange-300 dark:border-orange-800",
   CLOSE_2: "bg-success/10 text-success border-success/30",
 };
 

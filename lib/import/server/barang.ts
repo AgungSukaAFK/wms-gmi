@@ -1,14 +1,21 @@
 import { revalidatePath } from "next/cache";
 import type { ImportRowResult } from "../types";
-import { type ImportHandler, describeChanges, fail, fetchAll, keyOf, matchBarang, ok, str } from "./common";
+import { type ImportHandler, describeChanges, fail, fetchAll, fetchIn, keyOf, matchBarang, ok, str } from "./common";
 
 const LABELS = { part_name: "Nama", part_satuan: "Satuan" };
+const RESTORED = "Dipulihkan dari data terhapus";
 
 export const barangHandler: ImportHandler = {
   async run(ctx, rows) {
     const { supabase } = ctx;
     const updateExisting = ctx.options.update_existing !== false;
     const matches = await matchBarang(supabase, rows.map((r) => str(r.values.part_number)));
+    // Barang terhapus (soft delete) yang ada di file = masih dipakai -> dipulihkan.
+    const matchedIds = Array.from(new Set(Array.from(matches.values()).filter((m) => m.match === "persis").map((m) => m.id)));
+    const deletedRows = await fetchIn<{ id: number }>(matchedIds, (p) =>
+      supabase.from("barang").select("id").in("id", p).not("deleted_at", "is", null),
+    );
+    const deletedIds = new Set(deletedRows.map((b) => b.id));
     const results: ImportRowResult[] = [];
     const inserts: { row: number; payload: any }[] = [];
     const updates: { row: number; id: number; payload: any }[] = [];
@@ -30,15 +37,22 @@ export const barangHandler: ImportHandler = {
       const changes: Record<string, [unknown, unknown]> = {};
       if (m.part_name !== name) changes.part_name = [m.part_name, name];
       if (keyOf(m.part_satuan) !== keyOf(satuan)) changes.part_satuan = [m.part_satuan, satuan];
-      if (!Object.keys(changes).length) {
+      const restore = deletedIds.has(m.id);
+      const hasChanges = Object.keys(changes).length > 0;
+      if (!hasChanges && !restore) {
         results.push(ok(r.row, "skip", "Tidak ada perubahan", m.part_number));
-      } else if (!updateExisting) {
+      } else if (!updateExisting && !restore) {
         results.push(ok(r.row, "skip", `Sudah ada (opsi perbarui dimatikan): ${describeChanges(changes, LABELS)}`, m.part_number));
       } else {
         const payload: any = {};
-        for (const k of Object.keys(changes)) payload[k] = k === "part_name" ? name : satuan;
+        if (updateExisting) for (const k of Object.keys(changes)) payload[k] = k === "part_name" ? name : satuan;
+        if (restore) Object.assign(payload, { deleted_at: null, deleted_by: null });
+        const notes = [
+          restore ? RESTORED : null,
+          hasChanges ? (updateExisting ? describeChanges(changes, LABELS) : `opsi perbarui dimatikan: ${describeChanges(changes, LABELS)}`) : null,
+        ].filter(Boolean);
         updates.push({ row: r.row, id: m.id, payload });
-        results.push(ok(r.row, "update", describeChanges(changes, LABELS), m.part_number));
+        results.push(ok(r.row, "update", notes.join("; "), m.part_number));
       }
     }
 
@@ -66,7 +80,7 @@ export const barangHandler: ImportHandler = {
 
   async prefill(ctx, params) {
     const rows = await fetchAll<any>(() =>
-      ctx.supabase.from("barang").select("id, part_number, part_name, part_satuan").order("part_number"),
+      ctx.supabase.from("barang").select("id, part_number, part_name, part_satuan").is("deleted_at", null).order("part_number"),
     );
     const list = params.mode === "name_eq_pn" ? rows.filter((b) => keyOf(b.part_name) === keyOf(b.part_number)) : rows;
     return list.map((b) => ({ part_number: b.part_number, part_name: b.part_name, part_satuan: b.part_satuan }));

@@ -128,7 +128,7 @@ export function MRItemSelector({
 
   const fetchItems = async (q: string) => {
     setLoading(true);
-    let query = supabase.from("barang").select("*").limit(50);
+    let query = supabase.from("barang").select("*").is("deleted_at", null).limit(50);
 
     if (q) {
       // Escape karakter reserved PostgREST (koma, kurung, kutip) supaya
@@ -291,8 +291,8 @@ export function MRItemSelector({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Package className="h-4 w-4 text-slate-500" />
-          <h3 className="font-semibold text-slate-900 text-sm">
+          <Package className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground text-sm">
             Daftar Barang
           </h3>
         </div>
@@ -314,15 +314,15 @@ export function MRItemSelector({
             </Button>
           </PopoverTrigger>
           <PopoverContent
-            className="w-[calc(100vw-2rem)] max-w-100 p-0 rounded-lg border-slate-200 shadow-xl overflow-hidden"
+            className="w-[calc(100vw-2rem)] max-w-100 p-0 rounded-lg border-border shadow-xl overflow-hidden"
             align="end"
           >
-            <div className="p-2 border-b border-slate-100 bg-slate-50/50">
+            <div className="p-2 border-b border-border/60 bg-muted/30">
               <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/80" />
                 <Input
                   placeholder="Cari Barang..."
-                  className="pl-8 h-8 bg-white border-slate-200 focus:ring-slate-900 rounded-md text-xs"
+                  className="pl-8 h-8 bg-card border-border focus:ring-slate-900 rounded-md text-xs"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   autoFocus
@@ -331,8 +331,8 @@ export function MRItemSelector({
             </div>
             <div className="max-h-[300px] overflow-y-auto p-1">
               {loading ? (
-                <div className="p-8 text-center bg-slate-50/30">
-                  <span className="text-[10px] font-medium text-slate-400">
+                <div className="p-8 text-center bg-muted/20">
+                  <span className="text-[10px] font-medium text-muted-foreground/80">
                     Searching...
                   </span>
                 </div>
@@ -342,20 +342,20 @@ export function MRItemSelector({
                     key={r.id}
                     onClick={() => handleAddItem(r)}
                     disabled={items.some((i) => i.part_id === r.id)}
-                    className="w-full text-left p-2 hover:bg-slate-50 transition-all rounded-md group disabled:opacity-50"
+                    className="w-full text-left p-2 hover:bg-muted/50 transition-all rounded-md group disabled:opacity-50"
                   >
                     <div className="flex justify-between items-center gap-4">
                       <div className="flex flex-col min-w-0">
-                        <code className="text-xs font-bold text-slate-900 leading-none mb-0.5">
+                        <code className="text-xs font-bold text-foreground leading-none mb-0.5">
                           {r.part_number}
                         </code>
-                        <span className="text-[10px] text-slate-400 truncate">
+                        <span className="text-[10px] text-muted-foreground/80 truncate">
                           {r.part_name}
                         </span>
                       </div>
                       <Badge
                         variant="outline"
-                        className="text-[10px] font-medium text-slate-400 h-4 px-1"
+                        className="text-[10px] font-medium text-muted-foreground/80 h-4 px-1"
                       >
                         {r.part_satuan}
                       </Badge>
@@ -363,12 +363,12 @@ export function MRItemSelector({
                   </button>
                 ))
               ) : (
-                <div className="p-8 text-center text-slate-400 text-xs italic">
+                <div className="p-8 text-center text-muted-foreground/80 text-xs italic">
                   Barang tidak ditemukan.
                 </div>
               )}
             </div>
-            <div className="p-2 bg-slate-50/80 border-t border-slate-100 flex justify-center">
+            <div className="p-2 bg-muted/40 border-t border-border/60 flex justify-center">
               <Link
                 href="/request-barang-baru"
                 className="text-[10px] font-medium text-blue-600 hover:underline"
@@ -380,31 +380,31 @@ export function MRItemSelector({
         </Popover>
       </div>
 
-      <div className="border rounded-lg overflow-hidden bg-white border-slate-200">
+      <div className="border rounded-lg overflow-hidden bg-card border-border">
         <Table>
-          <TableHeader className="bg-slate-50/50">
+          <TableHeader className="bg-muted/30">
             <TableRow className="h-10 hover:bg-transparent">
-              <TableHead className="w-[50px] text-center font-semibold text-slate-500 text-xs">
+              <TableHead className="w-[50px] text-center font-semibold text-muted-foreground text-xs">
                 No
               </TableHead>
-              <TableHead className="font-semibold text-slate-500 text-xs">
+              <TableHead className="font-semibold text-muted-foreground text-xs">
                 Part Name & Number
               </TableHead>
-              <TableHead className="w-[100px] font-semibold text-slate-500 text-xs text-center">
+              <TableHead className="w-[100px] font-semibold text-muted-foreground text-xs text-center">
                 Unit
               </TableHead>
-              <TableHead className="w-35 font-semibold text-slate-500 text-xs text-center">
+              <TableHead className="w-35 font-semibold text-muted-foreground text-xs text-center">
                 Quantity
               </TableHead>
               {!hidePriority && (
-                <TableHead className="w-32 font-semibold text-slate-500 text-xs text-center">
+                <TableHead className="w-32 font-semibold text-muted-foreground text-xs text-center">
                   Prioritas
                 </TableHead>
               )}
-              <TableHead className="font-semibold text-slate-500 text-xs">
+              <TableHead className="font-semibold text-muted-foreground text-xs">
                 Catatan (opsional)
               </TableHead>
-              <TableHead className="w-[60px] text-center font-semibold text-slate-500 text-xs">
+              <TableHead className="w-[60px] text-center font-semibold text-muted-foreground text-xs">
                 Aksi
               </TableHead>
             </TableRow>
@@ -418,23 +418,23 @@ export function MRItemSelector({
                 return (
                   <TableRow
                     key={item.part_id}
-                    className="h-12 hover:bg-slate-50/50 transition-colors"
+                    className="h-12 hover:bg-muted/30 transition-colors"
                   >
-                    <TableCell className="text-center text-slate-400 text-xs font-medium">
+                    <TableCell className="text-center text-muted-foreground/80 text-xs font-medium">
                       {index + 1}
                     </TableCell>
                     <TableCell className="py-2">
                       <div className="flex flex-col">
-                        <span className="font-semibold text-slate-900 text-xs">
+                        <span className="font-semibold text-foreground text-xs">
                           {item.part_name}
                         </span>
-                        <code className="text-[10px] text-slate-400">
+                        <code className="text-[10px] text-muted-foreground/80">
                           {item.part_number}
                         </code>
                       </div>
                     </TableCell>
                     <TableCell className="text-center">
-                      <span className="text-[10px] font-medium text-slate-500 uppercase">
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase">
                         {item.satuan}
                       </span>
                     </TableCell>
@@ -450,10 +450,10 @@ export function MRItemSelector({
                               qty: parseInt(e.target.value) || 0,
                             })
                           }
-                          className={`h-8 w-20 text-center font-medium text-xs rounded-md bg-white ${
+                          className={`h-8 w-20 text-center font-medium text-xs rounded-md bg-card ${
                             item.qty <= 0
                               ? "border-red-500 ring-1 ring-red-500"
-                              : "border-slate-200"
+                              : "border-border"
                           }`}
                         />
                         {item.qty <= 0 && (
@@ -498,7 +498,7 @@ export function MRItemSelector({
                         onChange={(e) =>
                           updateItem(item.part_id, { remarks: e.target.value })
                         }
-                        className="h-8 w-full text-xs rounded-md bg-white border-slate-200"
+                        className="h-8 w-full text-xs rounded-md bg-card border-border"
                       />
                     </TableCell>
                     <TableCell className="text-center">
@@ -506,7 +506,7 @@ export function MRItemSelector({
                         variant="ghost"
                         size="icon"
                         onClick={() => removeItem(item.part_id)}
-                        className="h-7 w-7 text-slate-300 hover:text-red-500 rounded-md"
+                        className="h-7 w-7 text-muted-foreground/60 hover:text-red-500 rounded-md"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -517,7 +517,7 @@ export function MRItemSelector({
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
                 <TableCell colSpan={hidePriority ? 6 : 7} className="text-center">
-                  <span className="text-xs font-medium text-slate-400 italic">
+                  <span className="text-xs font-medium text-muted-foreground/80 italic">
                     No items added yet.
                   </span>
                 </TableCell>
@@ -550,7 +550,7 @@ export function MRItemSelector({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:bg-amber-900/30 dark:border-amber-800">
             <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1.5">
               Terdapat di MR:
             </p>
@@ -559,7 +559,7 @@ export function MRItemSelector({
                 <Badge
                   key={code}
                   variant="outline"
-                  className="border-amber-300 bg-white text-amber-700 font-bold text-xs"
+                  className="border-amber-300 bg-card text-amber-700 font-bold text-xs"
                 >
                   {code}
                 </Badge>
@@ -637,7 +637,7 @@ export function MRItemSelector({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-[11px] font-medium text-amber-800">
+          <div className="rounded-lg border border-amber-200 bg-amber-50/60 p-3 text-[11px] font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800">
             Kirim permintaan ke moderator/PPIC untuk mengatur stok PN ini.
             Setelah diatur, item bisa langsung ditambahkan ke MR.
           </div>

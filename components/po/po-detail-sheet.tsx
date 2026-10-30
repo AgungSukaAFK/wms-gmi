@@ -394,7 +394,7 @@ export function PODetailSheet({
         return (
           <Badge
             variant="outline"
-            className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30 font-bold text-[10px] uppercase"
+            className="text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30 font-bold text-[10px] uppercase dark:text-amber-300 dark:border-amber-800"
           >
             Partial
           </Badge>
@@ -531,7 +531,7 @@ export function PODetailSheet({
 
               {modEditMode && (
                 <div className="px-6 pt-4 -mb-4">
-                  <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2">
+                  <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 dark:border-amber-800">
                     <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
                       Mode Moderator Edit aktif — header (non-harga), qty item,
                       dan jalur/status approval bisa diubah bebas, di luar
@@ -683,7 +683,7 @@ export function PODetailSheet({
                               "rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed",
                               modBlockedDowngrade
                                 ? "border-destructive/40 bg-destructive/10 text-destructive"
-                                : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400",
+                                : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 dark:border-amber-800",
                             )}
                           >
                             {modBlockedDowngrade ? (

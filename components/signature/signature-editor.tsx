@@ -122,7 +122,7 @@ export function SignatureEditor({ image, onCropComplete, onCancel }: SignatureEd
   };
 
   return (
-    <div className="flex flex-col h-full bg-slate-50 rounded-lg overflow-hidden border shadow-inner">
+    <div className="flex flex-col h-full bg-muted/50 rounded-lg overflow-hidden border shadow-inner">
       <div className="relative h-[400px] w-full bg-slate-900">
         <Cropper
           image={image}
@@ -138,10 +138,10 @@ export function SignatureEditor({ image, onCropComplete, onCancel }: SignatureEd
         />
       </div>
 
-      <div className="p-4 space-y-4 bg-white border-t">
+      <div className="p-4 space-y-4 bg-card border-t">
         {/* Aspect Ratio Presets */}
         <div className="space-y-2">
-          <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Rasio Bingkai</span>
+          <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-wider">Rasio Bingkai</span>
           <div className="flex flex-wrap gap-1.5">
             {[
               { label: "1:1", val: 1 / 1 },
@@ -166,10 +166,10 @@ export function SignatureEditor({ image, onCropComplete, onCancel }: SignatureEd
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-end">
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium flex items-center gap-2 text-slate-600">
+              <span className="text-[11px] font-medium flex items-center gap-2 text-foreground/70">
                 <ZoomIn className="h-3 w-3" /> Zoom
               </span>
-              <span className="text-[10px] text-slate-400 font-mono">{Math.round(zoom * 100)}%</span>
+              <span className="text-[10px] text-muted-foreground/80 font-mono">{Math.round(zoom * 100)}%</span>
             </div>
             <Slider
               value={[zoom]}
@@ -182,7 +182,7 @@ export function SignatureEditor({ image, onCropComplete, onCancel }: SignatureEd
 
           <div className="space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-[11px] font-medium flex items-center gap-2 text-slate-600">
+              <span className="text-[11px] font-medium flex items-center gap-2 text-foreground/70">
                 <RotateCw className="h-3 w-3" /> Rotation
               </span>
               <Button variant="ghost" size="sm" className="h-5 text-[10px] px-1 text-blue-600" onClick={resetAdjustments}>
@@ -198,7 +198,7 @@ export function SignatureEditor({ image, onCropComplete, onCancel }: SignatureEd
                 step={1}
                 onValueChange={(val: number[]) => setRotation(val[0])}
               />
-              <span className="text-[10px] text-slate-400 w-8 font-mono">{rotation}°</span>
+              <span className="text-[10px] text-muted-foreground/80 w-8 font-mono">{rotation}°</span>
             </div>
           </div>
         </div>

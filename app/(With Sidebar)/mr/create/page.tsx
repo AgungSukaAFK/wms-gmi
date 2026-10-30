@@ -392,7 +392,7 @@ export default function CreateMRPage() {
             </div>
             {/* ACCURATE_HIDDEN: hidden per request, default always false */}
             {false && (
-              <div className="flex items-center gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-md">
+              <div className="flex items-center gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-md dark:bg-amber-900/30 dark:border-amber-800">
                 <Checkbox
                   id="mr-accurate"
                   checked={mrAccurate}

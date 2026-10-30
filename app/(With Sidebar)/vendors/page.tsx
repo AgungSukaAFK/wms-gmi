@@ -29,10 +29,13 @@ import {
   Loader2,
   Pencil,
   Plus,
+  RotateCcw,
   Search,
   ToggleLeft,
   Trash2,
+  X,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -45,13 +48,24 @@ import { useDebounce } from "use-debounce";
 import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import { toast } from "sonner";
 import {
+  bulkDeleteVendors,
   createVendor,
   deleteVendor,
   getVendorList,
+  restoreVendors,
   toggleVendorStatus,
   updateVendor,
 } from "@/services/master-actions";
 import { useConfirmDialog } from "@/components/confirm-dialog";
+import {
+  BulkEditVendorDialog,
+  type BulkEditVendorRow,
+} from "@/components/vendors/bulk-edit-vendor-dialog";
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100, 250, 500, 1000];
+
+const DELETE_NOTE =
+  "Vendor disembunyikan dari master & pilihan dokumen baru. PR/PO/SPB/IT yang sudah memakai vendor ini tetap utuh dan tidak berubah.";
 
 type VendorFormState = {
   vendor_name: string;
@@ -80,11 +94,13 @@ export default function VendorsPage() {
 
   const [search, setSearch] = useState("");
   const [debouncedSearch] = useDebounce(search, 350);
+  // "deleted" = vendor yang sudah dihapus (soft delete), khusus moderator.
   const [statusFilter, setStatusFilter] = useState<
-    "all" | "active" | "inactive"
+    "all" | "active" | "inactive" | "deleted"
   >("all");
+  const isDeletedView = statusFilter === "deleted";
   const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
+  const [limit, setLimit] = useState(25);
   const [sortOrder, setSortOrder] = useState("vendor_name_asc");
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -93,6 +109,43 @@ export default function VendorsPage() {
   const [form, setForm] = useState<VendorFormState>(emptyVendorForm);
 
   const [canWrite, setCanWrite] = useState(false);
+  const [isModerator, setIsModerator] = useState(false);
+
+  // Pilih banyak (moderator): edit massal / hapus / pulihkan. Pilihan bertahan
+  // saat ganti halaman, direset saat filter berubah supaya tidak ada vendor
+  // tersembunyi ikut terproses.
+  const [selectedRows, setSelectedRows] = useState<
+    Record<number, BulkEditVendorRow>
+  >({});
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const selectedList = Object.values(selectedRows);
+  const pageAllSelected =
+    vendors.length > 0 && vendors.every((v) => selectedRows[v.id]);
+
+  const filterKey = `${debouncedSearch}|${statusFilter}`;
+  const [selectionFilterKey, setSelectionFilterKey] = useState(filterKey);
+  if (selectionFilterKey !== filterKey) {
+    setSelectionFilterKey(filterKey);
+    setSelectedRows({});
+  }
+
+  const toggleRow = (vendor: BulkEditVendorRow, checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      if (checked) next[vendor.id] = vendor;
+      else delete next[vendor.id];
+      return next;
+    });
+
+  const togglePage = (checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      for (const v of vendors) {
+        if (checked) next[v.id] = v;
+        else delete next[v.id];
+      }
+      return next;
+    });
 
   const fetchRBAC = async () => {
     const {
@@ -115,6 +168,7 @@ export default function VendorsPage() {
         ["purchasing", "admin", "moderator"].includes(r),
       ),
     );
+    setIsModerator(roles.includes("moderator"));
   };
 
   const fetchVendors = async () => {
@@ -123,7 +177,8 @@ export default function VendorsPage() {
       page,
       limit,
       search: debouncedSearch,
-      is_aktif: statusFilter,
+      is_aktif: isDeletedView ? "all" : statusFilter,
+      deleted: isDeletedView,
       sort: sortOrder,
     });
 
@@ -239,6 +294,7 @@ export default function VendorsPage() {
     if (
       !(await confirm({
         title: "Hapus vendor ini?",
+        description: DELETE_NOTE,
         confirmText: "Hapus",
         destructive: true,
       }))
@@ -254,6 +310,65 @@ export default function VendorsPage() {
     }
 
     toast.success("Vendor berhasil dihapus", { id: toastId });
+    await fetchVendors();
+  };
+
+  const handleBulkDelete = async () => {
+    const ids = selectedList.map((v) => v.id);
+    if (
+      !(await confirm({
+        title: `Hapus ${ids.length} vendor terpilih?`,
+        description: `${DELETE_NOTE} Vendor yang masih punya stok titipan akan dilewati.`,
+        confirmText: "Hapus",
+        destructive: true,
+      }))
+    ) {
+      return;
+    }
+
+    const toastId = toast.loading(`Menghapus ${ids.length} vendor...`);
+    const result = await bulkDeleteVendors(ids);
+    if (!result.success) {
+      toast.error(result.error || "Gagal menghapus vendor", { id: toastId });
+      return;
+    }
+
+    const skipped = result.skipped || [];
+    if (skipped.length > 0) {
+      const preview = skipped
+        .slice(0, 5)
+        .map((s) => s.vendor_no)
+        .join(", ");
+      toast.warning(
+        `${result.deleted} vendor dihapus, ${skipped.length} dilewati (masih ada stok titipan)`,
+        {
+          id: toastId,
+          description:
+            preview +
+            (skipped.length > 5 ? `, dan ${skipped.length - 5} lainnya` : ""),
+          duration: 10000,
+        },
+      );
+    } else {
+      toast.success(`${result.deleted} vendor berhasil dihapus`, {
+        id: toastId,
+      });
+    }
+    setSelectedRows({});
+    await fetchVendors();
+  };
+
+  const handleRestore = async (ids: number[]) => {
+    const toastId = toast.loading(`Memulihkan ${ids.length} vendor...`);
+    const result = await restoreVendors(ids);
+    if (!result.success) {
+      toast.error(result.error || "Gagal memulihkan vendor", { id: toastId });
+      return;
+    }
+    toast.success(`${result.restored} vendor berhasil dipulihkan`, {
+      id: toastId,
+    });
+    setSelectedRows({});
     await fetchVendors();
   };
 
@@ -312,7 +427,9 @@ export default function VendorsPage() {
           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
             <Select
               value={statusFilter}
-              onValueChange={(val: "all" | "active" | "inactive") => {
+              onValueChange={(
+                val: "all" | "active" | "inactive" | "deleted",
+              ) => {
                 setStatusFilter(val);
                 setPage(1);
               }}
@@ -324,6 +441,9 @@ export default function VendorsPage() {
                 <SelectItem value="all">Semua Status</SelectItem>
                 <SelectItem value="active">Aktif</SelectItem>
                 <SelectItem value="inactive">Nonaktif</SelectItem>
+                {isModerator && (
+                  <SelectItem value="deleted">Terhapus</SelectItem>
+                )}
               </SelectContent>
             </Select>
 
@@ -341,10 +461,65 @@ export default function VendorsPage() {
       </Content>
 
       <Content className="overflow-hidden">
+        {isModerator && selectedList.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+            <span className="text-xs font-bold text-foreground">
+              {selectedList.length} vendor dipilih
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-semibold"
+                onClick={() => setSelectedRows({})}
+              >
+                <X className="h-3.5 w-3.5" /> Batal Pilih
+              </Button>
+              {isDeletedView ? (
+                <Button
+                  size="sm"
+                  className="h-8 gap-1.5 text-xs font-bold"
+                  onClick={() => handleRestore(selectedList.map((v) => v.id))}
+                >
+                  <RotateCcw className="h-3.5 w-3.5" /> Pulihkan Terpilih
+                </Button>
+              ) : (
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs font-bold"
+                    onClick={() => setBulkEditOpen(true)}
+                  >
+                    <Pencil className="h-3.5 w-3.5" /> Edit Massal
+                  </Button>
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    className="h-8 gap-1.5 text-xs font-bold"
+                    onClick={handleBulkDelete}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" /> Hapus Terpilih
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <Table>
             <TableHeader className="bg-muted/50 border-b border-border">
               <TableRow className="hover:bg-transparent h-10">
+                {isModerator && (
+                  <TableHead className="w-10 pl-4">
+                    <Checkbox
+                      checked={pageAllSelected}
+                      onCheckedChange={(v) => togglePage(v === true)}
+                      disabled={loading || vendors.length === 0}
+                      aria-label="Pilih semua di halaman ini"
+                    />
+                  </TableHead>
+                )}
                 <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
                   No
                 </TableHead>
@@ -383,7 +558,10 @@ export default function VendorsPage() {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={6} className="h-40 text-center">
+                  <TableCell
+                    colSpan={isModerator ? 7 : 6}
+                    className="h-40 text-center"
+                  >
                     <div className="flex flex-col items-center justify-center gap-2">
                       <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
                       <span className="text-[10px] font-bold text-muted-foreground uppercase">
@@ -395,10 +573,12 @@ export default function VendorsPage() {
               ) : vendors.length === 0 ? (
                 <TableRow>
                   <TableCell
-                    colSpan={6}
+                    colSpan={isModerator ? 7 : 6}
                     className="h-40 text-center text-muted-foreground italic text-sm"
                   >
-                    {hasActiveFilters
+                    {isDeletedView
+                      ? "Tidak ada vendor terhapus."
+                      : hasActiveFilters
                       ? "Tidak ada data vendor yang sesuai filter."
                       : "Belum ada data vendor."}
                   </TableCell>
@@ -409,6 +589,15 @@ export default function VendorsPage() {
                     key={vendor.id}
                     className="group hover:bg-muted/30 transition-all border-b border-border/50 h-15"
                   >
+                    {isModerator && (
+                      <TableCell className="pl-4">
+                        <Checkbox
+                          checked={!!selectedRows[vendor.id]}
+                          onCheckedChange={(v) => toggleRow(vendor, v === true)}
+                          aria-label={`Pilih ${vendor.vendor_no}`}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
                       {(page - 1) * limit + index + 1}
                     </TableCell>
@@ -420,6 +609,14 @@ export default function VendorsPage() {
                         <span className="text-[10px] text-muted-foreground line-clamp-1">
                           {vendor.address || "-"}
                         </span>
+                        {vendor.deleted_at && (
+                          <span className="text-[10px] font-semibold text-destructive">
+                            Dihapus{" "}
+                            {new Date(vendor.deleted_at).toLocaleDateString(
+                              "id-ID",
+                            )}
+                          </span>
+                        )}
                       </div>
                     </TableCell>
                     <TableCell>
@@ -446,38 +643,50 @@ export default function VendorsPage() {
                       </Badge>
                     </TableCell>
                     <TableCell className="text-right pr-6">
-                      <div className="flex items-center justify-end gap-1.5">
+                      {isDeletedView ? (
                         <Button
                           variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEditDialog(vendor)}
-                          disabled={!canWrite}
-                          title="Edit vendor"
+                          size="sm"
+                          className="h-8 gap-1.5 text-xs font-semibold"
+                          onClick={() => handleRestore([vendor.id])}
+                          disabled={!isModerator}
                         >
-                          <Pencil className="h-3.5 w-3.5" />
+                          <RotateCcw className="h-3.5 w-3.5" /> Pulihkan
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handleToggleStatus(vendor.id)}
-                          disabled={!canWrite}
-                          title="Toggle status"
-                        >
-                          <ToggleLeft className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8 text-destructive hover:text-destructive"
-                          onClick={() => handleDelete(vendor.id)}
-                          disabled={!canWrite}
-                          title="Hapus vendor"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
+                      ) : (
+                        <div className="flex items-center justify-end gap-1.5">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => openEditDialog(vendor)}
+                            disabled={!canWrite}
+                            title="Edit vendor"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8"
+                            onClick={() => handleToggleStatus(vendor.id)}
+                            disabled={!canWrite}
+                            title="Toggle status"
+                          >
+                            <ToggleLeft className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-8 w-8 text-destructive hover:text-destructive"
+                            onClick={() => handleDelete(vendor.id)}
+                            disabled={!canWrite}
+                            title="Hapus vendor"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -496,6 +705,7 @@ export default function VendorsPage() {
               setLimit(parseInt(val, 10));
               setPage(1);
             }}
+            pageSizeOptions={PAGE_SIZE_OPTIONS}
             itemLabel="Vendor"
           />
         </div>
@@ -611,6 +821,19 @@ export default function VendorsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {bulkEditOpen && (
+        <BulkEditVendorDialog
+          open={bulkEditOpen}
+          onOpenChange={setBulkEditOpen}
+          rows={selectedList}
+          onSaved={async () => {
+            setBulkEditOpen(false);
+            setSelectedRows({});
+            await fetchVendors();
+          }}
+        />
+      )}
     </>
   );
 }

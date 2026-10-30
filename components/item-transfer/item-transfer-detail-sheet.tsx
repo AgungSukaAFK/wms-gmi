@@ -273,7 +273,7 @@ export function ItemTransferDetailSheet({
                     <Clock className="h-3.5 w-3.5" /> Status Pengiriman
                   </h4>
                 </div>
-                <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3">
+                <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3 dark:bg-orange-900/30 dark:border-orange-800">
                   <ItemTransferTrackingControl
                     itId={it.id}
                     trackingStatus={it.tracking_status}
@@ -284,18 +284,18 @@ export function ItemTransferDetailSheet({
                   />
 
                   {it.status === "open" && (
-                    <p className="text-[10px] font-medium text-orange-700/80 bg-white border border-orange-200 rounded-lg p-2.5">
+                    <p className="text-[10px] font-medium text-orange-700/80 bg-card border border-orange-200 rounded-lg p-2.5">
                       Setujui Item Transfer dulu untuk mengubah status
                       pengiriman.
                     </p>
                   )}
 
                   {it.tracking_note && (
-                    <div className="rounded-lg border border-orange-200 bg-white p-3">
+                    <div className="rounded-lg border border-orange-200 bg-card p-3">
                       <p className="text-[9px] font-bold text-orange-700 uppercase mb-1">
                         Catatan Tracking
                       </p>
-                      <p className="text-[11px] font-medium text-slate-700 whitespace-pre-wrap">
+                      <p className="text-[11px] font-medium text-foreground/80 whitespace-pre-wrap">
                         {it.tracking_note}
                       </p>
                     </div>

@@ -152,6 +152,7 @@ export async function searchHmBarang(term: string): Promise<HmBarangOption[]> {
   let q = createClient()
     .from("barang")
     .select("id, part_number, part_name, part_satuan")
+    .is("deleted_at", null)
     .order("part_name")
     .limit(15);
   if (term) q = q.or(`part_number.ilike.%${term}%,part_name.ilike.%${term}%`);

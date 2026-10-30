@@ -130,9 +130,9 @@ export function MrFreezePanel({
   const today = businessToday();
 
   return (
-    <div className="rounded-xl border-2 border-sky-300 bg-sky-50/60 overflow-hidden">
+    <div className="rounded-xl border-2 border-sky-300 bg-sky-50/60 overflow-hidden dark:bg-sky-900/30 dark:border-sky-800">
       {/* Banner */}
-      <div className="flex items-start gap-3 p-4 border-b border-sky-200 bg-sky-100/60">
+      <div className="flex items-start gap-3 p-4 border-b border-sky-200 bg-sky-100/60 dark:bg-sky-900/40 dark:border-sky-800">
         <div className="h-9 w-9 rounded-lg bg-sky-500 flex items-center justify-center text-white shrink-0">
           <Snowflake className="h-5 w-5" />
         </div>
@@ -171,7 +171,7 @@ export function MrFreezePanel({
             {reports.map((r) => (
               <div
                 key={r.id}
-                className="rounded-lg border border-sky-200 bg-white p-3"
+                className="rounded-lg border border-sky-200 bg-card p-3"
               >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-[11px] font-bold text-foreground">
@@ -209,7 +209,7 @@ export function MrFreezePanel({
         {isOwner && !isModerator && (
           <div className="space-y-2">
             {openReport ? (
-              <p className="text-[11px] font-semibold text-sky-800 rounded-lg border border-sky-200 bg-white p-3">
+              <p className="text-[11px] font-semibold text-sky-800 rounded-lg border border-sky-200 bg-card p-3">
                 Laporan kendala Anda sudah dikirim dan menunggu tindakan
                 moderator. Anda belum bisa melanjutkan alur MR ini.
               </p>
@@ -222,7 +222,7 @@ export function MrFreezePanel({
                   value={kendala}
                   onChange={(e) => setKendala(e.target.value)}
                   placeholder="Jelaskan kendala kenapa sampai lewat due date tapi delivery belum dibuat..."
-                  className="min-h-20 bg-white border-sky-200 text-xs"
+                  className="min-h-20 bg-card border-sky-200 text-xs"
                   disabled={submitting}
                 />
                 <Button
@@ -245,7 +245,7 @@ export function MrFreezePanel({
 
         {/* Moderator: unfreeze / reset */}
         {isModerator && (
-          <div className="space-y-3 rounded-lg border border-sky-300 bg-white p-3">
+          <div className="space-y-3 rounded-lg border border-sky-300 bg-card p-3">
             <div className="flex items-center gap-2">
               <ShieldCheck className="h-4 w-4 text-sky-700" />
               <p className="text-[11px] font-bold text-sky-900 uppercase tracking-tight">
@@ -327,7 +327,7 @@ export function MrFreezePanel({
                   value={resolution}
                   onChange={(e) => setResolution(e.target.value)}
                   placeholder="Catatan tindakan (opsional)"
-                  className="min-h-16 bg-white border-sky-200 text-xs"
+                  className="min-h-16 bg-card border-sky-200 text-xs"
                   disabled={submitting}
                 />
                 <div className="flex gap-2">

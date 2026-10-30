@@ -71,6 +71,7 @@ export function VendorPicker({
         let q = supabase
           .from("vendors")
           .select("id, vendor_name, vendor_no")
+          .is("deleted_at", null)
           .eq("is_active", true)
           .order("vendor_name")
           .limit(20);

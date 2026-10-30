@@ -240,7 +240,7 @@ export function StockOutModeratorEditDialog({
                   "rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed",
                   blockedDowngrade
                     ? "border-destructive/40 bg-destructive/10 text-destructive"
-                    : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400",
+                    : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 dark:border-amber-800",
                 )}
               >
                 {blockedDowngrade

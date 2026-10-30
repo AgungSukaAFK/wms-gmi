@@ -556,7 +556,7 @@ export default function ItemTransferDetailPage({
       </Content>
 
       <Content title="Status Pengiriman">
-        <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3">
+        <div className="p-4 bg-orange-50/50 border border-orange-100 rounded-xl space-y-3 dark:bg-orange-900/30 dark:border-orange-800">
           {it && (
             <ItemTransferTrackingControl
               itId={Number(itId)}
@@ -569,21 +569,21 @@ export default function ItemTransferDetailPage({
           )}
 
           {it?.status === "open" && (
-            <p className="text-[10px] font-medium text-orange-700/80 bg-white border border-orange-200 rounded-lg p-2.5">
+            <p className="text-[10px] font-medium text-orange-700/80 bg-card border border-orange-200 rounded-lg p-2.5">
               Setujui Item Transfer dulu untuk mengubah status pengiriman.
             </p>
           )}
 
           {it?.tracking_note && (
-            <div className="rounded-lg border border-orange-200 bg-white p-3">
+            <div className="rounded-lg border border-orange-200 bg-card p-3">
               <p className="text-[9px] font-bold text-orange-700 uppercase mb-1">
                 Catatan Tracking
               </p>
-              <p className="text-[11px] font-medium text-slate-700 whitespace-pre-wrap">
+              <p className="text-[11px] font-medium text-foreground/80 whitespace-pre-wrap">
                 {it.tracking_note}
               </p>
               {it.tracking_note_updated_by && (
-                <p className="text-[9px] text-slate-400 font-medium mt-1.5">
+                <p className="text-[9px] text-muted-foreground/80 font-medium mt-1.5">
                   Diperbarui oleh{" "}
                   {profilesMap[it.tracking_note_updated_by] || "-"}
                   {it.tracking_note_updated_at &&

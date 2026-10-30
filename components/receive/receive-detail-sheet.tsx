@@ -312,8 +312,8 @@ export function ReceiveDetailSheet({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-slate-200 overflow-hidden shadow-2xl">
-        <SheetHeader className="px-6 pt-6 pb-4 border-b border-slate-100 shrink-0">
+      <SheetContent className="w-full sm:max-w-md p-0 flex flex-col gap-0 border-l border-border overflow-hidden shadow-2xl">
+        <SheetHeader className="px-6 pt-6 pb-4 border-b border-border/60 shrink-0">
           <div className="flex items-center justify-between gap-2">
             <SheetTitle className="flex items-center gap-2 text-sm font-black uppercase tracking-wide">
               <PackageCheck className="h-4 w-4 text-primary" />
@@ -378,7 +378,7 @@ export function ReceiveDetailSheet({
 
         {modEditMode && (
           <div className="px-6 pt-4 -mb-2">
-            <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2">
+            <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 dark:border-amber-800">
               <p className="text-[10px] font-semibold text-amber-700 dark:text-amber-400">
                 Mode Moderator Edit aktif — header (tanggal/PIC/keterangan)
                 {modItemsLocked ? "" : ", qty item,"} dan jalur/status approval
@@ -516,7 +516,7 @@ export function ReceiveDetailSheet({
                           "rounded-lg border px-3 py-2.5 text-[11px] font-semibold leading-relaxed",
                           modBlockedDowngrade
                             ? "border-destructive/40 bg-destructive/10 text-destructive"
-                            : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400",
+                            : "border-amber-300 bg-amber-50 dark:bg-amber-950/30 text-amber-700 dark:text-amber-400 dark:border-amber-800",
                         )}
                       >
                         {modBlockedDowngrade ? (
@@ -608,7 +608,7 @@ export function ReceiveDetailSheet({
                 )}
 
                 {!modEditMode && receive?.rejection_reason && (
-                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[10px] text-red-700">
+                  <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[10px] text-red-700 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800">
                     <span className="font-bold uppercase">Alasan Reject:</span>{" "}
                     {receive.rejection_reason}
                   </div>

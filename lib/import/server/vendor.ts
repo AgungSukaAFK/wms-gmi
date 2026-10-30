@@ -58,7 +58,10 @@ export const vendorHandler: ImportHandler = {
           continue;
         }
         namesInFile.set(keyOf(name), r.row);
-        const same = byName.get(keyOf(name)) || [];
+        // Vendor terhapus cuma dipakai kalau tidak ada yang aktif dengan nama sama.
+        const sameAll = byName.get(keyOf(name)) || [];
+        const sameActive = sameAll.filter((s) => !s.deleted_at);
+        const same = sameActive.length ? sameActive : sameAll;
         if (same.length > 1) {
           results.push(fail(r.row, `Ada ${same.length} vendor bernama “${name}” (${same.map((s) => s.vendor_no).join(", ")}). Isi Kode Vendor.`, name));
           continue;
@@ -84,11 +87,16 @@ export const vendorHandler: ImportHandler = {
           payload[f] = nv;
         }
       }
-      if (!Object.keys(payload).length) {
+      // Vendor terhapus (soft delete) yang ada di file = masih dipakai -> dipulihkan.
+      const restore = Boolean(existing.deleted_at);
+      const hasChanges = Object.keys(payload).length > 0;
+      if (restore) Object.assign(payload, { deleted_at: null, deleted_by: null });
+      if (!hasChanges && !restore) {
         results.push(ok(r.row, "skip", "Tidak ada perubahan", existing.vendor_no));
       } else {
+        const notes = [restore ? "Dipulihkan dari data terhapus" : null, hasChanges ? describeChanges(changes, LABELS) : null].filter(Boolean);
         ops.push({ row: r.row, kind: "update", id: existing.id, payload });
-        results.push(ok(r.row, "update", describeChanges(changes, LABELS), existing.vendor_no));
+        results.push(ok(r.row, "update", notes.join("; "), existing.vendor_no));
       }
     }
 
@@ -107,7 +115,7 @@ export const vendorHandler: ImportHandler = {
   },
 
   async prefill(ctx, params) {
-    const vendors = await fetchAll<any>(() => ctx.supabase.from("vendors").select("*").order("vendor_no"));
+    const vendors = await fetchAll<any>(() => ctx.supabase.from("vendors").select("*").is("deleted_at", null).order("vendor_no"));
     const list = params.mode === "incomplete" ? vendors.filter((v) => !str(v.address) || !str(v.telephone) || !str(v.email)) : vendors;
     return list.map((v) => ({
       vendor_no: v.vendor_no,

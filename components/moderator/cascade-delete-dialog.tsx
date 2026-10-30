@@ -132,14 +132,14 @@ export function CascadeDeleteDialog({
         </DialogHeader>
 
         {loadingPreview ? (
-          <div className="flex items-center justify-center py-8 text-slate-400">
+          <div className="flex items-center justify-center py-8 text-muted-foreground/80">
             <Loader2 className="h-5 w-5 animate-spin mr-2" />
             Memeriksa dokumen terkait...
           </div>
         ) : plan ? (
           <div className="space-y-4">
             <div>
-              <Label className="text-xs font-bold uppercase tracking-wide text-slate-500">
+              <Label className="text-xs font-bold uppercase tracking-wide text-muted-foreground">
                 Dokumen yang akan ikut terhapus ({plan.documents.length})
               </Label>
               <div className="mt-2 flex flex-wrap gap-1.5 max-h-40 overflow-y-auto">

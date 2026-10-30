@@ -6,6 +6,9 @@ import { createClient } from "@/lib/supabase/client";
 import { updateOwnFontSize, updateOwnProfile } from "@/services/user-actions";
 import { useAuthStore } from "@/stores/auth-store";
 import { Content } from "@/components/content";
+import { ThemeSwitcher } from "@/components/theme-switcher";
+import { AccentThemeSwitcher } from "@/components/accent-theme-switcher";
+import { FontSwitcher } from "@/components/font-switcher";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -461,8 +464,9 @@ export default function ProfilePage() {
                 Tampilan
               </CardTitle>
               <CardDescription className="text-xs">
-                Ukuran font tersimpan di akun Anda. Hasil cetak / PDF selalu
-                memakai ukuran Medium.
+                Ukuran font tersimpan di akun Anda; tema, warna aksen, dan
+                jenis font tersimpan di perangkat ini. Hasil cetak / PDF selalu
+                memakai tampilan standar.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-1.5">
@@ -517,6 +521,20 @@ export default function ProfilePage() {
                     </button>
                   );
                 })}
+              </div>
+
+              <div className="space-y-1.5 pt-4">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground">
+                  Tema, Warna Aksen &amp; Jenis Font
+                </Label>
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border p-2">
+                  <ThemeSwitcher />
+                  <AccentThemeSwitcher />
+                  <FontSwitcher />
+                  <span className="text-xs text-muted-foreground">
+                    Juga bisa diatur dari tombol Tampilan di top bar.
+                  </span>
+                </div>
               </div>
             </CardContent>
           </Card>

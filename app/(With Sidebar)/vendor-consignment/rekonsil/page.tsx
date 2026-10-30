@@ -75,11 +75,11 @@ function feedbackDeadline(rkTanggal: string) {
 }
 
 function statusOf(rk: any): { label: string; tone: string } {
-  if (rk.payment_status === "paid") return { label: "Lunas", tone: "bg-green-100 text-green-800 border-green-200" };
-  if (rk.invoice_no) return { label: "Invoice", tone: "bg-violet-100 text-violet-800 border-violet-200" };
-  if (rk.po_id) return { label: "PO dibuat", tone: "bg-blue-100 text-blue-800 border-blue-200" };
-  if (rk.status === "final") return { label: "BAST Final", tone: "bg-cyan-100 text-cyan-800 border-cyan-200" };
-  return { label: "Draft", tone: "bg-amber-100 text-amber-800 border-amber-200" };
+  if (rk.payment_status === "paid") return { label: "Lunas", tone: "bg-green-100 text-green-800 border-green-200 dark:bg-green-900/40 dark:text-green-300 dark:border-green-800" };
+  if (rk.invoice_no) return { label: "Invoice", tone: "bg-violet-100 text-violet-800 border-violet-200 dark:bg-violet-900/40 dark:text-violet-300 dark:border-violet-800" };
+  if (rk.po_id) return { label: "PO dibuat", tone: "bg-blue-100 text-blue-800 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800" };
+  if (rk.status === "final") return { label: "BAST Final", tone: "bg-cyan-100 text-cyan-800 border-cyan-200 dark:bg-cyan-900/40 dark:text-cyan-300 dark:border-cyan-800" };
+  return { label: "Draft", tone: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800" };
 }
 
 export default function RekonsilPage() {

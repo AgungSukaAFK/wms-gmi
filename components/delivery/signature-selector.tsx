@@ -114,8 +114,8 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
       </Button>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-112.5 p-0 rounded-xl border-slate-200 shadow-2xl overflow-hidden">
-          <DialogHeader className="p-5 bg-slate-50 border-b border-slate-100">
+        <DialogContent className="max-w-112.5 p-0 rounded-xl border-border shadow-2xl overflow-hidden">
+          <DialogHeader className="p-5 bg-muted/50 border-b border-border/60">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-3">
                 <div className="h-10 w-10 bg-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-blue-100">
@@ -125,7 +125,7 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
                   <DialogTitle className="text-lg font-bold tracking-tight">
                     Konfirmasi Tanda Tangan
                   </DialogTitle>
-                  <DialogDescription className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mt-0.5">
+                  <DialogDescription className="text-[10px] font-semibold text-muted-foreground/80 uppercase tracking-wider mt-0.5">
                     Sign & Submit Delivery
                   </DialogDescription>
                 </div>
@@ -134,7 +134,7 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
                 type="button"
                 variant="ghost"
                 size="icon"
-                className="h-9 w-9 text-slate-400 hover:text-blue-600 rounded-md"
+                className="h-9 w-9 text-muted-foreground/80 hover:text-blue-600 rounded-md"
                 onClick={fetchSignatures}
                 disabled={loading || verifying}
               >
@@ -145,9 +145,9 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
             </div>
           </DialogHeader>
 
-          <div className="p-5 space-y-5 max-h-125 overflow-y-auto bg-white">
+          <div className="p-5 space-y-5 max-h-125 overflow-y-auto bg-card">
             <div className="space-y-3">
-              <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1">
+              <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest pl-1">
                 Pilih Tanda Tangan
               </Label>
               {loading ? (
@@ -155,7 +155,7 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : signatures.length === 0 ? (
-                <div className="h-30 flex items-center justify-center text-center p-4 border border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                <div className="h-30 flex items-center justify-center text-center p-4 border border-dashed border-border rounded-xl bg-muted/30">
                   <p className="text-xs font-bold text-muted-foreground">
                     Belum ada tanda tangan. Buat dulu di Signature Manager.
                   </p>
@@ -171,8 +171,8 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
                       className={cn(
                         "relative flex flex-col items-center p-3 rounded-xl border-2 transition-all",
                         selectedId === sig.id
-                          ? "border-blue-600 bg-blue-50/50"
-                          : "border-slate-100 hover:border-slate-200",
+                          ? "border-blue-600 bg-blue-50/50 dark:bg-blue-900/30"
+                          : "border-border/60 hover:border-border",
                         verifying && "opacity-60 cursor-not-allowed",
                       )}
                     >
@@ -188,7 +188,7 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
                           "text-[10px] font-bold uppercase tracking-wider",
                           selectedId === sig.id
                             ? "text-blue-600"
-                            : "text-slate-400",
+                            : "text-muted-foreground/80",
                         )}
                       >
                         {sig.label}
@@ -205,13 +205,13 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
             </div>
 
             <div className="space-y-2 pt-1">
-              <Label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest pl-1 flex items-center gap-1.5">
+              <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest pl-1 flex items-center gap-1.5">
                 <Lock className="h-3 w-3" /> Password Signature
               </Label>
               <Input
                 type="password"
                 placeholder="Masukkan password signature..."
-                className="h-10 border-slate-200 bg-slate-50/50 focus:bg-white text-sm font-medium"
+                className="h-10 border-border bg-muted/30 focus:bg-card text-sm font-medium"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 disabled={verifying || signatures.length === 0}
@@ -222,7 +222,7 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
               <Button
                 type="button"
                 variant="outline"
-                className="w-full h-10 border-slate-200 text-slate-600 font-semibold text-xs rounded-lg hover:bg-slate-50"
+                className="w-full h-10 border-border text-foreground/70 font-semibold text-xs rounded-lg hover:bg-muted/50"
                 disabled={verifying}
               >
                 Buka Signature Manager
@@ -230,11 +230,11 @@ export function SignatureSelector({ value, onChange }: SignatureSelectorProps) {
             </Link>
           </div>
 
-          <DialogFooter className="p-5 bg-slate-50/50 border-t border-slate-100 gap-2 sm:flex-row">
+          <DialogFooter className="p-5 bg-muted/30 border-t border-border/60 gap-2 sm:flex-row">
             <Button
               type="button"
               variant="ghost"
-              className="flex-1 h-10 text-slate-400 font-semibold text-sm hover:text-slate-600 rounded-lg"
+              className="flex-1 h-10 text-muted-foreground/80 font-semibold text-sm hover:text-foreground/70 rounded-lg"
               onClick={() => setOpen(false)}
               disabled={verifying}
             >

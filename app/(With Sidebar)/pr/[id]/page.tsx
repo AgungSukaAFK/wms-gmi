@@ -551,7 +551,7 @@ export default function PRDetailPage({
                 {pr?.pr_jenis === "konsinyasi" && (
                   <Badge
                     variant="outline"
-                    className="text-[9px] font-bold uppercase border-violet-300 bg-violet-50 text-violet-700"
+                    className="text-[9px] font-bold uppercase border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800"
                   >
                     Konsinyasi · {pr?.vendor?.vendor_name}
                   </Badge>
@@ -1013,7 +1013,7 @@ export default function PRDetailPage({
                               "text-[9px] font-bold uppercase",
                               isFull
                                 ? "bg-success/10 text-success border-success/30"
-                                : "bg-amber-100 text-amber-700 border-amber-300",
+                                : "bg-amber-100 text-amber-700 border-amber-300 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
                             )}
                           >
                             {isFull ? "Sudah PO" : "Partial PO"}

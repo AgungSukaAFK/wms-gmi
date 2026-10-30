@@ -55,10 +55,10 @@ const JOB_SORT_COLUMNS: Record<string, string> = {
 };
 
 const STATUS_COLORS: Record<string, string> = {
-  open: "bg-blue-100 text-blue-700 border-blue-200",
-  approved: "bg-green-100 text-green-700 border-green-200",
-  completed: "bg-gray-100 text-gray-600 border-gray-200",
-  rejected: "bg-red-100 text-red-700 border-red-200",
+  open: "bg-blue-100 text-blue-700 border-blue-200 dark:bg-blue-900/40 dark:text-blue-300 dark:border-blue-800",
+  approved: "bg-green-100 text-green-700 border-green-200 dark:bg-green-900/40 dark:text-green-300 dark:border-green-800",
+  completed: "bg-muted text-foreground/70 border-border",
+  rejected: "bg-red-100 text-red-700 border-red-200 dark:bg-red-900/40 dark:text-red-300 dark:border-red-800",
 };
 
 export default function JobCostingListPage() {

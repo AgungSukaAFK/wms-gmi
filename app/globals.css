@@ -2,7 +2,8 @@
 
 @plugin 'tailwindcss-animate';
 
-@custom-variant dark (&:is(.dark *));
+/* soft-dark ikut dihitung sebagai dark supaya utility `dark:` tetap jalan */
+@custom-variant dark (&:is(.dark *, .soft-dark *));
 
 @theme {
   --color-background: hsl(var(--background));
@@ -110,7 +111,10 @@
     --muted-foreground: 240 5% 64.9%;
     --accent: 240 3.7% 15.9%;
     --accent-foreground: 0 0% 98%;
-    --destructive: 0 62.8% 30.6%;
+    /* Merah terang (red-400) supaya text-destructive terbaca di background
+       gelap (6.4:1). Fill solid (Button/Badge destructive) diredam pakai
+       dark:bg-destructive/60 supaya teks putih di atasnya tetap lolos AA. */
+    --destructive: 0 91% 71%;
     --destructive-foreground: 0 0% 98%;
     --success: 142.1 70.6% 45.3%;
     --success-foreground: 144.9 80.4% 97.3%;
@@ -126,6 +130,85 @@
     --chart-5: oklch(0.645 0.246 16.439);
     /* Re-tuned lightness/chroma vs --chart-1/2 (yang gagal cek contrast &
        lightness-band di dark surface) -- pasangan ini lolos semua cek. */
+    --chart-consignment-1: oklch(0.62 0.2 41);
+    --chart-consignment-2: oklch(0.62 0.15 165);
+  }
+
+  /* ====================================================== */
+  /* Soft Light - terang tapi tidak putih menyilaukan.      */
+  /* Background off-white hangat, teks abu tua (bukan hitam)*/
+  /* ====================================================== */
+  .soft-light {
+    color-scheme: light;
+    --background: 40 14% 91.5%;
+    --foreground: 30 7% 23%;
+    --card: 40 16% 94%;
+    --card-foreground: 30 7% 23%;
+    --popover: 40 16% 94%;
+    --popover-foreground: 30 7% 23%;
+    --primary: 30 7% 25%;
+    --primary-foreground: 40 16% 94%;
+    --secondary: 38 12% 86.5%;
+    --secondary-foreground: 30 7% 23%;
+    --muted: 38 12% 86.5%;
+    --muted-foreground: 30 5% 42%;
+    --accent: 38 12% 85%;
+    --accent-foreground: 30 7% 23%;
+    --destructive: 0 70% 55%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 38 9% 80.5%;
+    --input: 38 9% 80.5%;
+    --ring: 30 7% 25%;
+    --chart-1: oklch(0.646 0.222 41.116);
+    --chart-2: oklch(0.6 0.118 184.704);
+    --chart-3: oklch(0.398 0.07 227.392);
+    --chart-4: oklch(0.828 0.189 84.429);
+    --chart-5: oklch(0.769 0.188 70.08);
+    /* Token khusus wms-gmi, ikut nilai mode Light. */
+    --success: 142.1 76.2% 36.3%;
+    --success-foreground: 144.9 80.4% 97.3%;
+    --warning: 35.5 91.7% 32.9%;
+    --warning-foreground: 48 96.5% 88.8%;
+    --chart-consignment-1: oklch(0.646 0.222 41.116);
+    --chart-consignment-2: oklch(0.6 0.118 184.704);
+  }
+
+  /* ====================================================== */
+  /* Soft Dark - gelap tapi redup (abu kebiruan), tidak     */
+  /* sepekat .dark. Teks juga sedikit diredam.              */
+  /* ====================================================== */
+  .soft-dark {
+    color-scheme: dark;
+    --background: 215 14% 16.5%;
+    --foreground: 210 16% 85%;
+    --card: 215 13% 19%;
+    --card-foreground: 210 16% 85%;
+    --popover: 215 13% 19%;
+    --popover-foreground: 210 16% 85%;
+    --primary: 210 16% 87%;
+    --primary-foreground: 215 14% 15%;
+    --secondary: 215 12% 24.5%;
+    --secondary-foreground: 210 16% 85%;
+    --muted: 215 12% 24.5%;
+    --muted-foreground: 213 9% 64%;
+    --accent: 215 12% 26%;
+    --accent-foreground: 210 16% 87%;
+    /* Lihat catatan --destructive di .dark (5.4:1 di atas card). */
+    --destructive: 0 90% 74%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 215 11% 23.5%;
+    --input: 215 11% 26%;
+    --ring: 213 14% 66%;
+    --chart-1: oklch(0.488 0.243 264.376);
+    --chart-2: oklch(0.696 0.17 162.48);
+    --chart-3: oklch(0.769 0.188 70.08);
+    --chart-4: oklch(0.627 0.265 303.9);
+    --chart-5: oklch(0.645 0.246 16.439);
+    /* Token khusus wms-gmi, ikut nilai mode Dark. */
+    --success: 142.1 70.6% 45.3%;
+    --success-foreground: 144.9 80.4% 97.3%;
+    --warning: 32.1 94.6% 43.7%;
+    --warning-foreground: 26 83.3% 14.1%;
     --chart-consignment-1: oklch(0.62 0.2 41);
     --chart-consignment-2: oklch(0.62 0.15 165);
   }
@@ -155,12 +238,221 @@
     --ring: 142.1 76.2% 36.3%;
   }
 
+  /* Tema Red */
+  .theme-red {
+    --primary: 0 72.2% 50.6%;
+    --primary-foreground: 0 85.7% 97.3%;
+    --ring: 0 72.2% 50.6%;
+  }
+
+  /* Tema Orange */
+  .theme-orange {
+    --primary: 20.5 90.2% 48.2%;
+    --primary-foreground: 33.3 100% 96.5%;
+    --ring: 20.5 90.2% 48.2%;
+  }
+
+  /* Tema Amber */
+  .theme-amber {
+    --primary: 37.7 92.1% 50.2%;
+    --primary-foreground: 26 83.3% 14.1%;
+    --ring: 37.7 92.1% 50.2%;
+  }
+
+  /* Tema Emerald */
+  .theme-emerald {
+    --primary: 161.4 93.5% 30.4%;
+    --primary-foreground: 151.8 81% 95.9%;
+    --ring: 161.4 93.5% 30.4%;
+  }
+
+  /* Tema Teal */
+  .theme-teal {
+    --primary: 174.7 83.9% 31.6%;
+    --primary-foreground: 166.2 76.5% 96.7%;
+    --ring: 174.7 83.9% 31.6%;
+  }
+
+  /* Tema Cyan */
+  .theme-cyan {
+    --primary: 191.6 91.4% 36.5%;
+    --primary-foreground: 183.2 100% 96.3%;
+    --ring: 191.6 91.4% 36.5%;
+  }
+
+  /* Tema Sky */
+  .theme-sky {
+    --primary: 200.4 98% 39.4%;
+    --primary-foreground: 204 100% 97.1%;
+    --ring: 200.4 98% 39.4%;
+  }
+
+  /* Tema Indigo */
+  .theme-indigo {
+    --primary: 243.4 75.4% 58.6%;
+    --primary-foreground: 226.5 100% 96.9%;
+    --ring: 243.4 75.4% 58.6%;
+  }
+
+  /* Tema Violet */
+  .theme-violet {
+    --primary: 262.1 83.3% 57.8%;
+    --primary-foreground: 250 100% 97.6%;
+    --ring: 262.1 83.3% 57.8%;
+  }
+
+  /* Tema Purple */
+  .theme-purple {
+    --primary: 271.5 81.3% 55.9%;
+    --primary-foreground: 270 100% 98%;
+    --ring: 271.5 81.3% 55.9%;
+  }
+
+  /* Tema Fuchsia */
+  .theme-fuchsia {
+    --primary: 292.2 84.1% 60.6%;
+    --primary-foreground: 289.1 100% 97.8%;
+    --ring: 292.2 84.1% 60.6%;
+  }
+
+  /* Tema Pink */
+  .theme-pink {
+    --primary: 333.3 71.4% 50.6%;
+    --primary-foreground: 327.3 73.3% 97.1%;
+    --ring: 333.3 71.4% 50.6%;
+  }
+
+  /* ---------------------------------------------------- */
+  /* Tema warna perusahaan. Warna aslinya gelap, jadi di  */
+  /* dark mode dipakai versi lebih terang supaya tombol & */
+  /* teks primary tetap kontras dengan background gelap.  */
+  /* ---------------------------------------------------- */
+
+  /* Tema GMI - navy, #242365 / RGB(36, 35, 101) */
+  .theme-gmi {
+    --primary: 240.9 48.6% 26.7%;
+    --primary-foreground: 240 40% 98%;
+    --ring: 240.9 48.6% 26.7%;
+  }
+  .dark.theme-gmi,
+  .soft-dark.theme-gmi {
+    --primary: 241 50% 66%;
+    --primary-foreground: 241 50% 10%;
+    --ring: 241 50% 66%;
+  }
+
+  /* Tema GIS - hijau, RGB(23, 88, 49) */
+  .theme-gis {
+    --primary: 144 58.6% 21.8%;
+    --primary-foreground: 144 60% 97%;
+    --ring: 144 58.6% 21.8%;
+  }
+  .dark.theme-gis,
+  .soft-dark.theme-gis {
+    --primary: 144 45% 45%;
+    --primary-foreground: 144 60% 8%;
+    --ring: 144 45% 45%;
+  }
+
+  /* ---------------------------------------------------- */
+  /* Soft Dark: warna aksen pakai shade lebih terang      */
+  /* (setara Tailwind 400) + teks gelap, supaya tombol,   */
+  /* badge & text-primary tetap kontras di latar abu.     */
+  /* ---------------------------------------------------- */
+  .soft-dark.theme-blue {
+    --primary: 213.1 93.9% 67.8%;
+    --primary-foreground: 213.1 60% 12%;
+    --ring: 213.1 93.9% 67.8%;
+  }
+  .soft-dark.theme-sky {
+    --primary: 198.4 93.2% 59.6%;
+    --primary-foreground: 198.4 60% 12%;
+    --ring: 198.4 93.2% 59.6%;
+  }
+  .soft-dark.theme-cyan {
+    --primary: 187.9 85.7% 53.3%;
+    --primary-foreground: 187.9 60% 12%;
+    --ring: 187.9 85.7% 53.3%;
+  }
+  .soft-dark.theme-teal {
+    --primary: 172.5 66% 50.4%;
+    --primary-foreground: 172.5 60% 12%;
+    --ring: 172.5 66% 50.4%;
+  }
+  .soft-dark.theme-emerald {
+    --primary: 158.1 64.4% 51.6%;
+    --primary-foreground: 158.1 60% 12%;
+    --ring: 158.1 64.4% 51.6%;
+  }
+  .soft-dark.theme-green {
+    --primary: 141.9 69.2% 58%;
+    --primary-foreground: 141.9 60% 12%;
+    --ring: 141.9 69.2% 58%;
+  }
+  .soft-dark.theme-amber {
+    --primary: 45.9 96.7% 64.5%;
+    --primary-foreground: 45.9 60% 12%;
+    --ring: 45.9 96.7% 64.5%;
+  }
+  .soft-dark.theme-orange {
+    --primary: 27 96% 61%;
+    --primary-foreground: 27 60% 12%;
+    --ring: 27 96% 61%;
+  }
+  .soft-dark.theme-red {
+    --primary: 0 90.6% 70.8%;
+    --primary-foreground: 0 60% 12%;
+    --ring: 0 90.6% 70.8%;
+  }
+  .soft-dark.theme-rose {
+    --primary: 351.3 94.5% 71.4%;
+    --primary-foreground: 351.3 60% 12%;
+    --ring: 351.3 94.5% 71.4%;
+  }
+  .soft-dark.theme-pink {
+    --primary: 328.6 85.5% 70.2%;
+    --primary-foreground: 328.6 60% 12%;
+    --ring: 328.6 85.5% 70.2%;
+  }
+  .soft-dark.theme-fuchsia {
+    --primary: 292 91.4% 72.5%;
+    --primary-foreground: 292 60% 12%;
+    --ring: 292 91.4% 72.5%;
+  }
+  .soft-dark.theme-purple {
+    --primary: 270 95.2% 75.3%;
+    --primary-foreground: 270 60% 12%;
+    --ring: 270 95.2% 75.3%;
+  }
+  .soft-dark.theme-violet {
+    --primary: 255.1 91.7% 76.3%;
+    --primary-foreground: 255.1 60% 12%;
+    --ring: 255.1 91.7% 76.3%;
+  }
+  .soft-dark.theme-indigo {
+    --primary: 234.5 89.5% 73.9%;
+    --primary-foreground: 234.5 60% 12%;
+    --ring: 234.5 89.5% 73.9%;
+  }
+
   /* Global styles */
   * {
     @apply border-border outline-ring/50;
   }
   body {
     @apply bg-background text-foreground;
+  }
+
+  /* Jenis font pilihan user (lib/appearance.ts). Tanpa atribut = font
+     sistem bawaan Tailwind (default wms-gmi). Cetak selalu font standar. */
+  @media screen {
+    html[data-font="geist"] { font-family: var(--font-geist-sans), system-ui, sans-serif; }
+    html[data-font="inter"] { font-family: var(--font-inter), system-ui, sans-serif; }
+    html[data-font="jakarta"] { font-family: var(--font-jakarta), system-ui, sans-serif; }
+    html[data-font="poppins"] { font-family: var(--font-poppins), system-ui, sans-serif; }
+    html[data-font="nunito"] { font-family: var(--font-nunito), system-ui, sans-serif; }
+    html[data-font="roboto"] { font-family: var(--font-roboto), system-ui, sans-serif; }
+    html[data-font="atkinson"] { font-family: var(--font-atkinson), system-ui, sans-serif; }
   }
 
   html,
@@ -188,6 +480,19 @@
   ::file-selector-button {
     border-color: var(--color-gray-200, currentcolor);
   }
+
+  /* Tema soft pakai warna --border tema, bukan gray-200 yang terlalu
+     terang (terutama di soft-dark). Utility border-* tetap menang
+     karena ada di layer utilities. */
+  :is(.soft-light, .soft-dark) :is(*, ::after, ::before, ::backdrop, ::file-selector-button) {
+    border-color: hsl(var(--border));
+  }
+
+  /* Dark utama: sedikit lebih lembut dari gray-200, tapi tetap lebih
+     tegas dari soft-dark (setara zinc-600). */
+  .dark :is(*, ::after, ::before, ::backdrop, ::file-selector-button) {
+    border-color: hsl(240 5.2% 33.9%);
+  }
 }
 
 @layer utilities {
@@ -212,6 +517,82 @@
     --sidebar-border: hsl(240 3.7% 15.9%);
     --sidebar-ring: hsl(240 4.9% 83.9%);
   }
+  .soft-light {
+    --sidebar: hsl(40 13% 89%);
+    --sidebar-foreground: hsl(30 6% 28%);
+    --sidebar-primary: hsl(30 7% 25%);
+    --sidebar-primary-foreground: hsl(40 16% 94%);
+    --sidebar-accent: hsl(38 12% 84%);
+    --sidebar-accent-foreground: hsl(30 7% 23%);
+    --sidebar-border: hsl(38 9% 80.5%);
+    --sidebar-ring: hsl(var(--ring));
+  }
+  .soft-dark {
+    --sidebar: hsl(215 14% 14.5%);
+    --sidebar-foreground: hsl(210 16% 85%);
+    --sidebar-primary: hsl(210 16% 87%);
+    --sidebar-primary-foreground: hsl(215 14% 15%);
+    --sidebar-accent: hsl(215 12% 23%);
+    --sidebar-accent-foreground: hsl(210 16% 87%);
+    --sidebar-border: hsl(215 11% 20.5%);
+    --sidebar-ring: hsl(var(--ring));
+  }
+}
+
+/* ================================================================== */
+/* Cetak selalu tampilan terang apa pun tema layar (window.print() di  */
+/* halaman biasa). Halaman route cetak sudah dipaksa Light di          */
+/* lib/theme-provider.tsx.                                             */
+/* ================================================================== */
+@media print {
+  :root:is(.dark, .soft-dark, .soft-light) {
+    color-scheme: light;
+    --background: 0 0% 100%;
+    --foreground: 240 5.9% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 5.9% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 5.9% 10%;
+    --primary: 240 5.9% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 4.8% 95.9%;
+    --secondary-foreground: 240 5.9% 10%;
+    --muted: 240 4.8% 95.9%;
+    --muted-foreground: 240 3.8% 46.1%;
+    --accent: 240 4.8% 95.9%;
+    --accent-foreground: 240 5.9% 10%;
+    --border: 240 5.9% 90%;
+    --input: 240 5.9% 90%;
+  }
+}
+
+/* ================================================================== */
+/* View transitions - animasi ganti tema/aksen/font                   */
+/* (lib/view-transition.ts)                                           */
+/* ================================================================== */
+
+/* Default (aksen & font): cross-fade halus seluruh halaman */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 250ms;
+  animation-timing-function: ease-out;
+}
+
+/* Ganti mode terang/gelap: potret baru dibuka melingkar dari titik klik
+   (clip-path dianimasikan dari JS). Potret lama diam di bawahnya. */
+:root[data-vt="reveal"]::view-transition-old(root),
+:root[data-vt="reveal"]::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+/* Penanda opsi terpilih di panel Tampilan (view-transition-name di
+   topbar-appearance.tsx) bergeser ke opsi baru */
+::view-transition-group(appearance-mode),
+::view-transition-group(appearance-accent),
+::view-transition-group(appearance-font) {
+  animation-duration: 300ms;
+  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* ================================================================== */

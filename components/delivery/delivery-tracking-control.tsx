@@ -97,7 +97,7 @@ function TrackingControlForm({
         onValueChange={setStatus}
         disabled={!canEdit || saving}
       >
-        <SelectTrigger className="h-10 w-full bg-white border-orange-200 font-bold text-xs uppercase rounded-lg text-orange-700 disabled:opacity-100">
+        <SelectTrigger className="h-10 w-full bg-card border-orange-200 font-bold text-xs uppercase rounded-lg text-orange-700 disabled:opacity-100">
           <SelectValue placeholder="Pilih status pengiriman" />
         </SelectTrigger>
         <SelectContent>
@@ -124,7 +124,7 @@ function TrackingControlForm({
           value={note}
           onChange={(e) => setNote(e.target.value)}
           placeholder="Catatan tracking (opsional, khusus moderator/admin)"
-          className="min-h-20 bg-white border-orange-200 text-xs"
+          className="min-h-20 bg-card border-orange-200 text-xs"
           disabled={saving}
         />
       )}

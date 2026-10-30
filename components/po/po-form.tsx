@@ -356,6 +356,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       let q = supabase
         .from("barang")
         .select("id, part_number, part_name, part_satuan")
+        .is("deleted_at", null)
         .order("part_number")
         .limit(20);
       if (debouncedBarangSearch) {

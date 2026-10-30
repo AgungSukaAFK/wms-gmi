@@ -344,6 +344,8 @@ type VendorListParams = {
   search?: string;
   is_aktif?: "all" | "active" | "inactive";
   sort?: string;
+  /** true = hanya vendor terhapus (soft delete), default hanya yang belum. */
+  deleted?: boolean;
 };
 
 type VendorPayload = {
@@ -387,6 +389,47 @@ async function hasVendorWriteAccess() {
   };
 }
 
+async function hasVendorModeratorAccess() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { allowed: false, userId: null, error: "Unauthorized" };
+  }
+
+  const { data: roleRows, error } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  if (error) {
+    return { allowed: false, userId: user.id, error: error.message };
+  }
+
+  const roles = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
+  const allowed = roles.includes("moderator");
+
+  return {
+    allowed,
+    userId: user.id,
+    error: allowed
+      ? null
+      : "Akses ditolak. Aksi massal vendor hanya untuk moderator.",
+  };
+}
+
+// Batas id per request .in(...) supaya URL PostgREST tidak kepanjangan.
+const VENDOR_ID_CHUNK = 200;
+const VENDOR_MAX_BULK_ROWS = 1000;
+
+function chunkIds<T>(list: T[], size = VENDOR_ID_CHUNK) {
+  const out: T[][] = [];
+  for (let i = 0; i < list.length; i += size) out.push(list.slice(i, i + size));
+  return out;
+}
+
 async function generateVendorCode() {
   const supabase = await createClient();
   const { data, error } = await supabase
@@ -407,11 +450,15 @@ async function generateVendorCode() {
 export async function getVendorList(params: VendorListParams = {}) {
   const supabase = await createClient();
   const page = Math.max(1, params.page || 1);
-  const limit = Math.max(1, Math.min(200, params.limit || 20));
+  const limit = Math.max(1, Math.min(1000, params.limit || 25));
   const search = params.search?.trim() || "";
   const statusFilter = params.is_aktif || "all";
 
   let query = supabase.from("vendors").select("*", { count: "exact" });
+
+  query = params.deleted
+    ? query.not("deleted_at", "is", null)
+    : query.is("deleted_at", null);
 
   if (search) {
     query = query.or(
@@ -549,29 +596,168 @@ export async function toggleVendorStatus(id: number) {
   return { success: true };
 }
 
+export type VendorDeleteSkip = { id: number; vendor_no: string; reason: string };
+
+/**
+ * Hapus vendor = soft delete (vendors.deleted_at, migration 20261030120000).
+ * PR/PO/SPB/IT mengambil nama vendor lewat join, jadi baris vendor tetap
+ * disimpan supaya dokumen lama tidak berubah. Vendor yang barang titipannya
+ * masih ada di gudang GMI dilewati.
+ */
+async function softDeleteVendors(ids: number[], userId: string) {
+  const supabase = await createClient();
+  const uniqueIds = Array.from(new Set(ids.filter((id) => Number.isFinite(id))));
+
+  const rows: { id: number; vendor_no: string }[] = [];
+  for (const part of chunkIds(uniqueIds)) {
+    const { data, error } = await supabase
+      .from("vendors")
+      .select("id, vendor_no")
+      .in("id", part)
+      .is("deleted_at", null);
+    if (error) return { error: error.message } as const;
+    rows.push(...(data || []));
+  }
+
+  const blocked = new Set<number>();
+  for (const part of chunkIds(rows.map((r) => r.id))) {
+    const { data, error } = await supabase
+      .from("vendor_consignment_stock")
+      .select("vendor_id")
+      .in("vendor_id", part)
+      .neq("qty", 0);
+    if (error) return { error: error.message } as const;
+    for (const s of data || []) blocked.add(s.vendor_id);
+  }
+
+  const skipped: VendorDeleteSkip[] = rows
+    .filter((r) => blocked.has(r.id))
+    .map((r) => ({
+      id: r.id,
+      vendor_no: r.vendor_no,
+      reason: "Masih ada stok titipan vendor di gudang",
+    }));
+  const deletableIds = rows.filter((r) => !blocked.has(r.id)).map((r) => r.id);
+
+  const deletedAt = new Date().toISOString();
+  for (const part of chunkIds(deletableIds)) {
+    const { error } = await supabase
+      .from("vendors")
+      .update({ deleted_at: deletedAt, deleted_by: userId })
+      .in("id", part)
+      .is("deleted_at", null);
+    if (error) return { error: error.message } as const;
+  }
+
+  return { deleted: deletableIds.length, skipped } as const;
+}
+
 export async function deleteVendor(id: number) {
   const access = await hasVendorWriteAccess();
   if (!access.allowed) return { error: access.error };
 
   const supabase = await createClient();
-  const { count, error: poError } = await supabase
-    .from("pos")
-    .select("id", { count: "exact", head: true })
-    .eq("vendor_id", id);
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Unauthorized" };
 
-  if (poError) return { error: poError.message };
-
-  if ((count || 0) > 0) {
+  const result = await softDeleteVendors([id], user.id);
+  if ("error" in result) return { error: result.error };
+  if (result.skipped.length > 0) {
     return {
-      error: "Vendor tidak dapat dihapus karena sudah direferensikan pada PO",
+      error: `Vendor tidak dapat dihapus: ${result.skipped[0].reason.toLowerCase()}.`,
     };
   }
 
-  const { error } = await supabase.from("vendors").delete().eq("id", id);
+  revalidatePath("/vendors");
+  return { success: true };
+}
+
+export async function bulkDeleteVendors(ids: number[]) {
+  const access = await hasVendorModeratorAccess();
+  if (!access.allowed || !access.userId) return { error: access.error };
+  if (ids.length === 0) return { error: "Tidak ada vendor dipilih." };
+  if (ids.length > VENDOR_MAX_BULK_ROWS)
+    return { error: `Maksimal ${VENDOR_MAX_BULK_ROWS} vendor sekali hapus.` };
+
+  const result = await softDeleteVendors(ids, access.userId);
+  if ("error" in result) return { error: result.error };
+
+  revalidatePath("/vendors");
+  return { success: true, deleted: result.deleted, skipped: result.skipped };
+}
+
+export async function restoreVendors(ids: number[]) {
+  const access = await hasVendorModeratorAccess();
+  if (!access.allowed) return { error: access.error };
+  if (ids.length === 0) return { error: "Tidak ada vendor dipilih." };
+  if (ids.length > VENDOR_MAX_BULK_ROWS)
+    return { error: `Maksimal ${VENDOR_MAX_BULK_ROWS} vendor sekali pulihkan.` };
+
+  const supabase = await createClient();
+  let restored = 0;
+  for (const part of chunkIds(Array.from(new Set(ids)))) {
+    const { data, error } = await supabase
+      .from("vendors")
+      .update({ deleted_at: null, deleted_by: null })
+      .in("id", part)
+      .not("deleted_at", "is", null)
+      .select("id");
+    if (error) return { error: error.message };
+    restored += data?.length || 0;
+  }
+
+  revalidatePath("/vendors");
+  return { success: true, restored };
+}
+
+export type VendorBulkEditRow = VendorPayload & { id: number };
+
+/**
+ * Simpan edit massal vendor (hanya baris yang berubah). Satu statement upsert
+ * berdasarkan id supaya semuanya tersimpan atau tidak sama sekali; vendor_no
+ * diambil dari DB (tidak bisa diubah dari sini).
+ */
+export async function bulkUpdateVendors(rows: VendorBulkEditRow[]) {
+  const access = await hasVendorModeratorAccess();
+  if (!access.allowed) return { error: access.error };
+  if (rows.length === 0) return { error: "Tidak ada perubahan untuk disimpan." };
+  if (rows.length > VENDOR_MAX_BULK_ROWS)
+    return { error: `Maksimal ${VENDOR_MAX_BULK_ROWS} vendor sekali simpan.` };
+
+  const supabase = await createClient();
+  const ids = Array.from(new Set(rows.map((r) => Number(r.id))));
+  const vendorNoById = new Map<number, string>();
+  for (const part of chunkIds(ids)) {
+    const { data, error } = await supabase
+      .from("vendors")
+      .select("id, vendor_no")
+      .in("id", part);
+    if (error) return { error: error.message };
+    for (const v of data || []) vendorNoById.set(v.id, v.vendor_no);
+  }
+  if (vendorNoById.size !== ids.length)
+    return { error: "Sebagian vendor tidak ditemukan. Muat ulang halaman lalu coba lagi." };
+
+  const payload = rows.map((r) => ({
+    id: Number(r.id),
+    vendor_no: vendorNoById.get(Number(r.id))!,
+    vendor_name: r.vendor_name?.trim() || "",
+    address: r.address?.trim() || null,
+    telephone: r.telephone?.trim() || null,
+    email: r.email?.trim() || null,
+    pic_name: r.pic_name?.trim() || null,
+    is_active: r.is_active ?? true,
+  }));
+  const empty = payload.find((r) => !r.vendor_name);
+  if (empty) return { error: `Nama vendor wajib diisi (${empty.vendor_no}).` };
+
+  const { error } = await supabase.from("vendors").upsert(payload, { onConflict: "id" });
   if (error) return { error: error.message };
 
   revalidatePath("/vendors");
-  return { success: true };
+  return { success: true, updated: payload.length };
 }
 
 export async function upsertVendor(formData: FormData) {
@@ -921,5 +1107,245 @@ export async function updateCustomerSite(
   if (error) return { error: mapSiteError(error.message) };
 
   revalidatePath("/customers");
+  return { success: true };
+}
+
+/**
+ * UNIT SERVICES
+ * Baca: semua user login. Tulis: moderator saja (juga dijaga RLS units).
+ */
+
+type UnitPayload = {
+  kode_unit: string;
+  tipe_unit: string;
+  brand?: string | null;
+  is_active?: boolean;
+};
+
+type UnitListParams = {
+  page?: number;
+  limit?: number;
+  search?: string;
+  // "all" | "__none__" (tanpa brand) | nama brand
+  brand?: string;
+  is_aktif?: "all" | "active" | "inactive";
+  sort?: string;
+};
+
+async function hasUnitWriteAccess() {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user) {
+    return { allowed: false, error: "Unauthorized" };
+  }
+
+  const { data: roleRows, error } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+
+  if (error) {
+    return { allowed: false, error: error.message };
+  }
+
+  const roles = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
+  const allowed = roles.includes("moderator");
+
+  return {
+    allowed,
+    error: allowed
+      ? null
+      : "Akses ditolak. Hanya moderator yang diizinkan mengelola unit.",
+  };
+}
+
+function normalizeUnitPayload(payload: UnitPayload) {
+  const clean = (v?: string | null) => (v || "").replace(/\s+/g, " ").trim();
+  return {
+    kode_unit: clean(payload.kode_unit),
+    tipe_unit: clean(payload.tipe_unit),
+    brand: clean(payload.brand).toUpperCase() || null,
+    is_active: payload.is_active ?? true,
+  };
+}
+
+function mapUnitError(message: string) {
+  if (message.includes("uq_units_kode_unit")) {
+    return "Kode unit sudah terdaftar";
+  }
+  return message;
+}
+
+export async function getUnitList(params: UnitListParams = {}) {
+  const supabase = await createClient();
+  const page = Math.max(1, params.page || 1);
+  const limit = Math.max(1, Math.min(200, params.limit || 20));
+  // Kode/tipe unit banyak mengandung "(", "," -> nilai or() wajib di-quote.
+  const search = (params.search || "").replace(/["\\]/g, "").trim();
+  const statusFilter = params.is_aktif || "all";
+  const brandFilter = params.brand || "all";
+
+  let query = supabase.from("units").select("*", { count: "exact" });
+
+  if (search) {
+    query = query.or(
+      `kode_unit.ilike."%${search}%",tipe_unit.ilike."%${search}%",brand.ilike."%${search}%"`,
+    );
+  }
+
+  if (statusFilter === "active") {
+    query = query.eq("is_active", true);
+  } else if (statusFilter === "inactive") {
+    query = query.eq("is_active", false);
+  }
+
+  if (brandFilter === "__none__") {
+    query = query.is("brand", null);
+  } else if (brandFilter !== "all") {
+    query = query.eq("brand", brandFilter);
+  }
+
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  // Konvensi sort key: `${kolom}_${asc|desc}`.
+  const UNIT_SORT_COLUMNS: Record<string, string> = {
+    kode_unit: "kode_unit",
+    tipe_unit: "tipe_unit",
+    brand: "brand",
+    is_active: "is_active",
+  };
+  const [sortKeyRaw, sortDirRaw] = (params.sort || "").split(/_(asc|desc)$/);
+  const sortColumn = UNIT_SORT_COLUMNS[sortKeyRaw];
+  const sortField = sortColumn || "kode_unit";
+  const sortAscending = sortColumn ? sortDirRaw === "asc" : true;
+
+  let ordered = query.order(sortField, {
+    ascending: sortAscending,
+    nullsFirst: false,
+  });
+  if (sortField !== "kode_unit") {
+    ordered = ordered.order("kode_unit", { ascending: true });
+  }
+
+  const { data, error, count } = await ordered.range(from, to);
+
+  if (error) {
+    return { data: [], total: 0, page, limit, error: error.message };
+  }
+
+  return {
+    data: data || [],
+    total: count || 0,
+    page,
+    limit,
+    error: null,
+  };
+}
+
+// Daftar brand & tipe unik — untuk filter brand dan saran isian form.
+export async function getUnitOptions() {
+  const supabase = await createClient();
+  const brands = new Set<string>();
+  const types = new Set<string>();
+  const PAGE = 1000; // batas max_rows PostgREST
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("units")
+      .select("brand, tipe_unit")
+      .order("id")
+      .range(from, from + PAGE - 1);
+
+    if (error) return { brands: [], types: [], error: error.message };
+    for (const row of data || []) {
+      if (row.brand) brands.add(row.brand);
+      if (row.tipe_unit) types.add(row.tipe_unit);
+    }
+    if (!data || data.length < PAGE) break;
+  }
+
+  const sort = (a: string, b: string) => a.localeCompare(b, "id");
+  return {
+    brands: [...brands].sort(sort),
+    types: [...types].sort(sort),
+    error: null,
+  };
+}
+
+export async function createUnit(payload: UnitPayload) {
+  const access = await hasUnitWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const row = normalizeUnitPayload(payload);
+  if (!row.kode_unit) return { error: "Kode unit wajib diisi" };
+  if (!row.tipe_unit) return { error: "Tipe unit wajib diisi" };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("units")
+    .insert([row])
+    .select()
+    .single();
+
+  if (error) return { error: mapUnitError(error.message) };
+
+  revalidatePath("/units");
+  return { success: true, data };
+}
+
+export async function updateUnit(id: number, payload: UnitPayload) {
+  const access = await hasUnitWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const row = normalizeUnitPayload(payload);
+  if (!row.kode_unit) return { error: "Kode unit wajib diisi" };
+  if (!row.tipe_unit) return { error: "Tipe unit wajib diisi" };
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("units").update(row).eq("id", id);
+
+  if (error) return { error: mapUnitError(error.message) };
+
+  revalidatePath("/units");
+  return { success: true };
+}
+
+export async function toggleUnitStatus(id: number) {
+  const access = await hasUnitWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const supabase = await createClient();
+  const { data: current, error: currentError } = await supabase
+    .from("units")
+    .select("id, is_active")
+    .eq("id", id)
+    .single();
+
+  if (currentError || !current) return { error: "Unit tidak ditemukan" };
+
+  const { error } = await supabase
+    .from("units")
+    .update({ is_active: !current.is_active })
+    .eq("id", id);
+
+  if (error) return { error: error.message };
+
+  revalidatePath("/units");
+  return { success: true };
+}
+
+export async function deleteUnit(id: number) {
+  const access = await hasUnitWriteAccess();
+  if (!access.allowed) return { error: access.error };
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("units").delete().eq("id", id);
+  if (error) return { error: error.message };
+
+  revalidatePath("/units");
   return { success: true };
 }

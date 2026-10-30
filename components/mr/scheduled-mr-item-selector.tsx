@@ -253,7 +253,7 @@ export function ScheduledMRItemSelector({
 
   const fetchItems = async (q: string) => {
     setLoading(true);
-    let query = supabase.from("barang").select("*").limit(50);
+    let query = supabase.from("barang").select("*").is("deleted_at", null).limit(50);
     if (q) {
       const escaped = q.replace(/["\\]/g, "\\$&");
       query = query
@@ -469,8 +469,8 @@ export function ScheduledMRItemSelector({
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Package className="h-4 w-4 text-slate-500" />
-          <h3 className="font-semibold text-slate-900 text-sm">
+          <Package className="h-4 w-4 text-muted-foreground" />
+          <h3 className="font-semibold text-foreground text-sm">
             Daftar Barang ({items.length})
           </h3>
         </div>
@@ -492,15 +492,15 @@ export function ScheduledMRItemSelector({
             </Button>
           </PopoverTrigger>
           <PopoverContent
-            className="w-[calc(100vw-2rem)] max-w-100 p-0 rounded-lg border-slate-200 shadow-xl overflow-hidden"
+            className="w-[calc(100vw-2rem)] max-w-100 p-0 rounded-lg border-border shadow-xl overflow-hidden"
             align="end"
           >
-            <div className="p-2 border-b border-slate-100 bg-slate-50/50">
+            <div className="p-2 border-b border-border/60 bg-muted/30">
               <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-slate-400" />
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/80" />
                 <Input
                   placeholder="Cari Barang..."
-                  className="pl-8 h-8 bg-white border-slate-200 focus:ring-slate-900 rounded-md text-xs"
+                  className="pl-8 h-8 bg-card border-border focus:ring-slate-900 rounded-md text-xs"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   autoFocus
@@ -509,8 +509,8 @@ export function ScheduledMRItemSelector({
             </div>
             <div className="max-h-[300px] overflow-y-auto p-1">
               {loading ? (
-                <div className="p-8 text-center bg-slate-50/30">
-                  <span className="text-[10px] font-medium text-slate-400">
+                <div className="p-8 text-center bg-muted/20">
+                  <span className="text-[10px] font-medium text-muted-foreground/80">
                     Searching...
                   </span>
                 </div>
@@ -520,20 +520,20 @@ export function ScheduledMRItemSelector({
                     key={r.id}
                     onClick={() => handleAddItem(r)}
                     disabled={items.some((i) => i.part_id === r.id)}
-                    className="w-full text-left p-2 hover:bg-slate-50 transition-all rounded-md group disabled:opacity-50"
+                    className="w-full text-left p-2 hover:bg-muted/50 transition-all rounded-md group disabled:opacity-50"
                   >
                     <div className="flex justify-between items-center gap-4">
                       <div className="flex flex-col min-w-0">
-                        <code className="text-xs font-bold text-slate-900 leading-none mb-0.5">
+                        <code className="text-xs font-bold text-foreground leading-none mb-0.5">
                           {r.part_number}
                         </code>
-                        <span className="text-[10px] text-slate-400 truncate">
+                        <span className="text-[10px] text-muted-foreground/80 truncate">
                           {r.part_name}
                         </span>
                       </div>
                       <Badge
                         variant="outline"
-                        className="text-[10px] font-medium text-slate-400 h-4 px-1"
+                        className="text-[10px] font-medium text-muted-foreground/80 h-4 px-1"
                       >
                         {r.part_satuan}
                       </Badge>
@@ -541,7 +541,7 @@ export function ScheduledMRItemSelector({
                   </button>
                 ))
               ) : (
-                <div className="p-8 text-center text-slate-400 text-xs italic">
+                <div className="p-8 text-center text-muted-foreground/80 text-xs italic">
                   Barang tidak ditemukan.
                 </div>
               )}
@@ -550,32 +550,32 @@ export function ScheduledMRItemSelector({
         </Popover>
       </div>
 
-      <div className="border rounded-lg bg-white border-slate-200">
+      <div className="border rounded-lg bg-card border-border">
         <Table containerClassName="max-h-[55vh] overflow-y-auto">
-          <TableHeader className="bg-slate-50/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
+          <TableHeader className="bg-muted/30 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-slate-50 [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
             <TableRow className="h-10 hover:bg-transparent">
-              <TableHead className="w-10 text-center font-semibold text-slate-500 text-xs">
+              <TableHead className="w-10 text-center font-semibold text-muted-foreground text-xs">
                 No
               </TableHead>
-              <TableHead className="font-semibold text-slate-500 text-xs">
+              <TableHead className="font-semibold text-muted-foreground text-xs">
                 Part
               </TableHead>
-              <TableHead className="w-20 text-center font-semibold text-slate-500 text-xs">
+              <TableHead className="w-20 text-center font-semibold text-muted-foreground text-xs">
                 Qty
               </TableHead>
-              <TableHead className="w-36 font-semibold text-slate-500 text-xs">
+              <TableHead className="w-36 font-semibold text-muted-foreground text-xs">
                 Due Date
               </TableHead>
-              <TableHead className="w-28 font-semibold text-slate-500 text-xs">
+              <TableHead className="w-28 font-semibold text-muted-foreground text-xs">
                 Priority
               </TableHead>
-              <TableHead className="w-36 font-semibold text-slate-500 text-xs">
+              <TableHead className="w-36 font-semibold text-muted-foreground text-xs">
                 Site
               </TableHead>
-              <TableHead className="w-44 font-semibold text-slate-500 text-xs">
+              <TableHead className="w-44 font-semibold text-muted-foreground text-xs">
                 Alokasi (PR / Share Stock)
               </TableHead>
-              <TableHead className="w-14 text-center font-semibold text-slate-500 text-xs">
+              <TableHead className="w-14 text-center font-semibold text-muted-foreground text-xs">
                 Aksi
               </TableHead>
             </TableRow>
@@ -589,17 +589,17 @@ export function ScheduledMRItemSelector({
                 return (
                   <TableRow
                     key={item.part_id}
-                    className="hover:bg-slate-50/50 transition-colors align-top"
+                    className="hover:bg-muted/30 transition-colors align-top"
                   >
-                    <TableCell className="text-center text-slate-400 text-xs font-medium pt-3">
+                    <TableCell className="text-center text-muted-foreground/80 text-xs font-medium pt-3">
                       {index + 1}
                     </TableCell>
                     <TableCell className="py-2">
                       <div className="flex flex-col">
-                        <code className="text-sm font-bold text-slate-900">
+                        <code className="text-sm font-bold text-foreground">
                           {item.part_number}
                         </code>
-                        <span className="text-[10px] text-slate-400 truncate max-w-40">
+                        <span className="text-[10px] text-muted-foreground/80 truncate max-w-40">
                           {item.part_name}
                         </span>
                       </div>
@@ -683,7 +683,7 @@ export function ScheduledMRItemSelector({
                         variant="ghost"
                         size="icon"
                         onClick={() => removeItem(item.part_id)}
-                        className="h-7 w-7 text-slate-300 hover:text-red-500 rounded-md"
+                        className="h-7 w-7 text-muted-foreground/60 hover:text-red-500 rounded-md"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
@@ -694,7 +694,7 @@ export function ScheduledMRItemSelector({
             ) : (
               <TableRow className="h-32 hover:bg-transparent">
                 <TableCell colSpan={8} className="text-center">
-                  <span className="text-xs font-medium text-slate-400 italic">
+                  <span className="text-xs font-medium text-muted-foreground/80 italic">
                     Belum ada item. Tambahkan barang di atas.
                   </span>
                 </TableCell>
@@ -913,7 +913,7 @@ export function ScheduledMRItemSelector({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+          <div className="rounded-md border border-amber-200 bg-amber-50 p-3 dark:bg-amber-900/30 dark:border-amber-800">
             <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1.5">
               Terdapat di MR:
             </p>
@@ -922,7 +922,7 @@ export function ScheduledMRItemSelector({
                 <Badge
                   key={code}
                   variant="outline"
-                  className="border-amber-300 bg-white text-amber-700 font-bold text-xs"
+                  className="border-amber-300 bg-card text-amber-700 font-bold text-xs"
                 >
                   {code}
                 </Badge>

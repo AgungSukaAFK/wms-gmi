@@ -72,7 +72,7 @@ export async function getImportReferences(key: string): Promise<{ data?: ImportR
       if (kinds.has("customer_consignment")) refs.customer_consignment = rows.filter((r) => r.customer_type !== "non_consignment").map((r) => r.customer_no);
     }
     if (kinds.has("vendor")) {
-      const rows = await fetchAll<any>(() => supabase.from("vendors").select("vendor_no, is_active").eq("is_active", true).order("vendor_no"));
+      const rows = await fetchAll<any>(() => supabase.from("vendors").select("vendor_no, is_active").eq("is_active", true).is("deleted_at", null).order("vendor_no"));
       refs.vendor = rows.map((r) => r.vendor_no);
     }
     const tplTypes = (def.options || []).filter((o) => o.type === "approval_template").map((o: any) => o.templateType as string);

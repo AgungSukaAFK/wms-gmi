@@ -77,7 +77,7 @@ const TONE: Record<MovementTypeMeta["tone"], string> = {
   violet: "bg-violet-50 text-violet-700 dark:bg-violet-500/15 dark:text-violet-300",
   rose: "bg-rose-50 text-rose-700 dark:bg-rose-500/15 dark:text-rose-300",
   cyan: "bg-cyan-50 text-cyan-700 dark:bg-cyan-500/15 dark:text-cyan-300",
-  slate: "bg-slate-100 text-slate-600 dark:bg-slate-500/15 dark:text-slate-300",
+  slate: "bg-muted text-foreground/70 dark:bg-slate-500/15 dark:text-slate-300",
 };
 
 const fmt = (n: number) => n.toLocaleString("id-ID");

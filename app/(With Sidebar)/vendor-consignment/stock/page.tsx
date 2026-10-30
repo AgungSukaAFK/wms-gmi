@@ -42,15 +42,15 @@ import {
 } from "@/services/vendor-consignment-actions";
 
 const MOVE_LABEL: Record<string, { label: string; tone: string }> = {
-  GR: { label: "GR Konsinyasi", tone: "bg-green-100 text-green-800" },
-  GR_CANCEL: { label: "Batal GR", tone: "bg-slate-100 text-slate-700" },
-  IT_OUT: { label: "IT Keluar", tone: "bg-blue-100 text-blue-800" },
-  IT_IN: { label: "IT Masuk", tone: "bg-blue-100 text-blue-800" },
-  SPB_OUT: { label: "SPB Out", tone: "bg-rose-100 text-rose-800" },
-  SPB_CANCEL: { label: "SPB Batal", tone: "bg-slate-100 text-slate-700" },
-  SPB_ROLLBACK: { label: "SPB Rollback", tone: "bg-slate-100 text-slate-700" },
-  SPB_RETURN: { label: "Return SPB", tone: "bg-green-100 text-green-800" },
-  ADJUSTMENT: { label: "Stock Opname", tone: "bg-amber-100 text-amber-800" },
+  GR: { label: "GR Konsinyasi", tone: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" },
+  GR_CANCEL: { label: "Batal GR", tone: "bg-muted text-foreground/80" },
+  IT_OUT: { label: "IT Keluar", tone: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300" },
+  IT_IN: { label: "IT Masuk", tone: "bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300" },
+  SPB_OUT: { label: "SPB Out", tone: "bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-300" },
+  SPB_CANCEL: { label: "SPB Batal", tone: "bg-muted text-foreground/80" },
+  SPB_ROLLBACK: { label: "SPB Rollback", tone: "bg-muted text-foreground/80" },
+  SPB_RETURN: { label: "Return SPB", tone: "bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300" },
+  ADJUSTMENT: { label: "Stock Opname", tone: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
 };
 
 export default function ConsignmentStockPage() {
@@ -334,7 +334,7 @@ export default function ConsignmentStockPage() {
                   </TableRow>
                 ) : (
                   movesWithSaldo.map((m) => {
-                    const meta = MOVE_LABEL[m.type] || { label: m.type, tone: "bg-slate-100 text-slate-700" };
+                    const meta = MOVE_LABEL[m.type] || { label: m.type, tone: "bg-muted text-foreground/80" };
                     return (
                       <TableRow key={m.id} className="h-10">
                         <TableCell className="text-[11px] whitespace-nowrap">{formatDateTime(m.created_at)}</TableCell>

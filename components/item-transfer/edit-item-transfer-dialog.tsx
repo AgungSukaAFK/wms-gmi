@@ -358,6 +358,7 @@ export function EditItemTransferDialog({
         let q = supabase
           .from("barang")
           .select("id, part_number, part_name, part_satuan")
+          .is("deleted_at", null)
           .order("part_name")
           .limit(15);
         if (debouncedBarangSearch)

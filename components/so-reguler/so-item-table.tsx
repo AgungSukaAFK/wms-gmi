@@ -264,6 +264,7 @@ export function SoItemTable({
       let query = supabase
         .from("barang")
         .select("id, part_number, part_name, part_satuan")
+        .is("deleted_at", null)
         .limit(30);
       const q = debouncedSearch.trim();
       if (q) {

@@ -644,7 +644,7 @@ export default function PRListPage() {
                         {pr.pr_jenis === "konsinyasi" && (
                           <Badge
                             variant="outline"
-                            className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700"
+                            className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800"
                           >
                             Konsinyasi
                           </Badge>
