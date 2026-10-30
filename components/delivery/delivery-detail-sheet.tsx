@@ -197,7 +197,7 @@ export function DeliveryDetailSheet({
   const canFinalize =
     Boolean(delivery) &&
     !delivery?.signature_receiver_id &&
-    delivery?.tracking_status === "delivered" &&
+    ["in_transit", "delivered"].includes(delivery?.tracking_status) &&
     currentUserCabangId !== null &&
     currentUserCabangId === delivery?.ke_cabang_id;
 
@@ -691,8 +691,10 @@ export function DeliveryDetailSheet({
                         </div>
                       ) : (
                         <p className="text-[8px] text-slate-500 font-medium">
-                          {delivery?.tracking_status !== "delivered"
-                            ? "Selesaikan tracking hingga 'Barang Diterima' untuk finalisasi."
+                          {!["in_transit", "delivered"].includes(
+                            delivery?.tracking_status,
+                          )
+                            ? "Update tracking hingga 'Dalam Pengiriman' untuk finalisasi."
                             : "Hanya admin gudang penerima yang dapat menyelesaikan delivery ini."}
                         </p>
                       )}

@@ -703,10 +703,11 @@ export async function finalizeItemTransfer(itId: number, signatureId: string) {
   if (it.signature_receiver_id || it.status === "completed")
     return { success: true, alreadyFinalized: true };
 
-  if (it.tracking_status !== "delivered")
+  // TTD penerima sudah boleh sejak tahap 4 (Dalam Pengiriman).
+  if (!["in_transit", "delivered"].includes(it.tracking_status))
     return {
       error:
-        "Tracking belum mencapai 'Barang Diterima'. Update tracking terlebih dahulu.",
+        "Tracking belum mencapai 'Dalam Pengiriman'. Update tracking terlebih dahulu.",
     };
   if (profile.cabang_id !== it.ke_cabang_id)
     return {

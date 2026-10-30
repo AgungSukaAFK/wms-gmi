@@ -119,7 +119,7 @@ export function ItemTransferDetailSheet({
     it?.status === "approved" && it?.tracking_status !== "completed" && isSender;
   const canFinalize =
     it?.status === "approved" &&
-    it?.tracking_status === "delivered" &&
+    ["in_transit", "delivered"].includes(it?.tracking_status) &&
     isReceiver;
 
   const refresh = async () => {

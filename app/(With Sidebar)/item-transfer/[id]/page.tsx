@@ -192,7 +192,7 @@ export default function ItemTransferDetailPage({
     isSender;
   const canFinalize =
     it?.status === "approved" &&
-    it?.tracking_status === "delivered" &&
+    ["in_transit", "delivered"].includes(it?.tracking_status) &&
     isReceiver;
   const isModeratorOrAdmin = roleNames.some(
     (role) => role === "moderator" || role === "admin",

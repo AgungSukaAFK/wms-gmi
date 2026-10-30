@@ -1117,10 +1117,11 @@ export async function finalizeDelivery(
     };
   }
 
-  if (delivery.tracking_status !== "delivered")
+  // TTD penerima sudah boleh sejak tahap 4 (Dalam Pengiriman).
+  if (!["in_transit", "delivered"].includes(delivery.tracking_status))
     return {
       error:
-        "Delivery belum mencapai status 'Barang Diterima'. Update tracking terlebih dahulu.",
+        "Delivery belum mencapai status 'Dalam Pengiriman'. Update tracking terlebih dahulu.",
     };
   if (profile.cabang_id !== delivery.ke_cabang_id)
     return {
