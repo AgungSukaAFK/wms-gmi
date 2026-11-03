@@ -616,7 +616,7 @@ export default function RoleManagementClient({
             <AlertDialogAction
               onClick={handleDeleteRole}
               disabled={isDeleting}
-              className="bg-destructive hover:bg-destructive/90 text-xs font-bold h-9 gap-2"
+              className="bg-destructive hover:bg-destructive/90 dark:bg-destructive/60 dark:hover:bg-destructive/50 text-xs font-bold h-9 gap-2"
             >
               {isDeleting ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

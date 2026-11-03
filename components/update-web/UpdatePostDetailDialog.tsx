@@ -170,7 +170,7 @@ export function UpdatePostDetailDialog({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-white hover:bg-destructive/90"
+              className="bg-destructive text-white hover:bg-destructive/90 dark:bg-destructive/60 dark:hover:bg-destructive/50"
               onClick={(e) => {
                 e.preventDefault();
                 handleDelete();

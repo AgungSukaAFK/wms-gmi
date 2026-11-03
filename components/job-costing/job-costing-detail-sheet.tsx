@@ -680,7 +680,7 @@ export function JobCostingDetailSheet({
           <AlertDialogFooter>
             <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
             <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 dark:bg-destructive/60 dark:hover:bg-destructive/50"
               onClick={handleDeleteConfirm}
               disabled={deleting}
             >

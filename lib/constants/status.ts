@@ -25,7 +25,9 @@ export const SOLID_TONE = {
   orange: `${SOLID} bg-orange-500`,
   green: `${SOLID} bg-green-500`,
   emerald: `${SOLID} bg-emerald-600`,
-  red: "border-transparent bg-destructive text-white",
+  // Merah dark = red-400 (supaya text-destructive terbaca), jadi fill solid
+  // diredam supaya teks putih tetap kontras.
+  red: "border-transparent bg-destructive text-white dark:bg-destructive/60",
 } as const;
 
 export type StatusColor = keyof typeof SOFT;

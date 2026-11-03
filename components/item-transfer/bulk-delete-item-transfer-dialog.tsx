@@ -103,7 +103,7 @@ export function BulkDeleteItemTransferDialog({
       <DialogContent className="sm:max-w-xl p-0 rounded-xl border-border shadow-2xl overflow-hidden">
         <DialogHeader className="p-5 bg-destructive/5 border-b border-destructive/20">
           <div className="flex items-center gap-3">
-            <div className="h-10 w-10 bg-destructive rounded-xl flex items-center justify-center shadow-sm shrink-0">
+            <div className="h-10 w-10 bg-destructive dark:bg-destructive/60 rounded-xl flex items-center justify-center shadow-sm shrink-0">
               <Trash2 className="h-5 w-5 text-destructive-foreground" />
             </div>
             <div>
