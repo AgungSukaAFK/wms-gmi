@@ -41,13 +41,14 @@ import {
   ArrowRight,
   FileText,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { createConsignmentSo } from "@/services/consignment-so-actions";
 import { getCustomerSites } from "@/services/master-actions";
 import { useGoBack } from "@/hooks/use-go-back";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface ConsignmentItem {
   part_id: number;
@@ -104,7 +105,7 @@ export default function CreateConsignmentSoPage() {
         .limit(20);
       if (debouncedCustomerSearch)
         q = q.or(
-          `customer_name.ilike.%${debouncedCustomerSearch}%,customer_no.ilike.%${debouncedCustomerSearch}%`,
+          `customer_name.ilike.${orIlikePattern(debouncedCustomerSearch)},customer_no.ilike.${orIlikePattern(debouncedCustomerSearch)}`,
         );
       const { data } = await q;
       setCustomers(data || []);
@@ -136,7 +137,7 @@ export default function CreateConsignmentSoPage() {
       let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedSearch)
         q = q.or(
-          `part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedSearch)},part_name.ilike.${orIlikePattern(debouncedSearch)}`,
         );
       const { data } = await q;
       setResults(data || []);

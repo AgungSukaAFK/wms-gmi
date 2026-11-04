@@ -33,7 +33,7 @@ import {
   ExternalLink,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";

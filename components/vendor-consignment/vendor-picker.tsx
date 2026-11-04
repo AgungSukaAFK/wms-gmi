@@ -11,6 +11,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 export type VendorOption = { id: number; vendor_name: string; vendor_no: string };
 
@@ -75,7 +76,7 @@ export function VendorPicker({
           .eq("is_active", true)
           .order("vendor_name")
           .limit(20);
-        if (keyword) q = q.or(`vendor_name.ilike.%${keyword}%,vendor_no.ilike.%${keyword}%`);
+        if (keyword) q = q.or(`vendor_name.ilike.${orIlikePattern(keyword)},vendor_no.ilike.${orIlikePattern(keyword)}`);
         const { data } = await q;
         setOptions((data || []) as VendorOption[]);
       }

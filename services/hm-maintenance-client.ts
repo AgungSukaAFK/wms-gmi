@@ -13,6 +13,7 @@ import type {
   HmUnit,
   HmUnitSummary,
 } from "@/lib/hm";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 export type HmCabangOption = { id: number; nama_cabang: string; kode_cabang: string | null };
 export type HmBarangOption = { id: number; part_number: string; part_name: string; part_satuan: string };
@@ -155,7 +156,7 @@ export async function searchHmBarang(term: string): Promise<HmBarangOption[]> {
     .is("deleted_at", null)
     .order("part_name")
     .limit(15);
-  if (term) q = q.or(`part_number.ilike.%${term}%,part_name.ilike.%${term}%`);
+  if (term) q = q.or(`part_number.ilike.${orIlikePattern(term)},part_name.ilike.${orIlikePattern(term)}`);
   const { data, error } = await q;
   if (error) throw error;
   return (data ?? []) as HmBarangOption[];

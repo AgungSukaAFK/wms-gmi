@@ -1,11 +1,33 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { useDebounce } from "use-debounce";
-import { Search, Loader2, Warehouse, History, ClipboardCheck } from "lucide-react";
-import { toast } from "sonner";
+import { Loader2, Warehouse, History, ClipboardCheck } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  filterOptionLabel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -53,15 +75,51 @@ const MOVE_LABEL: Record<string, { label: string; tone: string }> = {
   ADJUSTMENT: { label: "Stock Opname", tone: "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300" },
 };
 
+// Harus sama dengan kolom yang dicari di `filtered`.
+const STOCK_SEARCH_FIELDS = ["Part Number", "Nama Part", "Vendor"];
+
+const STOCK_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getStockSortValue.
+const STOCK_COLUMNS = [
+  { id: "part", label: "Part", sortDirection: "asc", className: STOCK_HEAD_CLASS },
+  { id: "vendor", label: "Vendor", sortDirection: "asc", className: STOCK_HEAD_CLASS },
+  { id: "gudang", label: "Gudang", sortDirection: "asc", className: STOCK_HEAD_CLASS },
+  { id: "qty", label: "Qty", sortDirection: "desc", className: `text-right ${STOCK_HEAD_CLASS}` },
+  { id: "updated_at", label: "Update Terakhir", sortDirection: "desc", className: STOCK_HEAD_CLASS },
+] as const satisfies readonly ReorderableColumn[];
+type StockColumnId = (typeof STOCK_COLUMNS)[number]["id"];
+
+const getStockSortValue = (r: any, key: string) => {
+  if (key === "part") return r.barang?.part_number;
+  if (key === "vendor") return r.vendors?.vendor_name;
+  if (key === "gudang") return r.cabang?.nama_cabang;
+  return r[key];
+};
+
 export default function ConsignmentStockPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [cabangs, setCabangs] = useState<any[]>([]);
   const [vendor, setVendor] = useState<VendorOption | null>(null);
-  const [cabangId, setCabangId] = useState<string>("all");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 300);
+  const columnOrder = useColumnOrder("wms:table-column-order:vendor-consignment-stock", STOCK_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const cabangId = urlState.get("gudang", "all");
+  const setCabangId = (v: string) =>
+    urlState.set({ gudang: v === "all" ? "" : v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
   const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
 
   const [historyRow, setHistoryRow] = useState<any | null>(null);
@@ -122,6 +180,16 @@ export default function ConsignmentStockPage() {
 
   const totalQty = filtered.reduce((a, r) => a + (Number(r.qty) || 0), 0);
 
+  const sorted = sortRows(filtered, sortOrder, getStockSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
+
   const openHistory = async (row: any) => {
     setHistoryRow(row);
     setMovesLoading(true);
@@ -162,6 +230,63 @@ export default function ConsignmentStockPage() {
     load();
   };
 
+  const resetFilters = () => {
+    resetSearchQuery();
+    setVendor(null);
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (vendor)
+    activeFilters.push({
+      key: "vendor",
+      label: "Vendor",
+      value: vendor.vendor_name,
+      onRemove: () => setVendor(null),
+    });
+  if (cabangId !== "all")
+    activeFilters.push({
+      key: "gudang",
+      label: "Gudang",
+      value: filterOptionLabel(
+        cabangs.map((c) => ({ label: c.nama_cabang, value: String(c.id) })),
+        cabangId,
+      ),
+      onRemove: () => setCabangId("all"),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (r: any, id: StockColumnId) => {
+    switch (id) {
+      case "part":
+        return (
+          <TableCell>
+            <code className="block text-xs font-bold">{r.barang?.part_number}</code>
+            <span className="block text-[10px] text-muted-foreground">{r.barang?.part_name}</span>
+          </TableCell>
+        );
+      case "vendor":
+        return (
+          <TableCell className="text-xs">{r.vendors?.vendor_name}</TableCell>
+        );
+      case "gudang":
+        return (
+          <TableCell className="text-xs">{r.cabang?.nama_cabang}</TableCell>
+        );
+      case "qty":
+        return (
+          <TableCell className={`text-right text-sm font-bold ${r.qty < 0 ? "text-destructive" : ""}`}>
+            {r.qty} <span className="text-[10px] font-medium text-muted-foreground">{r.barang?.part_satuan}</span>
+          </TableCell>
+        );
+      case "updated_at":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">{formatDateTime(r.updated_at)}</TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -179,122 +304,138 @@ export default function ConsignmentStockPage() {
       </Content>
 
       <Content>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Vendor</Label>
-            <div className="flex gap-2">
-              <VendorPicker value={vendor} onChange={setVendor} placeholder="Semua vendor" className="h-9 text-xs" />
-              {vendor && (
-                <Button variant="ghost" size="sm" className="h-9 text-xs" onClick={() => setVendor(null)}>
-                  Reset
-                </Button>
-              )}
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Gudang</Label>
-            <Select value={cabangId} onValueChange={setCabangId}>
-              <SelectTrigger className="h-9 text-xs font-semibold">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua gudang</SelectItem>
-                {cabangs.map((c) => (
-                  <SelectItem key={c.id} value={String(c.id)}>
-                    {c.nama_cabang}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-[10px] uppercase font-bold text-muted-foreground">Cari</Label>
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Part number / nama part / vendor..."
-                className="h-9 bg-muted/40 pl-9 text-xs"
-              />
-            </div>
-          </div>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Part number, nama part, atau vendor..."
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={STOCK_SEARCH_FIELDS}
+          />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Vendor">
+                <VendorPicker
+                  value={vendor}
+                  onChange={setVendor}
+                  placeholder="Semua vendor"
+                  className="h-9 text-xs"
+                />
+              </FilterField>
+
+              <FilterField label="Gudang">
+                <Select value={cabangId} onValueChange={setCabangId}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua gudang</SelectItem>
+                    {cabangs.map((c) => (
+                      <SelectItem key={c.id} value={String(c.id)}>
+                        {c.nama_cabang}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
+      <Content>
         <div className="mb-2 text-xs text-muted-foreground">
           {filtered.length} baris · total qty <span className="font-bold text-foreground">{totalQty}</span>
         </div>
-        <div className="rounded-lg border border-border overflow-x-auto">
-          <Table>
-            <TableHeader>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={6}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
               <TableRow>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Part</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Vendor</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Gudang</TableHead>
-                <TableHead className="text-right text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Update Terakhir</TableHead>
-                <TableHead className="w-24" />
+                <TableCell
+                  colSpan={6}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Tidak ada stok konsinyasi"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+            ) : (
+              pageRows.map((r) => (
+                <TableRow key={r.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(r, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => openHistory(r)}
+                      >
+                        <History className="mr-2 h-4 w-4" /> Kartu Stok
+                      </DropdownMenuItem>
+                      {isModeratorOrAdmin && (
+                        <DropdownMenuItem
+                          onSelect={() => {
+                            setOpnameRow(r);
+                            setOpnameQty(String(r.qty));
+                            setOpnameNote("");
+                          }}
+                        >
+                          <ClipboardCheck className="mr-2 h-4 w-4" /> Stock Opname
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
-                  >
-                    Tidak ada stok konsinyasi
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell>
-                      <code className="block text-xs font-bold">{r.barang?.part_number}</code>
-                      <span className="block text-[10px] text-muted-foreground">{r.barang?.part_name}</span>
-                    </TableCell>
-                    <TableCell className="text-xs">{r.vendors?.vendor_name}</TableCell>
-                    <TableCell className="text-xs">{r.cabang?.nama_cabang}</TableCell>
-                    <TableCell className={`text-right text-sm font-bold ${r.qty < 0 ? "text-destructive" : ""}`}>
-                      {r.qty} <span className="text-[10px] font-medium text-muted-foreground">{r.barang?.part_satuan}</span>
-                    </TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">{formatDateTime(r.updated_at)}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 justify-end">
-                        <Button variant="ghost" size="icon" className="h-7 w-7" title="Kartu stok" onClick={() => openHistory(r)}>
-                          <History className="h-3.5 w-3.5" />
-                        </Button>
-                        {isModeratorOrAdmin && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7"
-                            title="Stock opname"
-                            onClick={() => {
-                              setOpnameRow(r);
-                              setOpnameQty(String(r.qty));
-                              setOpnameNote("");
-                            }}
-                          >
-                            <ClipboardCheck className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Stok"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>

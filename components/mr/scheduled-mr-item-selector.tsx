@@ -55,7 +55,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { getMrItemConstraint } from "@/services/procurement-actions";
 import { requestStockSetting } from "@/services/stock-request-actions";

@@ -47,7 +47,7 @@ import {
   ShieldAlert,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { DatePickerString } from "@/components/date-picker-string";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
@@ -67,6 +67,7 @@ import {
   koliFormPayload,
   validateKoliForm,
 } from "@/lib/shipment";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 const COURIERS = [
   "JNE",
@@ -348,7 +349,7 @@ export function EditItemTransferDialog({
             .limit(15);
           if (debouncedBarangSearch)
             q = q.or(
-              `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+              `part_number.ilike.${orIlikePattern(debouncedBarangSearch)},part_name.ilike.${orIlikePattern(debouncedBarangSearch)}`,
               { referencedTable: "barang" },
             );
           const { data } = await q;
@@ -363,7 +364,7 @@ export function EditItemTransferDialog({
           .limit(15);
         if (debouncedBarangSearch)
           q = q.or(
-            `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+            `part_number.ilike.${orIlikePattern(debouncedBarangSearch)},part_name.ilike.${orIlikePattern(debouncedBarangSearch)}`,
           );
         const { data } = await q;
         setBarangResults(data || []);

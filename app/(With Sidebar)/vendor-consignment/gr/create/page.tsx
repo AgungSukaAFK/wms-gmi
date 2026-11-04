@@ -25,7 +25,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { ChevronLeft, PackageCheck, Loader2, Calendar as CalendarIcon, AlertTriangle } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import {

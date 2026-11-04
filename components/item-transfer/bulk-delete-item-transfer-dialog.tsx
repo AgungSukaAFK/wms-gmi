@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { CheckCircle2, Info, Loader2, Trash2, XCircle } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { moderatorDeleteDocument } from "@/services/moderator-delete-actions";
 
 export type BulkDeleteItemTransferRow = {

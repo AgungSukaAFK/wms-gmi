@@ -2,15 +2,49 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useDebounce } from "use-debounce";
-import { Plus, Search, Loader2, PackageCheck, Eye, Trash2, Printer, CheckCircle2 } from "lucide-react";
-import { toast } from "sonner";
+import { Plus, Loader2, PackageCheck, Eye, Trash2, Printer, CheckCircle2 } from "lucide-react";
+import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -27,16 +61,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { formatDate } from "@/lib/utils";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 import {
@@ -45,18 +69,61 @@ import {
   resolveConsignmentGrComplaint,
 } from "@/services/vendor-consignment-actions";
 
+// Harus sama dengan kolom yang dicari di `filtered`.
+const GR_SEARCH_FIELDS = ["Kode GR", "Surat Jalan", "Kode PR", "Vendor"];
+
+const GR_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getGrSortValue.
+const GR_COLUMNS = [
+  { id: "gr_kode", label: "Kode GR", sortDirection: "asc", className: GR_HEAD_CLASS },
+  { id: "gr_tanggal", label: "Tanggal", sortDirection: "desc", className: GR_HEAD_CLASS },
+  { id: "pr", label: "PR", sortDirection: "asc", className: GR_HEAD_CLASS },
+  { id: "vendor", label: "Vendor", sortDirection: "asc", className: GR_HEAD_CLASS },
+  { id: "gudang", label: "Gudang", sortDirection: "asc", className: GR_HEAD_CLASS },
+  { id: "no_surat_jalan", label: "Surat Jalan", sortDirection: "asc", className: GR_HEAD_CLASS },
+  { id: "sesuai", label: "Sesuai / Kirim", className: `text-center ${GR_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type GrColumnId = (typeof GR_COLUMNS)[number]["id"];
+
+const getGrSortValue = (gr: any, key: string) => {
+  if (key === "pr") return gr.prs?.pr_kode;
+  if (key === "vendor") return gr.vendors?.vendor_name;
+  if (key === "gudang") return gr.cabang?.nama_cabang;
+  return gr[key];
+};
+
 export default function ConsignmentGrPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 300);
-  const [onlyOpenComplaint, setOnlyOpenComplaint] = useState(false);
+  const columnOrder = useColumnOrder("wms:table-column-order:vendor-consignment-gr", GR_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const komplainFilter = urlState.get("komplain", "all");
+  const setKomplainFilter = (v: string) =>
+    urlState.set({ komplain: v === "all" ? "" : v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [detailId, setDetailId] = useState<number | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
-  const [deleting, setDeleting] = useState(false);
   const [resolveTarget, setResolveTarget] = useState<any | null>(null);
   const [resolveNote, setResolveNote] = useState("");
   const [resolving, setResolving] = useState(false);
@@ -92,7 +159,10 @@ export default function ConsignmentGrPage() {
     (gr.vendor_consignment_gr_items || []).some((i: any) => i.resolution_status === "open");
 
   const filtered = rows.filter((gr) => {
-    if (onlyOpenComplaint && !hasOpenComplaint(gr)) return false;
+    if (komplainFilter === "open" && !hasOpenComplaint(gr)) return false;
+    const tanggal = (gr.gr_tanggal || "").slice(0, 10);
+    if (dateFrom && tanggal < dateFrom) return false;
+    if (dateTo && tanggal > dateTo) return false;
     const q = debouncedSearch.toLowerCase();
     if (!q) return true;
     return (
@@ -103,16 +173,26 @@ export default function ConsignmentGrPage() {
     );
   });
 
+  const sorted = sortRows(filtered, sortOrder, getGrSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
+
   const detail = rows.find((r) => r.id === detailId) || null;
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    setDeleting(true);
     const res = await deleteConsignmentGr(deleteTarget.id);
-    setDeleting(false);
-    if (res.error) return toast.error(res.error);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
     toast.success("GR dihapus, stok konsinyasinya sudah dikurangi kembali.");
-    setDeleteTarget(null);
     load();
   };
 
@@ -126,6 +206,79 @@ export default function ConsignmentGrPage() {
     setResolveTarget(null);
     setResolveNote("");
     load();
+  };
+
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (komplainFilter === "open")
+    activeFilters.push({
+      key: "komplain",
+      label: "Komplain",
+      value: "Belum selesai",
+      onRemove: () => setKomplainFilter("all"),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (gr: any, id: GrColumnId) => {
+    const items = gr.vendor_consignment_gr_items || [];
+    const terima = items.reduce((a: number, i: any) => a + i.qty_terima, 0);
+    const kirim = items.reduce((a: number, i: any) => a + i.qty_kirim, 0);
+
+    switch (id) {
+      case "gr_kode":
+        return (
+          <TableCell className="font-bold text-xs">
+            {gr.gr_kode}
+            {hasOpenComplaint(gr) && (
+              <Badge variant="destructive" className="ml-1.5 text-[9px] font-bold">
+                Komplain
+              </Badge>
+            )}
+          </TableCell>
+        );
+      case "gr_tanggal":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">{formatDate(gr.gr_tanggal)}</TableCell>
+        );
+      case "pr":
+        return (
+          <TableCell className="text-xs">
+            <Link href={`/pr/${gr.pr_id}`} className="hover:underline">
+              {gr.prs?.pr_kode || "-"}
+            </Link>
+          </TableCell>
+        );
+      case "vendor":
+        return (
+          <TableCell className="text-xs">{gr.vendors?.vendor_name || "-"}</TableCell>
+        );
+      case "gudang":
+        return (
+          <TableCell className="text-xs">{gr.cabang?.nama_cabang || "-"}</TableCell>
+        );
+      case "no_surat_jalan":
+        return (
+          <TableCell className="text-xs">{gr.no_surat_jalan}</TableCell>
+        );
+      case "sesuai":
+        return (
+          <TableCell className="text-center text-xs font-bold">
+            {terima} / {kirim}
+          </TableCell>
+        );
+    }
   };
 
   return (
@@ -157,109 +310,142 @@ export default function ConsignmentGrPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col sm:flex-row gap-3 sm:items-center">
-          <div className="relative min-w-0 flex-1 xl:max-w-100">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Cari kode GR, PR, surat jalan, vendor..."
-              className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium"
-            />
-          </div>
-          <Button
-            variant={onlyOpenComplaint ? "default" : "outline"}
-            size="sm"
-            className="h-9 text-xs"
-            onClick={() => setOnlyOpenComplaint((v) => !v)}
-          >
-            Komplain belum selesai
-          </Button>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari kode GR, PR, surat jalan, vendor..."
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={GR_SEARCH_FIELDS}
+          />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Komplain">
+                <Select value={komplainFilter} onValueChange={setKomplainFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua GR</SelectItem>
+                    <SelectItem value="open">Komplain belum selesai</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Tanggal GR">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border overflow-x-auto">
-          <Table>
-            <TableHeader>
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1100px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={8}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
               <TableRow>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode GR</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Tanggal</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">PR</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Vendor</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Gudang</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Surat Jalan</TableHead>
-                <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Sesuai / Kirim</TableHead>
-                <TableHead className="w-24" />
+                <TableCell
+                  colSpan={8}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Belum ada GR Konsinyasi"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+            ) : (
+              pageRows.map((gr) => (
+                <TableRow key={gr.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(gr, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => setDetailId(gr.id)}
+                      >
+                        <Eye className="mr-2 h-4 w-4" /> Lihat Detail
+                      </DropdownMenuItem>
+                      {isModeratorOrAdmin && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => setDeleteTarget(gr)}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
-                  >
-                    Belum ada GR Konsinyasi
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((gr) => {
-                  const items = gr.vendor_consignment_gr_items || [];
-                  const terima = items.reduce((a: number, i: any) => a + i.qty_terima, 0);
-                  const kirim = items.reduce((a: number, i: any) => a + i.qty_kirim, 0);
-                  return (
-                    <TableRow key={gr.id}>
-                      <TableCell className="font-bold text-xs">
-                        {gr.gr_kode}
-                        {hasOpenComplaint(gr) && (
-                          <Badge variant="destructive" className="ml-1.5 text-[9px] font-bold">
-                            Komplain
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">{formatDate(gr.gr_tanggal)}</TableCell>
-                      <TableCell className="text-xs">
-                        <Link href={`/pr/${gr.pr_id}`} className="hover:underline">
-                          {gr.prs?.pr_kode || "-"}
-                        </Link>
-                      </TableCell>
-                      <TableCell className="text-xs">{gr.vendors?.vendor_name || "-"}</TableCell>
-                      <TableCell className="text-xs">{gr.cabang?.nama_cabang || "-"}</TableCell>
-                      <TableCell className="text-xs">{gr.no_surat_jalan}</TableCell>
-                      <TableCell className="text-center text-xs font-bold">
-                        {terima} / {kirim}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1 justify-end">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setDetailId(gr.id)}>
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
-                          {isModeratorOrAdmin && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                              onClick={() => setDeleteTarget(gr)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="GR"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetailId(null)}>
@@ -382,23 +568,15 @@ export default function ConsignmentGrPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus GR {deleteTarget?.gr_kode}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Stok konsinyasi yang masuk lewat GR ini akan dikurangi kembali. Ditolak kalau barangnya
-              sudah ditransfer/dipakai. Tindakan ini tidak bisa dibatalkan.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={deleting}>
-              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Hapus"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        destructive
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Hapus GR ${deleteTarget?.gr_kode ?? ""}?`}
+        description="Stok konsinyasi yang masuk lewat GR ini akan dikurangi kembali. Ditolak kalau barangnya sudah ditransfer/dipakai. Tindakan ini tidak bisa dibatalkan."
+        confirmText="Hapus"
+        onConfirm={handleDelete}
+      />
     </>
   );
 }

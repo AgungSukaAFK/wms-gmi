@@ -55,7 +55,7 @@ import {
   PackageCheck,
   ClipboardList,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
@@ -74,6 +74,7 @@ import { createItemTransfer } from "@/services/item-transfer-actions";
 import { getConsignmentMrOutstanding } from "@/services/vendor-consignment-actions";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 import { useGoBack } from "@/hooks/use-go-back";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface ITItem {
   part_id: number;
@@ -254,7 +255,7 @@ export default function CreateItemTransferPage() {
           .limit(15);
         if (debouncedSearch)
           q = q.or(
-            `part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`,
+            `part_number.ilike.${orIlikePattern(debouncedSearch)},part_name.ilike.${orIlikePattern(debouncedSearch)}`,
             { referencedTable: "barang" },
           );
         const { data } = await q;
@@ -269,7 +270,7 @@ export default function CreateItemTransferPage() {
       let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedSearch)
         q = q.or(
-          `part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedSearch)},part_name.ilike.${orIlikePattern(debouncedSearch)}`,
         );
       const { data } = await q;
       setResults(data || []);

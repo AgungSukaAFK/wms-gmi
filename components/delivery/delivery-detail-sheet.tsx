@@ -46,7 +46,7 @@ import {
   finalizeDelivery,
   cancelDelivery,
 } from "@/services/inventory-actions";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";

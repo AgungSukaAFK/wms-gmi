@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import BarangClient from "./BarangClient";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface SearchParams {
   q?: string;
@@ -47,7 +48,7 @@ export default async function BarangPage({
       : query.is("deleted_at", null);
 
   if (q) {
-    query = query.or(`part_number.ilike.%${q}%,part_name.ilike.%${q}%`);
+    query = query.or(`part_number.ilike.${orIlikePattern(q)},part_name.ilike.${orIlikePattern(q)}`);
   }
 
   // "to" pakai batas awal hari berikutnya (bukan lte tanggal itu sendiri)

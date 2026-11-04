@@ -42,7 +42,7 @@ import {
 } from "lucide-react";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { approveReceive, rejectReceive } from "@/services/procurement-actions";
 import {
   moderatorEditReceive,

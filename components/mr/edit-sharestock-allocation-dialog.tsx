@@ -30,7 +30,7 @@ import {
   Info,
   Lock,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { moderatorEditShareStockAllocations } from "@/services/moderator-edit-actions";
 
 // Duplikat dari DELIVERY_ACTIVE_STATUSES (services/inventory-actions.ts) —

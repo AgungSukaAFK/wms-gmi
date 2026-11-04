@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 /**
  * CABANG SERVICES
@@ -462,7 +463,7 @@ export async function getVendorList(params: VendorListParams = {}) {
 
   if (search) {
     query = query.or(
-      `vendor_name.ilike.%${search}%,vendor_no.ilike.%${search}%,email.ilike.%${search}%,pic_name.ilike.%${search}%`,
+      `vendor_name.ilike.${orIlikePattern(search)},vendor_no.ilike.${orIlikePattern(search)},email.ilike.${orIlikePattern(search)},pic_name.ilike.${orIlikePattern(search)}`,
     );
   }
 
@@ -866,7 +867,7 @@ export async function getCustomerList(params: CustomerListParams = {}) {
 
   if (search) {
     query = query.or(
-      `customer_name.ilike.%${search}%,customer_no.ilike.%${search}%,email.ilike.%${search}%,pic_name.ilike.%${search}%`,
+      `customer_name.ilike.${orIlikePattern(search)},customer_no.ilike.${orIlikePattern(search)},email.ilike.${orIlikePattern(search)},pic_name.ilike.${orIlikePattern(search)}`,
     );
   }
 
@@ -1192,7 +1193,7 @@ export async function getUnitList(params: UnitListParams = {}) {
 
   if (search) {
     query = query.or(
-      `kode_unit.ilike."%${search}%",tipe_unit.ilike."%${search}%",brand.ilike."%${search}%"`,
+      `kode_unit.ilike.${orIlikePattern(search)},tipe_unit.ilike.${orIlikePattern(search)},brand.ilike.${orIlikePattern(search)}`,
     );
   }
 

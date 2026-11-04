@@ -2,42 +2,81 @@
 
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
-import { Plus, Search, FileText, Settings2, Loader2 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  Plus,
+  FileText,
+  Settings2,
+} from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { ApprovalTemplate, ApprovalType } from "@/type";
 import { TemplateEditor } from "@/components/approval/template-editor";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  filterOptionLabel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { MultiSelect } from "@/components/ui/multi-select";
 
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { useDebounce } from "use-debounce";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 const TEMPLATE_SORT_COLUMNS: Record<string, string> = {
   name: "name",
   type: "type",
   updated_at: "updated_at",
 };
+
+// Harus sama dengan kolom yang dicari di fetchData.
+const TEMPLATE_SEARCH_FIELDS = ["Nama Template"];
+
+const TEMPLATE_TYPE_OPTIONS = [
+  "Material Request",
+  "Purchase Request",
+  "Purchase Order",
+  "Receive Item",
+  "Item Transfer",
+  "Stock Out - SPB",
+  "Stock Out - SPB Invoice",
+  "Return SPB",
+  "Working Order",
+].map((value) => ({ label: value, value }));
+
+const TEMPLATE_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di TEMPLATE_SORT_COLUMNS.
+const TEMPLATE_COLUMNS = [
+  { id: "name", label: "Nama Template", sortDirection: "asc", className: `w-50 ${TEMPLATE_HEAD_CLASS}` },
+  { id: "type", label: "Jenis Dokumen", sortDirection: "asc", className: TEMPLATE_HEAD_CLASS },
+  { id: "lokasi", label: "Lokasi", className: TEMPLATE_HEAD_CLASS },
+  { id: "updated_at", label: "Pembaruan Terakhir", sortDirection: "desc", className: `w-37.5 ${TEMPLATE_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type TemplateColumnId = (typeof TEMPLATE_COLUMNS)[number]["id"];
 
 export default function ApprovalTemplatesPage() {
   const supabase = createClient();
@@ -52,13 +91,35 @@ export default function ApprovalTemplatesPage() {
     useState<ApprovalTemplate | null>(null);
 
   // Pagination & Filters
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 500);
-  const [typeFilters, setTypeFilters] = useState<string[]>([]);
-  const [cabangFilters, setCabangFilters] = useState<string[]>([]);
-  const [sortOrder, setSortOrder] = useState<string>("updated_at_desc");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
+  const columnOrder = useColumnOrder("wms:table-column-order:approval-template", TEMPLATE_COLUMNS);
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const typeFilters = urlState.list("jenis");
+  const setTypeFilters = (v: string[]) =>
+    urlState.set({ jenis: v }, { resetPage: true });
+  // Admin non-moderator terkunci ke cabangnya sendiri, apa pun isi URL-nya.
+  const lockedCabang =
+    userProfile?.isAdmin && !userProfile?.isModerator
+      ? userProfile.cabang_id?.toString()
+      : undefined;
+  const urlCabangFilters = urlState.list("lokasi");
+  const cabangFilters = useMemo(
+    () => (lockedCabang ? [lockedCabang] : urlCabangFilters),
+    [lockedCabang, urlCabangFilters],
+  );
+  const setCabangFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "updated_at_desc");
+  const setSortOrder = (v: string) =>
+    urlState.set({ sort: v === "updated_at_desc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
   const [totalCount, setTotalCount] = useState(0);
 
   const fetchData = async () => {
@@ -87,10 +148,6 @@ export default function ApprovalTemplatesPage() {
             ),
           };
           setUserProfile(processedProfile);
-
-          if (processedProfile.isAdmin && !processedProfile.isModerator) {
-            setCabangFilters([processedProfile.cabang_id.toString()]);
-          }
         }
       }
     }
@@ -173,6 +230,91 @@ export default function ApprovalTemplatesPage() {
     setIsEditorOpen(true);
   };
 
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  const cabangOptions = [
+    { label: "Global (Semua Lokasi)", value: "global" },
+    ...cabang.map((c) => ({
+      label: c.nama_cabang,
+      value: c.id.toString(),
+    })),
+  ];
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+  const activeFilters: ActiveFilter[] = [];
+  if (typeFilters.length > 0)
+    activeFilters.push({
+      key: "jenis",
+      label: "Jenis",
+      value: optionLabels(TEMPLATE_TYPE_OPTIONS, typeFilters),
+      onRemove: () => setTypeFilters([]),
+    });
+  if (cabangFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Lokasi",
+      value: optionLabels(cabangOptions, cabangFilters),
+      onRemove: lockedCabang ? undefined : () => setCabangFilters([]),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (template: ApprovalTemplate, id: TemplateColumnId) => {
+    switch (id) {
+      case "name":
+        return (
+          <TableCell>
+            <span className="font-bold text-foreground">
+              {template.name}
+            </span>
+          </TableCell>
+        );
+      case "type":
+        return (
+          <TableCell>
+            <div className="flex items-center gap-2">
+              <FileText className="h-4 w-4 text-primary" />
+              <span className="font-medium text-muted-foreground font-mono text-xs">
+                {template.type}
+              </span>
+            </div>
+          </TableCell>
+        );
+      case "lokasi":
+        return (
+          <TableCell>
+            {template.cabang_id ? (
+              <Badge
+                variant="outline"
+                className="font-normal border-border text-muted-foreground bg-background"
+              >
+                {template.cabang?.nama_cabang || "Unknown"}
+              </Badge>
+            ) : (
+              <Badge
+                variant="secondary"
+                className="font-bold bg-primary/10 text-primary border-none"
+              >
+                Semua Lokasi (Global)
+              </Badge>
+            )}
+          </TableCell>
+        );
+      case "updated_at":
+        return (
+          <TableCell className="text-muted-foreground text-xs">
+            {formatDate(template.updated_at)}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -200,199 +342,127 @@ export default function ApprovalTemplatesPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari nama template..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
-              value={searchQuery}
-              onChange={(e) => {
-                setSearchQuery(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <MultiSelect
-              className="w-full sm:w-45"
-              placeholder="Semua Jenis"
-              searchable
-              selected={typeFilters}
-              onChange={(vals) => {
-                setTypeFilters(vals);
-                setPage(1);
-              }}
-              options={[
-                { label: "Material Request", value: "Material Request" },
-                { label: "Purchase Request", value: "Purchase Request" },
-                { label: "Purchase Order", value: "Purchase Order" },
-                { label: "Receive Item", value: "Receive Item" },
-                { label: "Item Transfer", value: "Item Transfer" },
-                { label: "Stock Out - SPB", value: "Stock Out - SPB" },
-                {
-                  label: "Stock Out - SPB Invoice",
-                  value: "Stock Out - SPB Invoice",
-                },
-                { label: "Return SPB", value: "Return SPB" },
-                { label: "Working Order", value: "Working Order" },
-              ]}
-            />
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari nama template..."
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={TEMPLATE_SEARCH_FIELDS}
+          />
 
-            <MultiSelect
-              className="w-full sm:w-45"
-              placeholder="Lokasi: Semua"
-              searchable
-              disabled={userProfile?.isAdmin && !userProfile?.isModerator}
-              selected={cabangFilters}
-              onChange={(vals) => {
-                setCabangFilters(vals);
-                setPage(1);
-              }}
-              options={[
-                { label: "Global (Semua Lokasi)", value: "global" },
-                ...cabang.map((c) => ({
-                  label: c.nama_cabang,
-                  value: c.id.toString(),
-                })),
-              ]}
-            />
-          </div>
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Jenis Dokumen">
+                <MultiSelect
+                  placeholder="Semua Jenis"
+                  searchable
+                  selected={typeFilters}
+                  onChange={setTypeFilters}
+                  options={TEMPLATE_TYPE_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Lokasi">
+                <MultiSelect
+                  placeholder="Lokasi: Semua"
+                  searchable
+                  disabled={!!lockedCabang}
+                  selected={cabangFilters}
+                  onChange={setCabangFilters}
+                  options={cabangOptions}
+                />
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="flex-1 overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50">
-              <TableRow className="border-b border-border hover:bg-transparent">
-                <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
-                  No
-                </TableHead>
-                <SortableTableHead
-                  sortKey="name"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-50 text-[10px] font-black uppercase text-muted-foreground"
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[900px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
+                No
+              </TableHead>
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={6}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : templates.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={6}
+                  className="h-40 text-center text-muted-foreground italic text-sm"
                 >
-                  Nama Template
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="type"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Jenis Dokumen
-                </SortableTableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
-                  Lokasi
-                </TableHead>
-                <SortableTableHead
-                  sortKey="updated_at"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  defaultDir="desc"
-                  className="w-37.5 text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Pembaruan Terakhir
-                </SortableTableHead>
-                <TableHead className="text-right w-25 text-[10px] font-black uppercase text-muted-foreground">
-                  Aksi
-                </TableHead>
+                  Tidak ada template yang ditemukan.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-24 text-center">
-                    <div className="flex items-center justify-center gap-2 text-muted-foreground">
-                      <Loader2 className="h-4 w-4 animate-spin" /> Sedang memuat
-                      data...
-                    </div>
+            ) : (
+              templates.map((template, index) => (
+                <TableRow
+                  key={template.id}
+                  className="group hover:bg-muted/30 transition-all border-b border-border/50 h-14"
+                >
+                  <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
+                    {(page - 1) * limit + index + 1}
                   </TableCell>
-                </TableRow>
-              ) : templates.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="h-24 text-center text-muted-foreground"
-                  >
-                    Tidak ada template yang ditemukan.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                templates.map((template, index) => (
-                  <TableRow
-                    key={template.id}
-                    className="hover:bg-muted/30 transition-colors border-b border-border/50"
-                  >
-                    <TableCell className="text-center text-muted-foreground text-xs font-medium">
-                      {(page - 1) * limit + index + 1}
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-bold text-foreground">
-                        {template.name}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-2">
-                        <FileText className="h-4 w-4 text-primary" />
-                        <span className="font-medium text-muted-foreground font-mono text-xs">
-                          {template.type}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {template.cabang_id ? (
-                        <Badge
-                          variant="outline"
-                          className="font-normal border-border text-muted-foreground bg-background"
-                        >
-                          {template.cabang?.nama_cabang || "Unknown"}
-                        </Badge>
-                      ) : (
-                        <Badge
-                          variant="secondary"
-                          className="font-bold bg-primary/10 text-primary border-none"
-                        >
-                          Semua Lokasi (Global)
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-muted-foreground text-xs">
-                      {formatDate(template.updated_at)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 hover:bg-primary/10 hover:text-primary"
-                        onClick={() => handleEditTemplate(template)}
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(template, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => handleEditTemplate(template)}
                       >
-                        <Settings2 className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                        <Settings2 className="mr-2 h-4 w-4" /> Edit Template
+                      </DropdownMenuItem>
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <div className="p-4 border-t border-border bg-muted/30">
-          <DataTablePagination
-            totalCount={totalCount}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(val) => {
-              setLimit(parseInt(val));
-              setPage(1);
-            }}
-            itemLabel="Template"
-          />
-        </div>
+        <TablePaginationFooter
+          currentPage={page}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Template"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val, 10));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <TemplateEditor

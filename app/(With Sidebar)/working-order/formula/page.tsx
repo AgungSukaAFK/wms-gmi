@@ -4,6 +4,22 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,7 +56,7 @@ import {
   X,
   ShieldAlert,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { canManageWoFormula, canGrantWoFormulaAccess } from "@/lib/wo-formula-permissions";
 import {
@@ -53,8 +69,28 @@ import {
   WoFormulaComponentInput,
 } from "@/services/wo-formula-actions";
 import { useConfirmDialog } from "@/components/confirm-dialog";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 type DraftComponent = WoFormulaComponentInput & { _key: string };
+
+// Harus sama dengan kolom yang dicari di `filteredFormulas`.
+const FORMULA_SEARCH_FIELDS = ["PN Target", "Nama Barang"];
+
+const FORMULA_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getFormulaSortValue.
+const FORMULA_COLUMNS = [
+  { id: "pn", label: "PN Target", sortDirection: "asc", className: FORMULA_HEAD_CLASS },
+  { id: "nama", label: "Nama Barang", sortDirection: "asc", className: FORMULA_HEAD_CLASS },
+  { id: "komponen", label: "Jumlah Komponen", className: `text-center ${FORMULA_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type FormulaColumnId = (typeof FORMULA_COLUMNS)[number]["id"];
+
+const formulaBarang = (f: any) =>
+  Array.isArray(f.barang) ? f.barang[0] : f.barang;
+
+const getFormulaSortValue = (f: any, key: string) =>
+  key === "pn" ? formulaBarang(f)?.part_number : formulaBarang(f)?.part_name;
 
 export default function WoFormulaPage() {
   const { confirm, confirmDialog } = useConfirmDialog();
@@ -64,6 +100,20 @@ export default function WoFormulaPage() {
   const [loading, setLoading] = useState(true);
   const [roles, setRoles] = useState<string[]>([]);
   const [formulas, setFormulas] = useState<any[]>([]);
+  const columnOrder = useColumnOrder("wms:table-column-order:wo-formula", FORMULA_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   // Formula editor dialog
   const [editorOpen, setEditorOpen] = useState(false);
@@ -127,7 +177,7 @@ export default function WoFormulaPage() {
       let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedTargetSearch)
         q = q.or(
-          `part_number.ilike.%${debouncedTargetSearch}%,part_name.ilike.%${debouncedTargetSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedTargetSearch)},part_name.ilike.${orIlikePattern(debouncedTargetSearch)}`,
         );
       const { data } = await q;
       setTargetResults(data || []);
@@ -142,7 +192,7 @@ export default function WoFormulaPage() {
       let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedComponentSearch)
         q = q.or(
-          `part_number.ilike.%${debouncedComponentSearch}%,part_name.ilike.%${debouncedComponentSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedComponentSearch)},part_name.ilike.${orIlikePattern(debouncedComponentSearch)}`,
         );
       const { data } = await q;
       setComponentResults(data || []);
@@ -270,7 +320,7 @@ export default function WoFormulaPage() {
       const { data } = await supabase
         .from("profiles")
         .select("id, nama, email")
-        .or(`nama.ilike.%${debouncedUserSearch}%,email.ilike.%${debouncedUserSearch}%`)
+        .or(`nama.ilike.${orIlikePattern(debouncedUserSearch)},email.ilike.${orIlikePattern(debouncedUserSearch)}`)
         .limit(10);
       setUserResults(data || []);
     };
@@ -320,6 +370,50 @@ export default function WoFormulaPage() {
 
   const canGrant = canGrantWoFormulaAccess(roles);
 
+  const filteredFormulas = formulas.filter((f) => {
+    const q = debouncedSearch.toLowerCase();
+    if (!q) return true;
+    const barang = formulaBarang(f);
+    return (
+      barang?.part_number?.toLowerCase().includes(q) ||
+      barang?.part_name?.toLowerCase().includes(q)
+    );
+  });
+
+  const sorted = sortRows(filteredFormulas, sortOrder, getFormulaSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (f: any, id: FormulaColumnId) => {
+    const barang = Array.isArray(f.barang) ? f.barang[0] : f.barang;
+
+    switch (id) {
+      case "pn":
+        return (
+          <TableCell className="font-mono text-xs font-bold uppercase">
+            {barang?.part_number}
+          </TableCell>
+        );
+      case "nama":
+        return (
+          <TableCell className="font-semibold">{barang?.part_name}</TableCell>
+        );
+      case "komponen":
+        return (
+          <TableCell className="text-center">
+            <Badge variant="outline">{f.wo_formula_components?.length || 0}</Badge>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -359,53 +453,102 @@ export default function WoFormulaPage() {
         </div>
       </Content>
 
-      <Content size="lg">
-        <div className="overflow-hidden rounded-xl border border-border">
-          <Table containerClassName="max-h-[70vh] overflow-y-auto">
-            <TableHeader className="bg-muted/50 border-b border-border [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
-              <TableRow>
-                <TableHead>PN Target</TableHead>
-                <TableHead>Nama Barang</TableHead>
-                <TableHead className="text-center">Jumlah Komponen</TableHead>
-                <TableHead className="text-right pr-6">Aksi</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {formulas.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="h-40 text-center text-muted-foreground italic">
-                    Belum ada formula. Klik &quot;Tambah Formula&quot; untuk membuat.
+      <Content>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari PN target atau nama barang..."
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={FORMULA_SEARCH_FIELDS}
+          />
+        </div>
+      </Content>
+
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[800px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={4}>
+                    <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
-              ) : (
-                formulas.map((f) => {
-                  const barang = Array.isArray(f.barang) ? f.barang[0] : f.barang;
-                  return (
-                    <TableRow key={f.id}>
-                      <TableCell className="font-mono text-xs font-bold uppercase">
-                        {barang?.part_number}
-                      </TableCell>
-                      <TableCell className="font-semibold">{barang?.part_name}</TableCell>
-                      <TableCell className="text-center">
-                        <Badge variant="outline">{f.wo_formula_components?.length || 0}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right pr-6">
-                        <div className="flex justify-end gap-2">
-                          <Button variant="ghost" size="icon" onClick={() => openEdit(f)}>
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleDelete(f.id)}>
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            ) : pageRows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={4}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Belum ada formula"}
+                </TableCell>
+              </TableRow>
+            ) : (
+              pageRows.map((f) => (
+                <TableRow key={f.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(f, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => openEdit(f)}
+                      >
+                        <Pencil className="mr-2 h-4 w-4" /> Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => handleDelete(f.id)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                      </DropdownMenuItem>
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Formula"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       {/* Formula editor dialog */}

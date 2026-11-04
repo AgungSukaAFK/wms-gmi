@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import StockClient from "./StockClient";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface SearchParams {
   q?: string;
@@ -55,7 +56,7 @@ async function fetchLegacySummary(
   let query = supabase.from("v_stock_summary").select("*", { count: "exact" });
 
   if (opts.q) {
-    query = query.or(`part_number.ilike.%${opts.q}%,part_name.ilike.%${opts.q}%`);
+    query = query.or(`part_number.ilike.${orIlikePattern(opts.q)},part_name.ilike.${orIlikePattern(opts.q)}`);
   }
   const stockFrom = toNumberOrNull(opts.stockFrom);
   if (stockFrom !== null) query = query.gte("total_qty", stockFrom);

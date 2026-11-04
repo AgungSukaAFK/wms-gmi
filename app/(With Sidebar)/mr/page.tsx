@@ -2,25 +2,23 @@
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { formatDate } from "@/lib/utils";
+import { formatDate, toYmdLocal } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { canCreateMR } from "@/lib/mr-permissions";
+import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 import { MultiSelect } from "@/components/ui/multi-select";
+import { Input } from "@/components/ui/input";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import {
   Plus,
-  Search,
-  FileText,
-  Loader2,
+  Eye,
   Calendar as CalendarIcon,
   MapPin,
   ClipboardList,
@@ -28,51 +26,62 @@ import {
   Clock,
   AlertTriangle,
   Trash2,
-  Download,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import Link from "next/link";
-import { Separator } from "@/components/ui/separator";
 import { MRDetailSheet } from "@/components/mr/mr-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { deleteMR } from "@/services/procurement-actions";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { MrLevelBadge } from "@/components/mr/mr-level-badge";
 import {
   MrLevelAutoRules,
   DEFAULT_MR_LEVEL_AUTO_RULES,
 } from "@/lib/mr-level";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { useColumnOrder } from "@/hooks/use-column-order";
 import { StatusBadge } from "@/components/status-badge";
 import { useUrlListState } from "@/hooks/use-url-list-state";
 import {
   type ActiveFilter,
+  FilterField,
+  FilterFields,
   FilterPanel,
+  FilterRange,
+  FilterRangeFields,
   filterOptionLabel,
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
 import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import {
+  ExcelDownloadMenu,
+  type ExcelDownloadMode,
+} from "@/components/excel-download-menu";
+import { ListSearchInput } from "@/components/list-search-input";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 const MR_SORT_COLUMNS: Record<string, string> = {
   mr_kode: "mr_kode",
   mr_tanggal: "mr_tanggal",
   mr_status: "mr_status",
 };
+
+// Harus sama dengan kolom yang dicari di buildFilteredQuery.
+const MR_SEARCH_FIELDS = ["Kode MR", "PIC"];
 
 const MR_PRIORITY_OPTIONS = [
   { label: "P1 - EMERGENCY", value: "P1" },
@@ -87,6 +96,49 @@ const MR_STATUS_OPTIONS = [
   { label: "Rejected", value: "rejected" },
   { label: "Completed", value: "completed" },
 ];
+
+const KATEGORI_KOSONG = "kosong";
+
+const MR_KATEGORI_FILTER_OPTIONS = [
+  ...MR_KATEGORI_OPTIONS.map((k) => ({ label: k, value: k })),
+  { label: "Belum diisi", value: KATEGORI_KOSONG },
+];
+
+const MR_KONVERSI_OPTIONS = [
+  { label: "Belum PR", value: "pending" },
+  { label: "Sebagian PR", value: "partial" },
+  { label: "Sudah PR", value: "complete" },
+];
+
+const MR_JENIS_OPTIONS = [
+  { label: "Standard", value: "standard" },
+  { label: "Scheduled", value: "scheduled" },
+];
+
+const MR_ASAL_OPTIONS = [
+  { label: "Input Web", value: "web" },
+  { label: "Import", value: "import" },
+];
+
+const MR_KONDISI_OPTIONS = [
+  { label: "Frozen", value: "frozen" },
+  { label: "Lewat Due Date", value: "lewat_due" },
+  { label: "Ada Item Ditolak", value: "item_ditolak" },
+];
+
+const MR_HEAD_CLASS = "font-bold text-[10px] uppercase text-muted-foreground";
+
+// Kolom di antara "No" & "Aksi". Id kolom yang bisa di-sort = key di
+// MR_SORT_COLUMNS. ACCURATE_HIDDEN: kolom Accurate sengaja tidak ditampilkan;
+// untuk menampilkan lagi tambah di sini & di renderCell.
+const MR_COLUMNS = [
+  { id: "urgency", label: "Urgency", className: `w-24 text-center ${MR_HEAD_CLASS}` },
+  { id: "mr_kode", label: "Kode MR", sortDirection: "asc", className: `w-45 ${MR_HEAD_CLASS}` },
+  { id: "pic", label: "PIC & Lokasi", className: MR_HEAD_CLASS },
+  { id: "mr_tanggal", label: "Tanggal", sortDirection: "desc", className: `w-32.5 text-center ${MR_HEAD_CLASS}` },
+  { id: "mr_status", label: "Status", sortDirection: "asc", className: `w-[170px] text-center ${MR_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type MrColumnId = (typeof MR_COLUMNS)[number]["id"];
 
 export default function MaterialRequestPage() {
   const supabase = createClient();
@@ -108,6 +160,7 @@ export default function MaterialRequestPage() {
   // Pagination & Filters - disimpan di URL (hooks/use-url-list-state.ts),
   // jadi bisa di-share & tombol Back browser bekerja. Setter di bawah tetap
   // bernama seperti useState lama.
+  const columnOrder = useColumnOrder("wms:table-column-order:mr", MR_COLUMNS);
   const urlState = useUrlListState();
   const debouncedSearch = urlState.get("search");
   const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
@@ -142,6 +195,32 @@ export default function MaterialRequestPage() {
   const dateTo = urlState.get("sampai");
   const setDateTo = (v: string) =>
     urlState.set({ sampai: v }, { resetPage: true });
+  const dueFrom = urlState.get("due_dari");
+  const setDueFrom = (v: string) =>
+    urlState.set({ due_dari: v }, { resetPage: true });
+  const dueTo = urlState.get("due_sampai");
+  const setDueTo = (v: string) =>
+    urlState.set({ due_sampai: v }, { resetPage: true });
+  const kategoriFilters = urlState.list("kategori");
+  const setKategoriFilters = (v: string[]) =>
+    urlState.set({ kategori: v }, { resetPage: true });
+  const konversiFilters = urlState.list("konversi");
+  const setKonversiFilters = (v: string[]) =>
+    urlState.set({ konversi: v }, { resetPage: true });
+  const jenisFilters = urlState.list("jenis");
+  const setJenisFilters = (v: string[]) =>
+    urlState.set({ jenis: v }, { resetPage: true });
+  const asalFilters = urlState.list("asal");
+  const setAsalFilters = (v: string[]) =>
+    urlState.set({ asal: v }, { resetPage: true });
+  const kondisiFilters = urlState.list("kondisi");
+  const setKondisiFilters = (v: string[]) =>
+    urlState.set({ kondisi: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const [availableCabang, setAvailableCabang] = useState<any[]>([]);
 
   // Selected MR for Detail
@@ -196,24 +275,35 @@ export default function MaterialRequestPage() {
 
   // Query dasar dengan seluruh filter aktif diterapkan (tanpa order/range),
   // dipakai bersama oleh fetchData (list berpaginasi) dan exportExcel (semua baris).
-  const buildFilteredQuery = () => {
+  // Mode "all" melepas seluruh filter (export "Semua data").
+  const buildFilteredQuery = (mode: ExcelDownloadMode = "filtered") => {
+    const filtered = mode === "filtered";
     // Prioritas sekarang per-item (mr_items.item_priority). Kalau filter
     // prioritas aktif, embed mr_items pakai !inner supaya MR yang tidak
     // punya item dengan prioritas itu ikut tersaring keluar (bukan cuma
     // menyaring nested array-nya) — mengikuti pola yang sudah dipakai
     // share-stock/page.tsx.
     const mrItemsEmbed =
-      priorityFilters.length > 0
+      filtered && priorityFilters.length > 0
         ? "mr_items!inner(item_priority)"
         : "mr_items(item_priority)";
+    // Filter isi item lewat embed alias, supaya mr_items di atas tetap utuh
+    // (badge Urgency tidak ikut tersaring).
+    const itemDitolak = filtered && kondisiFilters.includes("item_ditolak");
+    const filterEmbeds = [
+      filtered && barangFilter ? ", barang_cocok:mr_items!inner(id)" : "",
+      itemDitolak ? ", item_ditolak:mr_items!inner(id)" : "",
+    ].join("");
     let query = supabase.from("mrs").select(
-      `*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama), ${mrItemsEmbed}`,
+      `*, cabang(nama_cabang), manual_level_setter:profiles!manual_level_set_by(nama), ${mrItemsEmbed}${filterEmbeds}`,
       { count: "exact" },
     );
 
+    if (!filtered) return query;
+
     if (debouncedSearch) {
       query = query.or(
-        `mr_kode.ilike.%${debouncedSearch}%,mr_pic.ilike.%${debouncedSearch}%`,
+        `mr_kode.ilike.${orIlikePattern(debouncedSearch)},mr_pic.ilike.${orIlikePattern(debouncedSearch)}`,
       );
     }
 
@@ -242,6 +332,56 @@ export default function MaterialRequestPage() {
     }
     if (dateTo) {
       query = query.lte("mr_tanggal", dateTo);
+    }
+
+    if (dueFrom) {
+      query = query.gte("mr_due_date", dueFrom);
+    }
+    if (dueTo) {
+      query = query.lte("mr_due_date", dueTo);
+    }
+
+    if (kategoriFilters.length > 0) {
+      const kategori = kategoriFilters.filter((k) => k !== KATEGORI_KOSONG);
+      if (kategori.length === kategoriFilters.length) {
+        query = query.in("kategori", kategori);
+      } else if (kategori.length === 0) {
+        query = query.is("kategori", null);
+      } else {
+        const values = kategori.map((k) => `"${k}"`).join(",");
+        query = query.or(`kategori.is.null,kategori.in.(${values})`);
+      }
+    }
+
+    if (konversiFilters.length > 0) {
+      query = query.in("mr_convert_status", konversiFilters);
+    }
+
+    if (jenisFilters.length > 0) {
+      query = query.in("mr_type", jenisFilters);
+    }
+
+    if (asalFilters.length === 1) {
+      query = query.eq("mr_is_import", asalFilters[0] === "import");
+    }
+
+    if (kondisiFilters.includes("frozen")) {
+      query = query.eq("is_frozen", true);
+    }
+    if (kondisiFilters.includes("lewat_due")) {
+      query = query
+        .lt("mr_due_date", toYmdLocal(new Date()))
+        .in("mr_status", ["open", "approved"]);
+    }
+    if (itemDitolak) {
+      query = query.eq("item_ditolak.item_status", "rejected");
+    }
+
+    if (barangFilter) {
+      query = query.or(
+        `part_number.ilike.${orIlikePattern(barangFilter)},part_name.ilike.${orIlikePattern(barangFilter)}`,
+        { referencedTable: "barang_cocok" },
+      );
     }
 
     return query;
@@ -335,20 +475,31 @@ export default function MaterialRequestPage() {
     setLoading(false);
   };
 
-  const exportExcel = async () => {
+  const fetchAllCount = async () => {
+    const { count, error } = await supabase
+      .from("mrs")
+      .select("id", { count: "exact", head: true });
+    if (error) throw error;
+    return count || 0;
+  };
+
+  const exportExcel = async (mode: ExcelDownloadMode) => {
     setExporting(true);
+    const toastId = toast.loading("Menyiapkan data MR...");
     try {
       const pageSize = 1000;
       const allRows: any[] = [];
       for (let pageIndex = 0; ; pageIndex += 1) {
         const from = pageIndex * pageSize;
         const to = from + pageSize - 1;
-        const { data, error } = await buildFilteredQuery()
+        const { data, error } = await buildFilteredQuery(mode)
           .order("created_at", { ascending: false })
           .range(from, to);
 
         if (error) {
-          toast.error(error.message || "Gagal mengambil data untuk export.");
+          toast.error(error.message || "Gagal mengambil data untuk export.", {
+            id: toastId,
+          });
           return;
         }
 
@@ -357,7 +508,7 @@ export default function MaterialRequestPage() {
       }
 
       if (allRows.length === 0) {
-        toast.error("Tidak ada data untuk diekspor.");
+        toast.warning("Tidak ada data untuk diekspor.", { id: toastId });
         return;
       }
 
@@ -525,7 +676,11 @@ export default function MaterialRequestPage() {
         wb,
         `MATERIAL_REQUEST_${new Date().toISOString().slice(0, 10)}.xlsx`,
       );
-      toast.success(`Export Excel berhasil (${sheetData.length} baris item).`);
+      toast.success(`Export Excel berhasil (${sheetData.length} baris item).`, {
+        id: toastId,
+      });
+    } catch (err: any) {
+      toast.error(`Gagal export Excel: ${err?.message || err}`, { id: toastId });
     } finally {
       setExporting(false);
     }
@@ -545,6 +700,14 @@ export default function MaterialRequestPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    dueFrom,
+    dueTo,
+    kategoriFilters,
+    konversiFilters,
+    jenisFilters,
+    asalFilters,
+    kondisiFilters,
+    barangFilter,
     sortOrder,
     page,
     limit,
@@ -557,6 +720,7 @@ export default function MaterialRequestPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -605,6 +769,59 @@ export default function MaterialRequestPage() {
       value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
       onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
     });
+  if (dueFrom || dueTo)
+    activeFilters.push({
+      key: "due",
+      label: "Due Date",
+      value: formatFilterRange(dueFrom, dueTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ due_dari: "", due_sampai: "" }, { resetPage: true }),
+    });
+  if (kategoriFilters.length > 0)
+    activeFilters.push({
+      key: "kategori",
+      label: "Kategori",
+      value: optionLabels(MR_KATEGORI_FILTER_OPTIONS, kategoriFilters),
+      onRemove: () => setKategoriFilters([]),
+    });
+  if (konversiFilters.length > 0)
+    activeFilters.push({
+      key: "konversi",
+      label: "Konversi PR",
+      value: optionLabels(MR_KONVERSI_OPTIONS, konversiFilters),
+      onRemove: () => setKonversiFilters([]),
+    });
+  if (jenisFilters.length > 0)
+    activeFilters.push({
+      key: "jenis",
+      label: "Jenis MR",
+      value: optionLabels(MR_JENIS_OPTIONS, jenisFilters),
+      onRemove: () => setJenisFilters([]),
+    });
+  if (asalFilters.length > 0)
+    activeFilters.push({
+      key: "asal",
+      label: "Asal Data",
+      value: optionLabels(MR_ASAL_OPTIONS, asalFilters),
+      onRemove: () => setAsalFilters([]),
+    });
+  if (kondisiFilters.length > 0)
+    activeFilters.push({
+      key: "kondisi",
+      label: "Kondisi",
+      value: optionLabels(MR_KONDISI_OPTIONS, kondisiFilters),
+      onRemove: () => setKondisiFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
+    });
 
   const getPriorityBadge = (p: string) => {
     switch (p) {
@@ -652,34 +869,144 @@ export default function MaterialRequestPage() {
     return nextStep ? nextStep.nama : null;
   };
 
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [mrToDelete, setMrToDelete] = useState<{ id: number; kode: string } | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const handleRowClick = (id: number) => {
     setSelectedMrId(id);
     setDetailOpen(true);
   };
 
-  const handleDeleteClick = (e: React.MouseEvent, mr: any) => {
-    e.stopPropagation();
-    setMrToDelete({ id: mr.id, kode: mr.mr_kode });
-    setDeleteDialogOpen(true);
-  };
-
   const handleDeleteConfirm = async () => {
     if (!mrToDelete) return;
-    setDeleting(true);
     const res = await deleteMR(mrToDelete.id);
-    setDeleting(false);
     if (res.error) {
       toast.error(res.error);
       return;
     }
     toast.success(`MR ${mrToDelete.kode} berhasil dihapus.`);
-    setDeleteDialogOpen(false);
-    setMrToDelete(null);
     fetchData();
+  };
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (mr: any, id: MrColumnId) => {
+    const nextApprover = getNextApprover(mr);
+
+    switch (id) {
+      case "urgency":
+        return (
+          <TableCell className="text-center">
+            <div className="flex flex-wrap items-center justify-center gap-0.5">
+              {Array.from(
+                new Set(
+                  (mr.mr_items || [])
+                    .map((i: any) => i.item_priority)
+                    .filter(Boolean),
+                ),
+              ).map((p: any) => (
+                <React.Fragment key={p}>
+                  {getPriorityBadge(p)}
+                </React.Fragment>
+              ))}
+            </div>
+          </TableCell>
+        );
+      case "mr_kode":
+        return (
+          <TableCell>
+            <span className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">
+              {mr.mr_kode}
+            </span>
+          </TableCell>
+        );
+      case "pic":
+        return (
+          <TableCell>
+            <div className="flex flex-col py-1">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-xs text-foreground uppercase tracking-tight">
+                  {mr.mr_pic}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5 mt-0.5">
+                <MapPin className="h-2.5 w-2.5 text-muted-foreground" />
+                <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-tighter">
+                  {mr.cabang?.nama_cabang || "Unknown Site"}
+                </span>
+              </div>
+            </div>
+          </TableCell>
+        );
+      case "mr_tanggal":
+        return (
+          <TableCell className="text-center">
+            <div className="flex flex-col items-center gap-0.5">
+              <div className="flex items-center gap-1 text-xs font-bold text-foreground">
+                <CalendarIcon className="h-3 w-3 text-muted-foreground" />
+                {formatDate(mr.mr_tanggal)}
+              </div>
+              <div className="flex items-center gap-1 opacity-60">
+                <span className="text-[8px] text-destructive font-bold uppercase">
+                  DUE:
+                </span>
+                <span className="text-[8px] text-muted-foreground font-bold">
+                  {formatDate(mr.mr_due_date)}
+                </span>
+              </div>
+            </div>
+          </TableCell>
+        );
+      case "mr_status":
+        return (
+          <TableCell className="text-center">
+            <div className="flex flex-col items-center gap-1.5">
+              <StatusBadge status={mr.mr_status} />
+              {mr.mr_status !== "open" &&
+                mr.mr_status !== "rejected" &&
+                levelExtraByMrId[mr.id] && (
+                  <MrLevelBadge
+                    mrId={mr.id}
+                    mrConvertStatus={mr.mr_convert_status}
+                    hasPo={levelExtraByMrId[mr.id].hasPo}
+                    qtyRequestTotal={
+                      levelExtraByMrId[mr.id].qtyRequestTotal
+                    }
+                    qtyReceivedTotal={
+                      levelExtraByMrId[mr.id].qtyReceivedTotal
+                    }
+                    manualLevel={mr.manual_level}
+                    manualNote={mr.manual_level_note}
+                    manualSetByName={mr.manual_level_setter?.nama}
+                    manualSetAt={mr.manual_level_set_at}
+                    autoRules={mrLevelAutoRules}
+                    canEdit={!!userProfile?.isModerator}
+                    size="xs"
+                    onChanged={(patch) =>
+                      setMrs((prev) =>
+                        prev.map((m) =>
+                          m.id === mr.id ? { ...m, ...patch } : m,
+                        ),
+                      )
+                    }
+                  />
+                )}
+              {mr.is_frozen && (
+                <Badge className="bg-sky-500 text-white border-none text-[9px] font-bold uppercase">
+                  Frozen
+                </Badge>
+              )}
+              {nextApprover && (
+                <div className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground uppercase tracking-tighter">
+                  <Clock className="h-2.5 w-2.5" />
+                  Menunggu:{" "}
+                  <span className="text-foreground">
+                    {nextApprover}
+                  </span>
+                </div>
+              )}
+            </div>
+          </TableCell>
+        );
+    }
   };
 
   return (
@@ -701,15 +1028,6 @@ export default function MaterialRequestPage() {
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
-            <Button
-              variant="outline"
-              onClick={exportExcel}
-              disabled={loading || exporting}
-              className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all"
-            >
-              <Download className="h-4 w-4" />
-              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
-            </Button>
             {canCreateMR(
               (userProfile?.roles as any[])?.map((r: any) => r.roles?.name),
             ) && (
@@ -725,21 +1043,27 @@ export default function MaterialRequestPage() {
 
       <Content>
         <div className="space-y-3">
-          <div className="relative min-w-0">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
+          <div className="flex flex-col gap-4 md:flex-row">
+            <ListSearchInput
               placeholder="Cari Kode MR atau PIC..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={setSearchQuery}
+              searchableFields={MR_SEARCH_FIELDS}
+            />
+            <ExcelDownloadMenu
+              itemLabel="MR"
+              filteredCount={totalCount}
+              fetchAllCount={fetchAllCount}
+              onDownload={exportExcel}
+              isExporting={exporting}
             />
           </div>
 
           <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-sm font-medium">Lokasi</label>
+            <FilterFields>
+              <FilterField
+                label="Lokasi"
+                action={
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
@@ -749,7 +1073,8 @@ export default function MaterialRequestPage() {
                     <Navigation2 className="h-3 w-3" />
                     Lokasi saya
                   </button>
-                </div>
+                }
+              >
                 <MultiSelect
                   placeholder="Semua Lokasi"
                   icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
@@ -758,10 +1083,9 @@ export default function MaterialRequestPage() {
                   onChange={setLocationFilters}
                   options={locationOptions}
                 />
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Prioritas</label>
+              <FilterField label="Prioritas">
                 <MultiSelect
                   placeholder="Semua Prioritas"
                   icon={<AlertTriangle className="h-3 w-3 text-muted-foreground" />}
@@ -769,287 +1093,220 @@ export default function MaterialRequestPage() {
                   onChange={setPriorityFilters}
                   options={MR_PRIORITY_OPTIONS}
                 />
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Status</label>
+              <FilterField label="Status">
                 <MultiSelect
                   placeholder="Semua Status"
                   selected={statusFilters}
                   onChange={setStatusFilters}
                   options={MR_STATUS_OPTIONS}
                 />
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Tanggal MR</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <DatePickerString
-                    value={dateFrom}
-                    onChange={setDateFrom}
-                    placeholder="Dari"
-                    className="h-9 w-full text-xs font-medium"
-                  />
-                  <DatePickerString
-                    value={dateTo}
-                    onChange={setDateTo}
-                    placeholder="Sampai"
-                    className="h-9 w-full text-xs font-medium"
-                  />
-                </div>
-              </div>
-            </div>
+              <FilterField label="Kategori">
+                <MultiSelect
+                  placeholder="Semua Kategori"
+                  selected={kategoriFilters}
+                  onChange={setKategoriFilters}
+                  options={MR_KATEGORI_FILTER_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Konversi PR">
+                <MultiSelect
+                  placeholder="Semua"
+                  selected={konversiFilters}
+                  onChange={setKonversiFilters}
+                  options={MR_KONVERSI_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Jenis MR">
+                <MultiSelect
+                  placeholder="Semua Jenis"
+                  selected={jenisFilters}
+                  onChange={setJenisFilters}
+                  options={MR_JENIS_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Asal Data">
+                <MultiSelect
+                  placeholder="Semua Asal"
+                  selected={asalFilters}
+                  onChange={setAsalFilters}
+                  options={MR_ASAL_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Kondisi">
+                <MultiSelect
+                  placeholder="Semua Kondisi"
+                  selected={kondisiFilters}
+                  onChange={setKondisiFilters}
+                  options={MR_KONDISI_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Tanggal MR">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+              <FilterField label="Due Date">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dueFrom}
+                      onChange={setDueFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dueTo}
+                      onChange={setDueTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
           </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="flex-1">
-          <Table containerClassName="max-h-[75vh] overflow-y-auto">
-            <TableHeader className="bg-muted/50 border-b border-border [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
-              <TableRow className="hover:bg-transparent h-10 text-foreground">
-                <TableHead className="w-12.5 text-center font-bold text-[10px] uppercase text-muted-foreground">
-                  No
-                </TableHead>
-                <TableHead className="w-24 text-center font-bold text-[10px] uppercase text-muted-foreground">
-                  Urgency
-                </TableHead>
-                <SortableTableHead
-                  sortKey="mr_kode"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-45 font-bold text-[10px] uppercase text-muted-foreground"
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[900px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10 text-foreground"
+            >
+              <TableHead className="w-12.5 text-center font-bold text-[10px] uppercase text-muted-foreground">
+                No
+              </TableHead>
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="text-right w-24 pr-4 font-bold text-[10px] uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: limit }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={7}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : mrs.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={7}
+                  className="h-40 text-center text-muted-foreground italic text-sm"
                 >
-                  Kode MR
-                </SortableTableHead>
-                <TableHead className="font-bold text-[10px] uppercase text-muted-foreground">
-                  PIC & Lokasi
-                </TableHead>
-                <SortableTableHead
-                  sortKey="mr_tanggal"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  defaultDir="desc"
-                  className="w-32.5 justify-center text-center font-bold text-[10px] uppercase text-muted-foreground"
-                >
-                  Tanggal
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="mr_status"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  style={{ width: 170 }}
-                  className="justify-center text-center font-bold text-[10px] uppercase text-muted-foreground"
-                >
-                  Status
-                </SortableTableHead>
-                {/* ACCURATE_HIDDEN */}
-                {false && (
-                  <TableHead className="w-32.5 font-bold text-[10px] uppercase text-muted-foreground text-center">
-                    Accurate
-                  </TableHead>
-                )}
-                <TableHead className="text-right w-24 pr-4 font-bold text-[10px] uppercase text-muted-foreground">
-                  Aksi
-                </TableHead>
+                  {activeFilters.length > 0 || accurateFilter !== "all"
+                    ? "Tidak ada data yang sesuai filter."
+                    : "Tidak ada permintaan barang yang ditemukan."}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="h-40 text-center">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                        Memuat Data...
-                      </span>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : mrs.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="h-40 text-center text-muted-foreground italic text-sm"
+            ) : (
+              mrs.map((mr, index) => {
+                return (
+                  <TableRow
+                    key={mr.id}
+                    className="hover:bg-muted/40 transition-colors group border-b border-border/40 last:border-0 h-16 cursor-pointer"
+                    onClick={() => handleRowClick(mr.id)}
                   >
-                    {statusFilters.length > 0 ||
-                    accurateFilter !== "all" ||
-                    locationFilters.length > 0 ||
-                    dateFrom ||
-                    dateTo
-                      ? "Tidak ada data yang sesuai filter."
-                      : "Tidak ada permintaan barang yang ditemukan."}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                mrs.map((mr, index) => {
-                  const nextApprover = getNextApprover(mr);
-
-                  return (
-                    <TableRow
-                      key={mr.id}
-                      className="hover:bg-muted/40 transition-colors group border-b border-border/40 last:border-0 h-16 cursor-pointer"
-                      onClick={() => handleRowClick(mr.id)}
+                    <TableCell className="text-center text-muted-foreground text-[10px] font-semibold font-mono">
+                      {(page - 1) * limit + index + 1}
+                    </TableCell>
+                    {columnOrder.order.map((id) => (
+                      <React.Fragment key={id}>{renderCell(mr, id)}</React.Fragment>
+                    ))}
+                    <TableCell
+                      className="text-right pr-4"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <TableCell className="text-center text-muted-foreground text-[10px] font-semibold font-mono">
-                        {(page - 1) * limit + index + 1}
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex flex-wrap items-center justify-center gap-0.5">
-                          {Array.from(
-                            new Set(
-                              (mr.mr_items || [])
-                                .map((i: any) => i.item_priority)
-                                .filter(Boolean),
-                            ),
-                          ).map((p: any) => (
-                            <React.Fragment key={p}>
-                              {getPriorityBadge(p)}
-                            </React.Fragment>
-                          ))}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="font-bold text-foreground text-sm group-hover:text-primary transition-colors">
-                          {mr.mr_kode}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col py-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-xs text-foreground uppercase tracking-tight">
-                              {mr.mr_pic}
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-1.5 mt-0.5">
-                            <MapPin className="h-2.5 w-2.5 text-muted-foreground" />
-                            <span className="text-[10px] font-bold text-muted-foreground uppercase tracking-tighter">
-                              {mr.cabang?.nama_cabang || "Unknown Site"}
-                            </span>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex flex-col items-center gap-0.5">
-                          <div className="flex items-center gap-1 text-xs font-bold text-foreground">
-                            <CalendarIcon className="h-3 w-3 text-muted-foreground" />
-                            {formatDate(mr.mr_tanggal)}
-                          </div>
-                          <div className="flex items-center gap-1 opacity-60">
-                            <span className="text-[8px] text-destructive font-bold uppercase">
-                              DUE:
-                            </span>
-                            <span className="text-[8px] text-muted-foreground font-bold">
-                              {formatDate(mr.mr_due_date)}
-                            </span>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex flex-col items-center gap-1.5">
-                          <StatusBadge status={mr.mr_status} />
-                          {mr.mr_status !== "open" &&
-                            mr.mr_status !== "rejected" &&
-                            levelExtraByMrId[mr.id] && (
-                              <MrLevelBadge
-                                mrId={mr.id}
-                                mrConvertStatus={mr.mr_convert_status}
-                                hasPo={levelExtraByMrId[mr.id].hasPo}
-                                qtyRequestTotal={
-                                  levelExtraByMrId[mr.id].qtyRequestTotal
-                                }
-                                qtyReceivedTotal={
-                                  levelExtraByMrId[mr.id].qtyReceivedTotal
-                                }
-                                manualLevel={mr.manual_level}
-                                manualNote={mr.manual_level_note}
-                                manualSetByName={mr.manual_level_setter?.nama}
-                                manualSetAt={mr.manual_level_set_at}
-                                autoRules={mrLevelAutoRules}
-                                canEdit={!!userProfile?.isModerator}
-                                size="xs"
-                                onChanged={(patch) =>
-                                  setMrs((prev) =>
-                                    prev.map((m) =>
-                                      m.id === mr.id ? { ...m, ...patch } : m,
-                                    ),
-                                  )
-                                }
-                              />
-                            )}
-                          {mr.is_frozen && (
-                            <Badge className="bg-sky-500 text-white border-none text-[9px] font-bold uppercase">
-                              Frozen
-                            </Badge>
-                          )}
-                          {nextApprover && (
-                            <div className="flex items-center gap-1 text-[9px] font-bold text-muted-foreground uppercase tracking-tighter">
-                              <Clock className="h-2.5 w-2.5" />
-                              Menunggu:{" "}
-                              <span className="text-foreground">
-                                {nextApprover}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                      </TableCell>
-                      {/* ACCURATE_HIDDEN */}
-                      {false && (
-                        <TableCell className="text-center">
-                          <Badge
-                            variant={mr.accurate ? "default" : "secondary"}
-                            className="text-[10px] font-bold uppercase"
+                      <RowActionsMenu>
+                        <DropdownMenuItem onSelect={() => handleRowClick(mr.id)}>
+                          <Eye className="mr-2 h-4 w-4" /> Lihat Detail
+                        </DropdownMenuItem>
+                        {userProfile?.isModerator && (
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onSelect={() =>
+                              setMrToDelete({ id: mr.id, kode: mr.mr_kode })
+                            }
                           >
-                            {mr.accurate ? "Sudah" : "Belum"}
-                          </Badge>
-                        </TableCell>
-                      )}
-                      <TableCell
-                        className="text-right pr-4"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <div className="flex items-center justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded-md transition-all shadow-none"
-                            onClick={() => handleRowClick(mr.id)}
-                          >
-                            <FileText className="h-3.5 w-3.5" />
-                          </Button>
-                          {userProfile?.isModerator && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded-md transition-all shadow-none"
-                              onClick={(e) => handleDeleteClick(e, mr)}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                            <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                          </DropdownMenuItem>
+                        )}
+                      </RowActionsMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <div className="p-4 border-t border-border bg-muted/30">
-          <DataTablePagination
-            totalCount={totalCount}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(val) => {
-              setLimit(parseInt(val));
-              setPage(1);
-            }}
-            itemLabel="Material Request"
-          />
-        </div>
+        <TablePaginationFooter
+          currentPage={page}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="MR"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <MRDetailSheet
@@ -1059,31 +1316,20 @@ export default function MaterialRequestPage() {
         isModerator={!!userProfile?.isModerator}
       />
 
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Material Request?</AlertDialogTitle>
-            <AlertDialogDescription>
-              MR <span className="font-bold text-foreground">{mrToDelete?.kode}</span> akan dihapus permanen.
-              Tindakan ini tidak dapat dibatalkan.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
-            <AlertDialogAction
-              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 dark:bg-destructive/60 dark:hover:bg-destructive/50"
-              onClick={handleDeleteConfirm}
-              disabled={deleting}
-            >
-              {deleting ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                "Ya, Hapus"
-              )}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        destructive
+        open={!!mrToDelete}
+        onOpenChange={(open) => !open && setMrToDelete(null)}
+        title="Hapus Material Request?"
+        description={
+          <>
+            MR <span className="font-bold text-foreground">{mrToDelete?.kode}</span> akan dihapus permanen.
+            Tindakan ini tidak dapat dibatalkan.
+          </>
+        }
+        confirmText="Ya, Hapus"
+        onConfirm={handleDeleteConfirm}
+      />
     </>
   );
 }

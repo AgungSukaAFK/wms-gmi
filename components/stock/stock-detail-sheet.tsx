@@ -47,7 +47,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { updateStock } from "@/services/stock-actions";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn, formatDateTime } from "@/lib/utils";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useAuthStore } from "@/stores/auth-store";

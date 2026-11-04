@@ -47,7 +47,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { approvePO, rejectPO } from "@/services/procurement-actions";
 import {
   moderatorEditPO,

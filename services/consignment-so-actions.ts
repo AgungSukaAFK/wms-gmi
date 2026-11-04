@@ -3,6 +3,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
 import { toYmdLocal } from "@/lib/utils";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 type ConsignmentSoItemInput = {
   part_id: number;
@@ -264,7 +265,7 @@ export async function getConsignmentDashboardReport(params?: {
 
   if (params?.search) {
     query = query.or(
-      `so_no.ilike.%${params.search}%,no_po.ilike.%${params.search}%,site.ilike.%${params.search}%,part_number.ilike.%${params.search}%,part_name.ilike.%${params.search}%,part_number_customer.ilike.%${params.search}%`,
+      `so_no.ilike.${orIlikePattern(params.search)},no_po.ilike.${orIlikePattern(params.search)},site.ilike.${orIlikePattern(params.search)},part_number.ilike.${orIlikePattern(params.search)},part_name.ilike.${orIlikePattern(params.search)},part_number_customer.ilike.${orIlikePattern(params.search)}`,
     );
   }
 

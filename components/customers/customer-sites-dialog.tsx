@@ -21,7 +21,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Loader2, Pencil, Plus, ToggleLeft, X } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   createCustomerSite,
   getCustomerSites,

@@ -31,7 +31,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { AlertTriangle, Building2, Link2, Loader2, Lock, X } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn, formatDate } from "@/lib/utils";
 import { fetchPrItemPoCoverage } from "@/lib/pr-po-coverage";
 import { parsePrRefCodes } from "@/lib/po-outstanding";

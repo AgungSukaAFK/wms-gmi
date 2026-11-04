@@ -8,7 +8,7 @@
 import { useEffect, useRef, useState } from "react";
 import Cropper, { Area } from "react-easy-crop";
 import { ImagePlus, Loader2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,

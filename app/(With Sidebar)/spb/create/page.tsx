@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, ChevronsUpDown, Plus, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -40,6 +40,7 @@ import { useRouter } from "next/navigation";
 import { toYmdLocal } from "@/lib/utils";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 import { UnitPicker, type UnitOption } from "@/components/units/unit-picker";
+import { orIlikePattern, orIlikePrefixPattern } from "@/lib/supabase/search-filter";
 
 type Barang = {
   id: number;
@@ -273,7 +274,7 @@ export default function SpbCreatePage() {
           .gt("qty", 0)
           .limit(15);
         if (keyword) {
-          kq = kq.or(`part_number.ilike.${keyword}%,part_name.ilike.%${keyword}%`, {
+          kq = kq.or(`part_number.ilike.${orIlikePrefixPattern(keyword)},part_name.ilike.${orIlikePattern(keyword)}`, {
             referencedTable: "barang",
           });
         }
@@ -297,7 +298,7 @@ export default function SpbCreatePage() {
         // supaya cari "14L-0135" tidak nyangkut ke kode lain yang sekadar
         // mengandung "14L-0135" di tengah/akhir string.
         query = query.or(
-          `part_number.ilike.${keyword}%,part_name.ilike.%${keyword}%`,
+          `part_number.ilike.${orIlikePrefixPattern(keyword)},part_name.ilike.${orIlikePattern(keyword)}`,
         );
       }
 

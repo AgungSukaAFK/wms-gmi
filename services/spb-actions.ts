@@ -10,6 +10,7 @@ import {
   returnSpbOutstandingStock,
 } from "@/lib/spb-posting";
 import { findSpbRekonsil } from "@/lib/vendor-consignment";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 type SpbItemPayload = {
   part_id: number;
@@ -489,7 +490,7 @@ export async function getSpbList(params?: {
 
   if (params?.search) {
     query = query.or(
-      `spb_no.ilike.%${params.search}%,spb_no_wo.ilike.%${params.search}%,spb_pic_gmi.ilike.%${params.search}%,spb_pic_ppa.ilike.%${params.search}%`,
+      `spb_no.ilike.${orIlikePattern(params.search)},spb_no_wo.ilike.${orIlikePattern(params.search)},spb_pic_gmi.ilike.${orIlikePattern(params.search)},spb_pic_ppa.ilike.${orIlikePattern(params.search)}`,
     );
   }
   if (params?.cabangIds && params.cabangIds.length > 0) {
@@ -828,6 +829,8 @@ const SPB_PO_SORT_COLUMNS: Record<string, string> = {
 
 export async function getSpbPoList(params?: {
   search?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -858,8 +861,14 @@ export async function getSpbPoList(params?: {
 
   if (params?.search) {
     query = query.or(
-      `po_no.ilike.%${params.search}%,so_no.ilike.%${params.search}%`,
+      `po_no.ilike.${orIlikePattern(params.search)},so_no.ilike.${orIlikePattern(params.search)}`,
     );
+  }
+  if (params?.dateFrom) {
+    query = query.gte("so_date", params.dateFrom);
+  }
+  if (params?.dateTo) {
+    query = query.lte("so_date", params.dateTo);
   }
 
   const { data, error, count } = await query.range(from, from + limit - 1);
@@ -1017,6 +1026,8 @@ const SPB_DO_SORT_COLUMNS: Record<string, string> = {
 
 export async function getSpbDoList(params?: {
   search?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -1045,8 +1056,14 @@ export async function getSpbDoList(params?: {
 
   if (params?.search) {
     query = query.or(
-      `do_no.ilike.%${params.search}%,do_pic.ilike.%${params.search}%`,
+      `do_no.ilike.${orIlikePattern(params.search)},do_pic.ilike.${orIlikePattern(params.search)}`,
     );
+  }
+  if (params?.dateFrom) {
+    query = query.gte("do_date", params.dateFrom);
+  }
+  if (params?.dateTo) {
+    query = query.lte("do_date", params.dateTo);
   }
 
   const { data, error, count } = await query.range(from, from + limit - 1);
@@ -1158,6 +1175,8 @@ const SPB_INVOICE_SORT_COLUMNS: Record<string, string> = {
 
 export async function getSpbInvoiceList(params?: {
   search?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -1185,7 +1204,13 @@ export async function getSpbInvoiceList(params?: {
   query = query.order("id", { ascending: false });
 
   if (params?.search) {
-    query = query.or(`invoice_no.ilike.%${params.search}%`);
+    query = query.or(`invoice_no.ilike.${orIlikePattern(params.search)}`);
+  }
+  if (params?.dateFrom) {
+    query = query.gte("invoice_date", params.dateFrom);
+  }
+  if (params?.dateTo) {
+    query = query.lte("invoice_date", params.dateTo);
   }
 
   const { data, error, count } = await query.range(from, from + limit - 1);
@@ -1291,6 +1316,8 @@ const RETURN_SPB_SORT_COLUMNS: Record<string, string> = {
 
 export async function getReturnSpbList(params?: {
   search?: string;
+  dateFrom?: string;
+  dateTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -1320,7 +1347,13 @@ export async function getReturnSpbList(params?: {
   query = query.order("id", { ascending: false });
 
   if (params?.search) {
-    query = query.or(`rtn_kode.ilike.%${params.search}%`);
+    query = query.or(`rtn_kode.ilike.${orIlikePattern(params.search)}`);
+  }
+  if (params?.dateFrom) {
+    query = query.gte("rtn_tanggal", params.dateFrom);
+  }
+  if (params?.dateTo) {
+    query = query.lte("rtn_tanggal", params.dateTo);
   }
 
   const { data, error, count } = await query.range(from, from + limit - 1);
@@ -1865,7 +1898,7 @@ export async function getSpbReport(params?: {
 
   if (params?.search) {
     query = query.or(
-      `spb_no.ilike.%${params.search}%,dtl_spb_part_number.ilike.%${params.search}%,dtl_spb_part_name.ilike.%${params.search}%,po_no.ilike.%${params.search}%,do_no.ilike.%${params.search}%,invoice_no.ilike.%${params.search}%`,
+      `spb_no.ilike.${orIlikePattern(params.search)},dtl_spb_part_number.ilike.${orIlikePattern(params.search)},dtl_spb_part_name.ilike.${orIlikePattern(params.search)},po_no.ilike.${orIlikePattern(params.search)},do_no.ilike.${orIlikePattern(params.search)},invoice_no.ilike.${orIlikePattern(params.search)}`,
     );
   }
 
@@ -1994,7 +2027,7 @@ export async function getSpbOptionsForPo(params?: {
     const s = params.search.replace(/[,()"]/g, " ").trim();
     if (s) {
       query = query.or(
-        `spb_no.ilike.%${s}%,spb_no_wo.ilike.%${s}%,spb_kode_unit.ilike.%${s}%`,
+        `spb_no.ilike.${orIlikePattern(s)},spb_no_wo.ilike.${orIlikePattern(s)},spb_kode_unit.ilike.${orIlikePattern(s)}`,
       );
     }
   }

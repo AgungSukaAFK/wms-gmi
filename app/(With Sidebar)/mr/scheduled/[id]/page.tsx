@@ -35,7 +35,7 @@ import {
   Snowflake,
   Printer,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { formatDate, formatDateTime } from "@/lib/utils";
 import { approveMR, rejectMR } from "@/services/procurement-actions";
 import { evaluateMrItemFreezeForMr } from "@/services/freeze-actions";

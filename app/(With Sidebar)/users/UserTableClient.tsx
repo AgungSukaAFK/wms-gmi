@@ -1,22 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
@@ -39,23 +32,40 @@ import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  filterOptionLabel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { MultiSelect } from "@/components/ui/multi-select";
 import {
-  MoreHorizontal,
   ShieldCheck,
   ShieldAlert,
   UserCog,
   UserMinus,
   Loader2,
   Users,
-  Search,
   KeyRound,
   Eye,
   EyeOff,
   UserPlus,
-  X,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   toggleUserStatus,
   updateUserDetail,
@@ -88,19 +98,57 @@ interface UserTableClientProps {
   allRoles: Role[];
 }
 
+// Harus sama dengan kolom yang dicari di filteredUsers.
+const USER_SEARCH_FIELDS = ["Nama", "Email", "NRP"];
+
+const USER_STATUS_LABEL: Record<string, string> = {
+  active: "Aktif",
+  inactive: "Pending Approval",
+};
+
+const USER_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di sortedUsers.
+const USER_COLUMNS = [
+  { id: "nama", label: "Nama", sortDirection: "asc", className: USER_HEAD_CLASS },
+  { id: "email", label: "Email / NRP", className: USER_HEAD_CLASS },
+  { id: "roles", label: "Roles", className: USER_HEAD_CLASS },
+  { id: "cabang", label: "Cabang", sortDirection: "asc", className: USER_HEAD_CLASS },
+  { id: "status", label: "Status", sortDirection: "asc", className: USER_HEAD_CLASS },
+] as const satisfies readonly ReorderableColumn[];
+type UserColumnId = (typeof USER_COLUMNS)[number]["id"];
+
 export default function UserTableClient({
   users,
   cabangList,
   allRoles,
 }: UserTableClientProps) {
   const { confirm, confirmDialog } = useConfirmDialog();
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-  const [cabangFilters, setCabangFilters] = useState<string[]>([]);
-  const [roleFilters, setRoleFilters] = useState<string[]>([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
-  const [sortOrder, setSortOrder] = useState("");
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const columnOrder = useColumnOrder("wms:table-column-order:users", USER_COLUMNS);
+  const urlState = useUrlListState();
+  const search = urlState.get("search");
+  const [searchInput, setSearchInput, resetSearch] = useUrlSearchInput(
+    search,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusFilter = urlState.get("status", "all");
+  const setStatusFilter = (v: string) =>
+    urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
+  const cabangFilters = urlState.list("cabang");
+  const setCabangFilters = (v: string[]) =>
+    urlState.set({ cabang: v }, { resetPage: true });
+  const roleFilters = urlState.list("role");
+  const setRoleFilters = (v: string[]) =>
+    urlState.set({ role: v }, { resetPage: true });
+  const sortOrder = urlState.get("sort");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const currentPage = urlState.getNumber("page", 1);
+  const setCurrentPage = (p: number) =>
+    urlState.set({ page: p === 1 ? "" : p });
+  const pageSize = urlState.getNumber("limit", 25);
+  const setPageSize = (n: number) =>
+    urlState.set({ limit: n === 25 ? "" : n }, { resetPage: true });
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isUpdating, setIsUpdating] = useState(false);
@@ -182,22 +230,50 @@ export default function UserTableClient({
     });
   }, [filteredUsers, sortOrder]);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [search, statusFilter, cabangFilters, roleFilters, pageSize]);
-
-  const hasActiveFilters =
-    search.trim() !== "" ||
-    statusFilter !== "all" ||
-    cabangFilters.length > 0 ||
-    roleFilters.length > 0;
-
   const resetFilters = () => {
-    setSearch("");
-    setStatusFilter("all");
-    setCabangFilters([]);
-    setRoleFilters([]);
+    resetSearch();
+    urlState.reset();
   };
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setCurrentPage(1);
+  };
+
+  const cabangOptions = cabangList.map((cabang) => ({
+    label: cabang.nama_cabang,
+    value: cabang.id.toString(),
+  }));
+  const roleOptions = allRoles.map((role) => ({
+    label: role.label,
+    value: role.id.toString(),
+  }));
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilter !== "all")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: USER_STATUS_LABEL[statusFilter] ?? statusFilter,
+      onRemove: () => setStatusFilter("all"),
+    });
+  if (cabangFilters.length > 0)
+    activeFilters.push({
+      key: "cabang",
+      label: "Cabang",
+      value: cabangFilters
+        .map((v) => filterOptionLabel(cabangOptions, v))
+        .join(", "),
+      onRemove: () => setCabangFilters([]),
+    });
+  if (roleFilters.length > 0)
+    activeFilters.push({
+      key: "role",
+      label: "Role",
+      value: roleFilters.map((v) => filterOptionLabel(roleOptions, v)).join(", "),
+      onRemove: () => setRoleFilters([]),
+    });
 
   const totalCount = filteredUsers.length;
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -402,6 +478,70 @@ export default function UserTableClient({
     }
   };
 
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (user: UserProfile, id: UserColumnId) => {
+    switch (id) {
+      case "nama":
+        return (
+          <TableCell className="font-semibold text-foreground">
+            {user.nama}
+          </TableCell>
+        );
+      case "email":
+        return (
+          <TableCell>
+            <div className="flex flex-col">
+              <span className="text-sm text-foreground">
+                {user.email}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {user.nrp || "-"}
+              </span>
+            </div>
+          </TableCell>
+        );
+      case "roles":
+        return (
+          <TableCell>
+            <div className="flex flex-wrap gap-1">
+              {user.roles.length > 0 ? (
+                user.roles.map((r) => (
+                  <Badge
+                    key={r.id}
+                    variant="outline"
+                    className={`text-[10px] px-1.5 py-0 capitalize border shadow-sm ${getBadgeColor(r.color)}`}
+                  >
+                    {r.label}
+                  </Badge>
+                ))
+              ) : (
+                <span className="text-xs text-muted-foreground italic">
+                  No role
+                </span>
+              )}
+            </div>
+          </TableCell>
+        );
+      case "cabang":
+        return (
+          <TableCell className="text-foreground">
+            {user.cabang?.nama_cabang || "-"}
+          </TableCell>
+        );
+      case "status":
+        return (
+          <TableCell>
+            <Badge
+              variant={user.is_active ? "default" : "destructive"}
+              className="text-[10px]"
+            >
+              {user.is_active ? "Aktif" : "Pending Approval"}
+            </Badge>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -433,199 +573,121 @@ export default function UserTableClient({
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari Nama, Email, atau NRP..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select value={statusFilter} onValueChange={setStatusFilter}>
-              <SelectTrigger className="h-9 w-full sm:w-45 border-input bg-background text-xs font-semibold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="active">Aktif</SelectItem>
-                <SelectItem value="inactive">Pending Approval</SelectItem>
-              </SelectContent>
-            </Select>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari Nama, Email, atau NRP..."
+            value={searchInput}
+            onChange={setSearchInput}
+            searchableFields={USER_SEARCH_FIELDS}
+          />
 
-            <MultiSelect
-              className="w-full sm:w-45"
-              placeholder="Semua Cabang"
-              searchable
-              selected={cabangFilters}
-              onChange={setCabangFilters}
-              options={cabangList.map((cabang) => ({
-                label: cabang.nama_cabang,
-                value: cabang.id.toString(),
-              }))}
-            />
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="active">Aktif</SelectItem>
+                    <SelectItem value="inactive">Pending Approval</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
 
-            <MultiSelect
-              className="w-full sm:w-45"
-              placeholder="Semua Role"
-              selected={roleFilters}
-              onChange={setRoleFilters}
-              options={allRoles.map((role) => ({
-                label: role.label,
-                value: role.id.toString(),
-              }))}
-            />
+              <FilterField label="Cabang">
+                <MultiSelect
+                  placeholder="Semua Cabang"
+                  searchable
+                  selected={cabangFilters}
+                  onChange={setCabangFilters}
+                  options={cabangOptions}
+                />
+              </FilterField>
 
-            {hasActiveFilters && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="h-9 gap-1.5 text-xs font-semibold text-muted-foreground hover:text-destructive"
-                onClick={resetFilters}
-              >
-                <X className="h-3.5 w-3.5" />
-                Reset Filter
-              </Button>
-            )}
-          </div>
+              <FilterField label="Role">
+                <MultiSelect
+                  placeholder="Semua Role"
+                  selected={roleFilters}
+                  onChange={setRoleFilters}
+                  options={roleOptions}
+                />
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <Table>
-          <TableHeader>
-            <TableRow className="bg-muted/50 hover:bg-muted/50">
-              <SortableTableHead
-                sortKey="nama"
-                currentSort={sortOrder}
-                onSort={setSortOrder}
-                className="text-[10px] font-black uppercase tracking-wide text-muted-foreground"
-              >
-                Nama
-              </SortableTableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
-                Email / NRP
-              </TableHead>
-              <TableHead className="text-[10px] font-black uppercase tracking-wide text-muted-foreground">
-                Roles
-              </TableHead>
-              <SortableTableHead
-                sortKey="cabang"
-                currentSort={sortOrder}
-                onSort={setSortOrder}
-                className="text-[10px] font-black uppercase tracking-wide text-muted-foreground"
-              >
-                Cabang
-              </SortableTableHead>
-              <SortableTableHead
-                sortKey="status"
-                currentSort={sortOrder}
-                onSort={setSortOrder}
-                className="text-[10px] font-black uppercase tracking-wide text-muted-foreground"
-              >
-                Status
-              </SortableTableHead>
-              <TableHead className="w-15 text-[10px] font-black uppercase tracking-wide text-muted-foreground">
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
                 Aksi
               </TableHead>
-            </TableRow>
-          </TableHeader>
+            </ReorderableHeaderRow>
+          }
+        >
           <TableBody>
             {paginatedUsers.length > 0 ? (
               paginatedUsers.map((user) => (
                 <TableRow key={user.id} className="hover:bg-muted/30">
-                  <TableCell className="font-semibold text-foreground">
-                    {user.nama}
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-col">
-                      <span className="text-sm text-foreground">
-                        {user.email}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {user.nrp || "-"}
-                      </span>
-                    </div>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex flex-wrap gap-1">
-                      {user.roles.length > 0 ? (
-                        user.roles.map((r) => (
-                          <Badge
-                            key={r.id}
-                            variant="outline"
-                            className={`text-[10px] px-1.5 py-0 capitalize border shadow-sm ${getBadgeColor(r.color)}`}
-                          >
-                            {r.label}
-                          </Badge>
-                        ))
-                      ) : (
-                        <span className="text-xs text-muted-foreground italic">
-                          No role
-                        </span>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-foreground">
-                    {user.cabang?.nama_cabang || "-"}
-                  </TableCell>
-                  <TableCell>
-                    <Badge
-                      variant={user.is_active ? "default" : "destructive"}
-                      className="text-[10px]"
-                    >
-                      {user.is_active ? "Aktif" : "Pending Approval"}
-                    </Badge>
-                  </TableCell>
-                  <TableCell>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(user, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
                     {loadingUserId === user.id ? (
-                      <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      <Loader2 className="ml-auto h-4 w-4 animate-spin text-muted-foreground" />
                     ) : (
-                      <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" className="h-8 w-8 p-0">
-                            <span className="sr-only">Buka menu</span>
-                            <MoreHorizontal className="h-4 w-4" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent align="end">
-                          <DropdownMenuLabel>Aksi</DropdownMenuLabel>
-                          <DropdownMenuItem onClick={() => handleEdit(user)}>
-                            <UserCog className="mr-2 h-4 w-4" />
-                            Edit Roles & Cabang
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={() => handleOpenResetPassword(user)}>
-                            <KeyRound className="mr-2 h-4 w-4" />
-                            Reset Password
-                          </DropdownMenuItem>
-                          <DropdownMenuItem
-                            onClick={() => handleToggleStatus(user)}
-                          >
-                            {user.is_active ? (
-                              <>
-                                <ShieldAlert className="mr-2 h-4 w-4 text-destructive" />
-                                Cabut Akses
-                              </>
-                            ) : (
-                              <>
-                                <ShieldCheck className="mr-2 h-4 w-4 text-success" />
-                                Buka Akses (Approve)
-                              </>
-                            )}
-                          </DropdownMenuItem>
-                          <DropdownMenuSeparator />
-                          <DropdownMenuItem
-                            onClick={() => handleDelete(user)}
-                            className="text-destructive focus:text-destructive"
-                          >
-                            <UserMinus className="mr-2 h-4 w-4" />
-                            Hapus User
-                          </DropdownMenuItem>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
+                      <RowActionsMenu>
+                        <DropdownMenuItem
+                          onSelect={() => handleEdit(user)}
+                        >
+                          <UserCog className="mr-2 h-4 w-4" /> Edit Roles & Cabang
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onSelect={() => handleOpenResetPassword(user)}
+                        >
+                          <KeyRound className="mr-2 h-4 w-4" /> Reset Password
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => handleToggleStatus(user)}>
+                          {user.is_active ? (
+                            <>
+                              <ShieldAlert className="mr-2 h-4 w-4 text-destructive" />
+                              Cabut Akses
+                            </>
+                          ) : (
+                            <>
+                              <ShieldCheck className="mr-2 h-4 w-4 text-success" />
+                              Buka Akses (Approve)
+                            </>
+                          )}
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => handleDelete(user)}
+                        >
+                          <UserMinus className="mr-2 h-4 w-4" /> Hapus User
+                        </DropdownMenuItem>
+                      </RowActionsMenu>
                     )}
                   </TableCell>
                 </TableRow>
@@ -641,62 +703,17 @@ export default function UserTableClient({
               </TableRow>
             )}
           </TableBody>
-        </Table>
+        </StickyHeaderTable>
 
-        <div className="mt-3 flex flex-col gap-3 rounded-md border border-border bg-muted/30 p-3 md:flex-row md:items-center md:justify-between">
-          <p className="text-xs font-medium text-muted-foreground">
-            Menampilkan {totalCount === 0 ? 0 : startIndex + 1}-
-            {Math.min(endIndex, totalCount)} dari {totalCount} pengguna
-          </p>
-
-          <div className="flex w-full flex-wrap items-center gap-2 md:w-auto md:justify-end">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-black uppercase text-muted-foreground">
-                Baris:
-              </span>
-              <Select
-                value={pageSize.toString()}
-                onValueChange={(value) => setPageSize(Number(value))}
-              >
-                <SelectTrigger className="h-8 w-18 border-input bg-background text-xs font-semibold text-foreground">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="10">10</SelectItem>
-                  <SelectItem value="25">25</SelectItem>
-                  <SelectItem value="50">50</SelectItem>
-                  <SelectItem value="100">100</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8"
-                onClick={() => setCurrentPage((prev) => Math.max(1, prev - 1))}
-                disabled={safeCurrentPage <= 1}
-              >
-                Prev
-              </Button>
-              <span className="text-xs font-semibold text-foreground">
-                {safeCurrentPage} / {totalPages}
-              </span>
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-8"
-                onClick={() =>
-                  setCurrentPage((prev) => Math.min(totalPages, prev + 1))
-                }
-                disabled={safeCurrentPage >= totalPages}
-              >
-                Next
-              </Button>
-            </div>
-          </div>
-        </div>
+        <TablePaginationFooter
+          currentPage={safeCurrentPage}
+          totalItems={totalCount}
+          limit={pageSize}
+          itemLabel="pengguna"
+          onPageChange={setCurrentPage}
+          onLimitChange={(value) => setPageSize(Number(value))}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={isCreateModalOpen} onOpenChange={setIsCreateModalOpen}>

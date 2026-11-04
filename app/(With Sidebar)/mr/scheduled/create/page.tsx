@@ -34,7 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";

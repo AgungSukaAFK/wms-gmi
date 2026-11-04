@@ -34,7 +34,7 @@ import {
   Package,
   ArrowRight,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";

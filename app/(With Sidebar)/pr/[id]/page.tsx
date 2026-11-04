@@ -65,7 +65,7 @@ import {
 import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
 import { ModeratorEditLogPanel } from "@/components/moderator/moderator-edit-log-panel";
 import { CascadeDeleteDialog } from "@/components/moderator/cascade-delete-dialog";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
@@ -878,11 +878,8 @@ export default function PRDetailPage({
           >
             <TableHeader className="bg-muted/50 [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
               <TableRow className="h-10 hover:bg-transparent border-b border-border">
-                <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4 w-30">
-                  Part Info
-                </TableHead>
-                <TableHead className="text-[9px] font-bold uppercase text-muted-foreground">
-                  Nama Barang
+                <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4">
+                  Barang
                 </TableHead>
                 <TableHead className="text-[9px] font-bold uppercase text-muted-foreground text-right w-24">
                   Status Item
@@ -898,11 +895,19 @@ export default function PRDetailPage({
                   key={item.id}
                   className="hover:bg-muted/30 border-b border-border/50 transition-colors align-top"
                 >
-                  <TableCell className="pl-4 py-3 align-top">
+                  <TableCell className="pl-4 py-3 align-top whitespace-normal">
                     <div className="flex flex-col gap-1">
-                      <span className="text-sm font-black font-mono text-foreground uppercase tracking-wide leading-none">
+                      <span className="text-sm font-black font-mono text-foreground uppercase tracking-wide leading-tight wrap-break-word">
                         {item.part_number}
                       </span>
+                      <span className="text-[10px] font-medium text-muted-foreground uppercase leading-tight wrap-break-word">
+                        {item.part_name}
+                      </span>
+                      {item.over_mr_note && (
+                        <span className="text-[10px] text-warning wrap-break-word">
+                          Melebihi MR: {item.over_mr_note}
+                        </span>
+                      )}
                       {modEditMode ? (
                         modDeletedItemIds.includes(item.id) ? (
                           <span className="text-[10px] font-bold text-destructive italic">
@@ -942,16 +947,6 @@ export default function PRDetailPage({
                         </span>
                       )}
                     </div>
-                  </TableCell>
-                  <TableCell className="py-3 align-top">
-                    <span className="block whitespace-normal wrap-break-word text-[10px] font-medium text-muted-foreground uppercase leading-tight">
-                      {item.part_name}
-                    </span>
-                    {item.over_mr_note && (
-                      <span className="block whitespace-normal wrap-break-word text-[10px] text-warning mt-1">
-                        Melebihi MR: {item.over_mr_note}
-                      </span>
-                    )}
                   </TableCell>
                   <TableCell className="text-right py-3 align-top">
                     <Select

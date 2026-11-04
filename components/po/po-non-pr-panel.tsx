@@ -24,7 +24,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Link2, Loader2, Search, Wrench, X } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { cn } from "@/lib/utils";
 import {

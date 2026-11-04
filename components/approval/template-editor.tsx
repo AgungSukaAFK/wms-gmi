@@ -49,7 +49,7 @@ import {
   ChevronsUpDown,
   Loader2,
 } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { cn, randomUUID } from "@/lib/utils";
 import { useDebounce } from "use-debounce";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -61,7 +61,8 @@ import {
   ApprovalType,
   ApprovalLevel,
 } from "@/type";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 type StepProfile = {
   nama?: string;
@@ -90,11 +91,6 @@ export function TemplateEditor({
   userProfile,
   onSuccess,
 }: TemplateEditorProps) {
-  const createStepId = () =>
-    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `step-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-
   const supabase = createClient();
   const [loading, setLoading] = useState(false);
   const [name, setName] = useState("");
@@ -156,7 +152,7 @@ export function TemplateEditor({
       .order("step_order");
     const mappedSteps: EditorStep[] = (data || []).map((step: any) => ({
       ...step,
-      local_id: createStepId(),
+      local_id: randomUUID(),
     }));
     setSteps(mappedSteps);
   };
@@ -178,7 +174,7 @@ export function TemplateEditor({
       .limit(10);
 
     if (search) {
-      query = query.or(`nama.ilike.%${search}%,email.ilike.%${search}%`);
+      query = query.or(`nama.ilike.${orIlikePattern(search)},email.ilike.${orIlikePattern(search)}`);
     }
 
     const { data } = await query;
@@ -189,7 +185,7 @@ export function TemplateEditor({
   const addStep = (type: "user" | "requester") => {
     const nextOrder = steps.length + 1;
     const newStep: EditorStep = {
-      local_id: createStepId(),
+      local_id: randomUUID(),
       step_order: nextOrder,
       approver_type: type,
       level: "menyetujui" as ApprovalLevel,

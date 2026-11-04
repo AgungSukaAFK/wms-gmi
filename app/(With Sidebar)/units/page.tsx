@@ -1,8 +1,29 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,20 +36,15 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
-  FilterX,
   Loader2,
   Pencil,
   Plus,
-  Search,
   ToggleLeft,
   Tractor,
   Trash2,
@@ -41,9 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useDebounce } from "use-debounce";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   createUnit,
   deleteUnit,
@@ -78,6 +92,26 @@ const emptyUnitForm: UnitFormState = {
 
 const DEFAULT_SORT = "kode_unit_asc";
 
+// Harus sama dengan kolom yang dicari di getUnitList.
+const UNIT_SEARCH_FIELDS = ["Kode Unit", "Tipe Unit", "Brand"];
+
+const STATUS_LABEL: Record<string, string> = {
+  active: "Aktif",
+  inactive: "Nonaktif",
+  deleted: "Terhapus",
+};
+
+const UNIT_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di service.
+const UNIT_COLUMNS = [
+  { id: "kode_unit", label: "Kode Unit", sortDirection: "asc", className: `w-48 ${UNIT_HEAD_CLASS}` },
+  { id: "tipe_unit", label: "Tipe Unit", sortDirection: "asc", className: UNIT_HEAD_CLASS },
+  { id: "brand", label: "Brand", sortDirection: "asc", className: `w-44 ${UNIT_HEAD_CLASS}` },
+  { id: "is_active", label: "Status", sortDirection: "asc", className: `w-28 text-center ${UNIT_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type UnitColumnId = (typeof UNIT_COLUMNS)[number]["id"];
+
 export default function UnitsPage() {
   const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
@@ -85,15 +119,31 @@ export default function UnitsPage() {
   const [units, setUnits] = useState<UnitRow[]>([]);
   const [totalCount, setTotalCount] = useState(0);
 
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 350);
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | "active" | "inactive"
-  >("all");
-  const [brandFilter, setBrandFilter] = useState("all");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
-  const [sortOrder, setSortOrder] = useState(DEFAULT_SORT);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const columnOrder = useColumnOrder("wms:table-column-order:unit", UNIT_COLUMNS);
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusParam = urlState.get("status");
+  const statusFilter: "all" | "active" | "inactive" =
+    statusParam === "active" || statusParam === "inactive"
+      ? statusParam
+      : "all";
+  const setStatusFilter = (v: string) =>
+    urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
+  const brandFilter = urlState.get("brand", "all");
+  const setBrandFilter = (v: string) =>
+    urlState.set({ brand: v === "all" ? "" : v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", DEFAULT_SORT);
+  const setSortOrder = (v: string) =>
+    urlState.set({ sort: v === DEFAULT_SORT ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [brandOptions, setBrandOptions] = useState<string[]>([]);
   const [typeOptions, setTypeOptions] = useState<string[]>([]);
@@ -186,21 +236,9 @@ export default function UnitsPage() {
   };
 
   const resetFilters = () => {
-    setSearch("");
-    setStatusFilter("all");
-    setBrandFilter("all");
-    setSortOrder(DEFAULT_SORT);
-    setPage(1);
+    resetSearch();
+    urlState.reset();
   };
-
-  const hasActiveFilters = useMemo(
-    () =>
-      Boolean(search) ||
-      statusFilter !== "all" ||
-      brandFilter !== "all" ||
-      sortOrder !== DEFAULT_SORT,
-    [search, statusFilter, brandFilter, sortOrder],
-  );
 
   const handleSubmit = async () => {
     if (!form.kode_unit.trim()) {
@@ -274,6 +312,71 @@ export default function UnitsPage() {
     await Promise.all([fetchUnits(), fetchOptions()]);
   };
 
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilter !== "all")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: STATUS_LABEL[statusFilter],
+      onRemove: () => setStatusFilter("all"),
+    });
+  if (brandFilter !== "all")
+    activeFilters.push({
+      key: "brand",
+      label: "Brand",
+      value: brandFilter === "__none__" ? "Tanpa Brand" : brandFilter,
+      onRemove: () => setBrandFilter("all"),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (unit: UnitRow, id: UnitColumnId) => {
+    switch (id) {
+      case "kode_unit":
+        return (
+          <TableCell>
+            <span className="font-mono text-xs font-bold text-primary">
+              {unit.kode_unit}
+            </span>
+          </TableCell>
+        );
+      case "tipe_unit":
+        return (
+          <TableCell>
+            <span className="text-sm font-semibold text-foreground">
+              {unit.tipe_unit}
+            </span>
+          </TableCell>
+        );
+      case "brand":
+        return (
+          <TableCell>
+            {unit.brand ? (
+              <Badge
+                variant="outline"
+                className="text-[10px] font-bold uppercase"
+              >
+                {unit.brand}
+              </Badge>
+            ) : (
+              <span className="text-xs text-muted-foreground">-</span>
+            )}
+          </TableCell>
+        );
+      case "is_active":
+        return (
+          <TableCell className="text-center">
+            <Badge
+              variant={unit.is_active ? "default" : "secondary"}
+              className="text-[10px] font-bold uppercase"
+            >
+              {unit.is_active ? "Aktif" : "Nonaktif"}
+            </Badge>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -312,234 +415,153 @@ export default function UnitsPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari kode unit, tipe unit, atau brand..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari kode unit, tipe, atau brand..."
+            value={search}
+            onChange={setSearch}
+            searchableFields={UNIT_SEARCH_FIELDS}
+          />
 
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select
-              value={brandFilter}
-              onValueChange={(val) => {
-                setBrandFilter(val);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-48 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Brand" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Brand</SelectItem>
-                <SelectItem value="__none__">Tanpa Brand</SelectItem>
-                {brandOptions.map((brand) => (
-                  <SelectItem key={brand} value={brand}>
-                    {brand}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Brand">
+                <Select value={brandFilter} onValueChange={setBrandFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue placeholder="Brand" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Brand</SelectItem>
+                    <SelectItem value="__none__">Tanpa Brand</SelectItem>
+                    {brandOptions.map((brand) => (
+                      <SelectItem key={brand} value={brand}>
+                        {brand}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
 
-            <Select
-              value={statusFilter}
-              onValueChange={(val: "all" | "active" | "inactive") => {
-                setStatusFilter(val);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-42.5 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="active">Aktif</SelectItem>
-                <SelectItem value="inactive">Nonaktif</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9 px-2 text-muted-foreground hover:text-destructive gap-1 transition-colors"
-              onClick={resetFilters}
-              disabled={!hasActiveFilters}
-            >
-              <FilterX className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+              <FilterField label="Status">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="active">Aktif</SelectItem>
+                    <SelectItem value="inactive">Nonaktif</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50 border-b border-border">
-              <TableRow className="hover:bg-transparent h-10">
-                <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
-                  No
-                </TableHead>
-                <SortableTableHead
-                  sortKey="kode_unit"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-48 text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Kode Unit
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="tipe_unit"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Tipe Unit
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="brand"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-44 text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Brand
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="is_active"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-28 text-[10px] font-black uppercase text-muted-foreground justify-center text-center"
-                >
-                  Status
-                </SortableTableHead>
-                {canWrite && (
-                  <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
-                    Aksi
-                  </TableHead>
-                )}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-40 text-center">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                        Memuat Unit...
-                      </span>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : units.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="h-40 text-center text-muted-foreground italic text-sm"
-                  >
-                    {hasActiveFilters
-                      ? "Tidak ada data unit yang sesuai filter."
-                      : "Belum ada data unit."}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                units.map((unit, index) => (
-                  <TableRow
-                    key={unit.id}
-                    className="group hover:bg-muted/30 transition-all border-b border-border/50 h-12"
-                  >
-                    <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
-                      {(page - 1) * limit + index + 1}
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs font-bold text-primary">
-                        {unit.kode_unit}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <span className="text-sm font-semibold text-foreground">
-                        {unit.tipe_unit}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      {unit.brand ? (
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] font-bold uppercase"
-                        >
-                          {unit.brand}
-                        </Badge>
-                      ) : (
-                        <span className="text-xs text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge
-                        variant={unit.is_active ? "default" : "secondary"}
-                        className="text-[10px] font-bold uppercase"
-                      >
-                        {unit.is_active ? "Aktif" : "Nonaktif"}
-                      </Badge>
-                    </TableCell>
-                    {canWrite && (
-                      <TableCell className="text-right pr-6">
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openEditDialog(unit)}
-                            title="Edit unit"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => handleToggleStatus(unit.id)}
-                            title="Toggle status"
-                          >
-                            <ToggleLeft className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => handleDelete(unit)}
-                            title="Hapus unit"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </TableCell>
-                    )}
-                  </TableRow>
-                ))
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[900px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
+                No
+              </TableHead>
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              {canWrite && (
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
               )}
-            </TableBody>
-          </Table>
-        </div>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={canWrite ? 6 : 5}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : units.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={canWrite ? 6 : 5}
+                  className="h-40 text-center text-muted-foreground italic text-sm"
+                >
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data unit yang sesuai filter."
+                    : "Belum ada data unit."}
+                </TableCell>
+              </TableRow>
+            ) : (
+              units.map((unit, index) => (
+                <TableRow
+                  key={unit.id}
+                  className="group hover:bg-muted/30 transition-all border-b border-border/50 h-14"
+                >
+                  <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
+                    {(page - 1) * limit + index + 1}
+                  </TableCell>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(unit, id)}</React.Fragment>
+                  ))}
+                  {canWrite && (
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => openEditDialog(unit)}
+                      >
+                        <Pencil className="mr-2 h-4 w-4" /> Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onSelect={() => handleToggleStatus(unit.id)}
+                      >
+                        <ToggleLeft className="mr-2 h-4 w-4" /> Ubah Status
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => handleDelete(unit)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                      </DropdownMenuItem>
+                    </RowActionsMenu>
+                  </TableCell>
+                  )}
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <div className="p-4 border-t border-border bg-muted/30">
-          <DataTablePagination
-            totalCount={totalCount}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(val) => {
-              setLimit(parseInt(val, 10));
-              setPage(1);
-            }}
-            itemLabel="Unit"
-          />
-        </div>
+        <TablePaginationFooter
+          currentPage={page}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Unit"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val, 10));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

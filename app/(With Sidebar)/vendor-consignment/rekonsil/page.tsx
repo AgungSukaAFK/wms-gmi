@@ -2,10 +2,8 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { useDebounce } from "use-debounce";
 import {
   Plus,
-  Search,
   Loader2,
   Scale,
   Eye,
@@ -16,9 +14,39 @@ import {
   ShoppingCart,
   Receipt,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,17 +74,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { DatePickerString } from "@/components/date-picker-string";
 import { formatDate, toYmdLocal } from "@/lib/utils";
 import {
   deleteRekonsil,
@@ -82,14 +99,61 @@ function statusOf(rk: any): { label: string; tone: string } {
   return { label: "Draft", tone: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800" };
 }
 
+// Harus sama dengan kolom yang dicari di `filtered`.
+const RK_SEARCH_FIELDS = ["Kode Rekonsil", "Vendor", "Site", "Kode PO", "No. Invoice"];
+
+const RK_STATUS_OPTIONS = ["Draft", "BAST Final", "PO dibuat", "Invoice", "Lunas"].map(
+  (label) => ({ label, value: label }),
+);
+
+const RK_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getRekonsilSortValue.
+const RK_COLUMNS = [
+  { id: "rk_kode", label: "Kode", sortDirection: "asc", className: RK_HEAD_CLASS },
+  { id: "site", label: "Site / Vendor", sortDirection: "asc", className: RK_HEAD_CLASS },
+  { id: "periode", label: "Periode", sortDirection: "desc", className: RK_HEAD_CLASS },
+  { id: "qty", label: "Qty", className: `text-right ${RK_HEAD_CLASS}` },
+  { id: "status", label: "Status", className: RK_HEAD_CLASS },
+  { id: "po_invoice", label: "PO / Invoice", className: RK_HEAD_CLASS },
+] as const satisfies readonly ReorderableColumn[];
+type RekonsilColumnId = (typeof RK_COLUMNS)[number]["id"];
+
+const getRekonsilSortValue = (rk: any, key: string) => {
+  if (key === "site") return rk.cabang?.nama_cabang;
+  if (key === "periode") return rk.periode_awal;
+  return rk[key];
+};
+
 export default function RekonsilPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [roles, setRoles] = useState<string[]>([]);
   const [userId, setUserId] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 300);
+  const columnOrder = useColumnOrder("wms:table-column-order:vendor-consignment-rekonsil", RK_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusFilters = urlState.list("status");
+  const setStatusFilters = (v: string[]) =>
+    urlState.set({ status: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [detail, setDetail] = useState<any | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -131,6 +195,12 @@ export default function RekonsilPage() {
   }, []);
 
   const filtered = rows.filter((rk) => {
+    if (statusFilters.length > 0 && !statusFilters.includes(statusOf(rk).label)) {
+      return false;
+    }
+    const tanggal = (rk.rk_tanggal || "").slice(0, 10);
+    if (dateFrom && tanggal < dateFrom) return false;
+    if (dateTo && tanggal > dateTo) return false;
     const q = debouncedSearch.toLowerCase();
     if (!q) return true;
     return (
@@ -141,6 +211,16 @@ export default function RekonsilPage() {
       rk.invoice_no?.toLowerCase().includes(q)
     );
   });
+
+  const sorted = sortRows(filtered, sortOrder, getRekonsilSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const openDetail = async (id: number) => {
     setDetailLoading(true);
@@ -156,12 +236,13 @@ export default function RekonsilPage() {
 
   const runConfirm = async () => {
     if (!confirm) return;
-    setBusy(true);
     const fn =
       confirm.kind === "finalize" ? finalizeRekonsil : confirm.kind === "reopen" ? reopenRekonsil : deleteRekonsil;
     const res = await fn(confirm.rk.id);
-    setBusy(false);
-    if (res.error) return toast.error(res.error);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
     toast.success(
       confirm.kind === "finalize"
         ? "Rekonsil final, siap dibuatkan PO oleh purchasing."
@@ -169,7 +250,6 @@ export default function RekonsilPage() {
           ? "Rekonsil dikembalikan ke draft."
           : "Rekonsil dihapus.",
     );
-    setConfirm(null);
     load();
   };
 
@@ -199,6 +279,102 @@ export default function RekonsilPage() {
 
   const today = toYmdLocal();
 
+  const canDeleteRk = (rk: any) =>
+    !rk.po_id && (isMod || (rk.status === "draft" && rk.created_by === userId));
+
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilters.length > 0)
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: optionLabels(RK_STATUS_OPTIONS, statusFilters),
+      onRemove: () => setStatusFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (rk: any, id: RekonsilColumnId) => {
+    const st = statusOf(rk);
+    const qty = (rk.vendor_consignment_rekonsil_items || []).reduce(
+      (a: number, i: any) => a + i.qty,
+      0,
+    );
+    const deadline = feedbackDeadline(rk.rk_tanggal);
+
+    switch (id) {
+      case "rk_kode":
+        return (
+          <TableCell className="text-xs">
+            <span className="font-bold">{rk.rk_kode}</span>
+            <span className="block text-[10px] text-muted-foreground">{formatDate(rk.rk_tanggal)}</span>
+          </TableCell>
+        );
+      case "site":
+        return (
+          <TableCell className="text-xs">
+            <span className="font-semibold">{rk.cabang?.nama_cabang}</span>
+            <span className="block text-[10px] text-muted-foreground">{rk.vendors?.vendor_name}</span>
+          </TableCell>
+        );
+      case "periode":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">
+            {formatDate(rk.periode_awal)} – {formatDate(rk.periode_akhir)}
+          </TableCell>
+        );
+      case "qty":
+        return (
+          <TableCell className="text-right text-xs font-bold">{qty}</TableCell>
+        );
+      case "status":
+        return (
+          <TableCell>
+            <Badge variant="outline" className={`text-[10px] font-bold ${st.tone}`}>
+              {st.label}
+            </Badge>
+            {rk.status === "draft" && (
+              <span
+                className={`block mt-1 text-[10px] ${deadline < today ? "text-destructive font-bold" : "text-muted-foreground"}`}
+              >
+                Feedback s.d. {formatDate(deadline)}
+              </span>
+            )}
+          </TableCell>
+        );
+      case "po_invoice":
+        return (
+          <TableCell className="text-xs">
+            {rk.pos ? (
+              <Link href={`/po/${rk.po_id}`} className="font-semibold hover:underline">
+                {rk.pos.po_kode}
+              </Link>
+            ) : (
+              "-"
+            )}
+            {rk.invoice_no && (
+              <span className="block text-[10px] text-muted-foreground">Inv {rk.invoice_no}</span>
+            )}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -223,158 +399,172 @@ export default function RekonsilPage() {
       </Content>
 
       <Content>
-        <div className="relative min-w-0 flex-1 xl:max-w-100">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari kode, vendor, site, PO, invoice..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari kode rekonsil, vendor, site, PO, invoice..."
-            className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium"
+            onChange={setSearchQuery}
+            searchableFields={RK_SEARCH_FIELDS}
           />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <MultiSelect
+                  placeholder="Semua Status"
+                  selected={statusFilters}
+                  onChange={setStatusFilters}
+                  options={RK_STATUS_OPTIONS}
+                />
+              </FilterField>
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Tanggal Rekonsil">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border overflow-x-auto">
-          <Table>
-            <TableHeader>
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1100px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={7}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
               <TableRow>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Site / Vendor</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Periode</TableHead>
-                <TableHead className="text-right text-[10px] font-black uppercase text-muted-foreground">Qty</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Status</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">PO / Invoice</TableHead>
-                <TableHead className="w-56" />
+                <TableCell
+                  colSpan={7}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Belum ada rekonsil"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
+            ) : (
+              pageRows.map((rk) => (
+                <TableRow key={rk.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(rk, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => openDetail(rk.id)}
+                      >
+                        <Eye className="mr-2 h-4 w-4" /> Lihat Detail
+                      </DropdownMenuItem>
+                      <DropdownMenuItem asChild>
+                        <Link href={`/vendor-consignment/rekonsil/${rk.id}/print`} target="_blank">
+                          <Printer className="mr-2 h-4 w-4" /> Cetak BAST
+                        </Link>
+                      </DropdownMenuItem>
+                      {rk.status === "draft" && (
+                        <DropdownMenuItem
+                          onSelect={() => setConfirm({ kind: "finalize", rk })}
+                        >
+                          <CheckCircle2 className="mr-2 h-4 w-4" /> BAST Final
+                        </DropdownMenuItem>
+                      )}
+                      {rk.status === "final" && !rk.po_id && canPo && (
+                        <DropdownMenuItem asChild>
+                          <Link href={`/vendor-consignment/rekonsil/${rk.id}/po`}>
+                            <ShoppingCart className="mr-2 h-4 w-4" /> Buat PO
+                          </Link>
+                        </DropdownMenuItem>
+                      )}
+                      {rk.status === "final" && !rk.po_id && canReopen && (
+                        <DropdownMenuItem
+                          onSelect={() => setConfirm({ kind: "reopen", rk })}
+                        >
+                          <Undo2 className="mr-2 h-4 w-4" /> Kembalikan ke Draft
+                        </DropdownMenuItem>
+                      )}
+                      {rk.po_id && canBilling && (
+                        <DropdownMenuItem
+                          onSelect={() => openBilling(rk)}
+                        >
+                          <Receipt className="mr-2 h-4 w-4" /> Tagihan
+                        </DropdownMenuItem>
+                      )}
+                      {canDeleteRk(rk) && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => setConfirm({ kind: "delete", rk })}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
                   </TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
-                  >
-                    Belum ada rekonsil
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((rk) => {
-                  const st = statusOf(rk);
-                  const qty = (rk.vendor_consignment_rekonsil_items || []).reduce((a: number, i: any) => a + i.qty, 0);
-                  const deadline = feedbackDeadline(rk.rk_tanggal);
-                  const canDelete = !rk.po_id && (isMod || (rk.status === "draft" && rk.created_by === userId));
-                  return (
-                    <TableRow key={rk.id}>
-                      <TableCell className="text-xs">
-                        <span className="font-bold">{rk.rk_kode}</span>
-                        <span className="block text-[10px] text-muted-foreground">{formatDate(rk.rk_tanggal)}</span>
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        <span className="font-semibold">{rk.cabang?.nama_cabang}</span>
-                        <span className="block text-[10px] text-muted-foreground">{rk.vendors?.vendor_name}</span>
-                      </TableCell>
-                      <TableCell className="text-xs whitespace-nowrap">
-                        {formatDate(rk.periode_awal)} – {formatDate(rk.periode_akhir)}
-                      </TableCell>
-                      <TableCell className="text-right text-xs font-bold">{qty}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline" className={`text-[10px] font-bold ${st.tone}`}>
-                          {st.label}
-                        </Badge>
-                        {rk.status === "draft" && (
-                          <span
-                            className={`block mt-1 text-[10px] ${deadline < today ? "text-destructive font-bold" : "text-muted-foreground"}`}
-                          >
-                            Feedback s.d. {formatDate(deadline)}
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-xs">
-                        {rk.pos ? (
-                          <Link href={`/po/${rk.po_id}`} className="font-semibold hover:underline">
-                            {rk.pos.po_kode}
-                          </Link>
-                        ) : (
-                          "-"
-                        )}
-                        {rk.invoice_no && (
-                          <span className="block text-[10px] text-muted-foreground">Inv {rk.invoice_no}</span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1 justify-end flex-wrap">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" title="Detail" onClick={() => openDetail(rk.id)}>
-                            <Eye className="h-3.5 w-3.5" />
-                          </Button>
-                          <Link href={`/vendor-consignment/rekonsil/${rk.id}/print`} target="_blank" title="Cetak BAST">
-                            <Button variant="ghost" size="icon" className="h-7 w-7">
-                              <Printer className="h-3.5 w-3.5" />
-                            </Button>
-                          </Link>
-                          {rk.status === "draft" && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 gap-1 text-[10px] font-bold"
-                              onClick={() => setConfirm({ kind: "finalize", rk })}
-                            >
-                              <CheckCircle2 className="h-3 w-3" /> BAST Final
-                            </Button>
-                          )}
-                          {rk.status === "final" && !rk.po_id && canPo && (
-                            <Link href={`/vendor-consignment/rekonsil/${rk.id}/po`}>
-                              <Button size="sm" className="h-7 gap-1 text-[10px] font-bold">
-                                <ShoppingCart className="h-3 w-3" /> Buat PO
-                              </Button>
-                            </Link>
-                          )}
-                          {rk.status === "final" && !rk.po_id && canReopen && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7"
-                              title="Kembalikan ke draft"
-                              onClick={() => setConfirm({ kind: "reopen", rk })}
-                            >
-                              <Undo2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                          {rk.po_id && canBilling && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 gap-1 text-[10px] font-bold"
-                              onClick={() => openBilling(rk)}
-                            >
-                              <Receipt className="h-3 w-3" /> Tagihan
-                            </Button>
-                          )}
-                          {canDelete && (
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                              onClick={() => setConfirm({ kind: "delete", rk })}
-                            >
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Rekonsil"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
@@ -471,32 +661,27 @@ export default function RekonsilPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!confirm} onOpenChange={(o) => !o && setConfirm(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>
-              {confirm?.kind === "finalize"
-                ? `Finalkan BAST ${confirm.rk.rk_kode}?`
-                : confirm?.kind === "reopen"
-                  ? `Kembalikan ${confirm?.rk.rk_kode} ke draft?`
-                  : `Hapus rekonsil ${confirm?.rk.rk_kode}?`}
-            </AlertDialogTitle>
-            <AlertDialogDescription>
-              {confirm?.kind === "finalize"
-                ? "Pastikan BAST sudah ditandatangani admin site, PJO, dan supplier. Setelah final, purchasing bisa membuat PO Rekonsil."
-                : confirm?.kind === "reopen"
-                  ? "Dipakai kalau ada feedback/koreksi. Rekonsil bisa dihapus & dibuat ulang selama belum ada PO."
-                  : "Baris SPB-nya kembali bisa direkonsil ulang. Tindakan ini tidak bisa dibatalkan."}
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={busy}>Batal</AlertDialogCancel>
-            <AlertDialogAction onClick={runConfirm} disabled={busy}>
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : "Lanjutkan"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        destructive={confirm?.kind === "delete"}
+        open={!!confirm}
+        onOpenChange={(open) => !open && setConfirm(null)}
+        title={
+          confirm?.kind === "finalize"
+            ? `Finalkan BAST ${confirm.rk.rk_kode}?`
+            : confirm?.kind === "reopen"
+              ? `Kembalikan ${confirm?.rk.rk_kode} ke draft?`
+              : `Hapus rekonsil ${confirm?.rk.rk_kode}?`
+        }
+        description={
+          confirm?.kind === "finalize"
+            ? "Pastikan BAST sudah ditandatangani admin site, PJO, dan supplier. Setelah final, purchasing bisa membuat PO Rekonsil."
+            : confirm?.kind === "reopen"
+              ? "Dipakai kalau ada feedback/koreksi. Rekonsil bisa dihapus & dibuat ulang selama belum ada PO."
+              : "Baris SPB-nya kembali bisa direkonsil ulang. Tindakan ini tidak bisa dibatalkan."
+        }
+        confirmText="Lanjutkan"
+        onConfirm={runConfirm}
+      />
     </>
   );
 }

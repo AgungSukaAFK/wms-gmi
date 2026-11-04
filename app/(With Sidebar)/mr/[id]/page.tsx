@@ -65,7 +65,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   approveMR,
   rejectMR,
@@ -93,6 +93,7 @@ import {
   DEFAULT_MR_LEVEL_AUTO_RULES,
 } from "@/lib/mr-level";
 import { StatusBadge } from "@/components/status-badge";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 const STATUS_LABELS: Record<string, string> = { done: "Done", closed: "Closed" };
 
@@ -422,7 +423,7 @@ export default function MRDetailPage({
         .limit(15);
       if (debouncedBarangSearch) {
         query = query.or(
-          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedBarangSearch)},part_name.ilike.${orIlikePattern(debouncedBarangSearch)}`,
         );
       }
       const { data } = await query;

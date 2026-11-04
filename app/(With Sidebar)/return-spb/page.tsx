@@ -1,22 +1,49 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import Link from "next/link";
-import { useDebounce } from "use-debounce";
-import { Plus, Printer, Search, ShieldAlert, Undo2 } from "lucide-react";
-import { toast } from "sonner";
-import { Content } from "@/components/content";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import {
-  Table,
+  Plus,
+  Printer,
+  ShieldAlert,
+  Undo2,
+  Check,
+  X,
+} from "lucide-react";
+import { toast } from "@/lib/toast";
+import { Content } from "@/components/content";
+import { DatePickerString } from "@/components/date-picker-string";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import {
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
 import {
   approveReturnSpb,
   getReturnSpbList,
@@ -28,19 +55,49 @@ import {
 } from "@/services/moderator-edit-actions";
 import { StockOutModeratorEditDialog } from "@/components/moderator/stock-out-moderator-edit-dialog";
 import { createClient } from "@/lib/supabase/client";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { formatDate } from "@/lib/utils";
+
+// Harus sama dengan kolom yang dicari di getReturnSpbList.
+const RETURN_SEARCH_FIELDS = ["Kode Return"];
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key sort di service.
+const RETURN_COLUMNS = [
+  { id: "rtn_kode", label: "Kode Return", sortDirection: "asc" },
+  { id: "spb_no", label: "No SPB" },
+  { id: "rtn_tanggal", label: "Tanggal Return", sortDirection: "desc" },
+  { id: "rtn_status", label: "Status", sortDirection: "asc" },
+  { id: "approval_status", label: "Approval", sortDirection: "asc" },
+  { id: "catatan", label: "Catatan" },
+  { id: "created_at", label: "Created" },
+] as const satisfies readonly ReorderableColumn[];
+type ReturnColumnId = (typeof RETURN_COLUMNS)[number]["id"];
 
 export default function ReturnSpbPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 500);
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
-  const [sort, setSort] = useState("created_at_desc");
+  const columnOrder = useColumnOrder("wms:table-column-order:return-spb", RETURN_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const sort = urlState.get("sort", "created_at_desc");
+  const setSort = (v: string) =>
+    urlState.set({ sort: v === "created_at_desc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
   const [userId, setUserId] = useState("");
 
   // Moderator Edit state
@@ -58,6 +115,8 @@ export default function ReturnSpbPage() {
     setLoading(true);
     const res = await getReturnSpbList({
       search: debouncedSearch || undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
       sort,
       page,
       limit,
@@ -75,7 +134,22 @@ export default function ReturnSpbPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, sort, page, limit]);
+  }, [debouncedSearch, dateFrom, dateTo, sort, page, limit]);
+
+  const resetFilters = () => {
+    resetSearch();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
 
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
@@ -175,6 +249,46 @@ export default function ReturnSpbPage() {
     fetchData();
   };
 
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (row: any, id: ReturnColumnId) => {
+    switch (id) {
+      case "rtn_kode":
+        return (
+          <TableCell className="font-medium">
+            {row.rtn_kode}
+          </TableCell>
+        );
+      case "spb_no":
+        return (
+          <TableCell>{row.spb?.spb_no || "-"}</TableCell>
+        );
+      case "rtn_tanggal":
+        return (
+          <TableCell>
+            {formatDate(row.rtn_tanggal)}
+          </TableCell>
+        );
+      case "rtn_status":
+        return (
+          <TableCell>{row.rtn_status}</TableCell>
+        );
+      case "approval_status":
+        return (
+          <TableCell>{row.approval_status || "open"}</TableCell>
+        );
+      case "catatan":
+        return (
+          <TableCell>{row.rtn_note || "-"}</TableCell>
+        );
+      case "created_at":
+        return (
+          <TableCell>
+            {formatDate(row.created_at)}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -204,158 +318,137 @@ export default function ReturnSpbPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Cari kode return"
-              className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium text-foreground transition-all focus:bg-background"
-            />
-          </div>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari kode return"
+            value={search}
+            onChange={setSearch}
+            searchableFields={RETURN_SEARCH_FIELDS}
+          />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterRangeFields>
+              <FilterField label="Tanggal Return">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border">
-          <Table containerClassName="max-h-[75vh] overflow-y-auto">
-            <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sort, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4">Aksi</TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: limit }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={8}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : rows.length === 0 ? (
               <TableRow>
-                <SortableTableHead
-                  sortKey="rtn_kode"
-                  currentSort={sort}
-                  onSort={handleSortChange}
+                <TableCell
+                  colSpan={8}
+                  className="h-24 text-center text-muted-foreground"
                 >
-                  Kode Return
-                </SortableTableHead>
-                <TableHead>No SPB</TableHead>
-                <SortableTableHead
-                  sortKey="rtn_tanggal"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                  defaultDir="desc"
-                >
-                  Tanggal Return
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="rtn_status"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Status
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="approval_status"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Approval
-                </SortableTableHead>
-                <TableHead>Catatan</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead>Aksi</TableHead>
+                  Belum ada data return.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="text-center text-muted-foreground"
-                  >
-                    Memuat data...
-                  </TableCell>
-                </TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="text-center text-muted-foreground"
-                  >
-                    Belum ada data return.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium">
-                      {row.rtn_kode}
-                    </TableCell>
-                    <TableCell>{row.spb?.spb_no || "-"}</TableCell>
-                    <TableCell>
-                      {formatDate(row.rtn_tanggal)}
-                    </TableCell>
-                    <TableCell>{row.rtn_status}</TableCell>
-                    <TableCell>{row.approval_status || "open"}</TableCell>
-                    <TableCell>{row.rtn_note || "-"}</TableCell>
-                    <TableCell>
-                      {formatDate(row.created_at)}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1">
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          onClick={() =>
-                            window.open(`/return-spb/print/${row.id}`, "_blank")
-                          }
-                        >
-                          <Printer className="mr-1.5 h-3.5 w-3.5" />
-                          Cetak
-                        </Button>
-                        {row.approval_status === "open" &&
-                          isMyApprovalTurn(row) && (
-                            <>
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={() => onApprove(row.id)}
-                              >
-                                Approve
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="destructive"
-                                onClick={() => onReject(row.id)}
-                              >
-                                Reject
-                              </Button>
-                            </>
-                          )}
-                        {isModerator && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="gap-1.5 border-amber-300 text-amber-600 hover:bg-amber-50"
-                            onClick={() => openModEdit(row)}
+            ) : (
+              rows.map((row) => (
+                <TableRow key={row.id}>
+                  {columnOrder.order.map((id) => (
+                    <Fragment key={id}>{renderCell(row, id)}</Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => window.open(`/return-spb/print/${row.id}`, "_blank")}
+                      >
+                        <Printer className="mr-2 h-4 w-4" /> Cetak
+                      </DropdownMenuItem>
+                      {row.approval_status === "open" && isMyApprovalTurn(row) && (
+                        <>
+                          <DropdownMenuItem
+                            onSelect={() => onApprove(row.id)}
                           >
-                            <ShieldAlert className="h-3.5 w-3.5" />
-                            Moderator Edit
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                            <Check className="mr-2 h-4 w-4" /> Approve
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onSelect={() => onReject(row.id)}
+                          >
+                            <X className="mr-2 h-4 w-4" /> Reject
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {isModerator && (
+                        <DropdownMenuItem
+                          className="text-amber-600 focus:text-amber-600"
+                          onSelect={() => openModEdit(row)}
+                        >
+                          <ShieldAlert className="mr-2 h-4 w-4" /> Moderator Edit
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <DataTablePagination
-          totalCount={total}
-          pageSize={limit}
+        <TablePaginationFooter
           currentPage={page}
+          totalItems={total}
+          limit={limit}
+          itemLabel="Return SPB"
           onPageChange={setPage}
-          onPageSizeChange={(v) => {
+          onLimitChange={(v) => {
             setLimit(Number(v));
             setPage(1);
           }}
-          itemLabel="Return SPB"
+          className="mt-6"
         />
       </Content>
 

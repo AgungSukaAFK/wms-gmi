@@ -19,7 +19,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { Loader2, Pencil, RotateCcw, Settings2 } from "lucide-react";
 import Link from "next/link";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   MR_LEVEL_DEFINITIONS,
   MrLevelCode,

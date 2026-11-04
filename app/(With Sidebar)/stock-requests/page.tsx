@@ -1,15 +1,12 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -20,6 +17,28 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import {
   Dialog,
@@ -29,8 +48,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Loader2, ClipboardList, CheckCircle2, Settings2 } from "lucide-react";
-import { toast } from "sonner";
+import { ClipboardList, CheckCircle2, Loader2, Settings2 } from "lucide-react";
+import { toast } from "@/lib/toast";
 import {
   getStockSettingRequests,
   resolveStockSettingRequest,
@@ -48,15 +67,68 @@ const REASON_META: Record<string, { label: string; className: string }> = {
   },
 };
 
+// Harus sama dengan kolom yang dicari di `filtered`.
+const REQUEST_SEARCH_FIELDS = ["Part Number", "Nama Barang", "Cabang", "Peminta"];
+
+const REQUEST_STATUS_LABEL: Record<string, string> = {
+  open: "Belum diproses",
+  resolved: "Selesai",
+  all: "Semua",
+};
+
+const REQUEST_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getRequestSortValue.
+const REQUEST_COLUMNS = [
+  { id: "part_number", label: "Barang", sortDirection: "asc", className: REQUEST_HEAD_CLASS },
+  { id: "cabang", label: "Cabang", sortDirection: "asc", className: REQUEST_HEAD_CLASS },
+  { id: "reason", label: "Alasan", sortDirection: "asc", className: REQUEST_HEAD_CLASS },
+  { id: "current_qty", label: "Stok (saat minta)", sortDirection: "desc", className: `text-center ${REQUEST_HEAD_CLASS}` },
+  { id: "requester", label: "Peminta", sortDirection: "asc", className: REQUEST_HEAD_CLASS },
+] as const satisfies readonly ReorderableColumn[];
+type RequestColumnId = (typeof REQUEST_COLUMNS)[number]["id"];
+
+const getRequestSortValue = (r: any, key: string) => {
+  switch (key) {
+    case "part_number":
+      return r.part_number || r.barang?.part_number || "";
+    case "cabang":
+      return r.cabang?.nama_cabang || "";
+    case "reason":
+      return r.reason || "";
+    case "current_qty":
+      return r.current_qty ?? 0;
+    case "requester":
+      return r.requester?.nama || "";
+    default:
+      return "";
+  }
+};
+
 export default function StockRequestsPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
-  const [statusFilter, setStatusFilter] = useState<"open" | "resolved" | "all">(
-    "open",
+  const columnOrder = useColumnOrder("wms:table-column-order:stock-requests", REQUEST_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
   );
+  const statusParam = urlState.get("status");
+  const statusFilter: "open" | "resolved" | "all" =
+    statusParam === "resolved" || statusParam === "all" ? statusParam : "open";
+  const setStatusFilter = (v: string) =>
+    urlState.set({ status: v === "open" ? "" : v }, { resetPage: true });
   const [denied, setDenied] = useState(false);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
-  const [sortOrder, setSortOrder] = useState("");
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   // Dialog set min/max
   const [settingRow, setSettingRow] = useState<any | null>(null);
@@ -94,34 +166,26 @@ export default function StockRequestsPage() {
     }
   };
 
-  const sortedRows = useMemo(() => {
-    if (!sortOrder) return rows;
-    const [sortKey, dir] = sortOrder.split(/_(asc|desc)$/);
-    const ascending = dir === "asc";
-    const getValue = (r: any) => {
-      switch (sortKey) {
-        case "part_number":
-          return r.part_number || r.barang?.part_number || "";
-        case "cabang":
-          return r.cabang?.nama_cabang || "";
-        case "reason":
-          return r.reason || "";
-        case "current_qty":
-          return r.current_qty ?? 0;
-        case "requester":
-          return r.requester?.nama || "";
-        default:
-          return "";
-      }
-    };
-    return [...rows].sort((a, b) => {
-      const va = getValue(a);
-      const vb = getValue(b);
-      if (va < vb) return ascending ? -1 : 1;
-      if (va > vb) return ascending ? 1 : -1;
-      return 0;
-    });
-  }, [rows, sortOrder]);
+  const filtered = rows.filter((r) => {
+    const q = debouncedSearch.toLowerCase();
+    if (!q) return true;
+    return [
+      r.part_number || r.barang?.part_number,
+      r.part_name || r.barang?.part_name,
+      r.cabang?.nama_cabang,
+      r.requester?.nama,
+    ].some((v) => v?.toLowerCase().includes(q));
+  });
+
+  const sorted = sortRows(filtered, sortOrder, getRequestSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const openSetDialog = (r: any) => {
     setSettingRow(r);
@@ -153,6 +217,69 @@ export default function StockRequestsPage() {
     }
   };
 
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilter !== "open")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: REQUEST_STATUS_LABEL[statusFilter],
+      onRemove: () => setStatusFilter("open"),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (r: any, id: RequestColumnId) => {
+    const meta = REASON_META[r.reason] || { label: r.reason, className: "" };
+
+    switch (id) {
+      case "part_number":
+        return (
+          <TableCell>
+            <div className="font-mono text-xs font-bold text-foreground">
+              {r.part_number || r.barang?.part_number}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              {r.part_name || r.barang?.part_name}
+            </div>
+          </TableCell>
+        );
+      case "cabang":
+        return (
+          <TableCell className="text-[11px] font-semibold">
+            {r.cabang?.nama_cabang || "-"}
+          </TableCell>
+        );
+      case "reason":
+        return (
+          <TableCell>
+            <Badge
+              variant="outline"
+              className={`text-[9px] font-bold uppercase ${meta.className}`}
+            >
+              {meta.label}
+            </Badge>
+          </TableCell>
+        );
+      case "current_qty":
+        return (
+          <TableCell className="text-center text-[11px] font-bold">
+            {r.current_qty ?? "-"} / {r.max_qty ?? "-"}
+          </TableCell>
+        );
+      case "requester":
+        return (
+          <TableCell className="text-[11px]">
+            {r.requester?.nama || "-"}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {/* Header */}
@@ -171,173 +298,143 @@ export default function StockRequestsPage() {
               </p>
             </div>
           </div>
-          <Select
-            value={statusFilter}
-            onValueChange={(v) => setStatusFilter(v as any)}
-          >
-            <SelectTrigger className="h-9 w-full sm:w-44 text-xs font-bold">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="open">Belum diproses</SelectItem>
-              <SelectItem value="resolved">Selesai</SelectItem>
-              <SelectItem value="all">Semua</SelectItem>
-            </SelectContent>
-          </Select>
         </div>
       </Content>
 
-      {/* Table */}
       <Content>
-        {denied ? (
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari PN, nama barang, cabang, peminta..."
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={REQUEST_SEARCH_FIELDS}
+          />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="open">Belum diproses</SelectItem>
+                    <SelectItem value="resolved">Selesai</SelectItem>
+                    <SelectItem value="all">Semua</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
+        </div>
+      </Content>
+
+      {denied ? (
+        <Content>
           <div className="py-12 text-center text-xs font-semibold text-muted-foreground">
             Halaman ini hanya untuk moderator / PPIC / PJO.
           </div>
-        ) : (
-          <div className="rounded-lg border border-border overflow-hidden">
-            <Table>
-              <TableHeader>
-                <TableRow className="bg-muted/40">
-                  <SortableTableHead
-                    sortKey="part_number"
-                    currentSort={sortOrder}
-                    onSort={setSortOrder}
-                    className="text-[10px] font-bold uppercase"
-                  >
-                    Barang
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="cabang"
-                    currentSort={sortOrder}
-                    onSort={setSortOrder}
-                    className="text-[10px] font-bold uppercase"
-                  >
-                    Cabang
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="reason"
-                    currentSort={sortOrder}
-                    onSort={setSortOrder}
-                    className="text-[10px] font-bold uppercase"
-                  >
-                    Alasan
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="current_qty"
-                    currentSort={sortOrder}
-                    onSort={setSortOrder}
-                    defaultDir="desc"
-                    className="justify-center text-center text-[10px] font-bold uppercase"
-                  >
-                    Stok (saat minta)
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="requester"
-                    currentSort={sortOrder}
-                    onSort={setSortOrder}
-                    className="text-[10px] font-bold uppercase"
-                  >
-                    Peminta
-                  </SortableTableHead>
-                  <TableHead className="text-[10px] font-bold uppercase text-right pr-4">
-                    Aksi
-                  </TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  <TableRow>
-                    <TableCell colSpan={6} className="h-32 text-center">
-                      <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
-                    </TableCell>
-                  </TableRow>
-                ) : sortedRows.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={6}
-                      className="h-32 text-center text-xs font-semibold text-muted-foreground"
-                    >
-                      Tidak ada request.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  sortedRows.map((r) => {
-                    const meta = REASON_META[r.reason] || {
-                      label: r.reason,
-                      className: "",
-                    };
-                    return (
-                      <TableRow key={r.id} className="hover:bg-muted/30">
-                        <TableCell>
-                          <div className="font-mono text-xs font-bold text-foreground">
-                            {r.part_number || r.barang?.part_number}
-                          </div>
-                          <div className="text-[11px] text-muted-foreground">
-                            {r.part_name || r.barang?.part_name}
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-[11px] font-semibold">
-                          {r.cabang?.nama_cabang || "-"}
-                        </TableCell>
-                        <TableCell>
-                          <Badge
-                            variant="outline"
-                            className={`text-[9px] font-bold uppercase ${meta.className}`}
-                          >
-                            {meta.label}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-center text-[11px] font-bold">
-                          {r.current_qty ?? "-"} / {r.max_qty ?? "-"}
-                        </TableCell>
-                        <TableCell className="text-[11px]">
-                          {r.requester?.nama || "-"}
-                        </TableCell>
-                        <TableCell className="text-right pr-4">
-                          {r.status === "open" ? (
-                            <div className="flex items-center justify-end gap-2">
-                              <Button
-                                size="sm"
-                                variant="outline"
-                                className="h-8 gap-1 text-[11px] font-bold"
-                                onClick={() => openSetDialog(r)}
-                              >
-                                <Settings2 className="h-3.5 w-3.5" /> Atur Stok
-                              </Button>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                className="h-8 gap-1 text-[11px] font-bold text-muted-foreground"
-                                onClick={() => handleResolve(r.id)}
-                                disabled={resolvingId === r.id}
-                                title="Tandai selesai tanpa mengatur (mis. sudah diatur manual)"
-                              >
-                                {resolvingId === r.id ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <CheckCircle2 className="h-3.5 w-3.5" />
-                                )}
-                                Selesai
-                              </Button>
-                            </div>
-                          ) : (
-                            <Badge
-                              variant="outline"
-                              className="text-[9px] font-bold uppercase text-success border-success/40 bg-success/10"
-                            >
-                              Selesai
-                            </Badge>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })
-                )}
-              </TableBody>
-            </Table>
-          </div>
+        </Content>
+      ) : (
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
         )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={6}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={6}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {debouncedSearch || statusFilter !== "open"
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Tidak ada request"}
+                </TableCell>
+              </TableRow>
+            ) : (
+              pageRows.map((r) => (
+                <TableRow key={r.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(r, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    {r.status === "open" ? (
+                    <RowActionsMenu>
+                      <DropdownMenuItem onSelect={() => openSetDialog(r)}>
+                        <Settings2 className="mr-2 h-4 w-4" /> Atur Stok
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={resolvingId === r.id}
+                        onSelect={() => handleResolve(r.id)}
+                      >
+                        {resolvingId === r.id ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <CheckCircle2 className="mr-2 h-4 w-4" />
+                        )}
+                        Tandai Selesai
+                      </DropdownMenuItem>
+                    </RowActionsMenu>
+                    ) : (
+                      <Badge
+                        variant="outline"
+                        className="text-[9px] font-bold uppercase text-success border-success/40 bg-success/10"
+                      >
+                        Selesai
+                      </Badge>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Request"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
+      )}
 
       {/* Dialog set min/max langsung */}
       <Dialog

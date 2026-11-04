@@ -38,7 +38,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Loader2, Plus, Trash2, Info, ShieldAlert } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   moderatorEditDelivery,
   getShareStockRemaining,

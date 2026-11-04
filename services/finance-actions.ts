@@ -9,6 +9,7 @@ import {
 } from "@/lib/document-status";
 import { fetchPoItemJcUsage } from "@/lib/po-non-pr";
 import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 /**
  * JOB COSTING SERVICES
@@ -37,7 +38,7 @@ export async function getJobCostingList(params?: {
 
   if (params?.search) {
     query = query.or(
-      `job_kode.ilike.%${params.search}%,description.ilike.%${params.search}%,finish_part.ilike.%${params.search}%`,
+      `job_kode.ilike.${orIlikePattern(params.search)},description.ilike.${orIlikePattern(params.search)},finish_part.ilike.${orIlikePattern(params.search)}`,
     );
   }
   if (params?.status && params.status !== "all") {

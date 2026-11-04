@@ -14,17 +14,43 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Plus,
-  Search,
-  Loader2,
   ClipboardList,
   ArrowRight,
   Trash2,
   Eye,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
-import { useDebounce } from "use-debounce";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
 import {
   Dialog,
@@ -33,17 +59,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   getConsignmentIkList,
   deleteConsignmentIk,
@@ -52,18 +68,62 @@ import {
 // Tujuan IK: site customer (IK baru) atau gudang cabang (IK lama).
 const tujuanIk = (ik: any) => ik?.ke_site_name || ik?.cabang_tujuan?.nama_cabang || "-";
 
+// Harus sama dengan kolom yang dicari di `filtered`.
+const IK_SEARCH_FIELDS = ["No. IK", "No. AWB", "No. SO"];
+
+const ASAL_OPTIONS = [
+  { label: "Input Web", value: "web" },
+  { label: "Import ERP", value: "import" },
+];
+
+const IK_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getIkSortValue.
+const IK_COLUMNS = [
+  { id: "ik_kode", label: "Kode IK", sortDirection: "asc", className: IK_HEAD_CLASS },
+  { id: "ik_tanggal", label: "Tgl IK", sortDirection: "desc", className: IK_HEAD_CLASS },
+  { id: "so_no", label: "No. SO", sortDirection: "asc", className: IK_HEAD_CLASS },
+  { id: "rute", label: "Asal → Tujuan", className: IK_HEAD_CLASS },
+  { id: "no_awb", label: "No. AWB", sortDirection: "asc", className: IK_HEAD_CLASS },
+  { id: "item", label: "Item", className: `text-center ${IK_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type IkColumnId = (typeof IK_COLUMNS)[number]["id"];
+
+const getIkSortValue = (ik: any, key: string) =>
+  key === "so_no" ? ik.so?.so_no : ik[key];
+
 export default function ConsignmentIkPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [iks, setIks] = useState<any[]>([]);
   const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 300);
+  const columnOrder = useColumnOrder("wms:table-column-order:consignment-ik", IK_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const asalFilters = urlState.list("asal");
+  const setAsalFilters = (v: string[]) =>
+    urlState.set({ asal: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [detailIk, setDetailIk] = useState<any | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -97,25 +157,113 @@ export default function ConsignmentIkPage() {
 
   const filtered = iks.filter((ik) => {
     const q = debouncedSearch.toLowerCase();
-    if (!q) return true;
-    return (
+    const matchSearch =
+      !q ||
       ik.ik_kode?.toLowerCase().includes(q) ||
       ik.no_awb?.toLowerCase().includes(q) ||
-      ik.so?.so_no?.toLowerCase().includes(q)
-    );
+      ik.so?.so_no?.toLowerCase().includes(q);
+    const matchAsal =
+      asalFilters.length !== 1 ||
+      Boolean(ik.ik_is_import) === (asalFilters[0] === "import");
+    const tanggal = (ik.ik_tanggal || "").slice(0, 10);
+    const matchTanggal =
+      (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
+    return matchSearch && matchAsal && matchTanggal;
   });
+
+  const sorted = sortRows(filtered, sortOrder, getIkSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    setDeleting(true);
     const res = await deleteConsignmentIk(deleteTarget.id);
-    setDeleting(false);
     if (res.success) {
       toast.success("IK berhasil dihapus, pergerakan stoknya sudah dibalik.");
-      setDeleteTarget(null);
       load();
     } else {
       toast.error(res.error || "Gagal menghapus IK.");
+    }
+  };
+
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+  const activeFilters: ActiveFilter[] = [];
+  if (asalFilters.length > 0)
+    activeFilters.push({
+      key: "asal",
+      label: "Asal Data",
+      value: optionLabels(ASAL_OPTIONS, asalFilters),
+      onRemove: () => setAsalFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (ik: any, id: IkColumnId) => {
+    switch (id) {
+      case "ik_kode":
+        return (
+          <TableCell className="font-bold text-xs">
+            {ik.ik_kode}
+            {ik.ik_is_import && (
+              <Badge variant="secondary" className="ml-1.5 text-[9px] font-bold">
+                Import ERP
+              </Badge>
+            )}
+          </TableCell>
+        );
+      case "ik_tanggal":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">
+            {ik.ik_tanggal ? formatDate(ik.ik_tanggal) : "-"}
+          </TableCell>
+        );
+      case "so_no":
+        return (
+          <TableCell className="text-xs">{ik.so?.so_no || "-"}</TableCell>
+        );
+      case "rute":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">
+            <span className="flex items-center gap-1">
+              {ik.cabang_asal?.nama_cabang || "-"}
+              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+              {tujuanIk(ik)}
+            </span>
+          </TableCell>
+        );
+      case "no_awb":
+        return (
+          <TableCell className="text-xs">{ik.no_awb || "-"}</TableCell>
+        );
+      case "item":
+        return (
+          <TableCell className="text-center">
+            <Badge variant="outline" className="font-bold text-[10px]">
+              {(ik.consignment_ik_items || []).length}
+            </Badge>
+          </TableCell>
+        );
     }
   };
 
@@ -145,103 +293,139 @@ export default function ConsignmentIkPage() {
       </Content>
 
       <Content>
-        <div className="relative min-w-0 flex-1 xl:max-w-100">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+        <div className="space-y-3">
+          <ListSearchInput
             placeholder="Cari No. IK, No. AWB, atau No. SO..."
-            className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium"
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={IK_SEARCH_FIELDS}
           />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Asal Data">
+                <MultiSelect
+                  placeholder="Semua Asal"
+                  selected={asalFilters}
+                  onChange={setAsalFilters}
+                  options={ASAL_OPTIONS}
+                />
+              </FilterField>
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Tanggal IK">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border overflow-x-auto">
-          <Table>
-            <TableHeader>
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={7}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
               <TableRow>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Kode IK</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Tgl IK</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">No. SO</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Asal → Tujuan</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">No. AWB</TableHead>
-                <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Item</TableHead>
-                <TableHead className="w-24 text-[10px] font-black uppercase text-muted-foreground" />
+                <TableCell
+                  colSpan={7}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Belum ada Item Konsinyasi"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="h-24 text-center text-xs text-muted-foreground">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto" />
-                  </TableCell>
-                </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
-                  >
-                    Belum ada Item Konsinyasi
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((ik) => (
-                  <TableRow key={ik.id}>
-                    <TableCell className="font-bold text-xs">
-                      {ik.ik_kode}
-                      {ik.ik_is_import && (
-                        <Badge variant="secondary" className="ml-1.5 text-[9px] font-bold">
-                          Import ERP
-                        </Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">
-                      {ik.ik_tanggal ? formatDate(ik.ik_tanggal) : "-"}
-                    </TableCell>
-                    <TableCell className="text-xs">{ik.so?.so_no || "-"}</TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">
-                      <span className="flex items-center gap-1">
-                        {ik.cabang_asal?.nama_cabang || "-"}
-                        <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                        {tujuanIk(ik)}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-xs">{ik.no_awb || "-"}</TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="outline" className="font-bold text-[10px]">
-                        {(ik.consignment_ik_items || []).length}
-                      </Badge>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() => setDetailIk(ik)}
+            ) : (
+              pageRows.map((ik) => (
+                <TableRow key={ik.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(ik, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => setDetailIk(ik)}
+                      >
+                        <Eye className="mr-2 h-4 w-4" /> Lihat Detail
+                      </DropdownMenuItem>
+                      {isModeratorOrAdmin && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => setDeleteTarget(ik)}
                         >
-                          <Eye className="h-3.5 w-3.5" />
-                        </Button>
-                        {isModeratorOrAdmin && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                            onClick={() => setDeleteTarget(ik)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                          <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="IK"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={!!detailIk} onOpenChange={(o) => !o && setDetailIk(null)}>
@@ -279,23 +463,15 @@ export default function ConsignmentIkPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Item Konsinyasi {deleteTarget?.ik_kode}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Pergerakan stok IK ini akan dibalik (stok dikembalikan ke gudang
-              asal). Tindakan ini tidak bisa dibatalkan.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={deleting}>
-              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Hapus"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        destructive
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Hapus Item Konsinyasi ${deleteTarget?.ik_kode ?? ""}?`}
+        description="Pergerakan stok IK ini akan dibalik (stok dikembalikan ke gudang asal). Tindakan ini tidak bisa dibatalkan."
+        confirmText="Hapus"
+        onConfirm={handleDelete}
+      />
     </>
   );
 }

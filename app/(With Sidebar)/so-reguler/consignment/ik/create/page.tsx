@@ -36,7 +36,7 @@ import {
   ArrowRight,
   Truck,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
@@ -47,6 +47,7 @@ import {
 } from "@/services/consignment-ik-actions";
 import { getCustomerSites } from "@/services/master-actions";
 import { useGoBack } from "@/hooks/use-go-back";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 type CabangOption = { id: number; nama_cabang: string };
 type SiteOption = { id: number; site_name: string };
@@ -115,7 +116,7 @@ export default function CreateConsignmentIkPage() {
         .order("id", { ascending: false })
         .limit(20);
       if (debouncedSoSearch)
-        q = q.or(`so_no.ilike.%${debouncedSoSearch}%,no_po.ilike.%${debouncedSoSearch}%`);
+        q = q.or(`so_no.ilike.${orIlikePattern(debouncedSoSearch)},no_po.ilike.${orIlikePattern(debouncedSoSearch)}`);
       const { data } = await q;
       setSoResults(data || []);
     };

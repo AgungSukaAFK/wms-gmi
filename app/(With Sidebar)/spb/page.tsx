@@ -1,8 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useDebounce } from "use-debounce";
 import {
   Ban,
   Edit2,
@@ -12,11 +11,36 @@ import {
   Plus,
   Printer,
   RefreshCcw,
-  Search,
   Trash2,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -39,15 +63,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   cancelSpb,
   deleteSpb,
@@ -84,21 +104,67 @@ type SpbRow = {
 type SpbTemplateOption = { id: number; name: string | null; cabang_id: number | null };
 type SpbApprovalPreviewStep = { nama: string; position?: string | null };
 
+// Harus sama dengan kolom yang dicari di getSpbList.
+const SPB_SEARCH_FIELDS = ["No SPB", "No WO", "PIC GMI", "PIC PPA"];
+
+const SPB_STATUS_OPTIONS = [
+  "DONE QUOT",
+  "PO_ATTACH",
+  "DO_ATTACH",
+  "Partial",
+  "Returned",
+  "CANCELLED",
+];
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key sort di service.
+const SPB_COLUMNS = [
+  { id: "spb_no", label: "No SPB", sortDirection: "asc" },
+  { id: "spb_no_wo", label: "No WO", sortDirection: "asc" },
+  { id: "spb_tanggal", label: "Tanggal", sortDirection: "desc" },
+  { id: "spb_kode_unit", label: "Kode Unit", sortDirection: "asc" },
+  { id: "spb_tipe_unit", label: "Tipe Unit", sortDirection: "asc" },
+  { id: "spb_brand", label: "Brand", sortDirection: "asc" },
+  { id: "spb_hm", label: "HM", sortDirection: "asc" },
+  { id: "spb_gudang", label: "Lokasi", sortDirection: "asc" },
+  { id: "spb_pic_gmi", label: "PIC GMI", sortDirection: "asc" },
+  { id: "spb_pic_ppa", label: "PIC PPA", sortDirection: "asc" },
+  { id: "spb_status", label: "Status", sortDirection: "asc" },
+] as const satisfies readonly ReorderableColumn[];
+type SpbColumnId = (typeof SPB_COLUMNS)[number]["id"];
+
 export default function SpbPage() {
   const { confirm, confirmDialog } = useConfirmDialog();
   const profile = useAuthStore((s) => s.profile);
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<SpbRow[]>([]);
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 500);
-  const [status, setStatus] = useState("all");
-  const [locationFilters, setLocationFilters] = useState<string[]>([]);
-  const [dateFrom, setDateFrom] = useState("");
-  const [dateTo, setDateTo] = useState("");
+  const columnOrder = useColumnOrder("wms:table-column-order:spb", SPB_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const status = urlState.get("status", "all");
+  const setStatus = (v: string) =>
+    urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
   const [availableCabang, setAvailableCabang] = useState<CabangOption[]>([]);
-  const [sort, setSort] = useState("created_at_desc");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
+  const sort = urlState.get("sort", "created_at_desc");
+  const setSort = (v: string) =>
+    urlState.set({ sort: v === "created_at_desc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
   const [total, setTotal] = useState(0);
   const [editOpen, setEditOpen] = useState(false);
   const [editTarget, setEditTarget] = useState<SpbRow | null>(null);
@@ -172,19 +238,41 @@ export default function SpbPage() {
     getCabangList().then((data) => setAvailableCabang((data || []) as CabangOption[]));
   }, []);
 
-  const hasActiveFilters =
-    status !== "all" ||
-    locationFilters.length > 0 ||
-    dateFrom !== "" ||
-    dateTo !== "";
-
   const resetFilters = () => {
-    setStatus("all");
-    setLocationFilters([]);
-    setDateFrom("");
-    setDateTo("");
-    setPage(1);
+    resetSearch();
+    urlState.reset();
   };
+
+  const locationOptions = availableCabang.map((c) => ({
+    label: c.nama_cabang,
+    value: c.id.toString(),
+  }));
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (status !== "all")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: status,
+      onRemove: () => setStatus("all"),
+    });
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Lokasi",
+      value: locationFilters
+        .map((v) => filterOptionLabel(locationOptions, v))
+        .join(", "),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
 
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
@@ -308,6 +396,65 @@ export default function SpbPage() {
     fetchData();
   };
 
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (row: SpbRow, id: SpbColumnId) => {
+    switch (id) {
+      case "spb_no":
+        return (
+          <TableCell className="font-medium">
+            {row.spb_no}
+            {row.spb_is_consignment && (
+              <span className="ml-1.5 rounded border border-violet-300 bg-violet-50 px-1 text-[9px] font-bold uppercase text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800">
+                Konsinyasi
+              </span>
+            )}
+          </TableCell>
+        );
+      case "spb_no_wo":
+        return (
+          <TableCell>{row.spb_no_wo || "-"}</TableCell>
+        );
+      case "spb_tanggal":
+        return (
+          <TableCell>
+            {formatDate(row.spb_tanggal)}
+          </TableCell>
+        );
+      case "spb_kode_unit":
+        return (
+          <TableCell>{row.spb_kode_unit || "-"}</TableCell>
+        );
+      case "spb_tipe_unit":
+        return (
+          <TableCell>{row.spb_tipe_unit || "-"}</TableCell>
+        );
+      case "spb_brand":
+        return (
+          <TableCell>{row.spb_brand || "-"}</TableCell>
+        );
+      case "spb_hm":
+        return (
+          <TableCell>{row.spb_hm ?? "-"}</TableCell>
+        );
+      case "spb_gudang":
+        return (
+          <TableCell>{row.spb_gudang || "-"}</TableCell>
+        );
+      case "spb_pic_gmi":
+        return (
+          <TableCell>{row.spb_pic_gmi || "-"}</TableCell>
+        );
+      case "spb_pic_ppa":
+        return (
+          <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
+        );
+      case "spb_status":
+        return (
+          <TableCell>{row.spb_status}</TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -338,279 +485,164 @@ export default function SpbPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-              placeholder="Cari No SPB, No WO, PIC"
-              className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium text-foreground transition-all focus:bg-background"
-            />
-          </div>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari No SPB, No WO, PIC"
+            value={search}
+            onChange={setSearch}
+            searchableFields={SPB_SEARCH_FIELDS}
+          />
 
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select
-              value={status}
-              onValueChange={(v) => {
-                setStatus(v);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-45">
-                <SelectValue placeholder="Filter status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="DONE QUOT">DONE QUOT</SelectItem>
-                <SelectItem value="PO_ATTACH">PO_ATTACH</SelectItem>
-                <SelectItem value="DO_ATTACH">DO_ATTACH</SelectItem>
-                <SelectItem value="Partial">Partial</SelectItem>
-                <SelectItem value="Returned">Returned</SelectItem>
-                <SelectItem value="CANCELLED">CANCELLED</SelectItem>
-              </SelectContent>
-            </Select>
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <Select value={status} onValueChange={setStatus}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue placeholder="Filter status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    {SPB_STATUS_OPTIONS.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
 
-            <MultiSelect
-              className="h-9 w-full sm:w-45"
-              placeholder="Semua Lokasi"
-              icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
-              searchable
-              selected={locationFilters}
-              onChange={(vals) => {
-                setLocationFilters(vals);
-                setPage(1);
-              }}
-              options={availableCabang.map((c) => ({
-                label: c.nama_cabang,
-                value: c.id.toString(),
-              }))}
-            />
+              <FilterField label="Lokasi">
+                <MultiSelect
+                  placeholder="Semua Lokasi"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+            </FilterFields>
 
-            <DatePickerString
-              value={dateFrom}
-              onChange={(value) => {
-                setDateFrom(value);
-                setPage(1);
-              }}
-              placeholder="Tanggal dari"
-              className="h-9 w-full text-xs font-medium sm:w-40"
-            />
-            <DatePickerString
-              value={dateTo}
-              onChange={(value) => {
-                setDateTo(value);
-                setPage(1);
-              }}
-              placeholder="Tanggal sampai"
-              className="h-9 w-full text-xs font-medium sm:w-40"
-            />
-
-            {hasActiveFilters && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-9 shrink-0 text-xs font-semibold text-muted-foreground"
-                onClick={resetFilters}
-              >
-                Reset Filter
-              </Button>
-            )}
-          </div>
+            <FilterRangeFields>
+              <FilterField label="Tanggal SPB">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border">
-          <Table containerClassName="max-h-[75vh] overflow-y-auto">
-            <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1500px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sort, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4">Aksi</TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: limit }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={12}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : rows.length === 0 ? (
               <TableRow>
-                <SortableTableHead
-                  sortKey="spb_no"
-                  currentSort={sort}
-                  onSort={handleSortChange}
+                <TableCell
+                  colSpan={12}
+                  className="h-24 text-center text-muted-foreground"
                 >
-                  No SPB
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_no_wo"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  No WO
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_tanggal"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                  defaultDir="desc"
-                >
-                  Tanggal
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_kode_unit"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Kode Unit
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_tipe_unit"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Tipe Unit
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_brand"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Brand
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_hm"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  HM
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_gudang"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Lokasi
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_pic_gmi"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  PIC GMI
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_pic_ppa"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  PIC PPA
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_status"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  Status
-                </SortableTableHead>
-                <TableHead className="w-28">Aksi</TableHead>
+                  Belum ada data SPB.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={12}
-                    className="text-center text-muted-foreground"
-                  >
-                    Memuat data...
-                  </TableCell>
-                </TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={12}
-                    className="text-center text-muted-foreground"
-                  >
-                    Belum ada data SPB.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="font-medium">
-                      {row.spb_no}
-                      {row.spb_is_consignment && (
-                        <span className="ml-1.5 rounded border border-violet-300 bg-violet-50 px-1 text-[9px] font-bold uppercase text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800">
-                          Konsinyasi
-                        </span>
+            ) : (
+              rows.map((row) => (
+                <TableRow key={row.id}>
+                  {columnOrder.order.map((id) => (
+                    <Fragment key={id}>{renderCell(row, id)}</Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      {canManageSpb && (
+                        <DropdownMenuItem
+                          onSelect={() => openEdit(row)}
+                        >
+                          <Edit2 className="mr-2 h-4 w-4" /> Edit
+                        </DropdownMenuItem>
                       )}
-                    </TableCell>
-                    <TableCell>{row.spb_no_wo || "-"}</TableCell>
-                    <TableCell>
-                      {formatDate(row.spb_tanggal)}
-                    </TableCell>
-                    <TableCell>{row.spb_kode_unit || "-"}</TableCell>
-                    <TableCell>{row.spb_tipe_unit || "-"}</TableCell>
-                    <TableCell>{row.spb_brand || "-"}</TableCell>
-                    <TableCell>{row.spb_hm ?? "-"}</TableCell>
-                    <TableCell>{row.spb_gudang || "-"}</TableCell>
-                    <TableCell>{row.spb_pic_gmi || "-"}</TableCell>
-                    <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
-                    <TableCell>{row.spb_status}</TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1">
-                        {canManageSpb && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => openEdit(row)}
-                          >
-                            <Edit2 className="mr-1.5 h-3.5 w-3.5" />
-                            Edit
-                          </Button>
-                        )}
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() =>
-                            window.open(`/spb/print/${row.id}`, "_blank")
-                          }
+                      <DropdownMenuItem
+                        onSelect={() => window.open(`/spb/print/${row.id}`, "_blank")}
+                      >
+                        <Printer className="mr-2 h-4 w-4" /> Cetak
+                      </DropdownMenuItem>
+                      {canManageSpb && row.spb_status !== "CANCELLED" && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => onCancel(row)}
                         >
-                          <Printer className="mr-1.5 h-3.5 w-3.5" />
-                          Cetak
-                        </Button>
-                        {canManageSpb && row.spb_status !== "CANCELLED" && (
-                          <Button
-                            variant="destructive"
-                            size="sm"
-                            onClick={() => onCancel(row)}
-                            title="Cancel SPB (stok akan dikembalikan)"
-                          >
-                            <Ban className="mr-1.5 h-3.5 w-3.5" />
-                            Cancel
-                          </Button>
-                        )}
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => onDelete(row)}
-                          title="Hapus SPB"
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                          <Ban className="mr-2 h-4 w-4" /> Cancel SPB
+                        </DropdownMenuItem>
+                      )}
+                      <DropdownMenuItem
+                        className="text-destructive focus:text-destructive"
+                        onSelect={() => onDelete(row)}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                      </DropdownMenuItem>
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <DataTablePagination
-          totalCount={total}
-          pageSize={limit}
+        <TablePaginationFooter
           currentPage={page}
+          totalItems={total}
+          limit={limit}
+          itemLabel="SPB"
           onPageChange={setPage}
-          onPageSizeChange={(v) => {
+          onLimitChange={(v) => {
             setLimit(Number(v));
             setPage(1);
           }}
-          itemLabel="SPB"
+          className="mt-6"
         />
       </Content>
 

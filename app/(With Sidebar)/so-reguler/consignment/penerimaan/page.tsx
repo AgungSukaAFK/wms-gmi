@@ -14,19 +14,46 @@ import {
 import { Button } from "@/components/ui/button";
 import {
   Plus,
-  Search,
   Loader2,
   PackageCheck,
   Trash2,
   Eye,
   MessageSquareWarning,
 } from "lucide-react";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
-import { useDebounce } from "use-debounce";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { sortRows } from "@/lib/client-sort";
+import { ConfirmDialog } from "@/components/confirm-dialog";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import Link from "next/link";
 import {
   Dialog,
@@ -36,22 +63,40 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   getConsignmentPenerimaanList,
   deleteConsignmentPenerimaan,
   resolveComplaintItem,
 } from "@/services/consignment-penerimaan-actions";
+
+// Harus sama dengan kolom yang dicari di `filtered`.
+const PENERIMAAN_SEARCH_FIELDS = ["No. Penerimaan", "No. IK", "Customer"];
+
+const STATUS_OPTIONS = [
+  { label: "Komplain", value: "komplain" },
+  { label: "Sesuai", value: "sesuai" },
+];
+
+const PENERIMAAN_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getPenerimaanSortValue.
+const PENERIMAAN_COLUMNS = [
+  { id: "penerimaan_kode", label: "No. Penerimaan", sortDirection: "asc", className: PENERIMAAN_HEAD_CLASS },
+  { id: "tanggal_terima", label: "Tgl Terima", sortDirection: "desc", className: PENERIMAAN_HEAD_CLASS },
+  { id: "ik_kode", label: "No. IK", sortDirection: "asc", className: PENERIMAAN_HEAD_CLASS },
+  { id: "customer", label: "Customer", sortDirection: "asc", className: PENERIMAAN_HEAD_CLASS },
+  { id: "nama_penerima", label: "Nama Penerima", sortDirection: "asc", className: PENERIMAAN_HEAD_CLASS },
+  { id: "item", label: "Item", className: `text-center ${PENERIMAAN_HEAD_CLASS}` },
+  { id: "status", label: "Status", className: `text-center ${PENERIMAAN_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type PenerimaanColumnId = (typeof PENERIMAAN_COLUMNS)[number]["id"];
+
+const getPenerimaanSortValue = (r: any, key: string) => {
+  if (key === "ik_kode") return r.ik?.ik_kode;
+  if (key === "customer") return r.customer?.customer_name;
+  return r[key];
+};
 
 export default function ConsignmentPenerimaanPage() {
   const supabase = createClient();
@@ -59,12 +104,32 @@ export default function ConsignmentPenerimaanPage() {
   const [rows, setRows] = useState<any[]>([]);
   const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 300);
+  const columnOrder = useColumnOrder("wms:table-column-order:consignment-penerimaan", PENERIMAAN_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusFilters = urlState.list("status");
+  const setStatusFilters = (v: string[]) =>
+    urlState.set({ status: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [detail, setDetail] = useState<any | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
-  const [deleting, setDeleting] = useState(false);
 
   const [resolveTarget, setResolveTarget] = useState<any | null>(null);
   const [resolveNote, setResolveNote] = useState("");
@@ -100,29 +165,42 @@ export default function ConsignmentPenerimaanPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const filtered = rows.filter((r) => {
-    const q = debouncedSearch.toLowerCase();
-    if (!q) return true;
-    return (
-      r.penerimaan_kode?.toLowerCase().includes(q) ||
-      r.ik?.ik_kode?.toLowerCase().includes(q) ||
-      r.customer?.customer_name?.toLowerCase().includes(q)
-    );
-  });
-
   const hasOpenComplaint = (r: any) =>
     (r.consignment_penerimaan_items || []).some(
       (i: any) => i.status === "komplain" && i.resolution_status === "open",
     );
 
+  const filtered = rows.filter((r) => {
+    const q = debouncedSearch.toLowerCase();
+    const matchSearch =
+      !q ||
+      r.penerimaan_kode?.toLowerCase().includes(q) ||
+      r.ik?.ik_kode?.toLowerCase().includes(q) ||
+      r.customer?.customer_name?.toLowerCase().includes(q);
+    const matchStatus =
+      statusFilters.length !== 1 ||
+      hasOpenComplaint(r) === (statusFilters[0] === "komplain");
+    const tanggal = (r.tanggal_terima || "").slice(0, 10);
+    const matchTanggal =
+      (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
+    return matchSearch && matchStatus && matchTanggal;
+  });
+
+  const sorted = sortRows(filtered, sortOrder, getPenerimaanSortValue);
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    setDeleting(true);
     const res = await deleteConsignmentPenerimaan(deleteTarget.id);
-    setDeleting(false);
     if (res.success) {
       toast.success("Penerimaan berhasil dihapus, stok sudah dikembalikan.");
-      setDeleteTarget(null);
       load();
     } else {
       toast.error(res.error || "Gagal menghapus Penerimaan.");
@@ -157,6 +235,80 @@ export default function ConsignmentPenerimaanPage() {
     }
   };
 
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilters.length > 0)
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: optionLabels(STATUS_OPTIONS, statusFilters),
+      onRemove: () => setStatusFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (r: any, id: PenerimaanColumnId) => {
+    switch (id) {
+      case "penerimaan_kode":
+        return (
+          <TableCell className="font-bold text-xs">{r.penerimaan_kode}</TableCell>
+        );
+      case "tanggal_terima":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">
+            {r.tanggal_terima ? formatDate(r.tanggal_terima) : "-"}
+          </TableCell>
+        );
+      case "ik_kode":
+        return (
+          <TableCell className="text-xs">{r.ik?.ik_kode || "-"}</TableCell>
+        );
+      case "customer":
+        return (
+          <TableCell className="text-xs">{r.customer?.customer_name || "-"}</TableCell>
+        );
+      case "nama_penerima":
+        return (
+          <TableCell className="text-xs">{r.nama_penerima}</TableCell>
+        );
+      case "item":
+        return (
+          <TableCell className="text-center">
+            <Badge variant="outline" className="font-bold text-[10px]">
+              {(r.consignment_penerimaan_items || []).length}
+            </Badge>
+          </TableCell>
+        );
+      case "status":
+        return (
+          <TableCell className="text-center">
+            {hasOpenComplaint(r) ? (
+              <Badge variant="destructive" className="text-[10px] gap-1">
+                <MessageSquareWarning className="h-3 w-3" /> Komplain
+              </Badge>
+            ) : (
+              <Badge className="text-[10px]">Sesuai</Badge>
+            )}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -183,100 +335,139 @@ export default function ConsignmentPenerimaanPage() {
       </Content>
 
       <Content>
-        <div className="relative min-w-0 flex-1 xl:max-w-100">
-          <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-          <Input
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari No. Penerimaan, IK, atau Customer..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Cari No. Penerimaan, No. IK, atau Customer..."
-            className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium"
+            onChange={setSearchQuery}
+            searchableFields={PENERIMAAN_SEARCH_FIELDS}
           />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <MultiSelect
+                  placeholder="Semua Status"
+                  selected={statusFilters}
+                  onChange={setStatusFilters}
+                  options={STATUS_OPTIONS}
+                />
+              </FilterField>
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Tanggal Terima">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border overflow-x-auto">
-          <Table>
-            <TableHeader>
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={8}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
               <TableRow>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">No. Penerimaan</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Tgl Terima</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">No. IK</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Customer</TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">Nama Penerima</TableHead>
-                <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Item</TableHead>
-                <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Status</TableHead>
-                <TableHead className="w-24 text-[10px] font-black uppercase text-muted-foreground" />
+                <TableCell
+                  colSpan={8}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                >
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Belum ada Penerimaan"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={8} className="h-24 text-center text-xs text-muted-foreground">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto" />
-                  </TableCell>
-                </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={8}
-                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
-                  >
-                    Belum ada Penerimaan
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((r) => (
-                  <TableRow key={r.id}>
-                    <TableCell className="font-bold text-xs">{r.penerimaan_kode}</TableCell>
-                    <TableCell className="text-xs whitespace-nowrap">
-                      {r.tanggal_terima ? formatDate(r.tanggal_terima) : "-"}
-                    </TableCell>
-                    <TableCell className="text-xs">{r.ik?.ik_kode || "-"}</TableCell>
-                    <TableCell className="text-xs">{r.customer?.customer_name || "-"}</TableCell>
-                    <TableCell className="text-xs">{r.nama_penerima}</TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="outline" className="font-bold text-[10px]">
-                        {(r.consignment_penerimaan_items || []).length}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      {hasOpenComplaint(r) ? (
-                        <Badge variant="destructive" className="text-[10px] gap-1">
-                          <MessageSquareWarning className="h-3 w-3" /> Komplain
-                        </Badge>
-                      ) : (
-                        <Badge className="text-[10px]">Sesuai</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex items-center gap-1 justify-end">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={() => setDetail(r)}
+            ) : (
+              pageRows.map((r) => (
+                <TableRow key={r.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(r, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => setDetail(r)}
+                      >
+                        <Eye className="mr-2 h-4 w-4" /> Lihat Detail
+                      </DropdownMenuItem>
+                      {isModeratorOrAdmin && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => setDeleteTarget(r)}
                         >
-                          <Eye className="h-3.5 w-3.5" />
-                        </Button>
-                        {isModeratorOrAdmin && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 text-muted-foreground hover:text-destructive"
-                            onClick={() => setDeleteTarget(r)}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                          <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Penerimaan"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={!!detail} onOpenChange={(o) => !o && setDetail(null)}>
@@ -383,24 +574,15 @@ export default function ConsignmentPenerimaanPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Hapus Penerimaan {deleteTarget?.penerimaan_kode}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Qty terima akan dikurangi dari stok customer (membalikkan
-              pergerakan stok Penerimaan ini). Tindakan ini tidak bisa
-              dibatalkan.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleting}>Batal</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} disabled={deleting}>
-              {deleting ? <Loader2 className="h-4 w-4 animate-spin" /> : "Hapus"}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <ConfirmDialog
+        destructive
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Hapus Penerimaan ${deleteTarget?.penerimaan_kode ?? ""}?`}
+        description="Qty terima akan dikurangi dari stok customer (membalikkan pergerakan stok Penerimaan ini). Tindakan ini tidak bisa dibatalkan."
+        confirmText="Hapus"
+        onConfirm={handleDelete}
+      />
     </>
   );
 }

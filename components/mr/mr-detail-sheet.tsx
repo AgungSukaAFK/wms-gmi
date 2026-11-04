@@ -30,7 +30,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useRouter } from "next/navigation";
 import { updateMRAccurate } from "@/services/procurement-actions";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { MrLevelBadge } from "@/components/mr/mr-level-badge";
 import {
   MrLevelAutoRules,
@@ -308,19 +308,19 @@ export function MRDetailSheet({
                 </div>
 
                 <div className="border border-border rounded-lg overflow-hidden shadow-sm bg-background">
-                  <Table className="table-fixed w-full">
+                  <Table className="table-fixed w-full min-w-[26rem]">
                     <TableHeader className="bg-muted/50">
                       <TableRow className="hover:bg-transparent h-9 border-b border-border">
-                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground pl-4">
+                        <TableHead className="w-[24%] text-[9px] font-bold uppercase text-muted-foreground pl-4">
                           Part Number
                         </TableHead>
                         <TableHead className="text-[9px] font-bold uppercase text-muted-foreground">
                           Nama Barang
                         </TableHead>
-                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground text-right pr-4">
+                        <TableHead className="w-20 text-[9px] font-bold uppercase text-muted-foreground text-right">
                           Qty
                         </TableHead>
-                        <TableHead className="text-[9px] font-bold uppercase text-muted-foreground text-center pr-4">
+                        <TableHead className="w-36 text-[9px] font-bold uppercase text-muted-foreground text-center">
                           Prioritas
                         </TableHead>
                       </TableRow>
@@ -357,13 +357,13 @@ export function MRDetailSheet({
                                 </p>
                               )}
                             </TableCell>
-                            <TableCell className="text-[11px] font-bold text-foreground text-right pr-4 py-2 whitespace-nowrap">
+                            <TableCell className="text-[11px] font-bold text-foreground text-right py-2 whitespace-normal wrap-break-word">
                               {item.qty_request}{" "}
                               <span className="text-muted-foreground font-medium ml-0.5">
                                 {item.satuan}
                               </span>
                             </TableCell>
-                            <TableCell className="text-center pr-4 py-2">
+                            <TableCell className="text-center py-2 whitespace-normal [&>*]:h-auto [&>*]:max-w-full [&>*]:whitespace-normal">
                               {getPriorityBadge(item.item_priority)}
                             </TableCell>
                           </TableRow>

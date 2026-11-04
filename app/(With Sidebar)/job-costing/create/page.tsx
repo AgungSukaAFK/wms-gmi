@@ -36,7 +36,7 @@ import {
   CommandItem,
   CommandList,
 } from "@/components/ui/command";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   Search,
   Trash2,
@@ -50,7 +50,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
-import { toYmdLocal } from "@/lib/utils";
+import { randomUUID, toYmdLocal } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import {
   fetchPoItemJcUsage,
@@ -59,6 +59,7 @@ import {
 } from "@/lib/po-non-pr";
 import { canViewPOPrice } from "@/lib/po-price-access";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 const rupiahFormatter = new Intl.NumberFormat("id-ID");
 
@@ -282,7 +283,7 @@ function JobCostingCreateForm() {
         }))
         .filter(({ sisa }) => sisa > 0)
         .map(({ item, sisa }) => ({
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           part_id: item.part_id,
           part_number: item.part_number,
           part_name: item.part_name,
@@ -336,7 +337,7 @@ function JobCostingCreateForm() {
 
       if (debouncedBarangSearch) {
         query = query.or(
-          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedBarangSearch)},part_name.ilike.${orIlikePattern(debouncedBarangSearch)}`,
         );
       }
 
@@ -414,7 +415,7 @@ function JobCostingCreateForm() {
         .limit(20);
       if (debouncedSourceCustomerSearch)
         q = q.or(
-          `customer_name.ilike.%${debouncedSourceCustomerSearch}%,customer_no.ilike.%${debouncedSourceCustomerSearch}%`,
+          `customer_name.ilike.${orIlikePattern(debouncedSourceCustomerSearch)},customer_no.ilike.${orIlikePattern(debouncedSourceCustomerSearch)}`,
         );
       const { data } = await q;
       setSourceCustomerOptions(data || []);
@@ -435,7 +436,7 @@ function JobCostingCreateForm() {
         .limit(20);
       if (debouncedFinishCustomerSearch)
         q = q.or(
-          `customer_name.ilike.%${debouncedFinishCustomerSearch}%,customer_no.ilike.%${debouncedFinishCustomerSearch}%`,
+          `customer_name.ilike.${orIlikePattern(debouncedFinishCustomerSearch)},customer_no.ilike.${orIlikePattern(debouncedFinishCustomerSearch)}`,
         );
       const { data } = await q;
       setFinishCustomerOptions(data || []);
@@ -458,7 +459,7 @@ function JobCostingCreateForm() {
 
       if (debouncedFinishPartSearch) {
         query = query.or(
-          `part_number.ilike.%${debouncedFinishPartSearch}%,part_name.ilike.%${debouncedFinishPartSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedFinishPartSearch)},part_name.ilike.${orIlikePattern(debouncedFinishPartSearch)}`,
         );
       }
 
@@ -531,7 +532,7 @@ function JobCostingCreateForm() {
       return [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           part_id: selected.id,
           part_number: selected.part_number,
           part_name: selected.part_name,
@@ -627,7 +628,7 @@ function JobCostingCreateForm() {
       return [
         ...prev,
         {
-          id: crypto.randomUUID(),
+          id: randomUUID(),
           part_id: selected.id,
           part_number: selected.part_number,
           part_name: selected.part_name,

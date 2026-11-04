@@ -30,6 +30,7 @@ export function useUrlListState() {
   }, [searchParams]);
 
   const pendingRef = useRef<Record<string, UrlParamValue> | null>(null);
+  const replaceRef = useRef(false);
   const listCache = useRef(new Map<string, { raw: string; value: string[] }>());
 
   const get = useCallback(
@@ -68,13 +69,22 @@ export function useUrlListState() {
     const next = params.toString();
     if (next === latestRef.current) return;
     latestRef.current = next;
-    router.push(next ? `${pathname}?${next}` : pathname, { scroll: false });
+    const navigate = replaceRef.current ? router.replace : router.push;
+    replaceRef.current = false;
+    navigate(next ? `${pathname}?${next}` : pathname, { scroll: false });
   }, [pathname, router]);
 
-  /** Ubah beberapa param sekaligus. `resetPage` = kembali ke halaman 1. */
+  /**
+   * Ubah beberapa param sekaligus. `resetPage` = kembali ke halaman 1.
+   * `replace` = tanpa entri riwayat baru (mis. nilai default saat halaman dibuka).
+   */
   const set = useCallback(
-    (updates: Record<string, UrlParamValue>, { resetPage = false } = {}) => {
+    (
+      updates: Record<string, UrlParamValue>,
+      { resetPage = false, replace = false } = {},
+    ) => {
       const first = pendingRef.current === null;
+      if (first) replaceRef.current = replace;
       pendingRef.current = {
         ...pendingRef.current,
         ...updates,

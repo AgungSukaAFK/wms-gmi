@@ -45,7 +45,7 @@ import {
   ReceiptText,
   X,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
@@ -65,6 +65,7 @@ import {
   fetchSoItemFulfillment,
 } from "@/lib/so-reguler";
 import { useGoBack } from "@/hooks/use-go-back";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface DOItem {
   part_id: number;
@@ -327,7 +328,7 @@ function CreateDoRegulerForm() {
         .limit(20);
       if (debouncedCustomerSearch)
         q = q.or(
-          `customer_name.ilike.%${debouncedCustomerSearch}%,customer_no.ilike.%${debouncedCustomerSearch}%`,
+          `customer_name.ilike.${orIlikePattern(debouncedCustomerSearch)},customer_no.ilike.${orIlikePattern(debouncedCustomerSearch)}`,
         );
       const { data } = await q;
       setCustomers(data || []);
@@ -342,7 +343,7 @@ function CreateDoRegulerForm() {
       let q = supabase.from("barang").select("*").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedSearch)
         q = q.or(
-          `part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedSearch)},part_name.ilike.${orIlikePattern(debouncedSearch)}`,
         );
       const { data } = await q;
       setResults(data || []);

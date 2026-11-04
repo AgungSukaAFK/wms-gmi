@@ -1,8 +1,29 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,22 +36,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
   Building2,
-  FilterX,
   Loader2,
   Pencil,
   Plus,
   RotateCcw,
-  Search,
   ToggleLeft,
   Trash2,
   X,
@@ -44,9 +60,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useDebounce } from "use-debounce";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   bulkDeleteVendors,
   createVendor,
@@ -85,6 +99,26 @@ const emptyVendorForm: VendorFormState = {
   is_active: true,
 };
 
+// Harus sama dengan kolom yang dicari di getVendorList.
+const VENDOR_SEARCH_FIELDS = ["Nama", "Kode", "Email", "PIC"];
+
+const STATUS_LABEL: Record<string, string> = {
+  active: "Aktif",
+  inactive: "Nonaktif",
+  deleted: "Terhapus",
+};
+
+const VENDOR_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di service.
+const VENDOR_COLUMNS = [
+  { id: "vendor_name", label: "Nama Vendor", sortDirection: "asc", className: VENDOR_HEAD_CLASS },
+  { id: "vendor_no", label: "Kode Vendor", sortDirection: "asc", className: `w-35 ${VENDOR_HEAD_CLASS}` },
+  { id: "email_pic", label: "Email / PIC", className: `w-50 ${VENDOR_HEAD_CLASS}` },
+  { id: "is_active", label: "Status", sortDirection: "asc", className: `w-28 text-center ${VENDOR_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type VendorColumnId = (typeof VENDOR_COLUMNS)[number]["id"];
+
 export default function VendorsPage() {
   const { confirm, confirmDialog } = useConfirmDialog();
   const supabase = createClient();
@@ -92,16 +126,34 @@ export default function VendorsPage() {
   const [vendors, setVendors] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
 
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 350);
-  // "deleted" = vendor yang sudah dihapus (soft delete), khusus moderator.
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | "active" | "inactive" | "deleted"
-  >("all");
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const columnOrder = useColumnOrder("wms:table-column-order:vendor", VENDOR_COLUMNS);
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const [isModerator, setIsModerator] = useState(false);
+  const statusParam = urlState.get("status");
+  // "deleted" = vendor yang sudah dihapus (soft delete), khusus moderator:
+  // nilai ini bisa datang dari URL, jadi perannya dicek di sini.
+  const statusFilter: "all" | "active" | "inactive" | "deleted" =
+    statusParam === "active" ||
+    statusParam === "inactive" ||
+    (statusParam === "deleted" && isModerator)
+      ? statusParam
+      : "all";
+  const setStatusFilter = (v: string) =>
+    urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
   const isDeletedView = statusFilter === "deleted";
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
-  const [sortOrder, setSortOrder] = useState("vendor_name_asc");
+  const sortOrder = urlState.get("sort", "vendor_name_asc");
+  const setSortOrder = (v: string) =>
+    urlState.set({ sort: v === "vendor_name_asc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -109,7 +161,6 @@ export default function VendorsPage() {
   const [form, setForm] = useState<VendorFormState>(emptyVendorForm);
 
   const [canWrite, setCanWrite] = useState(false);
-  const [isModerator, setIsModerator] = useState(false);
 
   // Pilih banyak (moderator): edit massal / hapus / pulihkan. Pilihan bertahan
   // saat ganti halaman, direset saat filter berubah supaya tidak ada vendor
@@ -226,19 +277,9 @@ export default function VendorsPage() {
   };
 
   const resetFilters = () => {
-    setSearch("");
-    setStatusFilter("all");
-    setSortOrder("vendor_name_asc");
-    setPage(1);
+    resetSearch();
+    urlState.reset();
   };
-
-  const hasActiveFilters = useMemo(
-    () =>
-      Boolean(search) ||
-      statusFilter !== "all" ||
-      sortOrder !== "vendor_name_asc",
-    [search, statusFilter, sortOrder],
-  );
 
   const handleSubmit = async () => {
     if (!form.vendor_name.trim()) {
@@ -372,6 +413,75 @@ export default function VendorsPage() {
     await fetchVendors();
   };
 
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilter !== "all")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: STATUS_LABEL[statusFilter],
+      onRemove: () => setStatusFilter("all"),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (vendor: any, id: VendorColumnId) => {
+    switch (id) {
+      case "vendor_name":
+        return (
+          <TableCell>
+            <div className="flex flex-col">
+              <span className="font-bold text-sm text-foreground uppercase">
+                {vendor.vendor_name}
+              </span>
+              <span className="text-[10px] text-muted-foreground line-clamp-1">
+                {vendor.address || "-"}
+              </span>
+              {vendor.deleted_at && (
+                <span className="text-[10px] font-semibold text-destructive">
+                  Dihapus{" "}
+                  {new Date(vendor.deleted_at).toLocaleDateString(
+                    "id-ID",
+                  )}
+                </span>
+              )}
+            </div>
+          </TableCell>
+        );
+      case "vendor_no":
+        return (
+          <TableCell>
+            <span className="font-mono text-xs font-bold text-primary">
+              {vendor.vendor_no}
+            </span>
+          </TableCell>
+        );
+      case "email_pic":
+        return (
+          <TableCell>
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-foreground">
+                {vendor.email || "-"}
+              </span>
+              <span className="text-[10px] text-muted-foreground uppercase">
+                PIC: {vendor.pic_name || "-"}
+              </span>
+            </div>
+          </TableCell>
+        );
+      case "is_active":
+        return (
+          <TableCell className="text-center">
+            <Badge
+              variant={vendor.is_active ? "default" : "secondary"}
+              className="text-[10px] font-bold uppercase"
+            >
+              {vendor.is_active ? "Aktif" : "Nonaktif"}
+            </Badge>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -410,57 +520,37 @@ export default function VendorsPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari nama, kode, email, atau PIC vendor..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari nama, kode, email, atau PIC..."
+            value={search}
+            onChange={setSearch}
+            searchableFields={VENDOR_SEARCH_FIELDS}
+          />
 
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select
-              value={statusFilter}
-              onValueChange={(
-                val: "all" | "active" | "inactive" | "deleted",
-              ) => {
-                setStatusFilter(val);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-42.5 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="active">Aktif</SelectItem>
-                <SelectItem value="inactive">Nonaktif</SelectItem>
-                {isModerator && (
-                  <SelectItem value="deleted">Terhapus</SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9 px-2 text-muted-foreground hover:text-destructive gap-1 transition-colors"
-              onClick={resetFilters}
-              disabled={!hasActiveFilters}
-            >
-              <FilterX className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="active">Aktif</SelectItem>
+                    <SelectItem value="inactive">Nonaktif</SelectItem>
+                    {isModerator && (
+                      <SelectItem value="deleted">Terhapus</SelectItem>
+                    )}
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
+      <Content>
         {isModerator && selectedList.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
             <span className="text-xs font-bold text-foreground">
@@ -506,209 +596,140 @@ export default function VendorsPage() {
             </div>
           </div>
         )}
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50 border-b border-border">
-              <TableRow className="hover:bg-transparent h-10">
-                {isModerator && (
-                  <TableHead className="w-10 pl-4">
-                    <Checkbox
-                      checked={pageAllSelected}
-                      onCheckedChange={(v) => togglePage(v === true)}
-                      disabled={loading || vendors.length === 0}
-                      aria-label="Pilih semua di halaman ini"
-                    />
-                  </TableHead>
-                )}
-                <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
-                  No
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {isModerator && (
+                <TableHead className="w-10 pl-4">
+                  <Checkbox
+                    checked={pageAllSelected}
+                    onCheckedChange={(v) => togglePage(v === true)}
+                    disabled={loading || vendors.length === 0}
+                    aria-label="Pilih semua di halaman ini"
+                  />
                 </TableHead>
-                <SortableTableHead
-                  sortKey="vendor_name"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Nama Vendor
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="vendor_no"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-35 text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Kode Vendor
-                </SortableTableHead>
-                <TableHead className="w-50 text-[10px] font-black uppercase text-muted-foreground">
-                  Email / PIC
-                </TableHead>
-                <SortableTableHead
-                  sortKey="is_active"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-28 text-[10px] font-black uppercase text-muted-foreground justify-center text-center"
-                >
-                  Status
-                </SortableTableHead>
-                <TableHead className="w-40 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
-                  Aksi
-                </TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={isModerator ? 7 : 6}
-                    className="h-40 text-center"
-                  >
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                        Memuat Vendor...
-                      </span>
-                    </div>
+              )}
+              <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
+                No
+              </TableHead>
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={isModerator ? 7 : 6}>
+                    <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
-              ) : vendors.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={isModerator ? 7 : 6}
-                    className="h-40 text-center text-muted-foreground italic text-sm"
-                  >
-                    {isDeletedView
-                      ? "Tidak ada vendor terhapus."
-                      : hasActiveFilters
+              ))
+            ) : vendors.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={isModerator ? 7 : 6}
+                  className="h-40 text-center text-muted-foreground italic text-sm"
+                >
+                  {isDeletedView
+                    ? "Tidak ada vendor terhapus."
+                    : activeFilters.length > 0 || debouncedSearch
                       ? "Tidak ada data vendor yang sesuai filter."
                       : "Belum ada data vendor."}
+                </TableCell>
+              </TableRow>
+            ) : (
+              vendors.map((vendor, index) => (
+                <TableRow
+                  key={vendor.id}
+                  className="group hover:bg-muted/30 transition-all border-b border-border/50 h-14"
+                >
+                  {isModerator && (
+                    <TableCell className="pl-4">
+                      <Checkbox
+                        checked={!!selectedRows[vendor.id]}
+                        onCheckedChange={(v) => toggleRow(vendor, v === true)}
+                        aria-label={`Pilih ${vendor.vendor_no}`}
+                      />
+                    </TableCell>
+                  )}
+                  <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
+                    {(page - 1) * limit + index + 1}
+                  </TableCell>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(vendor, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      {isDeletedView ? (
+                        <DropdownMenuItem
+                          disabled={!isModerator}
+                          onSelect={() => handleRestore([vendor.id])}
+                        >
+                          <RotateCcw className="mr-2 h-4 w-4" /> Pulihkan
+                        </DropdownMenuItem>
+                      ) : (
+                        <>
+                          <DropdownMenuItem
+                            disabled={!canWrite}
+                            onSelect={() => openEditDialog(vendor)}
+                          >
+                            <Pencil className="mr-2 h-4 w-4" /> Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            disabled={!canWrite}
+                            onSelect={() => handleToggleStatus(vendor.id)}
+                          >
+                            <ToggleLeft className="mr-2 h-4 w-4" /> Ubah Status
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            disabled={!canWrite}
+                            onSelect={() => handleDelete(vendor.id)}
+                          >
+                            <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </RowActionsMenu>
                   </TableCell>
                 </TableRow>
-              ) : (
-                vendors.map((vendor, index) => (
-                  <TableRow
-                    key={vendor.id}
-                    className="group hover:bg-muted/30 transition-all border-b border-border/50 h-15"
-                  >
-                    {isModerator && (
-                      <TableCell className="pl-4">
-                        <Checkbox
-                          checked={!!selectedRows[vendor.id]}
-                          onCheckedChange={(v) => toggleRow(vendor, v === true)}
-                          aria-label={`Pilih ${vendor.vendor_no}`}
-                        />
-                      </TableCell>
-                    )}
-                    <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
-                      {(page - 1) * limit + index + 1}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="font-bold text-sm text-foreground uppercase">
-                          {vendor.vendor_name}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground line-clamp-1">
-                          {vendor.address || "-"}
-                        </span>
-                        {vendor.deleted_at && (
-                          <span className="text-[10px] font-semibold text-destructive">
-                            Dihapus{" "}
-                            {new Date(vendor.deleted_at).toLocaleDateString(
-                              "id-ID",
-                            )}
-                          </span>
-                        )}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs font-bold text-primary">
-                        {vendor.vendor_no}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="text-xs font-semibold text-foreground">
-                          {vendor.email || "-"}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground uppercase">
-                          PIC: {vendor.pic_name || "-"}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge
-                        variant={vendor.is_active ? "default" : "secondary"}
-                        className="text-[10px] font-bold uppercase"
-                      >
-                        {vendor.is_active ? "Aktif" : "Nonaktif"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right pr-6">
-                      {isDeletedView ? (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 gap-1.5 text-xs font-semibold"
-                          onClick={() => handleRestore([vendor.id])}
-                          disabled={!isModerator}
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" /> Pulihkan
-                        </Button>
-                      ) : (
-                        <div className="flex items-center justify-end gap-1.5">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => openEditDialog(vendor)}
-                            disabled={!canWrite}
-                            title="Edit vendor"
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8"
-                            onClick={() => handleToggleStatus(vendor.id)}
-                            disabled={!canWrite}
-                            title="Toggle status"
-                          >
-                            <ToggleLeft className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-8 w-8 text-destructive hover:text-destructive"
-                            onClick={() => handleDelete(vendor.id)}
-                            disabled={!canWrite}
-                            title="Hapus vendor"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <div className="p-4 border-t border-border bg-muted/30">
-          <DataTablePagination
-            totalCount={totalCount}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(val) => {
-              setLimit(parseInt(val, 10));
-              setPage(1);
-            }}
-            pageSizeOptions={PAGE_SIZE_OPTIONS}
-            itemLabel="Vendor"
-          />
-        </div>
+        <TablePaginationFooter
+          limitOptions={PAGE_SIZE_OPTIONS}
+          currentPage={page}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Vendor"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val, 10));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

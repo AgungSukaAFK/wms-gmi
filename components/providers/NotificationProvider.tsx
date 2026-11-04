@@ -8,7 +8,7 @@ import React, {
   useState,
 } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useRouter } from "next/navigation";
 import type { RealtimePostgresInsertPayload } from "@supabase/supabase-js";
 import type { Notification } from "@/services/notification-actions";

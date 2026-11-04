@@ -4,7 +4,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UpdatePostForm } from "@/components/update-web/UpdatePostForm";
 import { useUpdateWebPublisher } from "@/hooks/use-update-web-publisher";

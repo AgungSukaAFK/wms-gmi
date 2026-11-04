@@ -39,7 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { useDebounce } from "use-debounce";
@@ -47,13 +47,7 @@ import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { useGoBack } from "@/hooks/use-go-back";
-
-const MR_KATEGORI_OPTIONS = [
-  "New Item",
-  "Replace Item",
-  "Fix & Repair",
-  "Upgrade",
-];
+import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 
 export default function CreateMRPage() {
   const router = useRouter();

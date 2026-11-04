@@ -23,7 +23,7 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { SHIPMENT_LABEL } from "@/lib/shipment";
 import { KoliDetailView } from "@/components/shipment/koli-detail-view";

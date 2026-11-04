@@ -57,7 +57,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { createPurchaseOrder } from "@/services/procurement-actions";
 import { revisePurchaseOrder } from "@/services/po-revision-actions";
 import { canRevisePO } from "@/lib/po-revision";
@@ -100,6 +100,7 @@ import {
 } from "@/lib/po-currency";
 import { PoMoneyInput } from "@/components/po/po-money-input";
 import { useConfirmDialog } from "@/components/confirm-dialog";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 type Step = 1 | 2 | 3;
 
@@ -286,7 +287,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       // Karakter , ( ) dibuang karena memecah sintaks filter .or().
       const term = debouncedSoSearch.replace(/[,()]/g, " ").trim();
       if (term)
-        q = q.or(`customer_po_no.ilike.%${term}%,so_kode.ilike.%${term}%`);
+        q = q.or(`customer_po_no.ilike.${orIlikePattern(term)},so_kode.ilike.${orIlikePattern(term)}`);
       const { data } = await q;
       setSoResults(data || []);
     };
@@ -361,7 +362,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         .limit(20);
       if (debouncedBarangSearch) {
         q = q.or(
-          `part_number.ilike.%${debouncedBarangSearch}%,part_name.ilike.%${debouncedBarangSearch}%`,
+          `part_number.ilike.${orIlikePattern(debouncedBarangSearch)},part_name.ilike.${orIlikePattern(debouncedBarangSearch)}`,
         );
       }
       const { data } = await q;

@@ -1,18 +1,42 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   BadgeDollarSign,
   Check,
   ChevronsUpDown,
   Plus,
   Printer,
-  Search,
   ShieldAlert,
+  X,
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 import { Button } from "@/components/ui/button";
 import {
   Command,
@@ -52,8 +76,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import {
   approveSpbInvoice,
@@ -99,17 +121,48 @@ type ApprovalTemplateOption = {
   cabang_id: number | null;
 };
 
+// Harus sama dengan kolom yang dicari di service list.
+const SPB_INVOICE_SEARCH_FIELDS = ["No Invoice"];
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key sort di service.
+const SPB_INVOICE_COLUMNS = [
+  { id: "spb_no", label: "No SPB" },
+  { id: "po_no", label: "No PO" },
+  { id: "do_no", label: "No DO" },
+  { id: "invoice_no", label: "No Invoice", sortDirection: "asc" },
+  { id: "invoice_date", label: "Tanggal Invoice", sortDirection: "desc" },
+  { id: "invoice_email_date", label: "Tanggal Email ke Site", sortDirection: "desc" },
+  { id: "approval_status", label: "Approval", sortDirection: "asc" },
+  { id: "created_at", label: "Created", sortDirection: "desc" },
+] as const satisfies readonly ReorderableColumn[];
+type SpbInvoiceColumnId = (typeof SPB_INVOICE_COLUMNS)[number]["id"];
+
 export default function SpbInvoicePage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
-  const [sort, setSort] = useState("created_at_desc");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
-
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 500);
+  const columnOrder = useColumnOrder("wms:table-column-order:spb-invoice", SPB_INVOICE_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const sort = urlState.get("sort", "created_at_desc");
+  const setSort = (v: string) =>
+    urlState.set({ sort: v === "created_at_desc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
   const [doOptionSearch, setDoOptionSearch] = useState("");
   const [debouncedDoOptionSearch] = useDebounce(doOptionSearch, 300);
 
@@ -151,6 +204,8 @@ export default function SpbInvoicePage() {
     setLoading(true);
     const res = await getSpbInvoiceList({
       search: debouncedSearch || undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
       sort,
       page,
       limit,
@@ -177,7 +232,22 @@ export default function SpbInvoicePage() {
 
   useEffect(() => {
     fetchList();
-  }, [debouncedSearch, sort, page, limit]);
+  }, [debouncedSearch, dateFrom, dateTo, sort, page, limit]);
+
+  const resetFilters = () => {
+    resetSearch();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
 
   const handleSortChange = (nextSort: string) => {
     setSort(nextSort);
@@ -366,6 +436,52 @@ export default function SpbInvoicePage() {
     fetchList();
   };
 
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (row: any, id: SpbInvoiceColumnId) => {
+    switch (id) {
+      case "spb_no":
+        return (
+          <TableCell>{row.do?.po?.spb?.spb_no || "-"}</TableCell>
+        );
+      case "po_no":
+        return (
+          <TableCell>{row.do?.po?.po_no || "-"}</TableCell>
+        );
+      case "do_no":
+        return (
+          <TableCell>{row.do?.do_no || "-"}</TableCell>
+        );
+      case "invoice_no":
+        return (
+          <TableCell className="font-medium">
+            {row.invoice_no}
+          </TableCell>
+        );
+      case "invoice_date":
+        return (
+          <TableCell>
+            {row.invoice_date ? formatDate(row.invoice_date) : "-"}
+          </TableCell>
+        );
+      case "invoice_email_date":
+        return (
+          <TableCell>
+            {row.invoice_email_date
+              ? formatDate(row.invoice_email_date)
+              : "-"}
+          </TableCell>
+        );
+      case "approval_status":
+        return (
+          <TableCell>{row.approval_status || "open"}</TableCell>
+        );
+      case "created_at":
+        return (
+          <TableCell>{formatDate(row.created_at)}</TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -393,175 +509,139 @@ export default function SpbInvoicePage() {
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
+      <Content>
         <div className="space-y-3">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-            <div className="relative min-w-0 flex-1 xl:min-w-70">
-              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="Cari No Invoice"
-                className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium text-foreground transition-all focus:bg-background"
-              />
-            </div>
-          </div>
-
-          <div className="rounded-lg border">
-            <Table containerClassName="max-h-[75vh] overflow-y-auto">
-              <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
-                <TableRow>
-                  <TableHead>No SPB</TableHead>
-                  <TableHead>No PO</TableHead>
-                  <TableHead>No DO</TableHead>
-                  <SortableTableHead
-                    sortKey="invoice_no"
-                    currentSort={sort}
-                    onSort={handleSortChange}
-                  >
-                    No Invoice
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="invoice_date"
-                    currentSort={sort}
-                    onSort={handleSortChange}
-                    defaultDir="desc"
-                  >
-                    Tanggal Invoice
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="invoice_email_date"
-                    currentSort={sort}
-                    onSort={handleSortChange}
-                    defaultDir="desc"
-                  >
-                    Tanggal Email ke Site
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="approval_status"
-                    currentSort={sort}
-                    onSort={handleSortChange}
-                  >
-                    Approval
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="created_at"
-                    currentSort={sort}
-                    onSort={handleSortChange}
-                    defaultDir="desc"
-                  >
-                    Created
-                  </SortableTableHead>
-                  <TableHead>Aksi</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {loading ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={9}
-                      className="text-center text-muted-foreground"
-                    >
-                      Memuat data...
-                    </TableCell>
-                  </TableRow>
-                ) : rows.length === 0 ? (
-                  <TableRow>
-                    <TableCell
-                      colSpan={9}
-                      className="text-center text-muted-foreground"
-                    >
-                      Belum ada data invoice.
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  rows.map((row) => (
-                    <TableRow key={row.id}>
-                      <TableCell>{row.do?.po?.spb?.spb_no || "-"}</TableCell>
-                      <TableCell>{row.do?.po?.po_no || "-"}</TableCell>
-                      <TableCell>{row.do?.do_no || "-"}</TableCell>
-                      <TableCell className="font-medium">
-                        {row.invoice_no}
-                      </TableCell>
-                      <TableCell>
-                        {row.invoice_date ? formatDate(row.invoice_date) : "-"}
-                      </TableCell>
-                      <TableCell>
-                        {row.invoice_email_date
-                          ? formatDate(row.invoice_email_date)
-                          : "-"}
-                      </TableCell>
-                      <TableCell>{row.approval_status || "open"}</TableCell>
-                      <TableCell>{formatDate(row.created_at)}</TableCell>
-                      <TableCell>
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() =>
-                              window.open(
-                                `/spb/invoice/print/${row.id}`,
-                                "_blank",
-                              )
-                            }
-                          >
-                            <Printer className="mr-1.5 h-3.5 w-3.5" />
-                            Cetak
-                          </Button>
-                          {row.approval_status === "open" &&
-                            isMyApprovalTurn(row) && (
-                              <>
-                                <Button
-                                  size="sm"
-                                  variant="outline"
-                                  onClick={() => onApprove(row.id)}
-                                >
-                                  Approve
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="destructive"
-                                  onClick={() => onReject(row.id)}
-                                >
-                                  Reject
-                                </Button>
-                              </>
-                            )}
-                          {isModerator && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="gap-1.5 border-amber-300 text-amber-600 hover:bg-amber-50"
-                              onClick={() => openModEdit(row)}
-                            >
-                              <ShieldAlert className="h-3.5 w-3.5" />
-                              Moderator Edit
-                            </Button>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </div>
-
-          <DataTablePagination
-            totalCount={total}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(v) => {
-              setLimit(Number(v));
-              setPage(1);
-            }}
-            itemLabel="Invoice SPB"
+          <ListSearchInput
+            placeholder="Cari No Invoice"
+            value={search}
+            onChange={setSearch}
+            searchableFields={SPB_INVOICE_SEARCH_FIELDS}
           />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterRangeFields>
+              <FilterField label="Tanggal Invoice">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
+      </Content>
+
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1300px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sort, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4">Aksi</TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: limit }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={9}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : rows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={9}
+                  className="h-24 text-center text-muted-foreground"
+                >
+                  Belum ada data invoice.
+                </TableCell>
+              </TableRow>
+            ) : (
+              rows.map((row) => (
+                <TableRow key={row.id}>
+                  {columnOrder.order.map((id) => (
+                    <Fragment key={id}>{renderCell(row, id)}</Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => window.open(`/spb/invoice/print/${row.id}`, "_blank")}
+                      >
+                        <Printer className="mr-2 h-4 w-4" /> Cetak
+                      </DropdownMenuItem>
+                      {row.approval_status === "open" && isMyApprovalTurn(row) && (
+                        <>
+                          <DropdownMenuItem
+                            onSelect={() => onApprove(row.id)}
+                          >
+                            <Check className="mr-2 h-4 w-4" /> Approve
+                          </DropdownMenuItem>
+                          <DropdownMenuItem
+                            className="text-destructive focus:text-destructive"
+                            onSelect={() => onReject(row.id)}
+                          >
+                            <X className="mr-2 h-4 w-4" /> Reject
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                      {isModerator && (
+                        <DropdownMenuItem
+                          className="text-amber-600 focus:text-amber-600"
+                          onSelect={() => openModEdit(row)}
+                        >
+                          <ShieldAlert className="mr-2 h-4 w-4" /> Moderator Edit
+                        </DropdownMenuItem>
+                      )}
+                    </RowActionsMenu>
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={page}
+          totalItems={total}
+          limit={limit}
+          itemLabel="Invoice SPB"
+          onPageChange={setPage}
+          onLimitChange={(v) => {
+            setLimit(Number(v));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <Dialog open={openCreateModal} onOpenChange={handleOpenCreateModal}>

@@ -17,6 +17,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { cn } from "@/lib/utils";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 export type PoVendorOption = {
   id: number;
@@ -54,7 +55,7 @@ export function PoVendorPicker({
       .order("vendor_name")
       .limit(15);
     if (query.trim()) {
-      q = q.or(`vendor_name.ilike.%${query}%,vendor_no.ilike.%${query}%`);
+      q = q.or(`vendor_name.ilike.${orIlikePattern(query)},vendor_no.ilike.${orIlikePattern(query)}`);
     }
     const { data } = await q;
     setResults((data as PoVendorOption[]) || []);

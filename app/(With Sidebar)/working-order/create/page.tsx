@@ -40,7 +40,7 @@ import {
   AlertCircle,
   Beaker,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { toYmdLocal } from "@/lib/utils";
 import { getMrForWo, createWorkingOrder } from "@/services/working-order-actions";

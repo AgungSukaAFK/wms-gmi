@@ -46,7 +46,7 @@ import {
 } from "@/components/ui/select";
 import { updateMRItemSSStatus } from "@/services/procurement-actions";
 import { bypassShareStockCompletion } from "@/services/inventory-actions";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { cn } from "@/lib/utils";
 import { Label } from "@/components/ui/label";
 import { ConfirmDialog } from "@/components/confirm-dialog";

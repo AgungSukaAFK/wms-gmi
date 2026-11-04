@@ -41,7 +41,7 @@ import {
   Package,
   Briefcase,
 } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
@@ -49,6 +49,7 @@ import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { VendorPicker, type VendorOption } from "@/components/vendor-consignment/vendor-picker";
 import { createConsignmentPr } from "@/services/vendor-consignment-actions";
 import { useGoBack } from "@/hooks/use-go-back";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface PrItem {
   part_id: number;
@@ -126,7 +127,7 @@ export default function CreateConsignmentPrPage() {
     const run = async () => {
       let q = supabase.from("barang").select("id, part_number, part_name, part_satuan").is("deleted_at", null).order("part_name").limit(15);
       if (debouncedSearch)
-        q = q.or(`part_number.ilike.%${debouncedSearch}%,part_name.ilike.%${debouncedSearch}%`);
+        q = q.or(`part_number.ilike.${orIlikePattern(debouncedSearch)},part_name.ilike.${orIlikePattern(debouncedSearch)}`);
       const { data } = await q;
       setResults(data || []);
     };

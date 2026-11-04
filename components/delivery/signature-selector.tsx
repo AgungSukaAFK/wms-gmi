@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { verifySignaturePassword } from "@/services/signature-actions";
 import Link from "next/link";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 
 interface SignatureSelectorProps {
   value: string;

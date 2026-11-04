@@ -15,7 +15,7 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { useDebounce } from "use-debounce";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   Popover,
   PopoverContent,
@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import type { ModeratorApprovalStep } from "@/services/moderator-edit-actions";
 import type { ApprovalType } from "@/type";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
 
 interface ApprovalFlowEditorProps {
   steps: ModeratorApprovalStep[];
@@ -136,7 +137,7 @@ export function ApprovalFlowEditor({
         .order("nama")
         .limit(10);
       if (debouncedSearch) {
-        query = query.or(`nama.ilike.%${debouncedSearch}%,email.ilike.%${debouncedSearch}%`);
+        query = query.or(`nama.ilike.${orIlikePattern(debouncedSearch)},email.ilike.${orIlikePattern(debouncedSearch)}`);
       }
       const { data } = await query;
       setProfiles(data || []);

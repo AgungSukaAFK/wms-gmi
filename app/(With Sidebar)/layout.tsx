@@ -21,7 +21,7 @@ import { isAuthRetryableFetchError } from "@supabase/supabase-js";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { Fragment, ReactNode, useEffect, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { DailyResetGuard } from "@/components/daily-reset-guard";
 import { useAuthStore } from "@/stores/auth-store";
 import { NotificationProvider } from "@/components/providers/NotificationProvider";
@@ -126,7 +126,15 @@ export default function DashboardLayout({ children }: { children: ReactNode }) {
 
   return (
     <NotificationProvider>
-      <Toaster richColors position="bottom-right" />
+      <Toaster
+        richColors
+        closeButton
+        position="bottom-right"
+        toastOptions={{
+          closeButtonAriaLabel: "Tutup",
+          classNames: { content: "flex-1" }, // tombol Salin rapat ke kanan
+        }}
+      />
       <FontSizeSync />
       <NavigationProgress />
       <SidebarProvider>

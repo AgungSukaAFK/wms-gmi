@@ -31,7 +31,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Loader2, Pencil } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { DatePickerString } from "@/components/date-picker-string";
 import { KoliDetailEditor } from "@/components/shipment/koli-detail-editor";
 import { updateDoReguler } from "@/services/do-reguler-actions";

@@ -5,32 +5,27 @@ import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
 import * as XLSX from "xlsx";
 import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
   Plus,
-  Search,
   ShoppingCart,
   Calendar,
   User,
   Building2,
-  ChevronRight,
+  Eye,
   MapPin,
   Navigation2,
-  Loader2,
   ArrowUpDown,
   Package,
-  Download,
 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import {
@@ -40,28 +35,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
 import Link from "next/link";
 import { PODetailSheet } from "@/components/po/po-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { completedFilterStatuses } from "@/lib/document-status";
 import { summarizeApprovals } from "@/lib/approval-progress";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { useColumnOrder } from "@/hooks/use-column-order";
 import {
   OUTSTANDING_FILTER_OPTIONS,
   type OutstandingFilter,
 } from "@/lib/po-outstanding";
 import { useUrlListState } from "@/hooks/use-url-list-state";
 import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
+import { PO_CURRENCY_OPTIONS } from "@/lib/po-currency";
 import {
   type ActiveFilter,
+  FilterField,
+  FilterFields,
   FilterPanel,
+  FilterRange,
+  FilterRangeFields,
   filterOptionLabel,
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import {
+  ExcelDownloadMenu,
+  type ExcelDownloadMode,
+} from "@/components/excel-download-menu";
+import { ListSearchInput } from "@/components/list-search-input";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
 
 const PO_SORT_COLUMNS: Record<string, string> = {
   po_kode: "po_kode",
@@ -69,6 +84,9 @@ const PO_SORT_COLUMNS: Record<string, string> = {
   po_status: "po_status",
   po_receive_status: "po_receive_status",
 };
+
+// Harus sama dengan kolom yang dicari di buildFilteredPoQuery.
+const PO_SEARCH_FIELDS = ["Kode PO", "PIC"];
 
 const PO_STATUS_OPTIONS = [
   { label: "Pending Approval", value: "open" },
@@ -83,6 +101,24 @@ const PO_RECEIVE_OPTIONS = [
   { label: "Selesai", value: "complete" },
 ];
 
+const PO_MATA_UANG_OPTIONS = PO_CURRENCY_OPTIONS.map((c) => ({
+  label: c.value,
+  value: c.value,
+}));
+
+const PO_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di PO_SORT_COLUMNS.
+const PO_COLUMNS = [
+  { id: "po_kode", label: "Purchase Order ID", sortDirection: "asc", className: `w-52 ${PO_HEAD_CLASS}` },
+  { id: "sumber", label: "Sumber PR / Lokasi", className: PO_HEAD_CLASS },
+  { id: "vendor", label: "Vendor(s)", className: PO_HEAD_CLASS },
+  { id: "po_status", label: "Progress Approval", sortDirection: "asc", className: `text-center ${PO_HEAD_CLASS}` },
+  { id: "po_receive_status", label: "Penerimaan", sortDirection: "asc", className: `text-center ${PO_HEAD_CLASS}` },
+  { id: "po_tanggal", label: "Tanggal Dokumen", sortDirection: "desc", className: `text-right pr-6 ${PO_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type PoColumnId = (typeof PO_COLUMNS)[number]["id"];
+
 export default function POListPage() {
   const supabase = createClient();
   const [pos, setPos] = useState<any[]>([]);
@@ -95,6 +131,7 @@ export default function POListPage() {
   // Filters & pagination - disimpan di URL (hooks/use-url-list-state.ts),
   // jadi bisa di-share & tombol Back browser bekerja. Setter di bawah tetap
   // bernama seperti useState lama.
+  const columnOrder = useColumnOrder("wms:table-column-order:po", PO_COLUMNS);
   const urlState = useUrlListState();
   const debouncedSearch = urlState.get("search");
   const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
@@ -116,6 +153,25 @@ export default function POListPage() {
   const dateTo = urlState.get("sampai");
   const setDateTo = (v: string) =>
     urlState.set({ sampai: v }, { resetPage: true });
+  const estimasiFrom = urlState.get("estimasi_dari");
+  const setEstimasiFrom = (v: string) =>
+    urlState.set({ estimasi_dari: v }, { resetPage: true });
+  const estimasiTo = urlState.get("estimasi_sampai");
+  const setEstimasiTo = (v: string) =>
+    urlState.set({ estimasi_sampai: v }, { resetPage: true });
+  const mataUangFilters = urlState.list("mata_uang");
+  const setMataUangFilters = (v: string[]) =>
+    urlState.set({ mata_uang: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
+  const vendorFilter = urlState.get("vendor");
+  const [vendorInput, setVendorInput, resetVendorInput] = useUrlSearchInput(
+    vendorFilter,
+    (value) => urlState.set({ vendor: value }, { resetPage: true }),
+  );
   const sortOrder = urlState.get("sort", "newest");
   const setSortOrder = (v: string) =>
     urlState.set({ sort: v === "newest" ? "" : v });
@@ -174,7 +230,17 @@ export default function POListPage() {
     setAvailableCabang(cabangData || []);
   };
 
-  const buildFilteredPoQuery = () => {
+  // Mode "all" melepas seluruh filter (export "Semua data").
+  const buildFilteredPoQuery = (mode: ExcelDownloadMode = "filtered") => {
+    const filtered = mode === "filtered";
+    // Filter isi item lewat embed alias, supaya po_items di bawah tetap utuh
+    // (daftar vendor tidak ikut tersaring).
+    const filterEmbeds = [
+      filtered && barangFilter ? ", barang_cocok:po_items!inner(id)" : "",
+      filtered && vendorFilter
+        ? ", vendor_cocok:po_items!inner(vendors!inner(id))"
+        : "",
+    ].join("");
     let query = supabase.from("pos").select(
       `
         id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
@@ -186,13 +252,17 @@ export default function POListPage() {
           cabang(nama_cabang),
           profiles(nama)
         ),
-        po_items(id, vendor_id, vendors(vendor_name))
+        po_items(id, vendor_id, vendors(vendor_name))${filterEmbeds}
       `,
       { count: "exact" },
     );
 
+    if (!filtered) return query;
+
     if (debouncedSearch) {
-      query = query.ilike("po_kode", `%${debouncedSearch}%`);
+      query = query.or(
+        `po_kode.ilike.${orIlikePattern(debouncedSearch)},po_pic.ilike.${orIlikePattern(debouncedSearch)}`,
+      );
     }
 
     if (statusFilters.length > 0) {
@@ -214,6 +284,19 @@ export default function POListPage() {
 
     if (dateFrom) query = query.gte("po_tanggal", dateFrom);
     if (dateTo) query = query.lte("po_tanggal", dateTo);
+    if (estimasiFrom) query = query.gte("po_estimasi", estimasiFrom);
+    if (estimasiTo) query = query.lte("po_estimasi", estimasiTo);
+
+    if (mataUangFilters.length > 0) {
+      query = query.in("po_currency", mataUangFilters);
+    }
+
+    if (vendorFilter) {
+      query = query.ilike(
+        "vendor_cocok.vendors.vendor_name",
+        `%${vendorFilter}%`,
+      );
+    }
 
     if (outstandingFilter !== "none") {
       query = query.eq("po_is_outstanding", true);
@@ -223,6 +306,13 @@ export default function POListPage() {
       } else if (outstandingFilter === "linked" && ids.length > 0) {
         query = query.not("id", "in", `(${ids.join(",")})`);
       }
+    }
+
+    if (barangFilter) {
+      query = query.or(
+        `part_number.ilike.${orIlikePattern(barangFilter)},part_name.ilike.${orIlikePattern(barangFilter)}`,
+        { referencedTable: "barang_cocok" },
+      );
     }
 
     return query;
@@ -276,20 +366,31 @@ export default function POListPage() {
     setLoading(false);
   };
 
-  const exportExcel = async () => {
+  const fetchAllCount = async () => {
+    const { count, error } = await supabase
+      .from("pos")
+      .select("id", { count: "exact", head: true });
+    if (error) throw error;
+    return count || 0;
+  };
+
+  const exportExcel = async (mode: ExcelDownloadMode) => {
     setExporting(true);
+    const toastId = toast.loading("Menyiapkan data PO...");
     try {
       const pageSize = 1000;
       const allRows: any[] = [];
       for (let pageIndex = 0; ; pageIndex += 1) {
         const from = pageIndex * pageSize;
         const to = from + pageSize - 1;
-        const { data, error } = await buildFilteredPoQuery()
+        const { data, error } = await buildFilteredPoQuery(mode)
           .order("created_at", { ascending: false })
           .range(from, to);
 
         if (error) {
-          toast.error(error.message || "Gagal mengambil data untuk export.");
+          toast.error(error.message || "Gagal mengambil data untuk export.", {
+            id: toastId,
+          });
           return;
         }
 
@@ -298,7 +399,7 @@ export default function POListPage() {
       }
 
       if (allRows.length === 0) {
-        toast.error("Tidak ada data untuk diekspor.");
+        toast.warning("Tidak ada data untuk diekspor.", { id: toastId });
         return;
       }
 
@@ -360,7 +461,11 @@ export default function POListPage() {
         wb,
         `PURCHASE_ORDER_${new Date().toISOString().slice(0, 10)}.xlsx`,
       );
-      toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+      toast.success(`Export Excel berhasil (${allRows.length} baris).`, {
+        id: toastId,
+      });
+    } catch (err: any) {
+      toast.error(`Gagal export Excel: ${err?.message || err}`, { id: toastId });
     } finally {
       setExporting(false);
     }
@@ -386,6 +491,11 @@ export default function POListPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    estimasiFrom,
+    estimasiTo,
+    mataUangFilters,
+    barangFilter,
+    vendorFilter,
     sortOrder,
     page,
     limit,
@@ -398,6 +508,8 @@ export default function POListPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
+    resetVendorInput();
     urlState.reset();
   };
 
@@ -453,20 +565,49 @@ export default function POListPage() {
       value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
       onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
     });
+  if (estimasiFrom || estimasiTo)
+    activeFilters.push({
+      key: "estimasi",
+      label: "Estimasi",
+      value: formatFilterRange(estimasiFrom, estimasiTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set(
+          { estimasi_dari: "", estimasi_sampai: "" },
+          { resetPage: true },
+        ),
+    });
+  if (mataUangFilters.length > 0)
+    activeFilters.push({
+      key: "mata_uang",
+      label: "Mata Uang",
+      value: mataUangFilters.join(", "),
+      onRemove: () => setMataUangFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
+    });
+  if (vendorFilter)
+    activeFilters.push({
+      key: "vendor",
+      label: "Vendor",
+      value: vendorFilter,
+      onRemove: () => {
+        resetVendorInput();
+        urlState.set({ vendor: "" }, { resetPage: true });
+      },
+    });
 
   const handleRowClick = (id: number) => {
     setSelectedPoId(id);
     setSheetOpen(true);
   };
-
-  const hasActiveFilters =
-    statusFilters.length > 0 ||
-    receiveStatusFilters.length > 0 ||
-    locationFilters.length > 0 ||
-    dateFrom !== "" ||
-    dateTo !== "" ||
-    outstandingFilter !== "none" ||
-    sortOrder !== "newest";
 
   const getApprovalStatusBadge = (status: string) => {
     switch (status) {
@@ -551,6 +692,179 @@ export default function POListPage() {
     return names;
   };
 
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (po: any, id: PoColumnId) => {
+    const vendorNames = getVendorNames(po.po_items);
+    const pr = po.prs;
+
+    switch (id) {
+      case "po_kode":
+        return (
+          <TableCell>
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 bg-primary/10 rounded-lg flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300 shadow-sm border border-primary/20">
+                <ShoppingCart className="h-4 w-4" />
+              </div>
+              <div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-bold text-foreground tracking-tight uppercase text-sm">
+                    {po.po_kode}
+                  </span>
+                  {po.po_jenis === "konsinyasi" && (
+                    <Badge
+                      variant="outline"
+                      className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800"
+                    >
+                      Rekonsil Konsinyasi
+                    </Badge>
+                  )}
+                  {po.po_is_outstanding && (
+                    <Badge
+                      variant="outline"
+                      className="h-4 px-1 text-[8px] font-black uppercase border-primary/40 bg-primary/10 text-primary"
+                    >
+                      Outstanding
+                    </Badge>
+                  )}
+                </div>
+                {po.po_detail_status && (
+                  <p className="text-[9px] text-muted-foreground font-medium mt-0.5">
+                    {po.po_detail_status}
+                  </p>
+                )}
+              </div>
+            </div>
+          </TableCell>
+        );
+      case "sumber":
+        return (
+          <TableCell>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground uppercase">
+                <User className="h-3 w-3 text-muted-foreground" />{" "}
+                {po.po_pic || pr?.profiles?.nama || "-"}
+              </div>
+              <div className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground uppercase tracking-tight">
+                <Building2 className="h-3 w-3" />{" "}
+                {pr?.cabang?.nama_cabang ||
+                  po.cabang?.nama_cabang ||
+                  "-"}
+              </div>
+              {po.po_jenis === "so" ? (
+                <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-mono">
+                  <Badge
+                    variant="outline"
+                    className="h-4 px-1 text-[8px] font-bold uppercase border-primary/40 text-primary"
+                  >
+                    SO
+                  </Badge>
+                  {po.so_reguler?.so_kode && (
+                    <Link
+                      href={`/so-reguler/so/${po.so_id}`}
+                      onClick={(e) => e.stopPropagation()}
+                      className="truncate max-w-40 hover:underline"
+                    >
+                      {po.so_reguler.so_kode}
+                    </Link>
+                  )}
+                </div>
+              ) : po.po_jenis === "non_pr" ? (
+                <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-mono">
+                  <Badge
+                    variant="outline"
+                    className="h-4 px-1 text-[8px] font-bold uppercase border-warning/40 text-warning"
+                  >
+                    Non-PR
+                  </Badge>
+                  {po.po_pr_referensi && (
+                    <span className="truncate max-w-40">
+                      {po.po_pr_referensi}
+                    </span>
+                  )}
+                </div>
+              ) : (
+                pr?.pr_kode && (
+                  <div className="text-[9px] text-muted-foreground font-mono">
+                    ↑ {pr.pr_kode}
+                  </div>
+                )
+              )}
+            </div>
+          </TableCell>
+        );
+      case "vendor":
+        return (
+          <TableCell>
+            <div className="flex flex-wrap gap-1">
+              {vendorNames.length === 0 ? (
+                <span className="text-[10px] text-muted-foreground/50 italic">
+                  -
+                </span>
+              ) : (
+                vendorNames.slice(0, 2).map((name) => (
+                  <Badge
+                    key={name}
+                    variant="secondary"
+                    className="text-[9px] font-semibold uppercase"
+                  >
+                    {name}
+                  </Badge>
+                ))
+              )}
+              {vendorNames.length > 2 && (
+                <Badge
+                  variant="outline"
+                  className="text-[9px] font-semibold"
+                >
+                  +{vendorNames.length - 2}
+                </Badge>
+              )}
+            </div>
+          </TableCell>
+        );
+      case "po_status":
+        return (
+          <TableCell className="text-center">
+            <div className="flex flex-col items-center gap-1">
+              {getApprovalStatusBadge(po.po_status)}
+              {(() => {
+                const summary = summarizeApprovals(po.approvals);
+                if (summary.totalCount === 0) return null;
+                return (
+                  <div className="flex flex-col items-center gap-0.5">
+                    <span className="text-[11px] font-bold text-foreground">
+                      {summary.approvedCount}/{summary.totalCount}{" "}
+                      Disetujui
+                    </span>
+                    {summary.pendingApprover && (
+                      <span className="text-[9px] font-medium text-warning uppercase tracking-tight">
+                        Menunggu: {summary.pendingApprover.nama}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+            </div>
+          </TableCell>
+        );
+      case "po_receive_status":
+        return (
+          <TableCell className="text-center">
+            {getReceiveStatusBadge(po.po_receive_status)}
+          </TableCell>
+        );
+      case "po_tanggal":
+        return (
+          <TableCell className="text-right pr-6">
+            <div className="flex items-center justify-end gap-2 text-xs font-bold text-foreground uppercase tracking-tighter">
+              <Calendar className="h-3.5 w-3.5 text-muted-foreground/40" />
+              {formatDate(po.po_tanggal)}
+            </div>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {/* Section 1: Header */}
@@ -570,16 +884,7 @@ export default function POListPage() {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <Button
-              variant="outline"
-              onClick={exportExcel}
-              disabled={loading || exporting}
-              className="gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase transition-all"
-            >
-              <Download className="h-4 w-4" />
-              {exporting ? "MENGEKSPOR..." : "EXPORT EXCEL"}
-            </Button>
-            {(userProfile?.isAdmin || userProfile?.isPurchasing) && (
+{(userProfile?.isAdmin || userProfile?.isPurchasing) && (
               <Link href="/po/create">
                 <Button className="shrink-0 gap-2 font-bold text-xs shadow-sm rounded-md px-4 h-9 uppercase">
                   <Plus className="h-4 w-4" /> Buat PO Baru
@@ -593,21 +898,27 @@ export default function POListPage() {
       {/* Section 2: Filter Bar */}
       <Content>
         <div className="space-y-3">
-          <div className="relative min-w-0">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari Kode PO..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
+          <div className="flex flex-col gap-4 md:flex-row">
+            <ListSearchInput
+              placeholder="Cari Kode PO atau PIC..."
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={setSearchQuery}
+              searchableFields={PO_SEARCH_FIELDS}
+            />
+            <ExcelDownloadMenu
+              itemLabel="PO"
+              filteredCount={totalCount}
+              fetchAllCount={fetchAllCount}
+              onDownload={exportExcel}
+              isExporting={exporting}
             />
           </div>
 
           <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              <div className="flex flex-col gap-2">
-                <div className="flex items-center justify-between gap-2">
-                  <label className="text-sm font-medium">Lokasi</label>
+            <FilterFields>
+              <FilterField
+                label="Lokasi"
+                action={
                   <button
                     type="button"
                     className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
@@ -617,7 +928,8 @@ export default function POListPage() {
                     <Navigation2 className="h-3 w-3" />
                     Lokasi saya
                   </button>
-                </div>
+                }
+              >
                 <MultiSelect
                   placeholder="Semua Lokasi"
                   icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
@@ -626,20 +938,18 @@ export default function POListPage() {
                   onChange={setLocationFilters}
                   options={locationOptions}
                 />
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Status Approval</label>
+              <FilterField label="Status Approval">
                 <MultiSelect
                   placeholder="Semua Status"
                   selected={statusFilters}
                   onChange={setStatusFilters}
                   options={PO_STATUS_OPTIONS}
                 />
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Status Terima</label>
+              <FilterField label="Status Terima">
                 <MultiSelect
                   placeholder="Semua Status Terima"
                   icon={<Package className="h-3 w-3 text-muted-foreground" />}
@@ -647,10 +957,9 @@ export default function POListPage() {
                   onChange={setReceiveStatusFilters}
                   options={PO_RECEIVE_OPTIONS}
                 />
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">PO Outstanding</label>
+              <FilterField label="PO Outstanding">
                 <Select
                   value={outstandingFilter}
                   onValueChange={(val) =>
@@ -669,33 +978,43 @@ export default function POListPage() {
                     ))}
                   </SelectContent>
                 </Select>
-              </div>
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Tanggal PO</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <DatePickerString
-                    value={dateFrom}
-                    onChange={setDateFrom}
-                    placeholder="Dari"
-                    className="h-9 w-full text-xs font-medium"
-                  />
-                  <DatePickerString
-                    value={dateTo}
-                    onChange={setDateTo}
-                    placeholder="Sampai"
-                    className="h-9 w-full text-xs font-medium"
-                  />
-                </div>
-              </div>
+              <FilterField label="Mata Uang">
+                <MultiSelect
+                  placeholder="Semua Mata Uang"
+                  selected={mataUangFilters}
+                  onChange={setMataUangFilters}
+                  options={PO_MATA_UANG_OPTIONS}
+                />
+              </FilterField>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Urutan</label>
+              <FilterField label="Vendor">
+                <Input
+                  placeholder="Nama vendor"
+                  value={vendorInput}
+                  onChange={(e) => setVendorInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+
+              <FilterField label="Urutan">
                 <Select value={sortOrder} onValueChange={handleSortChange}>
                   <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
-                    <div className="flex items-center gap-2">
-                      <ArrowUpDown className="h-3 w-3 text-muted-foreground" />
-                      <SelectValue placeholder="Urutan" />
+                    <div className="flex min-w-0 items-center gap-2">
+                      <ArrowUpDown className="h-3 w-3 shrink-0 text-muted-foreground" />
+                      <span className="truncate">
+                        <SelectValue placeholder="Urutan" />
+                      </span>
                     </div>
                   </SelectTrigger>
                   <SelectContent className="rounded-md">
@@ -705,268 +1024,142 @@ export default function POListPage() {
                     <SelectItem value="po_tanggal_asc">Tanggal Dok ↑</SelectItem>
                   </SelectContent>
                 </Select>
-              </div>
-            </div>
+              </FilterField>
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Tanggal PO">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+              <FilterField label="Estimasi Tiba">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={estimasiFrom}
+                      onChange={setEstimasiFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={estimasiTo}
+                      onChange={setEstimasiTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
           </FilterPanel>
         </div>
       </Content>
 
       {/* Section 3: Table */}
-      <Content className="overflow-hidden">
-        <div>
-          <Table containerClassName="max-h-[75vh] overflow-y-auto">
-            <TableHeader className="bg-muted/50 border-b border-border [&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
-              <TableRow className="hover:bg-transparent h-10">
-                <SortableTableHead
-                  sortKey="po_kode"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-52 text-[10px] font-black uppercase text-muted-foreground"
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1100px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: limit }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={7}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pos.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={7}
+                  className="h-48 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[10px]"
                 >
-                  Purchase Order ID
-                </SortableTableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
-                  Sumber PR / Lokasi
-                </TableHead>
-                <TableHead className="text-[10px] font-black uppercase text-muted-foreground">
-                  Vendor(s)
-                </TableHead>
-                <SortableTableHead
-                  sortKey="po_status"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Progress Approval
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="po_receive_status"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Penerimaan
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="po_tanggal"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  defaultDir="desc"
-                  className="justify-end text-right text-[10px] font-black uppercase text-muted-foreground pr-6"
-                >
-                  Tanggal Dokumen
-                </SortableTableHead>
-                <TableHead className="w-20"></TableHead>
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter."
+                    : "DATA PURCHASE ORDER TIDAK DITEMUKAN"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="h-40 text-center">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                        Memuat Data...
-                      </span>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ) : pos.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="h-48 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[10px]"
+            ) : (
+              pos.map((po) => {
+                return (
+                  <TableRow
+                    key={po.id}
+                    className="group hover:bg-muted/30 transition-all border-b border-border/50 h-16 cursor-pointer"
+                    onClick={() => handleRowClick(po.id)}
                   >
-                    {hasActiveFilters || searchQuery
-                      ? "Tidak ada data yang sesuai filter."
-                      : "DATA PURCHASE ORDER TIDAK DITEMUKAN"}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                pos.map((po) => {
-                  const vendorNames = getVendorNames(po.po_items);
-                  const pr = po.prs;
-                  return (
-                    <TableRow
-                      key={po.id}
-                      className="group hover:bg-muted/30 transition-all border-b border-border/50 h-16 cursor-pointer"
-                      onClick={() => handleRowClick(po.id)}
+                    {columnOrder.order.map((id) => (
+                      <React.Fragment key={id}>{renderCell(po, id)}</React.Fragment>
+                    ))}
+                    <TableCell
+                      className="text-right pr-4"
+                      onClick={(e) => e.stopPropagation()}
                     >
-                      <TableCell>
-                        <div className="flex items-center gap-3">
-                          <div className="h-9 w-9 bg-primary/10 rounded-lg flex items-center justify-center text-primary group-hover:bg-primary group-hover:text-primary-foreground transition-all duration-300 shadow-sm border border-primary/20">
-                            <ShoppingCart className="h-4 w-4" />
-                          </div>
-                          <div>
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-bold text-foreground tracking-tight uppercase text-sm">
-                                {po.po_kode}
-                              </span>
-                              {po.po_jenis === "konsinyasi" && (
-                                <Badge
-                                  variant="outline"
-                                  className="h-4 px-1 text-[8px] font-black uppercase border-violet-300 bg-violet-50 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300 dark:border-violet-800"
-                                >
-                                  Rekonsil Konsinyasi
-                                </Badge>
-                              )}
-                              {po.po_is_outstanding && (
-                                <Badge
-                                  variant="outline"
-                                  className="h-4 px-1 text-[8px] font-black uppercase border-primary/40 bg-primary/10 text-primary"
-                                >
-                                  Outstanding
-                                </Badge>
-                              )}
-                            </div>
-                            {po.po_detail_status && (
-                              <p className="text-[9px] text-muted-foreground font-medium mt-0.5">
-                                {po.po_detail_status}
-                              </p>
-                            )}
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5 text-[11px] font-bold text-foreground uppercase">
-                            <User className="h-3 w-3 text-muted-foreground" />{" "}
-                            {po.po_pic || pr?.profiles?.nama || "-"}
-                          </div>
-                          <div className="flex items-center gap-1.5 text-[9px] font-medium text-muted-foreground uppercase tracking-tight">
-                            <Building2 className="h-3 w-3" />{" "}
-                            {pr?.cabang?.nama_cabang ||
-                              po.cabang?.nama_cabang ||
-                              "-"}
-                          </div>
-                          {po.po_jenis === "so" ? (
-                            <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-mono">
-                              <Badge
-                                variant="outline"
-                                className="h-4 px-1 text-[8px] font-bold uppercase border-primary/40 text-primary"
-                              >
-                                SO
-                              </Badge>
-                              {po.so_reguler?.so_kode && (
-                                <Link
-                                  href={`/so-reguler/so/${po.so_id}`}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="truncate max-w-40 hover:underline"
-                                >
-                                  {po.so_reguler.so_kode}
-                                </Link>
-                              )}
-                            </div>
-                          ) : po.po_jenis === "non_pr" ? (
-                            <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-mono">
-                              <Badge
-                                variant="outline"
-                                className="h-4 px-1 text-[8px] font-bold uppercase border-warning/40 text-warning"
-                              >
-                                Non-PR
-                              </Badge>
-                              {po.po_pr_referensi && (
-                                <span className="truncate max-w-40">
-                                  {po.po_pr_referensi}
-                                </span>
-                              )}
-                            </div>
-                          ) : (
-                            pr?.pr_kode && (
-                              <div className="text-[9px] text-muted-foreground font-mono">
-                                ↑ {pr.pr_kode}
-                              </div>
-                            )
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex flex-wrap gap-1">
-                          {vendorNames.length === 0 ? (
-                            <span className="text-[10px] text-muted-foreground/50 italic">
-                              -
-                            </span>
-                          ) : (
-                            vendorNames.slice(0, 2).map((name) => (
-                              <Badge
-                                key={name}
-                                variant="secondary"
-                                className="text-[9px] font-semibold uppercase"
-                              >
-                                {name}
-                              </Badge>
-                            ))
-                          )}
-                          {vendorNames.length > 2 && (
-                            <Badge
-                              variant="outline"
-                              className="text-[9px] font-semibold"
-                            >
-                              +{vendorNames.length - 2}
-                            </Badge>
-                          )}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        <div className="flex flex-col items-center gap-1">
-                          {getApprovalStatusBadge(po.po_status)}
-                          {(() => {
-                            const summary = summarizeApprovals(po.approvals);
-                            if (summary.totalCount === 0) return null;
-                            return (
-                              <div className="flex flex-col items-center gap-0.5">
-                                <span className="text-[11px] font-bold text-foreground">
-                                  {summary.approvedCount}/{summary.totalCount}{" "}
-                                  Disetujui
-                                </span>
-                                {summary.pendingApprover && (
-                                  <span className="text-[9px] font-medium text-warning uppercase tracking-tight">
-                                    Menunggu: {summary.pendingApprover.nama}
-                                  </span>
-                                )}
-                              </div>
-                            );
-                          })()}
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center">
-                        {getReceiveStatusBadge(po.po_receive_status)}
-                      </TableCell>
-                      <TableCell className="text-right pr-6">
-                        <div className="flex items-center justify-end gap-2 text-xs font-bold text-foreground uppercase tracking-tighter">
-                          <Calendar className="h-3.5 w-3.5 text-muted-foreground/40" />
-                          {formatDate(po.po_tanggal)}
-                        </div>
-                      </TableCell>
-                      <TableCell className="pr-4">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-9 w-9 rounded-md hover:bg-muted transition-all group-hover:bg-muted border border-transparent group-hover:border-border"
-                        >
-                          <ChevronRight className="h-4 w-4 text-muted-foreground/40 group-hover:text-primary transition-colors" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
-        <div className="p-4 border-t border-border bg-muted/30">
-          <DataTablePagination
-            totalCount={totalCount}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(val) => {
-              setLimit(parseInt(val));
-              setPage(1);
-            }}
-            itemLabel="Purchase Order"
-          />
-        </div>
+                      <RowActionsMenu>
+                        <DropdownMenuItem onSelect={() => handleRowClick(po.id)}>
+                          <Eye className="mr-2 h-4 w-4" /> Lihat Detail
+                        </DropdownMenuItem>
+                      </RowActionsMenu>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={page}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="PO"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <PODetailSheet

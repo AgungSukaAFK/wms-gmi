@@ -3,18 +3,24 @@
 
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { CalendarClock } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Content } from "@/components/content";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { useColumnOrder } from "@/hooks/use-column-order";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import { formatCount, formatHm, formatRemaining, HmPartView, HmUnitSummary } from "@/lib/hm";
@@ -34,8 +40,24 @@ import { HmUnitGrid } from "@/components/hm-maintenance/hm-unit-grid";
 
 const NUM = "text-right font-mono tabular-nums whitespace-nowrap";
 
+// Kolom setelah penanda status. Urutan baris tetap dari yang paling mendesak.
+const MAINT_COLUMNS = [
+  { id: "code", label: "Part Number" },
+  { id: "name", label: "Deskripsi" },
+  { id: "unit", label: "Unit" },
+  { id: "interval", label: "Interval", className: "text-right" },
+  { id: "last", label: "HM Ganti Terakhir", className: "text-right" },
+  { id: "due", label: "HM Jatuh Tempo", className: "text-right" },
+  { id: "sisa", label: "Sisa HM", className: "text-right" },
+  { id: "stock", label: "Stock on Hand", className: "text-right" },
+  { id: "status", label: "Status" },
+  { id: "penggantian", label: "Penggantian" },
+] as const satisfies readonly ReorderableColumn[];
+type MaintColumnId = (typeof MAINT_COLUMNS)[number]["id"];
+
 export default function MaintenanceSchedulePage() {
   const { isAdmin } = useHmAdmin();
+  const columnOrder = useColumnOrder("wms:table-column-order:maintenance", MAINT_COLUMNS);
   const { siteId, site, ready } = useHmSite();
   const [schedule, setSchedule] = useState<HmPartView[]>([]);
   const [units, setUnits] = useState<HmUnitSummary[]>([]);
@@ -73,6 +95,67 @@ export default function MaintenanceSchedulePage() {
     }),
     [schedule],
   );
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (p: HmPartView, id: MaintColumnId) => {
+    switch (id) {
+      case "code":
+        return (
+          <TableCell className="whitespace-nowrap">
+            <Link
+              href={`/maintenance/unit/${p.unit_id}`}
+              className="font-mono text-sm font-semibold hover:underline"
+            >
+              {p.code || "—"}
+            </Link>
+          </TableCell>
+        );
+      case "name":
+        return (
+          <TableCell className="min-w-40 text-muted-foreground">{p.name}</TableCell>
+        );
+      case "unit":
+        return (
+          <TableCell className="whitespace-nowrap font-medium">{p.unit_code ?? "—"}</TableCell>
+        );
+      case "interval":
+        return (
+          <TableCell className={NUM}>{formatHm(p.interval_hm)}</TableCell>
+        );
+      case "last":
+        return (
+          <TableCell className={NUM}>{formatHm(p.last_replacement_hm)}</TableCell>
+        );
+      case "due":
+        return (
+          <TableCell className={NUM}>{formatHm(p.due_hm)}</TableCell>
+        );
+      case "sisa":
+        return (
+          <TableCell className={cn(NUM, "font-semibold", STATUS_TEXT[p.status])}>
+            {formatRemaining(p.remaining_hm)}
+          </TableCell>
+        );
+      case "stock":
+        return (
+          <TableCell className={NUM}>
+            {p.stock_on_hand === null ? "—" : formatCount(p.stock_on_hand)}
+          </TableCell>
+        );
+      case "status":
+        return (
+          <TableCell>
+            <StatusBadge status={p.status} />
+          </TableCell>
+        );
+      case "penggantian":
+        return (
+          <TableCell>
+            <ReplacementBadge part={p} />
+          </TableCell>
+        );
+    }
+  };
 
   return (
     <>
@@ -113,77 +196,55 @@ export default function MaintenanceSchedulePage() {
           </Link>
         }
       >
-        <div className="rounded-lg border">
-          <Table containerClassName="max-h-[65vh] overflow-y-auto">
-            <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card">
-              <TableRow>
-                <TableHead className="w-[3px] min-w-[3px] p-0" />
-                <TableHead>Part Number</TableHead>
-                <TableHead>Deskripsi</TableHead>
-                <TableHead>Unit</TableHead>
-                <TableHead className="text-right">Interval</TableHead>
-                <TableHead className="text-right">HM Ganti Terakhir</TableHead>
-                <TableHead className="text-right">HM Jatuh Tempo</TableHead>
-                <TableHead className="text-right">Sisa HM</TableHead>
-                <TableHead className="text-right">Stock on Hand</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Penggantian</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading &&
-                Array.from({ length: 6 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={11}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              {!loading && schedule.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={11} className="py-10 text-center">
-                    <CalendarClock className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
-                    <div className="font-semibold">Belum ada part terjadwal</div>
-                    <div className="text-sm text-muted-foreground">
-                      Tambahkan part pada halaman detail unit untuk mulai memantau jatuh tempo.
-                    </div>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1200px]"
+          containerClassName="rounded-lg border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+            >
+              <TableHead className="w-[3px] min-w-[3px] p-0" />
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead key={column.id} column={column} />
+              ))}
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading &&
+              Array.from({ length: 6 }).map((_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={11}>
+                    <Skeleton className="h-5 w-full" />
                   </TableCell>
                 </TableRow>
-              )}
-              {!loading &&
-                schedule.map((p) => (
-                  <TableRow key={p.id}>
-                    <RailCell status={p.status} />
-                    <TableCell className="whitespace-nowrap">
-                      <Link
-                        href={`/maintenance/unit/${p.unit_id}`}
-                        className="font-mono text-sm font-semibold hover:underline"
-                      >
-                        {p.code || "—"}
-                      </Link>
-                    </TableCell>
-                    <TableCell className="min-w-40 text-muted-foreground">{p.name}</TableCell>
-                    <TableCell className="whitespace-nowrap font-medium">{p.unit_code ?? "—"}</TableCell>
-                    <TableCell className={NUM}>{formatHm(p.interval_hm)}</TableCell>
-                    <TableCell className={NUM}>{formatHm(p.last_replacement_hm)}</TableCell>
-                    <TableCell className={NUM}>{formatHm(p.due_hm)}</TableCell>
-                    <TableCell className={cn(NUM, "font-semibold", STATUS_TEXT[p.status])}>
-                      {formatRemaining(p.remaining_hm)}
-                    </TableCell>
-                    <TableCell className={NUM}>
-                      {p.stock_on_hand === null ? "—" : formatCount(p.stock_on_hand)}
-                    </TableCell>
-                    <TableCell>
-                      <StatusBadge status={p.status} />
-                    </TableCell>
-                    <TableCell>
-                      <ReplacementBadge part={p} />
-                    </TableCell>
-                  </TableRow>
-                ))}
-            </TableBody>
-          </Table>
-        </div>
+              ))}
+            {!loading && schedule.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={11} className="py-10 text-center">
+                  <CalendarClock className="mx-auto mb-2 h-8 w-8 text-muted-foreground" />
+                  <div className="font-semibold">Belum ada part terjadwal</div>
+                  <div className="text-sm text-muted-foreground">
+                    Tambahkan part pada halaman detail unit untuk mulai memantau jatuh tempo.
+                  </div>
+                </TableCell>
+              </TableRow>
+            )}
+            {!loading &&
+              schedule.map((p) => (
+                <TableRow key={p.id}>
+                  <RailCell status={p.status} />
+                  {columnOrder.order.map((id) => (
+                    <Fragment key={id}>{renderCell(p, id)}</Fragment>
+                  ))}
+                </TableRow>
+              ))}
+          </TableBody>
+        </StickyHeaderTable>
       </Content>
 
       <Content title="Ringkasan Unit" description={`${formatCount(units.length)} unit`}>

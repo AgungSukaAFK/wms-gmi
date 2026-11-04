@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
@@ -13,6 +13,18 @@ import {
 } from "lucide-react";
 import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -24,18 +36,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import {
-  Table,
   TableBody,
   TableCell,
-  TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   getSpbReport,
   updateSpbInvoicePaymentStatus,
@@ -236,6 +243,38 @@ function countActiveFilters(values: FilterValues) {
   return count;
 }
 
+// Kolom report. Id kolom yang bisa di-sort = key sort di service.
+const REPORT_COLUMNS = [
+  { id: "spb_tanggal", label: "TGL SPB", sortDirection: "desc" },
+  { id: "spb_no", label: "NO SPB", sortDirection: "asc" },
+  { id: "lokasi", label: "LOKASI" },
+  { id: "part_number", label: "PART NUMBER" },
+  { id: "part_name", label: "PART NAME" },
+  { id: "qty", label: "QTY" },
+  { id: "uom", label: "UOM" },
+  { id: "kode_unit", label: "KODE UNIT" },
+  { id: "type_unit", label: "TYPE UNIT" },
+  { id: "brand", label: "BRAND" },
+  { id: "hm", label: "HM" },
+  { id: "remark", label: "REMARK" },
+  { id: "section", label: "SECTION" },
+  { id: "pic_gmi", label: "PIC GMI" },
+  { id: "pic_ppa", label: "PIC PPA" },
+  { id: "no_wo", label: "NO WO" },
+  { id: "date_input_spb", label: "DATE INPUT SPB" },
+  { id: "spb_status", label: "STATUS", sortDirection: "asc" },
+  { id: "po_no", label: "NO PO", sortDirection: "asc" },
+  { id: "so_no", label: "NO SO" },
+  { id: "date_input_po", label: "DATE INPUT PO" },
+  { id: "do_no", label: "NO DO", sortDirection: "asc" },
+  { id: "date_input_do", label: "DATE INPUT DO" },
+  { id: "invoice_no", label: "NO INVOICE", sortDirection: "asc" },
+  { id: "tgl_invoice", label: "TGL INVOICE" },
+  { id: "tgl_email", label: "TGL EMAIL KE SITE" },
+  { id: "payment", label: "STATUS PAYMENT" },
+] as const satisfies readonly ReorderableColumn[];
+type ReportColumnId = (typeof REPORT_COLUMNS)[number]["id"];
+
 export default function SpbReportPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -247,20 +286,37 @@ export default function SpbReportPage() {
     number | string | null
   >(null);
 
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 500);
-  const [status, setStatus] = useState<
-    "all" | "no_po" | "no_do" | "no_invoice"
-  >("all");
-  const [locationFilters, setLocationFilters] = useState<string[]>([]);
+  const columnOrder = useColumnOrder("wms:table-column-order:spb-report", REPORT_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusParam = urlState.get("status");
+  const status: "all" | "no_po" | "no_do" | "no_invoice" =
+    statusParam === "no_po" ||
+    statusParam === "no_do" ||
+    statusParam === "no_invoice"
+      ? statusParam
+      : "all";
+  const setStatus = (v: string) =>
+    urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
   const [availableCabang, setAvailableCabang] = useState<CabangOption[]>([]);
   const [filterValues, setFilterValues] = useState<FilterValues>({});
   const [debouncedFilterValues] = useDebounce(filterValues, 500);
   const [showFilters, setShowFilters] = useState(false);
-  const [sort, setSort] = useState("spb_tanggal_desc");
-
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
+  const sort = urlState.get("sort", "spb_tanggal_desc");
+  const setSort = (v: string) =>
+    urlState.set({ sort: v === "spb_tanggal_desc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const cabangIds = useMemo(
     () =>
@@ -308,10 +364,8 @@ export default function SpbReportPage() {
 
   const resetFilters = () => {
     setFilterValues({});
-    setLocationFilters([]);
-    setSearch("");
-    setStatus("all");
-    setPage(1);
+    resetSearch();
+    urlState.reset();
   };
 
   useEffect(() => {
@@ -490,6 +544,158 @@ export default function SpbReportPage() {
     fetchData();
   }, [fetchData]);
 
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (row: SpbReportRow, id: ReportColumnId) => {
+    switch (id) {
+      case "spb_tanggal":
+        return (
+          <TableCell>{formatDate(row.spb_tanggal)}</TableCell>
+        );
+      case "spb_no":
+        return (
+          <TableCell>{row.spb_no}</TableCell>
+        );
+      case "lokasi":
+        return (
+          <TableCell>{row.spb_gudang || "-"}</TableCell>
+        );
+      case "part_number":
+        return (
+          <TableCell>{row.dtl_spb_part_number}</TableCell>
+        );
+      case "part_name":
+        return (
+          <TableCell>{row.dtl_spb_part_name}</TableCell>
+        );
+      case "qty":
+        return (
+          <TableCell>{row.dtl_spb_qty}</TableCell>
+        );
+      case "uom":
+        return (
+          <TableCell>{row.dtl_spb_part_satuan}</TableCell>
+        );
+      case "kode_unit":
+        return (
+          <TableCell>{row.spb_kode_unit || "-"}</TableCell>
+        );
+      case "type_unit":
+        return (
+          <TableCell>{row.spb_tipe_unit || "-"}</TableCell>
+        );
+      case "brand":
+        return (
+          <TableCell>{row.spb_brand || "-"}</TableCell>
+        );
+      case "hm":
+        return (
+          <TableCell>{row.spb_hm ?? "-"}</TableCell>
+        );
+      case "remark":
+        return (
+          <TableCell>{row.spb_problem_remark || "-"}</TableCell>
+        );
+      case "section":
+        return (
+          <TableCell>{row.spb_section || "-"}</TableCell>
+        );
+      case "pic_gmi":
+        return (
+          <TableCell>{row.spb_pic_gmi || "-"}</TableCell>
+        );
+      case "pic_ppa":
+        return (
+          <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
+        );
+      case "no_wo":
+        return (
+          <TableCell>{row.spb_no_wo || "-"}</TableCell>
+        );
+      case "date_input_spb":
+        return (
+          <TableCell>
+            {formatDate(row.spb_created_at)}
+          </TableCell>
+        );
+      case "spb_status":
+        return (
+          <TableCell>{row.spb_status}</TableCell>
+        );
+      case "po_no":
+        return (
+          <TableCell>{row.po_no || "-"}</TableCell>
+        );
+      case "so_no":
+        return (
+          <TableCell>{row.so_no || "-"}</TableCell>
+        );
+      case "date_input_po":
+        return (
+          <TableCell>{formatDate(row.po_created_at)}</TableCell>
+        );
+      case "do_no":
+        return (
+          <TableCell>{row.do_no || "-"}</TableCell>
+        );
+      case "date_input_do":
+        return (
+          <TableCell>{formatDate(row.do_created_at)}</TableCell>
+        );
+      case "invoice_no":
+        return (
+          <TableCell>{row.invoice_no || "-"}</TableCell>
+        );
+      case "tgl_invoice":
+        return (
+          <TableCell>{formatDate(row.invoice_date)}</TableCell>
+        );
+      case "tgl_email":
+        return (
+          <TableCell>
+            {formatDate(row.invoice_email_date)}
+          </TableCell>
+        );
+      case "payment":
+        return (
+          <TableCell>
+            {!row.invoice_no ? (
+              "-"
+            ) : canEditPayment ? (
+              <Select
+                value={row.invoice_payment_status || "unpaid"}
+                disabled={updatingInvoiceId === row.invoice_id}
+                onValueChange={(v: "paid" | "unpaid") =>
+                  row.invoice_id &&
+                  handlePaymentStatusChange(row.invoice_id, v)
+                }
+              >
+                <SelectTrigger className="h-8 w-28 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="unpaid">Unpaid</SelectItem>
+                  <SelectItem value="paid">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            ) : (
+              <Badge
+                variant="outline"
+                className={
+                  row.invoice_payment_status === "paid"
+                    ? "bg-success/10 text-success border-success/20"
+                    : "bg-warning/10 text-warning border-warning/20"
+                }
+              >
+                {PAYMENT_STATUS_LABEL[
+                  row.invoice_payment_status || "unpaid"
+                ]}
+              </Badge>
+            )}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -632,181 +838,69 @@ export default function SpbReportPage() {
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="rounded-lg border border-border">
-          <Table containerClassName="max-h-[75vh] overflow-y-auto">
-            <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-card [&_th]:shadow-[0_2px_4px_-2px_rgba(0,0,0,0.15)]">
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-max"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sort, onSort: handleSortChange }}
+                />
+              ))}
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: limit }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={27}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : rows.length === 0 ? (
               <TableRow>
-                <SortableTableHead
-                  sortKey="spb_tanggal"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                  defaultDir="desc"
+                <TableCell
+                  colSpan={27}
+                  className="h-24 text-center text-muted-foreground"
                 >
-                  TGL SPB
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="spb_no"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  NO SPB
-                </SortableTableHead>
-                <TableHead>LOKASI</TableHead>
-                <TableHead>PART NUMBER</TableHead>
-                <TableHead>PART NAME</TableHead>
-                <TableHead>QTY</TableHead>
-                <TableHead>UOM</TableHead>
-                <TableHead>KODE UNIT</TableHead>
-                <TableHead>TYPE UNIT</TableHead>
-                <TableHead>BRAND</TableHead>
-                <TableHead>HM</TableHead>
-                <TableHead>REMARK</TableHead>
-                <TableHead>SECTION</TableHead>
-                <TableHead>PIC GMI</TableHead>
-                <TableHead>PIC PPA</TableHead>
-                <TableHead>NO WO</TableHead>
-                <TableHead>DATE INPUT SPB</TableHead>
-                <SortableTableHead
-                  sortKey="spb_status"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  STATUS
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="po_no"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  NO PO
-                </SortableTableHead>
-                <TableHead>NO SO</TableHead>
-                <TableHead>DATE INPUT PO</TableHead>
-                <SortableTableHead
-                  sortKey="do_no"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  NO DO
-                </SortableTableHead>
-                <TableHead>DATE INPUT DO</TableHead>
-                <SortableTableHead
-                  sortKey="invoice_no"
-                  currentSort={sort}
-                  onSort={handleSortChange}
-                >
-                  NO INVOICE
-                </SortableTableHead>
-                <TableHead>TGL INVOICE</TableHead>
-                <TableHead>TGL EMAIL KE SITE</TableHead>
-                <TableHead>STATUS PAYMENT</TableHead>
+                  Data report kosong.
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={27}
-                    className="text-center text-muted-foreground"
-                  >
-                    Memuat report...
-                  </TableCell>
+            ) : (
+              rows.map((row, idx) => (
+                <TableRow key={`${row.spb_id}-${row.spb_dtl_id}-${idx}`}>
+                  {columnOrder.order.map((id) => (
+                    <Fragment key={id}>{renderCell(row, id)}</Fragment>
+                  ))}
                 </TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={27}
-                    className="text-center text-muted-foreground"
-                  >
-                    Data report kosong.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row, idx) => (
-                  <TableRow key={`${row.spb_id}-${row.spb_dtl_id}-${idx}`}>
-                    <TableCell>{formatDate(row.spb_tanggal)}</TableCell>
-                    <TableCell>{row.spb_no}</TableCell>
-                    <TableCell>{row.spb_gudang || "-"}</TableCell>
-                    <TableCell>{row.dtl_spb_part_number}</TableCell>
-                    <TableCell>{row.dtl_spb_part_name}</TableCell>
-                    <TableCell>{row.dtl_spb_qty}</TableCell>
-                    <TableCell>{row.dtl_spb_part_satuan}</TableCell>
-                    <TableCell>{row.spb_kode_unit || "-"}</TableCell>
-                    <TableCell>{row.spb_tipe_unit || "-"}</TableCell>
-                    <TableCell>{row.spb_brand || "-"}</TableCell>
-                    <TableCell>{row.spb_hm ?? "-"}</TableCell>
-                    <TableCell>{row.spb_problem_remark || "-"}</TableCell>
-                    <TableCell>{row.spb_section || "-"}</TableCell>
-                    <TableCell>{row.spb_pic_gmi || "-"}</TableCell>
-                    <TableCell>{row.spb_pic_ppa || "-"}</TableCell>
-                    <TableCell>{row.spb_no_wo || "-"}</TableCell>
-                    <TableCell>
-                      {formatDate(row.spb_created_at)}
-                    </TableCell>
-                    <TableCell>{row.spb_status}</TableCell>
-                    <TableCell>{row.po_no || "-"}</TableCell>
-                    <TableCell>{row.so_no || "-"}</TableCell>
-                    <TableCell>{formatDate(row.po_created_at)}</TableCell>
-                    <TableCell>{row.do_no || "-"}</TableCell>
-                    <TableCell>{formatDate(row.do_created_at)}</TableCell>
-                    <TableCell>{row.invoice_no || "-"}</TableCell>
-                    <TableCell>{formatDate(row.invoice_date)}</TableCell>
-                    <TableCell>
-                      {formatDate(row.invoice_email_date)}
-                    </TableCell>
-                    <TableCell>
-                      {!row.invoice_no ? (
-                        "-"
-                      ) : canEditPayment ? (
-                        <Select
-                          value={row.invoice_payment_status || "unpaid"}
-                          disabled={updatingInvoiceId === row.invoice_id}
-                          onValueChange={(v: "paid" | "unpaid") =>
-                            row.invoice_id &&
-                            handlePaymentStatusChange(row.invoice_id, v)
-                          }
-                        >
-                          <SelectTrigger className="h-8 w-28 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="unpaid">Unpaid</SelectItem>
-                            <SelectItem value="paid">Paid</SelectItem>
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Badge
-                          variant="outline"
-                          className={
-                            row.invoice_payment_status === "paid"
-                              ? "bg-success/10 text-success border-success/20"
-                              : "bg-warning/10 text-warning border-warning/20"
-                          }
-                        >
-                          {PAYMENT_STATUS_LABEL[
-                            row.invoice_payment_status || "unpaid"
-                          ]}
-                        </Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <DataTablePagination
-          totalCount={total}
-          pageSize={limit}
+        <TablePaginationFooter
           currentPage={page}
+          totalItems={total}
+          limit={limit}
+          itemLabel="Report SPB"
           onPageChange={setPage}
-          onPageSizeChange={(v) => {
+          onLimitChange={(v) => {
             setLimit(Number(v));
             setPage(1);
           }}
-          itemLabel="Report SPB"
+          className="mt-6"
         />
       </Content>
     </>

@@ -1,22 +1,15 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState } from "react";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
-  DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import {
   Dialog,
@@ -45,28 +38,22 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
-  MoreHorizontal,
   Plus,
-  Search,
   FileSpreadsheet,
   Pencil,
   Trash2,
   Loader2,
-  ChevronLeft,
-  ChevronRight,
   Package,
-  ArrowRight,
-  FilterX,
   LayoutGrid,
   List,
-  SortAsc,
-  CalendarIcon,
   QrCode,
   RotateCcw,
   X,
+  ArrowRight,
+  FilterX,
 } from "lucide-react";
-import { toast } from "sonner";
-import { useDebounce } from "use-debounce";
+import { toast } from "@/lib/toast";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { useRouter, useSearchParams } from "next/navigation";
 import * as XLSX from "xlsx";
 import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
@@ -82,6 +69,27 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { BulkEditBarangDialog } from "@/components/barang/bulk-edit-barang-dialog";
 import { updateStock } from "@/services/stock-actions";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { useColumnOrder } from "@/hooks/use-column-order";
 import { DatePickerString } from "@/components/date-picker-string";
 import { toYmdLocal } from "@/lib/utils";
 import { useAuthStore } from "@/stores/auth-store";
@@ -123,6 +131,19 @@ interface BarangClientProps {
   initialStatus: "active" | "deleted";
 }
 
+// Harus sama dengan kolom yang dicari di barang/page.tsx.
+const BARANG_SEARCH_FIELDS = ["Part Number", "Nama Barang"];
+
+const BARANG_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di barang/page.tsx.
+const BARANG_COLUMNS = [
+  { id: "part_number", label: "Part Number", sortDirection: "asc", className: `w-45 ${BARANG_HEAD_CLASS}` },
+  { id: "name", label: "Nama Suku Cadang", sortDirection: "asc", className: BARANG_HEAD_CLASS },
+  { id: "part_satuan", label: "Satuan", sortDirection: "asc", className: `w-25 ${BARANG_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type BarangColumnId = (typeof BARANG_COLUMNS)[number]["id"];
+
 export default function BarangClient({
   initialData,
   totalCount,
@@ -139,11 +160,37 @@ export default function BarangClient({
   const router = useRouter();
   const searchParams = useSearchParams();
 
+  const columnOrder = useColumnOrder("wms:table-column-order:barang", BARANG_COLUMNS);
+
+  /** Ubah query string + kembali ke halaman 1. */
+  const pushFilter = (mutate: (params: URLSearchParams) => void) => {
+    const params = new URLSearchParams(searchParams.toString());
+    mutate(params);
+    params.set("page", "1");
+    router.push(`/barang?${params.toString()}`);
+  };
+
   // Search & Filters
-  const [search, setSearch] = useState(initialQuery);
-  const [debouncedSearch] = useDebounce(search, 500);
-  const [updatedFrom, setUpdatedFrom] = useState(initialUpdatedFrom);
-  const [updatedTo, setUpdatedTo] = useState(initialUpdatedTo);
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    initialQuery,
+    (value) =>
+      pushFilter((params) => {
+        if (value) params.set("q", value);
+        else params.delete("q");
+      }),
+  );
+  const updatedFrom = initialUpdatedFrom;
+  const setUpdatedFrom = (value: string) =>
+    pushFilter((params) => {
+      if (value) params.set("updated_from", value);
+      else params.delete("updated_from");
+    });
+  const updatedTo = initialUpdatedTo;
+  const setUpdatedTo = (value: string) =>
+    pushFilter((params) => {
+      if (value) params.set("updated_to", value);
+      else params.delete("updated_to");
+    });
 
   const profile = useAuthStore((s) => s.profile);
   const isModerator = (profile?.roles || []).some(
@@ -208,25 +255,6 @@ export default function BarangClient({
   const [stockDetails, setStockDetails] = useState<StockDetail[]>([]);
   const [isLoadingStock, setIsLoadingStock] = useState(false);
 
-  // Pagination states
-  const [jumpPage, setJumpPage] = useState(currentPage.toString());
-
-  // Sync Search & Filters with URL
-  useEffect(() => {
-    const params = new URLSearchParams(searchParams.toString());
-    if (debouncedSearch) params.set("q", debouncedSearch);
-    else params.delete("q");
-
-    if (updatedFrom) params.set("updated_from", updatedFrom);
-    else params.delete("updated_from");
-
-    if (updatedTo) params.set("updated_to", updatedTo);
-    else params.delete("updated_to");
-
-    params.set("page", "1");
-    router.push(`/barang?${params.toString()}`);
-  }, [debouncedSearch, updatedFrom, updatedTo]);
-
   const totalPages = Math.ceil(totalCount / pageSize);
 
   const handlePageChange = (newPage: number) => {
@@ -234,7 +262,6 @@ export default function BarangClient({
     const params = new URLSearchParams(searchParams.toString());
     params.set("page", newPage.toString());
     router.push(`/barang?${params.toString()}`);
-    setJumpPage(newPage.toString());
   };
 
   const handleLimitChange = (newLimit: string) => {
@@ -265,20 +292,8 @@ export default function BarangClient({
     router.push(`/barang?${params.toString()}`);
   };
 
-  const handleJumpPage = (e: React.FormEvent) => {
-    e.preventDefault();
-    const p = parseInt(jumpPage);
-    if (!isNaN(p) && p >= 1 && p <= totalPages) {
-      handlePageChange(p);
-    } else {
-      setJumpPage(currentPage.toString());
-    }
-  };
-
   const handleReset = () => {
-    setSearch("");
-    setUpdatedFrom("");
-    setUpdatedTo("");
+    resetSearch();
     router.push("/barang");
   };
 
@@ -449,6 +464,63 @@ export default function BarangClient({
     XLSX.writeFile(wb, `MASTER_BARANG_${toYmdLocal()}.xlsx`);
   };
 
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (isDeletedView)
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: "Terhapus",
+      onRemove: () => handleStatusChange("active"),
+    });
+  if (updatedFrom || updatedTo)
+    activeFilters.push({
+      key: "updated",
+      label: "Diubah",
+      value: formatFilterRange(updatedFrom, updatedTo, formatFilterDate),
+      onRemove: () =>
+        pushFilter((params) => {
+          params.delete("updated_from");
+          params.delete("updated_to");
+        }),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (barang: Barang, id: BarangColumnId) => {
+    switch (id) {
+      case "part_number":
+        return (
+          <TableCell>
+            <div className="font-bold text-foreground text-sm tracking-tight group-hover:text-primary transition-colors uppercase">
+              {barang.part_number}
+            </div>
+          </TableCell>
+        );
+      case "name":
+        return (
+          <TableCell>
+            <div className="text-muted-foreground text-xs font-medium truncate">
+              {barang.part_name}
+            </div>
+            {barang.deleted_at && (
+              <div className="text-[10px] font-semibold text-destructive">
+                Dihapus{" "}
+                {new Date(barang.deleted_at).toLocaleDateString("id-ID")}
+              </div>
+            )}
+          </TableCell>
+        );
+      case "part_satuan":
+        return (
+          <TableCell>
+            <span className="text-xs text-muted-foreground uppercase font-semibold">
+              {barang.part_satuan}
+            </span>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {confirmDialog}
@@ -491,18 +563,15 @@ export default function BarangClient({
 
       {/* Section 2: Filter Bar */}
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari Barang..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
+        <div className="space-y-3">
+          <div className="flex flex-col gap-4 md:flex-row">
+            <ListSearchInput
+              placeholder="Cari part number atau nama..."
               value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              onChange={setSearch}
+              searchableFields={BARANG_SEARCH_FIELDS}
             />
-          </div>
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <div className="flex p-0.5 bg-muted rounded-md border border-border">
+            <div className="flex shrink-0 self-start p-0.5 bg-muted rounded-md border border-border">
               <Button
                 variant="ghost"
                 size="sm"
@@ -528,64 +597,66 @@ export default function BarangClient({
                 <LayoutGrid className="h-3.5 w-3.5 mr-1.5" /> Kartu
               </Button>
             </div>
-
-            <div className="flex items-center gap-2">
-              <SortAsc className="h-3.5 w-3.5 text-muted-foreground" />
-              <Select value={initialSort} onValueChange={handleSortChange}>
-                <SelectTrigger className="h-8 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-35">
-                  <SelectValue placeholder="Urutkan" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="name_asc">Nama (A-Z)</SelectItem>
-                  <SelectItem value="name_desc">Nama (Z-A)</SelectItem>
-                  <SelectItem value="latest">Terbaru</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {isModerator && (
-              <Select value={initialStatus} onValueChange={handleStatusChange}>
-                <SelectTrigger className="h-8 w-full border-input bg-background text-xs font-semibold text-foreground sm:w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="active">Aktif</SelectItem>
-                  <SelectItem value="deleted">Terhapus</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-
-            <div className="flex w-full items-center gap-2 sm:w-auto">
-              <CalendarIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-              <DatePickerString
-                value={updatedFrom}
-                onChange={setUpdatedFrom}
-                placeholder="Diubah dari"
-                className="h-8 w-full text-xs font-medium sm:w-38"
-              />
-            </div>
-
-            <DatePickerString
-              value={updatedTo}
-              onChange={setUpdatedTo}
-              placeholder="Diubah sampai"
-              className="h-8 w-full text-xs font-medium sm:w-38"
-            />
-
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleReset}
-              className="h-8 px-2 text-muted-foreground hover:text-destructive gap-1 transition-colors"
-            >
-              <FilterX className="h-3.5 w-3.5" />
-            </Button>
           </div>
+
+          <FilterPanel activeFilters={activeFilters} onReset={handleReset}>
+            <FilterFields>
+              <FilterField label="Urutan">
+                <Select value={initialSort} onValueChange={handleSortChange}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue placeholder="Urutkan" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="name_asc">Nama (A-Z)</SelectItem>
+                    <SelectItem value="name_desc">Nama (Z-A)</SelectItem>
+                    <SelectItem value="latest">Terbaru</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
+
+              {isModerator && (
+                <FilterField label="Status">
+                  <Select value={initialStatus} onValueChange={handleStatusChange}>
+                    <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="active">Aktif</SelectItem>
+                      <SelectItem value="deleted">Terhapus</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FilterField>
+              )}
+            </FilterFields>
+
+            <FilterRangeFields>
+              <FilterField label="Terakhir Diubah">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={updatedFrom}
+                      onChange={setUpdatedFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={updatedTo}
+                      onChange={setUpdatedTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
       {/* Section 3: Content View + Pagination */}
-      <Content className="overflow-hidden">
+      <Content>
         {isModerator && selectedList.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
             <span className="text-xs font-bold text-foreground">
@@ -633,10 +704,19 @@ export default function BarangClient({
         )}
         {/* Table View */}
         {initialView === "table" ? (
-          <div className="overflow-x-auto">
-            <Table className="table-fixed">
-              <TableHeader className="bg-muted/50">
-                <TableRow className="hover:bg-transparent border-b border-border h-10">
+          <>
+            {columnOrder.isCustomOrder && (
+              <ColumnOrderReset onReset={columnOrder.resetOrder} />
+            )}
+            <StickyHeaderTable
+              className="table-fixed min-w-[800px]"
+              containerClassName="rounded-md border"
+              header={
+                <ReorderableHeaderRow
+                  order={columnOrder.order}
+                  onMove={columnOrder.moveColumn}
+                  className="hover:bg-transparent border-b border-border h-10"
+                >
                   {isModerator && (
                     <TableHead className="w-10 pl-4">
                       <Checkbox
@@ -650,35 +730,19 @@ export default function BarangClient({
                   <TableHead className="w-12.5 text-center text-[10px] font-black uppercase text-muted-foreground">
                     No
                   </TableHead>
-                  <SortableTableHead
-                    sortKey="part_number"
-                    currentSort={initialSort}
-                    onSort={handleSortChange}
-                    className="w-45 text-[10px] font-black uppercase text-muted-foreground"
-                  >
-                    Part Number
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="name"
-                    currentSort={initialSort}
-                    onSort={handleSortChange}
-                    className="text-[10px] font-black uppercase text-muted-foreground"
-                  >
-                    Nama Suku Cadang
-                  </SortableTableHead>
-                  <SortableTableHead
-                    sortKey="part_satuan"
-                    currentSort={initialSort}
-                    onSort={handleSortChange}
-                    className="w-25 text-[10px] font-black uppercase text-muted-foreground"
-                  >
-                    Satuan
-                  </SortableTableHead>
-                  <TableHead className="w-20 text-right pr-6 text-[10px] font-black uppercase text-muted-foreground">
+                  {columnOrder.orderedColumns.map((column) => (
+                    <ReorderableTableHead
+                      key={column.id}
+                      column={column}
+                      sort={{ currentSort: initialSort, onSort: handleSortChange }}
+                    />
+                  ))}
+                  <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
                     Aksi
                   </TableHead>
-                </TableRow>
-              </TableHeader>
+                </ReorderableHeaderRow>
+              }
+            >
               <TableBody>
                 {initialData.length > 0 ? (
                   initialData.map((barang, index) => (
@@ -702,85 +766,48 @@ export default function BarangClient({
                       <TableCell className="text-center text-muted-foreground text-xs font-medium font-mono">
                         {(currentPage - 1) * pageSize + index + 1}
                       </TableCell>
-                      <TableCell>
-                        <div className="font-bold text-foreground text-sm tracking-tight group-hover:text-primary transition-colors uppercase">
-                          {barang.part_number}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-muted-foreground text-xs font-medium truncate">
-                          {barang.part_name}
-                        </div>
-                        {barang.deleted_at && (
-                          <div className="text-[10px] font-semibold text-destructive">
-                            Dihapus{" "}
-                            {new Date(barang.deleted_at).toLocaleDateString("id-ID")}
-                          </div>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <span className="text-xs text-muted-foreground uppercase font-semibold">
-                          {barang.part_satuan}
-                        </span>
-                      </TableCell>
+                      {columnOrder.order.map((id) => (
+                        <React.Fragment key={id}>{renderCell(barang, id)}</React.Fragment>
+                      ))}
                       <TableCell
                         className="text-right pr-4"
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              className="h-7 w-7 p-0 hover:bg-muted rounded-full"
+                        <RowActionsMenu>
+                          {isDeletedView ? (
+                            <DropdownMenuItem
+                              onSelect={() => handleRestore([barang.id])}
                             >
-                              <MoreHorizontal className="h-3.5 w-3.5" />
-                            </Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent
-                            align="end"
-                            className="w-40 p-1.5 rounded-lg border-border"
-                          >
-                            {isDeletedView ? (
+                              <RotateCcw className="mr-2 h-4 w-4" /> Pulihkan
+                            </DropdownMenuItem>
+                          ) : (
+                            <>
                               <DropdownMenuItem
-                                onClick={() => handleRestore([barang.id])}
-                                className="text-xs rounded-md"
+                                onSelect={() => {
+                                  setEditingBarang(barang);
+                                  setIsEditModalOpen(true);
+                                }}
                               >
-                                <RotateCcw className="mr-2 h-3.5 w-3.5" /> Pulihkan
+                                <Pencil className="mr-2 h-4 w-4" /> Edit
                               </DropdownMenuItem>
-                            ) : (
-                              <>
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setEditingBarang(barang);
-                                    setIsEditModalOpen(true);
-                                  }}
-                                  className="text-xs rounded-md"
-                                >
-                                  <Pencil className="mr-2 h-3.5 w-3.5" /> Edit
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setBarcodeBarang(barang);
-                                    setIsBarcodeDialogOpen(true);
-                                  }}
-                                  className="text-xs rounded-md"
-                                >
-                                  <QrCode className="mr-2 h-3.5 w-3.5" /> Cetak
-                                  QR Code
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                  className="text-xs text-destructive focus:text-destructive rounded-md"
-                                  onClick={() =>
-                                    handleDelete(barang.id, barang.part_name)
-                                  }
-                                >
-                                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Hapus
-                                </DropdownMenuItem>
-                              </>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
+                              <DropdownMenuItem
+                                onSelect={() => {
+                                  setBarcodeBarang(barang);
+                                  setIsBarcodeDialogOpen(true);
+                                }}
+                              >
+                                <QrCode className="mr-2 h-4 w-4" /> Cetak QR Code
+                              </DropdownMenuItem>
+                              <DropdownMenuSeparator />
+                              <DropdownMenuItem
+                                className="text-destructive focus:text-destructive"
+                                onSelect={() => handleDelete(barang.id, barang.part_name)}
+                              >
+                                <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                              </DropdownMenuItem>
+                            </>
+                          )}
+                        </RowActionsMenu>
                       </TableCell>
                     </TableRow>
                   ))
@@ -791,15 +818,15 @@ export default function BarangClient({
                       className="h-32 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[10px]"
                     >
                       <Package className="h-8 w-8 mx-auto mb-2 opacity-10" />
-                      {isDeletedView
-                        ? "TIDAK ADA BARANG TERHAPUS"
+                      {activeFilters.length > 0 || initialQuery
+                        ? "TIDAK ADA BARANG YANG SESUAI FILTER"
                         : "BELUM ADA DATA BARANG"}
                     </TableCell>
                   </TableRow>
                 )}
               </TableBody>
-            </Table>
-          </div>
+            </StickyHeaderTable>
+          </>
         ) : (
           /* Grid View */
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 p-1">
@@ -855,75 +882,16 @@ export default function BarangClient({
           </div>
         )}
 
-        {/* Pagination */}
-        <div className="flex flex-col items-start justify-between gap-4 p-4 border-t border-border bg-muted/30 md:flex-row md:items-center">
-          <p className="text-xs text-muted-foreground whitespace-nowrap">
-            Menampilkan{" "}
-            <span className="font-bold text-foreground">
-              {(currentPage - 1) * pageSize + 1}-
-              {Math.min(currentPage * pageSize, totalCount)}
-            </span>{" "}
-            dari <span className="font-bold text-foreground">{totalCount}</span>
-          </p>
-
-          <div className="flex w-full flex-wrap items-center gap-3 md:w-auto md:flex-nowrap">
-            <div className="flex items-center gap-1.5 pr-3 md:border-r md:border-border">
-              <span className="text-[10px] uppercase font-black text-muted-foreground">
-                Show:
-              </span>
-              <Select
-                value={pageSize.toString()}
-                onValueChange={handleLimitChange}
-              >
-                <SelectTrigger className="h-7 w-18 bg-muted/40 border-input text-[10px] font-bold">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {PAGE_SIZE_OPTIONS.map((size) => (
-                    <SelectItem key={size} value={size.toString()}>
-                      {size}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <form
-              onSubmit={handleJumpPage}
-              className="flex items-center gap-1.5"
-            >
-              <Input
-                className="h-7 w-10 text-center p-0.5 bg-muted/40 border-input text-xs font-bold"
-                value={jumpPage}
-                onChange={(e) => setJumpPage(e.target.value)}
-              />
-              <span className="text-[10px] uppercase font-black text-muted-foreground">
-                / {totalPages}
-              </span>
-            </form>
-
-            <div className="flex items-center rounded-lg border border-border bg-muted/40 overflow-hidden ml-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 rounded-none px-2 hover:bg-background transition-colors"
-                onClick={() => handlePageChange(currentPage - 1)}
-                disabled={currentPage <= 1}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 rounded-none px-2 border-l border-border hover:bg-background transition-colors"
-                onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= totalPages}
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-          </div>
-        </div>
+        <TablePaginationFooter
+          currentPage={currentPage}
+          totalItems={totalCount}
+          limit={pageSize}
+          limitOptions={PAGE_SIZE_OPTIONS}
+          itemLabel="Barang"
+          onPageChange={handlePageChange}
+          onLimitChange={handleLimitChange}
+          className="mt-6"
+        />
       </Content>
 
       {/* Side Panel Detail Stok */}

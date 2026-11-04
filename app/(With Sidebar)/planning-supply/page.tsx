@@ -3,16 +3,11 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import {
-  Table,
   TableBody,
   TableCell,
-  TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import {
   Select,
   SelectContent,
@@ -22,18 +17,32 @@ import {
 } from "@/components/ui/select";
 import { Content } from "@/components/content";
 import {
-  Search,
-  Loader2,
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import {
   PackageSearch,
   ArrowRight,
   CalendarClock,
   AlertTriangle,
-  FilterX,
 } from "lucide-react";
-import { useDebounce } from "use-debounce";
 import type { PlanningSupply } from "@/type";
 import { businessToday } from "@/lib/business-date";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 
 const SORT_ACCESSORS: Record<string, (r: PlanningSupply) => string | number> = {
   part_number: (r) => r.part_number || "",
@@ -60,6 +69,29 @@ const STATUS_META: Record<
   },
 };
 
+// Harus sama dengan kolom yang dicari di `filtered`.
+const PLANNING_SEARCH_FIELDS = ["Part Number", "Nama Barang", "Kode MR", "Kode Delivery"];
+
+const PLANNING_STATUS_LABEL: Record<string, string> = {
+  active: "Dalam Pengiriman",
+  received: "Diterima",
+  cancelled: "Dibatalkan",
+  all: "Semua Status",
+};
+
+const PLANNING_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di SORT_ACCESSORS.
+const PLANNING_COLUMNS = [
+  { id: "part_number", label: "Barang", sortDirection: "asc", className: PLANNING_HEAD_CLASS },
+  { id: "rute", label: "Rute", className: PLANNING_HEAD_CLASS },
+  { id: "qty", label: "Qty", sortDirection: "desc", className: `text-center ${PLANNING_HEAD_CLASS}` },
+  { id: "deadline", label: "Deadline", sortDirection: "asc", className: PLANNING_HEAD_CLASS },
+  { id: "referensi", label: "Referensi", className: PLANNING_HEAD_CLASS },
+  { id: "status", label: "Status / Keterangan", sortDirection: "asc", className: PLANNING_HEAD_CLASS },
+] as const satisfies readonly ReorderableColumn[];
+type PlanningColumnId = (typeof PLANNING_COLUMNS)[number]["id"];
+
 export default function PlanningSupplyPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -67,10 +99,23 @@ export default function PlanningSupplyPage() {
   const [profile, setProfile] = useState<any>(null);
   const [isModerator, setIsModerator] = useState(false);
 
-  const [searchQuery, setSearchQuery] = useState("");
-  const [debouncedSearch] = useDebounce(searchQuery, 400);
-  const [statusFilter, setStatusFilter] = useState<string>("active");
-  const [sortOrder, setSortOrder] = useState<string>("");
+  const columnOrder = useColumnOrder("wms:table-column-order:planning-supply", PLANNING_COLUMNS);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusFilter = urlState.get("status", "active");
+  const setStatusFilter = (v: string) =>
+    urlState.set({ status: v === "active" ? "" : v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "");
+  const setSortOrder = (v: string) => urlState.set({ sort: v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const today = businessToday();
 
@@ -174,6 +219,125 @@ export default function PlanningSupplyPage() {
   const isOverdue = (r: PlanningSupply) =>
     r.status === "in_transit" && r.deadline && r.deadline < today;
 
+  const totalCount = sorted.length;
+  const safePage = Math.min(page, Math.max(1, Math.ceil(totalCount / limit)));
+  const pageRows = sorted.slice((safePage - 1) * limit, safePage * limit);
+
+  const handleSortChange = (nextSort: string) => {
+    setSortOrder(nextSort);
+    setPage(1);
+  };
+
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilter !== "active")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: PLANNING_STATUS_LABEL[statusFilter] ?? statusFilter,
+      onRemove: () => setStatusFilter("active"),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (r: PlanningSupply, id: PlanningColumnId) => {
+    const meta = STATUS_META[r.status] || { label: r.status, className: "" };
+    const overdue = isOverdue(r);
+
+    switch (id) {
+      case "part_number":
+        return (
+          <TableCell>
+            <div className="font-mono text-xs font-bold text-foreground">
+              {r.part_number}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              {r.part_name}
+            </div>
+          </TableCell>
+        );
+      case "rute":
+        return (
+          <TableCell>
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold">
+              <span className="text-muted-foreground">
+                {r.source_cabang?.nama_cabang || "-"}
+              </span>
+              <ArrowRight className="h-3 w-3 text-muted-foreground" />
+              <span className="text-foreground">
+                {r.dest_cabang?.nama_cabang || "-"}
+              </span>
+            </div>
+          </TableCell>
+        );
+      case "qty":
+        return (
+          <TableCell className="text-center font-black text-sm">
+            {r.qty} <span className="text-[10px] font-normal text-muted-foreground">{r.satuan}</span>
+          </TableCell>
+        );
+      case "deadline":
+        return (
+          <TableCell>
+            {r.deadline ? (
+              <div
+                className={`flex items-center gap-1 text-[11px] font-bold ${
+                  overdue ? "text-destructive" : "text-foreground"
+                }`}
+              >
+                {overdue ? (
+                  <AlertTriangle className="h-3 w-3" />
+                ) : (
+                  <CalendarClock className="h-3 w-3" />
+                )}
+                {r.deadline}
+                {overdue && (
+                  <span className="text-[9px] uppercase">
+                    (lewat)
+                  </span>
+                )}
+              </div>
+            ) : (
+              <span className="text-[11px] text-muted-foreground">
+                -
+              </span>
+            )}
+          </TableCell>
+        );
+      case "referensi":
+        return (
+          <TableCell>
+            <div className="text-[11px] font-bold text-foreground">
+              {r.deliveries?.dlv_kode || "-"}
+            </div>
+            <div className="text-[10px] text-muted-foreground">
+              {r.mrs?.mr_kode || ""}
+            </div>
+          </TableCell>
+        );
+      case "status":
+        return (
+          <TableCell>
+            <Badge
+              variant="outline"
+              className={`text-[9px] font-bold uppercase ${meta.className}`}
+            >
+              {meta.label}
+            </Badge>
+            {r.status === "cancelled" && r.note && (
+              <div className="mt-1 text-[10px] text-destructive font-medium max-w-55">
+                {r.note}
+              </div>
+            )}
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       {/* Header */}
@@ -207,191 +371,102 @@ export default function PlanningSupplyPage() {
         </div>
       </Content>
 
-      {/* Filter */}
       <Content>
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari PN, nama barang, kode MR/Delivery..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-          <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="h-9 w-full sm:w-48 text-xs font-bold">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="active">Dalam Pengiriman</SelectItem>
-              <SelectItem value="received">Diterima</SelectItem>
-              <SelectItem value="cancelled">Dibatalkan</SelectItem>
-              <SelectItem value="all">Semua Status</SelectItem>
-            </SelectContent>
-          </Select>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 text-muted-foreground hover:text-destructive"
-            onClick={() => {
-              setSearchQuery("");
-              setStatusFilter("active");
-              setSortOrder("");
-            }}
-          >
-            <FilterX className="h-4 w-4" />
-          </Button>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari PN, nama barang, kode MR/Delivery..."
+            value={searchQuery}
+            onChange={setSearchQuery}
+            searchableFields={PLANNING_SEARCH_FIELDS}
+          />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="active">Dalam Pengiriman</SelectItem>
+                    <SelectItem value="received">Diterima</SelectItem>
+                    <SelectItem value="cancelled">Dibatalkan</SelectItem>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      {/* Table */}
       <Content>
-        <div className="rounded-lg border border-border overflow-hidden">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/40">
-                <SortableTableHead
-                  sortKey="part_number"
-                  currentSort={sortOrder}
-                  onSort={setSortOrder}
-                  className="text-[10px] font-bold uppercase"
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={6}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : pageRows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={6}
+                  className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
                 >
-                  Barang
-                </SortableTableHead>
-                <TableHead className="text-[10px] font-bold uppercase">
-                  Rute
-                </TableHead>
-                <SortableTableHead
-                  sortKey="qty"
-                  currentSort={sortOrder}
-                  onSort={setSortOrder}
-                  defaultDir="desc"
-                  className="justify-center text-center text-[10px] font-bold uppercase"
-                >
-                  Qty
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="deadline"
-                  currentSort={sortOrder}
-                  onSort={setSortOrder}
-                  className="text-[10px] font-bold uppercase"
-                >
-                  Deadline
-                </SortableTableHead>
-                <TableHead className="text-[10px] font-bold uppercase">
-                  Referensi
-                </TableHead>
-                <SortableTableHead
-                  sortKey="status"
-                  currentSort={sortOrder}
-                  onSort={setSortOrder}
-                  className="text-[10px] font-bold uppercase"
-                >
-                  Status / Keterangan
-                </SortableTableHead>
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data yang sesuai filter"
+                    : "Tidak ada data barang dalam pengiriman"}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={6} className="h-32 text-center">
-                    <Loader2 className="h-5 w-5 animate-spin mx-auto text-muted-foreground" />
-                  </TableCell>
+            ) : (
+              pageRows.map((r) => (
+                <TableRow key={r.id}>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(r, id)}</React.Fragment>
+                  ))}
                 </TableRow>
-              ) : sorted.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={6}
-                    className="h-32 text-center text-xs font-semibold text-muted-foreground"
-                  >
-                    Tidak ada data barang dalam pengiriman.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                sorted.map((r) => {
-                  const meta = STATUS_META[r.status] || {
-                    label: r.status,
-                    className: "",
-                  };
-                  const overdue = isOverdue(r);
-                  return (
-                    <TableRow key={r.id} className="hover:bg-muted/30">
-                      <TableCell>
-                        <div className="font-mono text-xs font-bold text-foreground">
-                          {r.part_number}
-                        </div>
-                        <div className="text-[11px] text-muted-foreground">
-                          {r.part_name}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1.5 text-[11px] font-semibold">
-                          <span className="text-muted-foreground">
-                            {r.source_cabang?.nama_cabang || "-"}
-                          </span>
-                          <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                          <span className="text-foreground">
-                            {r.dest_cabang?.nama_cabang || "-"}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell className="text-center font-black text-sm">
-                        {r.qty} <span className="text-[10px] font-normal text-muted-foreground">{r.satuan}</span>
-                      </TableCell>
-                      <TableCell>
-                        {r.deadline ? (
-                          <div
-                            className={`flex items-center gap-1 text-[11px] font-bold ${
-                              overdue ? "text-destructive" : "text-foreground"
-                            }`}
-                          >
-                            {overdue ? (
-                              <AlertTriangle className="h-3 w-3" />
-                            ) : (
-                              <CalendarClock className="h-3 w-3" />
-                            )}
-                            {r.deadline}
-                            {overdue && (
-                              <span className="text-[9px] uppercase">
-                                (lewat)
-                              </span>
-                            )}
-                          </div>
-                        ) : (
-                          <span className="text-[11px] text-muted-foreground">
-                            -
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell>
-                        <div className="text-[11px] font-bold text-foreground">
-                          {r.deliveries?.dlv_kode || "-"}
-                        </div>
-                        <div className="text-[10px] text-muted-foreground">
-                          {r.mrs?.mr_kode || ""}
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Badge
-                          variant="outline"
-                          className={`text-[9px] font-bold uppercase ${meta.className}`}
-                        >
-                          {meta.label}
-                        </Badge>
-                        {r.status === "cancelled" && r.note && (
-                          <div className="mt-1 text-[10px] text-destructive font-medium max-w-55">
-                            {r.note}
-                          </div>
-                        )}
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
+
+        <TablePaginationFooter
+          currentPage={safePage}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Barang"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
     </>
   );

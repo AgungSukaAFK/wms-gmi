@@ -2,7 +2,7 @@
 
 import Image from "next/image";
 import { Headset } from "lucide-react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { AUTH_BRANDING } from "@/lib/site";
 import { AuthSlideshow } from "./auth-slideshow";

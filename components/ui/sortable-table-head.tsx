@@ -20,6 +20,39 @@ interface SortableTableHeadProps extends React.ComponentProps<"th"> {
   defaultDir?: "asc" | "desc";
 }
 
+type SortDir = "asc" | "desc";
+
+/** Nilai sort berikutnya saat kolom diklik. */
+export function getNextSort(
+  sortKey: string,
+  currentSort: string,
+  defaultDir: SortDir = "asc",
+) {
+  if (currentSort === `${sortKey}_asc`) return `${sortKey}_desc`;
+  if (currentSort === `${sortKey}_desc`) return `${sortKey}_asc`;
+  return `${sortKey}_${defaultDir}`;
+}
+
+export function sortAriaValue(sortKey: string, currentSort: string) {
+  if (currentSort === `${sortKey}_asc`) return "ascending" as const;
+  if (currentSort === `${sortKey}_desc`) return "descending" as const;
+  return "none" as const;
+}
+
+export function SortIcon({
+  sortKey,
+  currentSort,
+}: {
+  sortKey: string;
+  currentSort: string;
+}) {
+  if (currentSort === `${sortKey}_asc`)
+    return <ArrowUp className="h-3 w-3 shrink-0" />;
+  if (currentSort === `${sortKey}_desc`)
+    return <ArrowDown className="h-3 w-3 shrink-0" />;
+  return <ArrowUpDown className="h-3 w-3 shrink-0 opacity-30" />;
+}
+
 export function SortableTableHead({
   sortKey,
   currentSort,
@@ -29,15 +62,8 @@ export function SortableTableHead({
   children,
   ...props
 }: SortableTableHeadProps) {
-  const isAsc = currentSort === `${sortKey}_asc`;
-  const isDesc = currentSort === `${sortKey}_desc`;
-  const active = isAsc || isDesc;
-
-  const handleClick = () => {
-    if (isAsc) onSort(`${sortKey}_desc`);
-    else if (isDesc) onSort(`${sortKey}_asc`);
-    else onSort(`${sortKey}_${defaultDir}`);
-  };
+  const active = sortAriaValue(sortKey, currentSort) !== "none";
+  const handleClick = () => onSort(getNextSort(sortKey, currentSort, defaultDir));
 
   return (
     <TableHead
@@ -59,9 +85,7 @@ export function SortableTableHead({
     >
       <span className="inline-flex items-center gap-1">
         {children}
-        {isAsc && <ArrowUp className="h-3 w-3 shrink-0" />}
-        {isDesc && <ArrowDown className="h-3 w-3 shrink-0" />}
-        {!active && <ArrowUpDown className="h-3 w-3 shrink-0 opacity-30" />}
+        <SortIcon sortKey={sortKey} currentSort={currentSort} />
       </span>
     </TableHead>
   );

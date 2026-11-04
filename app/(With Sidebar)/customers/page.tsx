@@ -1,8 +1,29 @@
 "use client";
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+} from "@/components/filter-panel";
+import { ListSearchInput } from "@/components/list-search-input";
+import {
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+  type ReorderableColumn,
+} from "@/components/reorderable-table-head";
+import { RowActionsMenu } from "@/components/row-actions-menu";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,21 +36,17 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Table,
   TableBody,
   TableCell,
   TableHead,
-  TableHeader,
   TableRow,
 } from "@/components/ui/table";
 import {
   Building2,
-  FilterX,
   Loader2,
   MapPin,
   Pencil,
   Plus,
-  Search,
   ToggleLeft,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -40,16 +57,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { useDebounce } from "use-debounce";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   createCustomer,
   getCustomerList,
   toggleCustomerStatus,
   updateCustomer,
 } from "@/services/master-actions";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
 import { CustomerSitesDialog } from "@/components/customers/customer-sites-dialog";
 
 const CUSTOMER_SORT_COLUMNS: Record<string, string> = {
@@ -87,21 +101,60 @@ const CUSTOMER_TYPE_LABEL: Record<CustomerType, string> = {
   both: "Keduanya",
 };
 
+// Harus sama dengan kolom yang dicari di getCustomerList.
+const CUSTOMER_SEARCH_FIELDS = ["Nama", "Kode", "Email", "PIC"];
+
+const STATUS_LABEL: Record<string, string> = {
+  active: "Aktif",
+  inactive: "Nonaktif",
+  deleted: "Terhapus",
+};
+
+const CUSTOMER_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
+
+// Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di CUSTOMER_SORT_COLUMNS.
+const CUSTOMER_COLUMNS = [
+  { id: "customer_name", label: "Nama Customer", sortDirection: "asc", className: CUSTOMER_HEAD_CLASS },
+  { id: "customer_no", label: "Kode Customer", sortDirection: "asc", className: `w-35 ${CUSTOMER_HEAD_CLASS}` },
+  { id: "email", label: "Email / PIC", sortDirection: "asc", className: `w-50 ${CUSTOMER_HEAD_CLASS}` },
+  { id: "jenis", label: "Jenis", className: `w-32 ${CUSTOMER_HEAD_CLASS}` },
+  { id: "is_active", label: "Status", sortDirection: "asc", className: `w-28 text-center ${CUSTOMER_HEAD_CLASS}` },
+] as const satisfies readonly ReorderableColumn[];
+type CustomerColumnId = (typeof CUSTOMER_COLUMNS)[number]["id"];
+
 export default function CustomersPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [customers, setCustomers] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
 
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 350);
-  const [statusFilter, setStatusFilter] = useState<
-    "all" | "active" | "inactive"
-  >("all");
-  const [typeFilter, setTypeFilter] = useState<"all" | CustomerType>("all");
-  const [sortOrder, setSortOrder] = useState<string>("customer_name_asc");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(20);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const columnOrder = useColumnOrder("wms:table-column-order:customer", CUSTOMER_COLUMNS);
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
+  );
+  const statusParam = urlState.get("status");
+  const statusFilter: "all" | "active" | "inactive" =
+    statusParam === "active" || statusParam === "inactive"
+      ? statusParam
+      : "all";
+  const setStatusFilter = (v: string) =>
+    urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
+  const typeParam = urlState.get("jenis");
+  const typeFilter: "all" | CustomerType =
+    typeParam in CUSTOMER_TYPE_LABEL ? (typeParam as CustomerType) : "all";
+  const setTypeFilter = (v: string) =>
+    urlState.set({ jenis: v === "all" ? "" : v }, { resetPage: true });
+  const sortOrder = urlState.get("sort", "customer_name_asc");
+  const setSortOrder = (v: string) =>
+    urlState.set({ sort: v === "customer_name_asc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -196,21 +249,9 @@ export default function CustomersPage() {
   };
 
   const resetFilters = () => {
-    setSearch("");
-    setStatusFilter("all");
-    setTypeFilter("all");
-    setSortOrder("customer_name_asc");
-    setPage(1);
+    resetSearch();
+    urlState.reset();
   };
-
-  const hasActiveFilters = useMemo(
-    () =>
-      Boolean(search) ||
-      statusFilter !== "all" ||
-      typeFilter !== "all" ||
-      sortOrder !== "customer_name_asc",
-    [search, statusFilter, typeFilter, sortOrder],
-  );
 
   const handleSubmit = async () => {
     if (!form.customer_name.trim()) {
@@ -263,6 +304,94 @@ export default function CustomersPage() {
     await fetchCustomers();
   };
 
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (statusFilter !== "all")
+    activeFilters.push({
+      key: "status",
+      label: "Status",
+      value: STATUS_LABEL[statusFilter],
+      onRemove: () => setStatusFilter("all"),
+    });
+  if (typeFilter !== "all")
+    activeFilters.push({
+      key: "jenis",
+      label: "Jenis",
+      value: CUSTOMER_TYPE_LABEL[typeFilter],
+      onRemove: () => setTypeFilter("all"),
+    });
+
+  // Satu sel per id kolom; urutannya diatur useColumnOrder.
+  const renderCell = (customer: any, id: CustomerColumnId) => {
+    switch (id) {
+      case "customer_name":
+        return (
+          <TableCell>
+            <div className="flex flex-col">
+              <span className="font-bold text-sm text-foreground uppercase">
+                {customer.customer_name}
+              </span>
+              <span className="text-[10px] text-muted-foreground line-clamp-1">
+                {customer.address || "-"}
+              </span>
+            </div>
+          </TableCell>
+        );
+      case "customer_no":
+        return (
+          <TableCell>
+            <span className="font-mono text-xs font-bold text-primary">
+              {customer.customer_no}
+            </span>
+          </TableCell>
+        );
+      case "email":
+        return (
+          <TableCell>
+            <div className="flex flex-col">
+              <span className="text-xs font-semibold text-foreground">
+                {customer.email || "-"}
+              </span>
+              <span className="text-[10px] text-muted-foreground uppercase">
+                PIC: {customer.pic_name || "-"}
+              </span>
+            </div>
+          </TableCell>
+        );
+      case "jenis":
+        return (
+          <TableCell>
+            <Badge
+              variant={
+                customer.customer_type === "consignment"
+                  ? "default"
+                  : customer.customer_type === "both"
+                    ? "outline"
+                    : "secondary"
+              }
+              className="text-[10px] font-bold uppercase"
+            >
+              {CUSTOMER_TYPE_LABEL[
+                (customer.customer_type as CustomerType) ||
+                  "non_consignment"
+              ]}
+            </Badge>
+          </TableCell>
+        );
+      case "is_active":
+        return (
+          <TableCell className="text-center">
+            <Badge
+              variant={customer.is_active ? "default" : "secondary"}
+              className="text-[10px] font-bold uppercase"
+            >
+              {customer.is_active ? "Aktif" : "Nonaktif"}
+            </Badge>
+          </TableCell>
+        );
+    }
+  };
+
   return (
     <>
       <Content>
@@ -300,252 +429,147 @@ export default function CustomersPage() {
       </Content>
 
       <Content>
-        <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-          <div className="relative min-w-0 flex-1 xl:min-w-70">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <Input
-              placeholder="Cari nama, kode, email, atau PIC customer..."
-              className="pl-9 h-9 border-input bg-muted/40 focus:bg-background transition-all rounded-md text-xs font-medium text-foreground"
-              value={search}
-              onChange={(e) => {
-                setSearch(e.target.value);
-                setPage(1);
-              }}
-            />
-          </div>
+        <div className="space-y-3">
+          <ListSearchInput
+            placeholder="Cari nama, kode, email, atau PIC..."
+            value={search}
+            onChange={setSearch}
+            searchableFields={CUSTOMER_SEARCH_FIELDS}
+          />
 
-          <div className="flex w-full shrink-0 flex-wrap items-center gap-2 xl:w-auto xl:justify-end">
-            <Select
-              value={statusFilter}
-              onValueChange={(val: "all" | "active" | "inactive") => {
-                setStatusFilter(val);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-42.5 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Status" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Status</SelectItem>
-                <SelectItem value="active">Aktif</SelectItem>
-                <SelectItem value="inactive">Nonaktif</SelectItem>
-              </SelectContent>
-            </Select>
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Status">
+                <Select value={statusFilter} onValueChange={setStatusFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue placeholder="Status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Status</SelectItem>
+                    <SelectItem value="active">Aktif</SelectItem>
+                    <SelectItem value="inactive">Nonaktif</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
 
-            <Select
-              value={typeFilter}
-              onValueChange={(val: "all" | CustomerType) => {
-                setTypeFilter(val);
-                setPage(1);
-              }}
-            >
-              <SelectTrigger className="h-9 w-full sm:w-42.5 border-input bg-background text-xs font-bold text-foreground">
-                <SelectValue placeholder="Jenis Customer" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Semua Jenis</SelectItem>
-                <SelectItem value="consignment">Consignment</SelectItem>
-                <SelectItem value="non_consignment">Non-Consignment</SelectItem>
-                <SelectItem value="both">Keduanya</SelectItem>
-              </SelectContent>
-            </Select>
-
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-9 px-2 text-muted-foreground hover:text-destructive gap-1 transition-colors"
-              onClick={resetFilters}
-              disabled={!hasActiveFilters}
-            >
-              <FilterX className="h-3.5 w-3.5" />
-            </Button>
-          </div>
+              <FilterField label="Jenis Customer">
+                <Select value={typeFilter} onValueChange={setTypeFilter}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue placeholder="Jenis Customer" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Jenis</SelectItem>
+                    <SelectItem value="consignment">Consignment</SelectItem>
+                    <SelectItem value="non_consignment">Non-Consignment</SelectItem>
+                    <SelectItem value="both">Keduanya</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+          </FilterPanel>
         </div>
       </Content>
 
-      <Content className="overflow-hidden">
-        <div className="overflow-x-auto">
-          <Table>
-            <TableHeader className="bg-muted/50 border-b border-border">
-              <TableRow className="hover:bg-transparent h-10">
-                <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
-                  No
-                </TableHead>
-                <SortableTableHead
-                  sortKey="customer_name"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="text-[10px] font-black uppercase text-muted-foreground"
+      <Content>
+        {columnOrder.isCustomOrder && (
+          <ColumnOrderReset onReset={columnOrder.resetOrder} />
+        )}
+        <StickyHeaderTable
+          className="min-w-[1000px]"
+          containerClassName="rounded-md border"
+          header={
+            <ReorderableHeaderRow
+              order={columnOrder.order}
+              onMove={columnOrder.moveColumn}
+              className="hover:bg-transparent h-10"
+            >
+              <TableHead className="w-14 text-center text-[10px] font-black uppercase text-muted-foreground">
+                No
+              </TableHead>
+              {columnOrder.orderedColumns.map((column) => (
+                <ReorderableTableHead
+                  key={column.id}
+                  column={column}
+                  sort={{ currentSort: sortOrder, onSort: handleSortChange }}
+                />
+              ))}
+              <TableHead className="w-20 text-right pr-4 text-[10px] font-black uppercase text-muted-foreground">
+                Aksi
+              </TableHead>
+            </ReorderableHeaderRow>
+          }
+        >
+          <TableBody>
+            {loading ? (
+              Array.from({ length: Math.min(limit, 25) }, (_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={7}>
+                    <Skeleton className="h-8 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))
+            ) : customers.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={7}
+                  className="h-40 text-center text-muted-foreground italic text-sm"
                 >
-                  Nama Customer
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="customer_no"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-35 text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Kode Customer
-                </SortableTableHead>
-                <SortableTableHead
-                  sortKey="email"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-50 text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Email / PIC
-                </SortableTableHead>
-                <TableHead className="w-32 text-[10px] font-black uppercase text-muted-foreground">
-                  Jenis
-                </TableHead>
-                <SortableTableHead
-                  sortKey="is_active"
-                  currentSort={sortOrder}
-                  onSort={handleSortChange}
-                  className="w-28 justify-center text-center text-[10px] font-black uppercase text-muted-foreground"
-                >
-                  Status
-                </SortableTableHead>
-                <TableHead className="w-36 text-[10px] font-black uppercase text-muted-foreground text-right pr-6">
-                  Aksi
-                </TableHead>
+                  {activeFilters.length > 0 || debouncedSearch
+                    ? "Tidak ada data customer yang sesuai filter."
+                    : "Belum ada data customer."}
+                </TableCell>
               </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="h-40 text-center">
-                    <div className="flex flex-col items-center justify-center gap-2">
-                      <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                      <span className="text-[10px] font-bold text-muted-foreground uppercase">
-                        Memuat Customer...
-                      </span>
-                    </div>
+            ) : (
+              customers.map((customer, index) => (
+                <TableRow
+                  key={customer.id}
+                  className="group hover:bg-muted/30 transition-all border-b border-border/50 h-14"
+                >
+                  <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
+                    {(page - 1) * limit + index + 1}
+                  </TableCell>
+                  {columnOrder.order.map((id) => (
+                    <React.Fragment key={id}>{renderCell(customer, id)}</React.Fragment>
+                  ))}
+                  <TableCell className="text-right pr-4">
+                    <RowActionsMenu>
+                      <DropdownMenuItem
+                        onSelect={() => setSitesCustomer(customer)}
+                      >
+                        <MapPin className="mr-2 h-4 w-4" /> Kelola Site
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!canWrite}
+                        onSelect={() => openEditDialog(customer)}
+                      >
+                        <Pencil className="mr-2 h-4 w-4" /> Edit
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        disabled={!canWrite}
+                        onSelect={() => handleToggleStatus(customer.id)}
+                      >
+                        <ToggleLeft className="mr-2 h-4 w-4" /> Ubah Status
+                      </DropdownMenuItem>
+                    </RowActionsMenu>
                   </TableCell>
                 </TableRow>
-              ) : customers.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="h-40 text-center text-muted-foreground italic text-sm"
-                  >
-                    {hasActiveFilters
-                      ? "Tidak ada data customer yang sesuai filter."
-                      : "Belum ada data customer."}
-                  </TableCell>
-                </TableRow>
-              ) : (
-                customers.map((customer, index) => (
-                  <TableRow
-                    key={customer.id}
-                    className="group hover:bg-muted/30 transition-all border-b border-border/50 h-15"
-                  >
-                    <TableCell className="text-center text-[10px] font-semibold text-muted-foreground">
-                      {(page - 1) * limit + index + 1}
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="font-bold text-sm text-foreground uppercase">
-                          {customer.customer_name}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground line-clamp-1">
-                          {customer.address || "-"}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-mono text-xs font-bold text-primary">
-                        {customer.customer_no}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      <div className="flex flex-col">
-                        <span className="text-xs font-semibold text-foreground">
-                          {customer.email || "-"}
-                        </span>
-                        <span className="text-[10px] text-muted-foreground uppercase">
-                          PIC: {customer.pic_name || "-"}
-                        </span>
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          customer.customer_type === "consignment"
-                            ? "default"
-                            : customer.customer_type === "both"
-                              ? "outline"
-                              : "secondary"
-                        }
-                        className="text-[10px] font-bold uppercase"
-                      >
-                        {CUSTOMER_TYPE_LABEL[
-                          (customer.customer_type as CustomerType) ||
-                            "non_consignment"
-                        ]}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge
-                        variant={customer.is_active ? "default" : "secondary"}
-                        className="text-[10px] font-bold uppercase"
-                      >
-                        {customer.is_active ? "Aktif" : "Nonaktif"}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-right pr-6">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => setSitesCustomer(customer)}
-                          title="Kelola site"
-                        >
-                          <MapPin className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => openEditDialog(customer)}
-                          disabled={!canWrite}
-                          title="Edit customer"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-8 w-8"
-                          onClick={() => handleToggleStatus(customer.id)}
-                          disabled={!canWrite}
-                          title="Toggle status"
-                        >
-                          <ToggleLeft className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+              ))
+            )}
+          </TableBody>
+        </StickyHeaderTable>
 
-        <div className="p-4 border-t border-border bg-muted/30">
-          <DataTablePagination
-            totalCount={totalCount}
-            pageSize={limit}
-            currentPage={page}
-            onPageChange={setPage}
-            onPageSizeChange={(val) => {
-              setLimit(parseInt(val, 10));
-              setPage(1);
-            }}
-            itemLabel="Customer"
-          />
-        </div>
+        <TablePaginationFooter
+          currentPage={page}
+          totalItems={totalCount}
+          limit={limit}
+          itemLabel="Customer"
+          onPageChange={setPage}
+          onLimitChange={(val) => {
+            setLimit(parseInt(val, 10));
+            setPage(1);
+          }}
+          className="mt-6"
+        />
       </Content>
 
       <CustomerSitesDialog

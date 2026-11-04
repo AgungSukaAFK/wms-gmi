@@ -6,19 +6,21 @@ import {
   LayoutDashboard,
   ListChecks,
   RefreshCw,
-  Search,
 } from "lucide-react";
-import { useDebounce } from "use-debounce";
 import { Content } from "@/components/content";
-import { Input } from "@/components/ui/input";
+import { ListSearchInput } from "@/components/list-search-input";
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+  ColumnOrderReset,
+  ReorderableHeaderRow,
+  ReorderableTableHead,
+} from "@/components/reorderable-table-head";
+import { StickyHeaderTable } from "@/components/sticky-header-table";
+import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useColumnOrder } from "@/hooks/use-column-order";
+import { useUrlListState } from "@/hooks/use-url-list-state";
+import { useUrlSearchInput } from "@/hooks/use-url-search-input";
+import { TableBody, TableCell, TableRow } from "@/components/ui/table";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,9 +30,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { DataTablePagination } from "@/components/ui/data-table-pagination";
-import { SortableTableHead } from "@/components/ui/sortable-table-head";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import {
   getConsignmentDashboardReport,
   getConsignmentPerformanceReport,
@@ -216,16 +216,47 @@ const COLUMNS: Column[] = [
   { key: "durasi_kirim_gmi_do", label: "Tgl Kirim GMI - Tgl DO PO Out", render: DASH },
 ];
 
+// Harus sama dengan kolom yang dicari di getConsignmentDashboardReport.
+const DASHBOARD_SEARCH_FIELDS = [
+  "No. SO",
+  "No. PO",
+  "Site",
+  "Part Number",
+  "Nama Barang",
+  "PN Customer",
+];
+
+// Id kolom = `key`; sort memakai `sortKey`.
+const DASHBOARD_COLUMNS = COLUMNS.map((col) => ({
+  ...col,
+  id: col.key,
+  sortDirection: col.sortKey ? ("asc" as const) : undefined,
+  className:
+    "whitespace-nowrap text-[10px] font-black uppercase text-muted-foreground",
+}));
+
 export default function DashboardConsignmentPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<DashboardRow[]>([]);
   const [total, setTotal] = useState(0);
 
-  const [search, setSearch] = useState("");
-  const [debouncedSearch] = useDebounce(search, 500);
-  const [sort, setSort] = useState("so_tanggal_input_desc");
-  const [page, setPage] = useState(1);
-  const [limit, setLimit] = useState(25);
+  // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
+  const columnOrder = useColumnOrder(
+    "wms:table-column-order:consignment-dashboard",
+    DASHBOARD_COLUMNS,
+  );
+  const urlState = useUrlListState();
+  const debouncedSearch = urlState.get("search");
+  const [search, setSearch] = useUrlSearchInput(debouncedSearch, (value) =>
+    urlState.set({ search: value }, { resetPage: true }),
+  );
+  const sort = urlState.get("sort", "so_tanggal_input_desc");
+  const setSort = (v: string) =>
+    urlState.set({ sort: v === "so_tanggal_input_desc" ? "" : v });
+  const page = urlState.getNumber("page", 1);
+  const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
+  const limit = urlState.getNumber("limit", 25);
+  const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
 
   const [activeTab, setActiveTab] = useState("tracking");
   const [perfMonths, setPerfMonths] = useState(6);
@@ -360,18 +391,12 @@ export default function DashboardConsignmentPage() {
       ) : (
         <>
           <Content>
-            <div className="relative min-w-0 flex-1 xl:max-w-100">
-              <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="Cari No. SO, No. PO, Part, atau Site..."
-                className="h-9 rounded-md border-input bg-muted/40 pl-9 text-xs font-medium"
-              />
-            </div>
+            <ListSearchInput
+              placeholder="Cari No. SO, No. PO, Part, atau Site..."
+              value={search}
+              onChange={setSearch}
+              searchableFields={DASHBOARD_SEARCH_FIELDS}
+            />
             <p className="mt-2 text-[10px] font-medium text-muted-foreground">
               Kolom fase supply, pengiriman, PR/PO GMI, dan rekonsiliasi masih
               placeholder (&ldquo;-&rdquo;) &mdash; akan diisi setelah fitur tahap
@@ -379,79 +404,75 @@ export default function DashboardConsignmentPage() {
             </p>
           </Content>
 
-          <Content className="overflow-hidden">
-            <div className="rounded-lg border border-border overflow-x-auto">
-              <Table>
-            <TableHeader>
-              <TableRow>
-                {COLUMNS.map((col) =>
-                  col.sortKey ? (
-                    <SortableTableHead
-                      key={col.key}
-                      sortKey={col.sortKey}
-                      currentSort={sort}
-                      onSort={handleSortChange}
-                      className="whitespace-nowrap text-[10px] font-black uppercase text-muted-foreground"
-                    >
-                      {col.label}
-                    </SortableTableHead>
-                  ) : (
-                    <TableHead
-                      key={col.key}
-                      className="whitespace-nowrap text-[10px] font-black uppercase text-muted-foreground"
-                    >
-                      {col.label}
-                    </TableHead>
-                  ),
-                )}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {loading ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={COLUMNS.length}
-                    className="h-24 text-center text-xs text-muted-foreground"
-                  >
-                    Memuat dashboard...
-                  </TableCell>
-                </TableRow>
-              ) : rows.length === 0 ? (
-                <TableRow>
-                  <TableCell
-                    colSpan={COLUMNS.length}
-                    className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
-                  >
-                    Belum ada data SO Consignment
-                  </TableCell>
-                </TableRow>
-              ) : (
-                rows.map((row) => (
-                  <TableRow key={row.item_id}>
-                    {COLUMNS.map((col) => (
-                      <TableCell key={col.key} className="whitespace-nowrap text-xs">
-                        {col.render(row)}
+          <Content>
+            {columnOrder.isCustomOrder && (
+              <ColumnOrderReset onReset={columnOrder.resetOrder} />
+            )}
+            <StickyHeaderTable
+              className="min-w-max"
+              containerClassName="rounded-md border"
+              header={
+                <ReorderableHeaderRow
+                  order={columnOrder.order}
+                  onMove={columnOrder.moveColumn}
+                >
+                  {columnOrder.orderedColumns.map((column) => (
+                    <ReorderableTableHead
+                      key={column.id}
+                      column={column}
+                      sort={{ currentSort: sort, onSort: handleSortChange }}
+                    />
+                  ))}
+                </ReorderableHeaderRow>
+              }
+            >
+              <TableBody>
+                {loading ? (
+                  Array.from({ length: limit }, (_, i) => (
+                    <TableRow key={i}>
+                      <TableCell colSpan={COLUMNS.length}>
+                        <Skeleton className="h-8 w-full" />
                       </TableCell>
-                    ))}
+                    </TableRow>
+                  ))
+                ) : rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell
+                      colSpan={COLUMNS.length}
+                      className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
+                    >
+                      {debouncedSearch
+                        ? "Tidak ada data yang sesuai pencarian."
+                        : "Belum ada data SO Consignment"}
+                    </TableCell>
                   </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </div>
+                ) : (
+                  rows.map((row) => (
+                    <TableRow key={row.item_id}>
+                      {columnOrder.orderedColumns.map((col) => (
+                        <TableCell key={col.key} className="whitespace-nowrap text-xs">
+                          {col.render(row)}
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                )}
+              </TableBody>
+            </StickyHeaderTable>
 
-        <DataTablePagination
-          totalCount={total}
-          pageSize={limit}
-          currentPage={page}
-          onPageChange={setPage}
-          onPageSizeChange={(v) => {
-            setLimit(Number(v));
-            setPage(1);
-          }}
-          itemLabel="Item SO Consignment"
-        />
-      </Content>
+            <TablePaginationFooter
+              currentPage={page}
+              totalItems={total}
+              limit={limit}
+              itemLabel="Item SO Consignment"
+              onPageChange={setPage}
+              onLimitChange={(v) => {
+                setLimit(Number(v));
+                setPage(1);
+              }}
+              className="mt-6"
+            />
+          </Content>
         </>
       )}
     </>
