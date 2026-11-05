@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
+import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/client";
 import {
   TableBody,
@@ -21,6 +22,10 @@ import {
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
+import {
+  ExcelDownloadMenu,
+  type ExcelDownloadMode,
+} from "@/components/excel-download-menu";
 import {
   type ActiveFilter,
   FilterField,
@@ -48,12 +53,15 @@ import { useColumnOrder } from "@/hooks/use-column-order";
 import { useUrlListState } from "@/hooks/use-url-list-state";
 import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { completedFilterStatuses } from "@/lib/document-status";
+import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 import { ShareStockDetailSheet } from "@/components/share-stock/share-stock-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
-import { formatDate } from "@/lib/utils";
+import { formatDate, toYmdLocal } from "@/lib/utils";
 import { StatusBadge } from "@/components/status-badge";
 import { orIlikePattern } from "@/lib/supabase/search-filter";
+import { toast } from "@/lib/toast";
 
 const STATUS_LABELS: Record<string, string> = { done: "Done", closed: "Closed" };
 
@@ -79,6 +87,46 @@ const SS_PRIORITY_OPTIONS = [
   { label: "P4 - LOW", value: "P4" },
 ];
 
+// Label mengikuti dropdown status item di ShareStockDetailSheet. "closed" juga
+// mencakup "done" (status lama yang masih bisa dipilih moderator).
+const SS_ITEM_STATUS_OPTIONS = [
+  { label: "Open", value: "open" },
+  { label: "Processed", value: "approved" },
+  { label: "Rejected", value: "rejected" },
+  { label: "Closed", value: "closed" },
+];
+
+const KATEGORI_KOSONG = "kosong";
+
+const SS_KATEGORI_OPTIONS = [
+  ...MR_KATEGORI_OPTIONS.map((k) => ({ label: k, value: k })),
+  { label: "Belum diisi", value: KATEGORI_KOSONG },
+];
+
+const SS_JENIS_OPTIONS = [
+  { label: "Standard", value: "standard" },
+  { label: "Scheduled", value: "scheduled" },
+];
+
+const SS_KONDISI_OPTIONS = [
+  { label: "Frozen", value: "frozen" },
+  { label: "Lewat Deadline", value: "lewat_deadline" },
+];
+
+const SS_EXPORT_ITEM_FIELDS =
+  "id, part_number, part_name, satuan, qty_sharestock_total, ss_status, item_priority, item_due_date";
+
+// Sebagian MR lama punya baris alokasi kembar (approve terulang sebelum ada
+// claim), jadi baris identik dihitung sekali supaya qty tidak berlipat.
+const uniqueAllocations = (allocations: any[]) => {
+  const unique = new Map<string, any>();
+  for (const alloc of allocations) {
+    const key = `${alloc.source_cabang_id}:${alloc.qty}`;
+    if (!unique.has(key)) unique.set(key, alloc);
+  }
+  return Array.from(unique.values());
+};
+
 const SS_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
 // Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di SHARE_STOCK_SORT_COLUMNS.
@@ -98,6 +146,7 @@ export default function ShareStockPage() {
   const [mrs, setMrs] = useState<any[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [userProfile, setUserProfile] = useState<any>(null);
+  const [exporting, setExporting] = useState(false);
 
   // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
   const columnOrder = useColumnOrder("wms:table-column-order:share-stock", SS_COLUMNS);
@@ -116,6 +165,27 @@ export default function ShareStockPage() {
   const locationFilters = urlState.list("lokasi");
   const setLocationFilters = (v: string[]) =>
     urlState.set({ lokasi: v }, { resetPage: true });
+  const pemasokFilters = urlState.list("pemasok");
+  const setPemasokFilters = (v: string[]) =>
+    urlState.set({ pemasok: v }, { resetPage: true });
+  const itemStatusFilters = urlState.list("status_item");
+  const setItemStatusFilters = (v: string[]) =>
+    urlState.set({ status_item: v }, { resetPage: true });
+  const kategoriFilters = urlState.list("kategori");
+  const setKategoriFilters = (v: string[]) =>
+    urlState.set({ kategori: v }, { resetPage: true });
+  const jenisFilters = urlState.list("jenis");
+  const setJenisFilters = (v: string[]) =>
+    urlState.set({ jenis: v }, { resetPage: true });
+  const kondisiFilters = urlState.list("kondisi");
+  const setKondisiFilters = (v: string[]) =>
+    urlState.set({ kondisi: v }, { resetPage: true });
+  const deadlineFrom = urlState.get("deadline_dari");
+  const setDeadlineFrom = (v: string) =>
+    urlState.set({ deadline_dari: v }, { resetPage: true });
+  const deadlineTo = urlState.get("deadline_sampai");
+  const setDeadlineTo = (v: string) =>
+    urlState.set({ deadline_sampai: v }, { resetPage: true });
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -171,22 +241,48 @@ export default function ShareStockPage() {
     setAvailableCabang(cabangData || []);
   };
 
-  const fetchData = async () => {
-    setLoading(true);
+  // Query dasar dengan seluruh filter aktif (tanpa order/range), dipakai bersama
+  // fetchData dan exportExcel. Mode "all" melepas seluruh filter.
+  const buildFilteredQuery = (
+    mode: ExcelDownloadMode = "filtered",
+    forExport = false,
+  ) => {
+    const filtered = mode === "filtered";
     // Fetch MRs that have at least one item with share stock requirements
-    // Filter isi item lewat embed alias, supaya mr_items tetap utuh.
-    const barangEmbed = barangFilter
-      ? ", barang_cocok:mr_items!inner(id)"
+    // Filter isi item lewat embed alias, supaya mr_items tetap utuh (kolom
+    // Gudang Asal tetap menampilkan semua pemasok). Semua filter level item
+    // memakai alias yang sama, jadi harus cocok di item yang sama. Export
+    // membaca baris dari alias ini, jadi isinya ikut tersaring.
+    const lewatDeadline = filtered && kondisiFilters.includes("lewat_deadline");
+    const allocationFilterActive =
+      filtered &&
+      (pemasokFilters.length > 0 || !!deadlineFrom || !!deadlineTo || lewatDeadline);
+    const itemFilterActive =
+      forExport ||
+      (filtered &&
+        (!!barangFilter || itemStatusFilters.length > 0 || allocationFilterActive));
+    const allocationJoin = allocationFilterActive ? "!inner" : "";
+    const allocationEmbed = forExport
+      ? `, mr_sharestock_allocations${allocationJoin}(qty, deadline, source_cabang_id, source_cabang:cabang!source_cabang_id(nama_cabang))`
+      : allocationFilterActive
+        ? ", mr_sharestock_allocations!inner(id)"
+        : "";
+    const itemFields = forExport ? SS_EXPORT_ITEM_FIELDS : "id";
+    const itemEmbed = itemFilterActive
+      ? `, item_cocok:mr_items!inner(${itemFields}${allocationEmbed})`
       : "";
     let query = supabase
       .from("mrs")
       .select(
-        `*, cabang(nama_cabang), mr_items!inner(item_priority, qty_sharestock_total, mr_sharestock_allocations(source_cabang_id, source_cabang:cabang!source_cabang_id(nama_cabang)))${barangEmbed}`,
+        `*, cabang(nama_cabang), mr_items!inner(item_priority, qty_sharestock_total, mr_sharestock_allocations(source_cabang_id, source_cabang:cabang!source_cabang_id(nama_cabang)))${itemEmbed}`,
         {
           count: "exact",
         },
       )
       .gt("mr_items.qty_sharestock_total", 0);
+    if (itemFilterActive)
+      query = query.gt("item_cocok.qty_sharestock_total", 0);
+    if (!filtered) return query;
 
     if (debouncedSearch) {
       query = query.or(
@@ -201,20 +297,62 @@ export default function ShareStockPage() {
     }
     // Prioritas sekarang per-item; filter berdasarkan item share-stock yang
     // sudah diembed di atas (bukan lagi kolom mrs.mr_priority).
-    if (priorityFilters.length > 0)
+    if (priorityFilters.length > 0) {
       query = query.in("mr_items.item_priority", priorityFilters);
+      if (itemFilterActive)
+        query = query.in("item_cocok.item_priority", priorityFilters);
+    }
     if (locationFilters.length > 0)
       query = query.in("cabang_id", locationFilters);
     if (dateFrom) query = query.gte("mr_tanggal", dateFrom);
     if (dateTo) query = query.lte("mr_tanggal", dateTo);
 
+    if (kategoriFilters.length > 0) {
+      const kategori = kategoriFilters.filter((k) => k !== KATEGORI_KOSONG);
+      if (kategori.length === kategoriFilters.length) {
+        query = query.in("kategori", kategori);
+      } else if (kategori.length === 0) {
+        query = query.is("kategori", null);
+      } else {
+        const values = kategori.map((k) => `"${k}"`).join(",");
+        query = query.or(`kategori.is.null,kategori.in.(${values})`);
+      }
+    }
+    if (jenisFilters.length > 0) query = query.in("mr_type", jenisFilters);
+    if (kondisiFilters.includes("frozen")) query = query.eq("is_frozen", true);
+
     if (barangFilter) {
       query = query.or(
         `part_number.ilike.${orIlikePattern(barangFilter)},part_name.ilike.${orIlikePattern(barangFilter)}`,
-        { referencedTable: "barang_cocok" },
+        { referencedTable: "item_cocok" },
       );
     }
+    if (itemStatusFilters.length > 0) {
+      const expanded = itemStatusFilters.flatMap((s) =>
+        s === "closed" ? ["closed", "done"] : [s],
+      );
+      query = query.in("item_cocok.ss_status", expanded);
+    }
+    if (pemasokFilters.length > 0)
+      query = query.in(
+        "item_cocok.mr_sharestock_allocations.source_cabang_id",
+        pemasokFilters,
+      );
+    if (deadlineFrom)
+      query = query.gte("item_cocok.mr_sharestock_allocations.deadline", deadlineFrom);
+    if (deadlineTo)
+      query = query.lte("item_cocok.mr_sharestock_allocations.deadline", deadlineTo);
+    if (lewatDeadline) {
+      query = query
+        .lt("item_cocok.mr_sharestock_allocations.deadline", toYmdLocal(new Date()))
+        .not("item_cocok.ss_status", "in", "(closed,done)");
+    }
 
+    return query;
+  };
+
+  const fetchData = async () => {
+    setLoading(true);
     const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
     const sortColumn = SHARE_STOCK_SORT_COLUMNS[sortKeyRaw];
     const sortField = sortColumn || "created_at";
@@ -224,7 +362,7 @@ export default function ShareStockPage() {
     const from = (page - 1) * limit;
     const to = from + limit - 1;
 
-    const { data, count, error } = await query
+    const { data, count, error } = await buildFilteredQuery()
       .order(sortField, { ascending })
       .range(from, to);
 
@@ -233,6 +371,102 @@ export default function ShareStockPage() {
       setTotalCount(count || 0);
     }
     setLoading(false);
+  };
+
+  const fetchAllCount = async () => {
+    const { count, error } = await supabase
+      .from("mrs")
+      .select("id, mr_items!inner(id)", { count: "exact", head: true })
+      .gt("mr_items.qty_sharestock_total", 0);
+    if (error) throw error;
+    return count || 0;
+  };
+
+  // Satu baris per item per gudang pemasok. Item tanpa alokasi (MR import)
+  // tetap satu baris dengan pemasok kosong.
+  const exportExcel = async (mode: ExcelDownloadMode) => {
+    setExporting(true);
+    const toastId = toast.loading("Menyiapkan data Share Stock...");
+    try {
+      const pageSize = 1000;
+      const allRows: any[] = [];
+      for (let pageIndex = 0; ; pageIndex += 1) {
+        const from = pageIndex * pageSize;
+        const to = from + pageSize - 1;
+        const { data, error } = await buildFilteredQuery(mode, true)
+          .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
+          .range(from, to);
+
+        if (error) {
+          toast.error(error.message || "Gagal mengambil data untuk export.", {
+            id: toastId,
+          });
+          return;
+        }
+
+        allRows.push(...(data || []));
+        if (!data || data.length < pageSize) break;
+      }
+
+      const rows = allRows.flatMap((mr) =>
+        [...(mr.item_cocok || [])]
+          .sort((a: any, b: any) => a.id - b.id)
+          .flatMap((item: any) => {
+            const allocations = uniqueAllocations(
+              item.mr_sharestock_allocations || [],
+            );
+            return allocations.length > 0
+              ? allocations.map((alloc: any) => ({ mr, item, alloc }))
+              : [{ mr, item, alloc: null }];
+          }),
+      );
+
+      if (rows.length === 0) {
+        toast.warning("Tidak ada data untuk diekspor.", { id: toastId });
+        return;
+      }
+
+      const sheetData = rows.map(({ mr, item, alloc }, index) => ({
+        NO: index + 1,
+        "NO MR": mr.mr_kode || "-",
+        "TANGGAL MR": toExcelDate(mr.mr_tanggal),
+        "DUE DATE": toExcelDate(item.item_due_date || mr.mr_due_date),
+        "PART NUMBER": item.part_number || "-",
+        "NAMA BARANG": item.part_name || "-",
+        QTY: alloc?.qty ?? item.qty_sharestock_total ?? 0,
+        SATUAN: item.satuan || "-",
+        "GUDANG PEMASOK": alloc?.source_cabang?.nama_cabang || "-",
+        "GUDANG TUJUAN": mr.cabang?.nama_cabang || "-",
+        DEADLINE: toExcelDate(alloc?.deadline),
+        PRIORITAS: item.item_priority || "-",
+        "STATUS ITEM": filterOptionLabel(
+          SS_ITEM_STATUS_OPTIONS,
+          item.ss_status === "done" ? "closed" : item.ss_status,
+        ),
+        "STATUS MR": mr.mr_status || "-",
+        PIC: mr.mr_pic || "-",
+      }));
+
+      const ws = jsonToSheetWithDates(sheetData, [
+        "TANGGAL MR",
+        "DUE DATE",
+        "DEADLINE",
+      ]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Share Stock");
+      XLSX.writeFile(
+        wb,
+        `SHARE_STOCK_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      );
+      toast.success(`Export Excel berhasil (${sheetData.length} baris).`, {
+        id: toastId,
+      });
+    } catch (err: any) {
+      toast.error(`Gagal export Excel: ${err?.message || err}`, { id: toastId });
+    } finally {
+      setExporting(false);
+    }
   };
 
   useEffect(() => {
@@ -246,6 +480,13 @@ export default function ShareStockPage() {
     statusFilters,
     priorityFilters,
     locationFilters,
+    pemasokFilters,
+    itemStatusFilters,
+    kategoriFilters,
+    jenisFilters,
+    kondisiFilters,
+    deadlineFrom,
+    deadlineTo,
     dateFrom,
     dateTo,
     barangFilter,
@@ -323,6 +564,21 @@ export default function ShareStockPage() {
     }
   };
 
+  // Pemasok tidak pernah sama dengan cabang peminta (ditolak saat alokasi), jadi
+  // cabang ini dilepas dari filter peminta supaya hasilnya tidak selalu kosong.
+  const setMyPemasokFilter = () => {
+    if (userProfile?.cabang_id) {
+      const myCabang = userProfile.cabang_id.toString();
+      urlState.set(
+        {
+          pemasok: [myCabang],
+          lokasi: locationFilters.filter((id) => id !== myCabang),
+        },
+        { resetPage: true },
+      );
+    }
+  };
+
   const locationOptions = availableCabang.map((c) => ({
     label: c.nama_cabang,
     value: c.id.toString(),
@@ -341,12 +597,47 @@ export default function ShareStockPage() {
       value: optionLabels(locationOptions, locationFilters),
       onRemove: () => setLocationFilters([]),
     });
+  if (pemasokFilters.length > 0)
+    activeFilters.push({
+      key: "pemasok",
+      label: "Pemasok",
+      value: optionLabels(locationOptions, pemasokFilters),
+      onRemove: () => setPemasokFilters([]),
+    });
   if (statusFilters.length > 0)
     activeFilters.push({
       key: "status",
       label: "Status",
       value: optionLabels(SS_STATUS_OPTIONS, statusFilters),
       onRemove: () => setStatusFilters([]),
+    });
+  if (itemStatusFilters.length > 0)
+    activeFilters.push({
+      key: "status_item",
+      label: "Status Item",
+      value: optionLabels(SS_ITEM_STATUS_OPTIONS, itemStatusFilters),
+      onRemove: () => setItemStatusFilters([]),
+    });
+  if (kategoriFilters.length > 0)
+    activeFilters.push({
+      key: "kategori",
+      label: "Kategori",
+      value: optionLabels(SS_KATEGORI_OPTIONS, kategoriFilters),
+      onRemove: () => setKategoriFilters([]),
+    });
+  if (jenisFilters.length > 0)
+    activeFilters.push({
+      key: "jenis",
+      label: "Jenis",
+      value: optionLabels(SS_JENIS_OPTIONS, jenisFilters),
+      onRemove: () => setJenisFilters([]),
+    });
+  if (kondisiFilters.length > 0)
+    activeFilters.push({
+      key: "kondisi",
+      label: "Kondisi",
+      value: optionLabels(SS_KONDISI_OPTIONS, kondisiFilters),
+      onRemove: () => setKondisiFilters([]),
     });
   if (priorityFilters.length > 0)
     activeFilters.push({
@@ -361,6 +652,14 @@ export default function ShareStockPage() {
       label: "Tanggal",
       value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
       onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+  if (deadlineFrom || deadlineTo)
+    activeFilters.push({
+      key: "deadline",
+      label: "Deadline",
+      value: formatFilterRange(deadlineFrom, deadlineTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ deadline_dari: "", deadline_sampai: "" }, { resetPage: true }),
     });
   if (barangFilter)
     activeFilters.push({
@@ -508,6 +807,13 @@ export default function ShareStockPage() {
               onChange={setSearchQuery}
               searchableFields={SS_SEARCH_FIELDS}
             />
+            <ExcelDownloadMenu
+              itemLabel="MR"
+              filteredCount={totalCount}
+              fetchAllCount={fetchAllCount}
+              onDownload={exportExcel}
+              isExporting={exporting}
+            />
           </div>
 
           <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
@@ -536,6 +842,30 @@ export default function ShareStockPage() {
                 />
               </FilterField>
 
+              <FilterField
+                label="Gudang Pemasok"
+                action={
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-1 text-xs font-medium text-primary underline-offset-4 hover:underline disabled:pointer-events-none disabled:opacity-50"
+                    onClick={setMyPemasokFilter}
+                    disabled={!userProfile?.cabang_id}
+                  >
+                    <Navigation2 className="h-3 w-3" />
+                    Lokasi saya
+                  </button>
+                }
+              >
+                <MultiSelect
+                  placeholder="Semua Pemasok"
+                  icon={<Truck className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={pemasokFilters}
+                  onChange={setPemasokFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+
               <FilterField label="Status MR">
                 <MultiSelect
                   placeholder="Semua Status"
@@ -552,6 +882,42 @@ export default function ShareStockPage() {
                   selected={priorityFilters}
                   onChange={setPriorityFilters}
                   options={SS_PRIORITY_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Status Item">
+                <MultiSelect
+                  placeholder="Semua Status Item"
+                  selected={itemStatusFilters}
+                  onChange={setItemStatusFilters}
+                  options={SS_ITEM_STATUS_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Kategori">
+                <MultiSelect
+                  placeholder="Semua Kategori"
+                  selected={kategoriFilters}
+                  onChange={setKategoriFilters}
+                  options={SS_KATEGORI_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Jenis MR">
+                <MultiSelect
+                  placeholder="Semua Jenis"
+                  selected={jenisFilters}
+                  onChange={setJenisFilters}
+                  options={SS_JENIS_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Kondisi">
+                <MultiSelect
+                  placeholder="Semua Kondisi"
+                  selected={kondisiFilters}
+                  onChange={setKondisiFilters}
+                  options={SS_KONDISI_OPTIONS}
                 />
               </FilterField>
 
@@ -580,6 +946,27 @@ export default function ShareStockPage() {
                     <DatePickerString
                       value={dateTo}
                       onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+
+              <FilterField label="Deadline Share Stock">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={deadlineFrom}
+                      onChange={setDeadlineFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={deadlineTo}
+                      onChange={setDeadlineTo}
                       placeholder="Sampai"
                       className="h-9 w-full text-xs font-medium"
                     />
