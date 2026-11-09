@@ -43,6 +43,7 @@ const MENU_KEYWORDS: Record<string, string[]> = {
   "/po/non-pr": ["po", "non pr", "job costing", "jc"],
   "/receive": ["ri", "receive", "penerimaan", "terima barang", "gr", "barang masuk"],
   "/working-order": ["wo", "produksi", "rakit", "assembly", "formula"],
+  "/spb/dashboard": ["spb", "dashboard", "ringkasan", "wo", "work order", "status"],
   "/spb/report": ["spb", "laporan", "report", "rekap", "payment"],
   "/spb": ["spb", "stock out", "pengeluaran barang", "proyek"],
   "/spb/po": ["spb", "po", "purchase order customer"],

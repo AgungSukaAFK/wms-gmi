@@ -2182,3 +2182,122 @@ export async function getSpbReturnableDetails(spbId: number) {
 export async function nowIso() {
   return toISODate(new Date());
 }
+
+// ---------------------------------------------------------------------------
+// Dashboard SPB (/spb/dashboard) -- RPC dari migration 20261109100000.
+// `dateTo` eksklusif (ISO awal hari SETELAH tanggal akhir yang dipilih).
+// ---------------------------------------------------------------------------
+
+export type SpbDashboardFilters = {
+  cabangIds?: number[];
+  dateFrom?: string;
+  dateTo?: string;
+  noWo?: string;
+};
+
+type ApprovalCounts = { total: number; open: number; completed: number; rejected: number };
+
+export type SpbDashboardSummary = {
+  spb_total: number;
+  by_status: { status: string; count: number }[];
+  progress: {
+    belum_po: number;
+    po_belum_do: number;
+    do_belum_invoice: number;
+    sudah_invoice: number;
+    cancelled: number;
+  };
+  po_total: number;
+  do_total: number;
+  invoice: ApprovalCounts & { paid: number; unpaid: number };
+  return: ApprovalCounts;
+  items: {
+    total: number;
+    qty_total: number;
+    qty_po: number;
+    qty_belum_po: number;
+    item_belum_po: number;
+  };
+};
+
+export type SpbWoItemRow = {
+  spb_id: number;
+  spb_no: string;
+  spb_no_wo: string | null;
+  spb_tanggal: string | null;
+  spb_status: string | null;
+  spb_kode_unit: string | null;
+  nama_cabang: string | null;
+  spb_dtl_id: number;
+  part_number: string;
+  part_name: string;
+  satuan: string;
+  qty: number;
+  qty_returned: number;
+  qty_po: number;
+  qty_belum_po: number;
+  po_nos: string | null;
+  do_nos: string | null;
+  invoice_nos: string | null;
+};
+
+function dashboardRpcArgs(filters?: SpbDashboardFilters) {
+  return {
+    p_cabang_ids: filters?.cabangIds?.length ? filters.cabangIds : null,
+    p_date_from: filters?.dateFrom || null,
+    p_date_to: filters?.dateTo || null,
+  };
+}
+
+export async function getSpbDashboardSummary(filters?: SpbDashboardFilters) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_spb_dashboard_summary", {
+    ...dashboardRpcArgs(filters),
+    p_no_wo: filters?.noWo?.trim() || null,
+  });
+  if (error) return { data: null, error: error.message };
+  return { data: data as SpbDashboardSummary, error: null as string | null };
+}
+
+export async function getSpbWoItems(filters: SpbDashboardFilters) {
+  const noWo = filters.noWo?.trim();
+  if (!noWo) return { data: [] as SpbWoItemRow[], error: null as string | null };
+
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_spb_wo_items", {
+    ...dashboardRpcArgs(filters),
+    p_no_wo: noWo,
+  });
+  if (error) return { data: [] as SpbWoItemRow[], error: error.message };
+  return { data: (data || []) as SpbWoItemRow[], error: null as string | null };
+}
+
+/** Saran nomor WO (distinct) untuk input filter di Dashboard SPB. */
+export async function searchSpbWoNumbers(search: string) {
+  const term = search.trim();
+  const supabase = await createClient();
+  let query = supabase
+    .from("spb")
+    .select("spb_no_wo")
+    .eq("spb_is_deleted", false)
+    .not("spb_no_wo", "is", null)
+    .neq("spb_no_wo", "")
+    .order("spb_tanggal", { ascending: false })
+    .limit(200);
+  if (term) query = query.ilike("spb_no_wo", `%${escapeIlike(term)}%`);
+
+  const { data, error } = await query;
+  if (error) return { data: [] as string[], error: error.message };
+
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const row of data || []) {
+    const wo = String(row.spb_no_wo || "").trim();
+    const key = wo.toLowerCase();
+    if (!wo || seen.has(key)) continue;
+    seen.add(key);
+    result.push(wo);
+    if (result.length >= 20) break;
+  }
+  return { data: result, error: null as string | null };
+}

@@ -165,6 +165,7 @@ export function buildNavGroups(profile: NavProfile): NavGroup[] {
       label: "Stock Out Project",
       hideable: true,
       items: [
+        { title: "Dashboard SPB", url: "/spb/dashboard", icon: LayoutDashboard },
         { title: "Report SPB", url: "/spb/report", icon: FileBox },
         { title: "SPB", url: "/spb", icon: FileWarning },
         { title: "Purchase Order", url: "/spb/po", icon: ShoppingCart },
