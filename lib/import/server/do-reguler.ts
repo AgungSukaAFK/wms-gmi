@@ -3,7 +3,7 @@ import type { ImportRowResult } from "../types";
 import { createDoReguler } from "@/services/do-reguler-actions";
 import { computeSoItemRemaining, fetchSoItemFulfillment, poPoolAvailableAt, refreshSoStatus } from "@/lib/so-reguler";
 import { defaultEstimasiHari } from "@/lib/shipment";
-import { type ImportHandler, codeVariants, fetchIn, firstValue, groupRows, keyOf, loadCabang, looseKey, matchBarang, num, str } from "./common";
+import { type ImportHandler, codeVariants, fetchIn, firstValue, groupRows, keyOf, loadCabang, looseKey, matchBarang, num, savedErr, str } from "./common";
 import { StockCache, cutStock, docResults, existingCodes, loadCustomers, resolveDocItems, sumByPart } from "./docs";
 
 const SHIPMENT: Record<string, string> = {
@@ -158,7 +158,7 @@ export const doRegulerHandler: ImportHandler = {
       const items = p.items.map((i) => ({ part_id: i.part_id, part_number: i.part_number, part_name: i.part_name, satuan: i.satuan, qty: i.qty, so_item_id: i.so_item_id }));
       if (!riwayat) {
         const res: any = await createDoReguler({ ...p.payload, items });
-        if (res?.error) markErr(p, res.error);
+        if (res?.error) markErr(p, savedErr(res.error));
         continue;
       }
       // Riwayat: DO langsung completed / delivered (pola import DO ERP).

@@ -28,6 +28,7 @@ import { IMPORT_CATEGORY_LABEL, IMPORT_DEFINITIONS, getImportDefinition } from "
 import { buildTemplateWorkbook, downloadWorkbook, templateFileName } from "@/lib/import/template";
 import { docKeyOf, makeBatches, parseImportFile, type ParsedFile } from "@/lib/import/parse";
 import { downloadImportReport } from "@/lib/import/report";
+import { formatRowList } from "@/lib/import/explain";
 import type { ImportDefinition, ImportOptionValues, ImportRefs, ImportRow, ImportRowResult } from "@/lib/import/types";
 import {
   getImportAccess,
@@ -50,6 +51,17 @@ function defaultOptions(def: ImportDefinition): ImportOptionValues {
     else o[opt.key] = null;
   }
   return o;
+}
+
+/** Isi sel yang disebut di error parser (nilai mentah tidak tersimpan, jadi tampilkan hasil parse / kosong). */
+function cellDetails(def: ImportDefinition, r: ImportRow, errs: string[]) {
+  const out: { label: string; file?: string | number | null }[] = [];
+  for (const c of def.columns) {
+    if (!errs.some((e) => e.startsWith(`${c.header}:`) || e.startsWith(`${c.header} `))) continue;
+    const v = r.values[c.key];
+    out.push({ label: c.header, file: v === null || v === undefined || v === "" ? "(kosong / tidak terbaca)" : String(v) });
+  }
+  return out.length ? out : undefined;
 }
 
 function countResults(rows: ImportRow[], results: Map<number, ImportRowResult>) {
@@ -233,7 +245,13 @@ function ImportPanel({ def }: { def: ImportDefinition }) {
     for (const batch of batches) {
       const res = await runImportBatch(def.key, batch, options, commit);
       if (res.error) {
-        for (const r of batch) next.set(r.row, { row: r.row, status: "error", message: res.error });
+        for (const r of batch)
+          next.set(r.row, {
+            row: r.row,
+            status: "error",
+            kind: commit ? "save_failed" : "other",
+            message: `${commit ? "Gagal disimpan" : "Gagal dicek"} (server): ${res.error}`,
+          });
       } else {
         for (const x of res.data || []) next.set(x.row, x);
       }
@@ -256,15 +274,31 @@ function ImportPanel({ def }: { def: ImportDefinition }) {
         return;
       }
       const base = new Map<number, ImportRowResult>();
-      for (const [row, errs] of p.rowErrors) base.set(row, { row, status: "error", message: errs.join(" · ") });
+      const refOf = (r: ImportRow) => (def.docKey?.length ? def.docKey.map((k) => String(r.values[k] ?? "")).join(" / ") : undefined);
+      for (const r of p.rows) {
+        const errs = p.rowErrors.get(r.row);
+        if (errs) base.set(r.row, { row: r.row, status: "error", message: errs.join(" · "), ref: refOf(r), details: cellDetails(def, r, errs) });
+      }
       // Dokumen dengan 1 baris error -> seluruh dokumen tidak dikirim.
-      const badDocs = new Set<string>();
-      if (def.docKey?.length) for (const r of p.rows) if (base.has(r.row)) badDocs.add(docKeyOf(def, r));
+      const badDocs = new Map<string, number[]>();
+      if (def.docKey?.length)
+        for (const r of p.rows)
+          if (base.has(r.row)) {
+            const k = docKeyOf(def, r);
+            badDocs.set(k, [...(badDocs.get(k) || []), r.row]);
+          }
       const send: ImportRow[] = [];
       for (const r of p.rows) {
         if (base.has(r.row)) continue;
-        if (def.docKey?.length && badDocs.has(docKeyOf(def, r))) {
-          base.set(r.row, { row: r.row, status: "error", message: "Dilewati: ada baris error di dokumen yang sama" });
+        const bad = def.docKey?.length ? badDocs.get(docKeyOf(def, r)) : undefined;
+        if (bad) {
+          base.set(r.row, {
+            row: r.row,
+            status: "error",
+            kind: "cascade",
+            ref: refOf(r),
+            message: `Ikut ditahan: baris ${formatRowList(bad)} di dokumen ${refOf(r)} error (1 dokumen disimpan utuh atau tidak sama sekali)`,
+          });
           continue;
         }
         send.push(r);

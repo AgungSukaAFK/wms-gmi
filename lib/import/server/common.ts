@@ -111,6 +111,9 @@ export const ok = (row: number, status: ImportRowResult["status"], message?: str
   ref,
   warnings: warnings?.length ? warnings : undefined,
 });
+/** Pesan error dari fungsi simpan aplikasi (lolos cek awal, ditolak saat disimpan). */
+export const savedErr = (message: string) => `Ditolak saat disimpan: ${message}`;
+
 export const fail = (row: number, message: string, ref?: string): ImportRowResult => ({ row, status: "error", message, ref });
 
 /** Kelompokkan baris per kunci (urutan kemunculan dipertahankan). */

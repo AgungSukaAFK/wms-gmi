@@ -1,6 +1,6 @@
 import type { ImportRowResult } from "../types";
 import { createSoReguler } from "@/services/so-reguler-actions";
-import { type ImportHandler, firstValue, groupRows, keyOf, matchBarang, str } from "./common";
+import { type ImportHandler, firstValue, groupRows, keyOf, matchBarang, savedErr, str } from "./common";
 import { docResults, existingCodes, loadCustomers, resolveDocItems } from "./docs";
 
 export const soRegulerHandler: ImportHandler = {
@@ -80,7 +80,7 @@ export const soRegulerHandler: ImportHandler = {
     const byRow = new Map(results.map((x) => [x.row, x]));
     for (const p of plans) {
       const res: any = await createSoReguler(p.payload);
-      if (res?.error) for (const x of docResults(p.list, p.payload.so_kode, "error", res.error)) byRow.set(x.row, x);
+      if (res?.error) for (const x of docResults(p.list, p.payload.so_kode, "error", savedErr(res.error))) byRow.set(x.row, x);
     }
     return rows.map((r) => byRow.get(r.row)!);
   },

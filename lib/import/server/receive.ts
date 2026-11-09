@@ -4,7 +4,7 @@ import { createReceive } from "@/services/procurement-actions";
 import { applyReceiveCompletion } from "@/lib/receive-posting";
 import { fetchPoItemPendingReceiveQty } from "@/lib/procurement-status";
 import { resolveNonPrReceiveCabang } from "@/lib/po-non-pr";
-import { type ImportHandler, codeVariants, fail, fetchAll, fetchIn, groupRows, keyOf, loadCabang, looseKey, num, ok, str } from "./common";
+import { type ImportHandler, codeVariants, fail, fetchAll, fetchIn, groupRows, keyOf, loadCabang, looseKey, num, ok, savedErr, str } from "./common";
 
 type Alloc = { po_item_id: number; qty: number; cabang_id: number; row: number };
 
@@ -142,7 +142,7 @@ export const receiveHandler: ImportHandler = {
           approval_template_id: templateId!,
           items,
         });
-        if (res?.error) markDoc(plan, res.error);
+        if (res?.error) markDoc(plan, savedErr(res.error));
         continue;
       }
       // Riwayat: RI langsung completed lalu diposting (pola approveReceive).

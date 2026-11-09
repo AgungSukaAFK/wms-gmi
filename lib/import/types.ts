@@ -110,6 +110,26 @@ export type ImportRow = {
 
 export type ImportRowStatus = "create" | "update" | "skip" | "error";
 
+/** Jenis masalah baris (lihat lib/import/explain.ts). */
+export type ImportIssueKind =
+  | "format"
+  | "header_mismatch"
+  | "duplicate"
+  | "master_missing"
+  | "not_in_source"
+  | "doc_status"
+  | "freeze"
+  | "stock"
+  | "allocation"
+  | "over_qty"
+  | "conflict"
+  | "cascade"
+  | "save_failed"
+  | "other";
+
+/** Perbandingan isi file vs data di WMS untuk 1 baris bermasalah. */
+export type ImportIssueDetail = { label: string; file?: string | number | null; wms?: string | number | null };
+
 export type ImportRowResult = {
   row: number;
   status: ImportRowStatus;
@@ -117,6 +137,12 @@ export type ImportRowResult = {
   warnings?: string[];
   /** Kode dokumen / kunci data (untuk tampilan & laporan). */
   ref?: string;
+  /** Jenis masalah (kosong = ditebak dari message oleh classifyIssue). */
+  kind?: ImportIssueKind;
+  /** Rincian: nilai di file vs nilai di WMS. */
+  details?: ImportIssueDetail[];
+  /** Saran perbaikan khusus baris ini (kosong = saran umum jenis masalah). */
+  hint?: string;
 };
 
 export type ImportOptionValues = Record<string, string | boolean | number | null>;

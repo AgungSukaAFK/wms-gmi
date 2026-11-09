@@ -1,7 +1,7 @@
 import { revalidatePath } from "next/cache";
 import type { ImportRowResult } from "../types";
 import { createSpb } from "@/services/spb-actions";
-import { type ImportHandler, firstValue, groupRows, keyOf, loadCabang, matchBarang, num, str } from "./common";
+import { type ImportHandler, firstValue, groupRows, keyOf, loadCabang, matchBarang, num, savedErr, str } from "./common";
 import { StockCache, cutStock, docResults, existingCodes, resolveDocItems, sumByPart } from "./docs";
 
 export const spbHandler: ImportHandler = {
@@ -110,7 +110,7 @@ export const spbHandler: ImportHandler = {
           cabang_id: p.cab.id,
           items: details,
         });
-        if (res?.error) markErr(p, res.error);
+        if (res?.error) markErr(p, savedErr(res.error));
         continue;
       }
       const { data: spb, error } = await supabase

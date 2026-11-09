@@ -2,7 +2,7 @@ import { revalidatePath } from "next/cache";
 import type { ImportRowResult } from "../types";
 import { createConsignmentSo } from "@/services/consignment-so-actions";
 import { createConsignmentIk } from "@/services/consignment-ik-actions";
-import { type ImportHandler, codeVariants, fetchAll, fetchIn, firstValue, groupRows, keyOf, loadCabang, looseKey, matchBarang, str } from "./common";
+import { type ImportHandler, codeVariants, fetchAll, fetchIn, firstValue, groupRows, keyOf, loadCabang, looseKey, matchBarang, savedErr, str } from "./common";
 import { StockCache, cutStock, docResults, existingCodes, loadCustomers, resolveDocItems, sumByPart } from "./docs";
 
 async function loadSites(supabase: any, customerIds: number[]) {
@@ -71,7 +71,7 @@ export const consignmentSoHandler: ImportHandler = {
     const byRow = new Map(results.map((x) => [x.row, x]));
     for (const p of plans) {
       const res: any = await createConsignmentSo(p.payload);
-      if (res?.error) for (const x of docResults(p.list, p.code, "error", res.error)) byRow.set(x.row, x);
+      if (res?.error) for (const x of docResults(p.list, p.code, "error", savedErr(res.error))) byRow.set(x.row, x);
     }
     return rows.map((r) => byRow.get(r.row)!);
   },
@@ -232,7 +232,7 @@ export const consignmentIkHandler: ImportHandler = {
             qty: i.qty,
           })),
         });
-        if (res?.error) markErr(p, res.error);
+        if (res?.error) markErr(p, savedErr(res.error));
         continue;
       }
       const { data: ik, error } = await supabase

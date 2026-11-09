@@ -4,7 +4,7 @@ import { createMaterialRequest, createPurchaseOrder, createPurchaseRequest } fro
 import { fetchMrItemPrConvertedQty } from "@/lib/procurement-status";
 import { fetchPrItemConvertedQty, isPrItemRejected } from "@/lib/pr-po-coverage";
 import { computeSoItemRemaining, fetchSoItemFulfillment } from "@/lib/so-reguler";
-import { type ImportCtx, type ImportHandler, codeVariants, fetchIn, firstValue, groupRows, keyOf, loadCabang, looseKey, matchBarang, num, str } from "./common";
+import { type ImportCtx, type ImportHandler, codeVariants, fetchIn, firstValue, groupRows, keyOf, loadCabang, looseKey, matchBarang, num, savedErr, str } from "./common";
 import { docResults, existingCodes, resolveDocItems } from "./docs";
 import { loadApprovalTemplate, mrStyleApprovals, prStyleApprovals } from "./approvals";
 
@@ -109,7 +109,7 @@ export const mrHandler: ImportHandler = {
             remarks: (i.extra.remarks as string) || undefined,
           })),
         });
-        if (res?.error) markErr(p, res.error);
+        if (res?.error) markErr(p, savedErr(res.error));
         else if (p.head.keterangan && res?.data?.id) await supabase.from("mrs").update({ mr_remarks: p.head.keterangan }).eq("id", res.data.id);
         continue;
       }
@@ -246,7 +246,7 @@ export const prHandler: ImportHandler = {
         approvals: riwayat ? [] : prStyleApprovals(t.tpl, ctx),
         items: p.items,
       });
-      if (res?.error) for (const x of docResults(p.list, p.code, "error", res.error)) byRow.set(x.row, x);
+      if (res?.error) for (const x of docResults(p.list, p.code, "error", savedErr(res.error))) byRow.set(x.row, x);
     }
     return rows.map((r) => byRow.get(r.row)!);
   },
@@ -433,7 +433,7 @@ export const poHandler: ImportHandler = {
     const byRow = new Map(results.map((x) => [x.row, x]));
     for (const p of plans) {
       const res: any = await createPurchaseOrder(p.payload);
-      if (res?.error) for (const x of docResults(p.list, p.code, "error", res.error)) byRow.set(x.row, x);
+      if (res?.error) for (const x of docResults(p.list, p.code, "error", savedErr(res.error))) byRow.set(x.row, x);
     }
     return rows.map((r) => byRow.get(r.row)!);
   },

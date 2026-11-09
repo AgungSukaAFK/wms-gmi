@@ -3,6 +3,34 @@
 import { changeStockQty } from "@/lib/stock-mutation";
 import type { ImportRow, ImportRowResult } from "../types";
 import { type BarangMatch, codeVariants, fail, fetchIn, keyOf, ok, str } from "./common";
+import { formatRowList } from "../explain";
+
+/** Error 1 baris yang lebih kaya dari sekadar teks. */
+export type RowIssue = Pick<ImportRowResult, "kind" | "details" | "hint"> & { message: string };
+
+/** Tambah masalah ke baris (baris boleh punya >1 masalah; digabung). */
+export function addIssue(errors: Map<number, string | RowIssue>, row: number, issue: RowIssue) {
+  const prev = errors.get(row);
+  if (!prev) return void errors.set(row, issue);
+  const p: RowIssue = typeof prev === "string" ? { message: prev } : prev;
+  errors.set(row, {
+    message: `${p.message} · ${issue.message}`,
+    kind: p.kind || issue.kind,
+    details: [...(p.details || []), ...(issue.details || [])],
+    hint: [p.hint, issue.hint].filter(Boolean).join(" ") || undefined,
+  });
+}
+
+/** Baris yang benar tapi ikut ditahan karena baris lain di dokumen yang sama error. */
+export function cascadeFail(row: number, code: string, errRows: string): ImportRowResult {
+  return {
+    row,
+    status: "error",
+    kind: "cascade",
+    ref: code,
+    message: `Ikut ditahan: baris ${errRows} di dokumen ${code} error (1 dokumen disimpan utuh atau tidak sama sekali)`,
+  };
+}
 
 export type CustomerRow = { id: number; customer_no: string; customer_name: string; customer_type: string; is_active: boolean };
 
@@ -74,13 +102,18 @@ export function docResults(
   code: string,
   status: ImportRowResult["status"],
   message: string,
-  errors: Map<number, string> = new Map(),
+  errors: Map<number, string | RowIssue> = new Map(),
   warnings: Map<number, string[]> = new Map(),
 ): ImportRowResult[] {
   const hasErr = errors.size > 0 || status === "error";
+  const errRows = formatRowList(Array.from(errors.keys()));
   return list.map((r) => {
-    if (errors.has(r.row)) return fail(r.row, errors.get(r.row)!, code);
-    if (hasErr && status !== "error") return fail(r.row, "Dilewati: ada baris error di dokumen yang sama", code);
+    if (errors.has(r.row)) {
+      const e = errors.get(r.row)!;
+      return typeof e === "string" ? fail(r.row, e, code) : { ...fail(r.row, e.message, code), kind: e.kind, details: e.details, hint: e.hint, warnings: warnings.get(r.row) };
+    }
+    // status "error" + message kosong = dipanggil cuma untuk error per baris.
+    if (hasErr && (status !== "error" || !message)) return cascadeFail(r.row, code, errRows);
     if (status === "error") return fail(r.row, message, code);
     return ok(r.row, status, message, code, warnings.get(r.row));
   });
