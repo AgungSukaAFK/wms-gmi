@@ -210,7 +210,7 @@ AS $$
     'completing', jsonb_build_object(
       'quotation',   (SELECT count(*) FROM st WHERE completing = 'Quotation'),
       'po_customer', (SELECT count(*) FROM st WHERE completing = 'PO Customer'),
-      'delivered',   (SELECT count(*) FROM st WHERE completing = 'Delivered'),
+      'delivered',   (SELECT count(*) FROMz st WHERE completing = 'Delivered'),
       'invoiced',    (SELECT count(*) FROM st WHERE completing = 'Invoiced'),
       'paid',        (SELECT count(*) FROM st WHERE completing = 'Paid'),
       'cancelled',   (SELECT count(*) FROM st WHERE completing = 'Cancelled')

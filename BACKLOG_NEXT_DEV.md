@@ -130,9 +130,10 @@ Sisa / perbaikan:
 
 ## E. Dashboard, Filter & Report Umum (WMS)
 
-### E1. Pembaruan dashboard Consignment & dashboard lain — **Open**
+### E1. Pembaruan dashboard Consignment & dashboard lain — **Partial**
 - Perbarui dashboard consignment (`consignment_dashboard_view`) supaya sinkron dengan modul baru (IK, penerimaan, Vendor Consignment GR/rekonsil).
-- Review dashboard utama & dashboard modul lain → susun daftar KPI yang perlu ditambah/diperbaiki (perlu masukan user).
+- [x] Dashboard utama `/dashboard` dibangun ulang (2026-11-11, migration `20261111120000_main_dashboard.sql`): antrian "perlu tindakan", approval per user, section per role, analitik atasan (lead time, tren, level MR, umur approval, lokasi & stok, vendor/barang teratas, penjualan), semua kartu bisa diklik → daftar + Excel. Atasan = moderator/manager/spv/pjo/gl; nilai Rupiah PO hanya purchasing.
+- [ ] Review angka & layout dashboard utama bersama atasan.
 
 ### E2. Filter lebih detail — **Open**
 - Terapkan di list & dashboard utama: rentang tanggal, cabang/site, project, dept, status, PIC, vendor, PN, unit, No WO.

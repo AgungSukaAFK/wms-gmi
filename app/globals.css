@@ -34,6 +34,12 @@
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
+  --color-chart-dash-1: var(--chart-dash-1); /* dashboard utama, lihat :root */
+  --color-chart-dash-2: var(--chart-dash-2);
+  --color-chart-dash-3: var(--chart-dash-3);
+  --color-chart-dash-4: var(--chart-dash-4);
+  --color-chart-critical: var(--chart-critical);
+  --color-chart-neutral: var(--chart-neutral);
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -91,6 +97,18 @@
        vs surface (lihat pasangan di blok .dark di bawah). */
     --chart-consignment-1: oklch(0.646 0.222 41.116);
     --chart-consignment-2: oklch(0.6 0.118 184.704);
+    /* Dashboard utama: 4 seri kategorikal berurutan tetap (MR, PR, PO, RI)
+       + merah "kritis" dan abu de-emphasis. Step terang/gelap dipilih per
+       mode dan divalidasi (lightness band, CVD, normal-vision, contrast)
+       terhadap ke-4 surface card lewat dataviz validate_palette.js.
+       Kuning & hijau di bawah 3:1 pada surface terang -> chart yang
+       memakainya wajib punya legend berangka + tampilan tabel. */
+    --chart-dash-1: #2a78d6;
+    --chart-dash-2: #eb6834;
+    --chart-dash-3: #1baf7a;
+    --chart-dash-4: #eda100;
+    --chart-critical: #d03b3b;
+    --chart-neutral: #c9c8c0;
   }
   .dark {
     /* ====================================================== */
@@ -132,6 +150,13 @@
        lightness-band di dark surface) -- pasangan ini lolos semua cek. */
     --chart-consignment-1: oklch(0.62 0.2 41);
     --chart-consignment-2: oklch(0.62 0.15 165);
+    /* Dashboard utama: step khusus surface gelap (lihat catatan di :root). */
+    --chart-dash-1: #3987e5;
+    --chart-dash-2: #d95926;
+    --chart-dash-3: #199e70;
+    --chart-dash-4: #c98500;
+    --chart-critical: #e66767;
+    --chart-neutral: #5c5b57;
   }
 
   /* ====================================================== */
@@ -171,6 +196,13 @@
     --warning-foreground: 48 96.5% 88.8%;
     --chart-consignment-1: oklch(0.646 0.222 41.116);
     --chart-consignment-2: oklch(0.6 0.118 184.704);
+    /* Dashboard utama, ikut nilai mode Light. */
+    --chart-dash-1: #2a78d6;
+    --chart-dash-2: #eb6834;
+    --chart-dash-3: #1baf7a;
+    --chart-dash-4: #eda100;
+    --chart-critical: #d03b3b;
+    --chart-neutral: #c9c8c0;
   }
 
   /* ====================================================== */
@@ -211,6 +243,13 @@
     --warning-foreground: 26 83.3% 14.1%;
     --chart-consignment-1: oklch(0.62 0.2 41);
     --chart-consignment-2: oklch(0.62 0.15 165);
+    /* Dashboard utama, ikut nilai mode Dark. */
+    --chart-dash-1: #3987e5;
+    --chart-dash-2: #d95926;
+    --chart-dash-3: #199e70;
+    --chart-dash-4: #c98500;
+    --chart-critical: #e66767;
+    --chart-neutral: #5c5b57;
   }
 
   /* ====================================================== */
