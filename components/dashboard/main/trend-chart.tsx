@@ -9,7 +9,8 @@
 // seri disembunyikan). Kuning/hijau kontrasnya rendah di tema terang, jadi
 // legend selalu menampilkan total dan ada tampilan tabel.
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useSyncExternalStore } from "react";
+import { Skeleton } from "@/components/ui/skeleton";
 import { CartesianGrid, Line, LineChart, XAxis, YAxis } from "recharts";
 import { ChartLine, Table2 } from "lucide-react";
 import { EmptyNote, num } from "@/components/dashboard/main/primitives";
@@ -42,6 +43,8 @@ const SERIES = [
 ] as const;
 
 type SeriesKey = (typeof SERIES)[number]["key"];
+
+const noopSubscribe = () => () => {};
 type Granularity = "hari" | "minggu" | "bulan";
 type Bucket = { key: string; label: string; mr: number; pr: number; po: number; ri: number };
 
@@ -122,6 +125,13 @@ export function TrendChart({
     [buckets],
   );
   const grandTotal = SERIES.reduce((sum, s) => sum + totals[s.key], 0);
+  // Grafik digambar di browser saja: kalau ikut dirender di server, lebarnya
+  // diukur saat kartu masih tersembunyi (streaming) dan grafik jadi sempit.
+  const isClient = useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false,
+  );
   const visible = SERIES.filter((s) => !hidden.includes(s.key));
 
   const toggle = (key: SeriesKey) =>
@@ -185,6 +195,8 @@ export function TrendChart({
 
       {grandTotal === 0 ? (
         <EmptyNote>Tidak ada dokumen pada rentang ini.</EmptyNote>
+      ) : view === "chart" && !isClient ? (
+        <Skeleton className="h-64 w-full" />
       ) : view === "chart" ? (
         <ChartContainer config={chartConfig} className="aspect-auto h-64 w-full">
           <LineChart accessibilityLayer data={buckets} margin={{ left: 0, right: 12, top: 8, bottom: 0 }}>

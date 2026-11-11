@@ -19,18 +19,39 @@ import {
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { DashboardFilters } from "@/lib/dashboard/filters";
-import type { ListArgs, ListKind, ListScope } from "@/lib/dashboard/types";
+import type {
+  DashboardExecAPart,
+  DashboardExecBPart,
+  DashboardPeriodPart,
+  ListArgs,
+  ListKind,
+  ListScope,
+  PartResult,
+} from "@/lib/dashboard/types";
 import { LIST_DEFS } from "@/components/dashboard/main/config";
 
 type ParamValue = string | string[] | number[] | null | undefined;
 
 export type OpenList = { kind: ListKind; args: ListArgs; title?: string };
 
+/**
+ * Bagian dashboard yang dimuat menyusul (dibaca dengan use() di dalam
+ * <Suspense>). exec_a/exec_b null untuk user non-atasan.
+ */
+export type DashboardParts = {
+  period: Promise<PartResult<DashboardPeriodPart>>;
+  execA: Promise<PartResult<DashboardExecAPart>> | null;
+  execB: Promise<PartResult<DashboardExecBPart>> | null;
+};
+
 type DashboardContextValue = {
   filters: DashboardFilters;
   /** Filter final untuk RPC daftar (lokasi sudah termasuk default hak akses). */
   scope: ListScope;
   canValue: boolean;
+  parts: DashboardParts;
+  /** Berubah tiap filter berubah: key Suspense supaya skeleton tampil lagi. */
+  dataKey: string;
   pending: boolean;
   setParams: (updates: Record<string, ParamValue>) => void;
   resetFilters: () => void;
@@ -70,11 +91,13 @@ export function DashboardProvider({
   filters,
   scope,
   canValue,
+  parts,
   children,
 }: {
   filters: DashboardFilters;
   scope: ListScope;
   canValue: boolean;
+  parts: DashboardParts;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -177,11 +200,15 @@ export function DashboardProvider({
     };
   }, [detailKind, detailArgs, detailTitle]);
 
+  const dataKey = useMemo(() => JSON.stringify(scope), [scope]);
+
   const value = useMemo<DashboardContextValue>(
     () => ({
       filters,
       scope,
       canValue,
+      parts,
+      dataKey,
       pending,
       setParams,
       resetFilters,
@@ -190,7 +217,7 @@ export function DashboardProvider({
       closeList,
       detail,
     }),
-    [filters, scope, canValue, pending, setParams, resetFilters, refresh, openList, closeList, detail],
+    [filters, scope, canValue, parts, dataKey, pending, setParams, resetFilters, refresh, openList, closeList, detail],
   );
 
   return <DashboardContext.Provider value={value}>{children}</DashboardContext.Provider>;

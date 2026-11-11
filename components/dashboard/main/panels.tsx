@@ -27,10 +27,10 @@ import {
   Delta,
   EmptyNote,
   LegendDots,
+  MetricCell,
   num,
   pct,
   SegmentedBar,
-  StatTile,
 } from "@/components/dashboard/main/primitives";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,7 +38,8 @@ import { formatYmdShort } from "@/lib/dashboard/filters";
 import type {
   AgingRow,
   ApproverRow,
-  DashboardExec,
+  DashboardExecA,
+  DashboardExecB,
   DashboardPeriod,
   DashboardQueue,
   LeadTime,
@@ -58,6 +59,9 @@ function ageTone(days: number) {
   return "text-muted-foreground";
 }
 
+/** Baris yang tampil; sisanya lewat "Lihat semua". */
+const MY_ROWS = 6;
+
 /** Dokumen yang gilirannya di-approve user ini. */
 export function MyApprovalsPanel({ rows, total }: { rows: MyApprovalRow[]; total: number }) {
   const { openList } = useDashboard();
@@ -74,7 +78,7 @@ export function MyApprovalsPanel({ rows, total }: { rows: MyApprovalRow[]; total
   return (
     <div>
       <ul className="-mx-2 divide-y">
-        {rows.map((row) => {
+        {rows.slice(0, MY_ROWS).map((row) => {
           const href = row.href.endsWith("=")
             ? `${row.href}${encodeURIComponent(row.kode)}`
             : row.href;
@@ -104,7 +108,7 @@ export function MyApprovalsPanel({ rows, total }: { rows: MyApprovalRow[]; total
           );
         })}
       </ul>
-      {total > rows.length && (
+      {total > Math.min(rows.length, MY_ROWS) && (
         <Button
           variant="ghost"
           size="sm"
@@ -307,7 +311,7 @@ export function StageFlow({ queue }: { queue: DashboardQueue }) {
 }
 
 /** MR aktif per level progres (urut dari awal ke akhir proses). */
-export function PipelinePanel({ pipeline }: { pipeline: DashboardExec["mr_pipeline"] }) {
+export function PipelinePanel({ pipeline }: { pipeline: DashboardExecA["mr_pipeline"] }) {
   const { openList } = useDashboard();
   const total = MR_LEVELS.reduce((sum, l) => sum + (pipeline[l.key] ?? 0), 0);
   if (total === 0) return <EmptyNote>Tidak ada MR aktif.</EmptyNote>;
@@ -352,7 +356,7 @@ function useLocationFilter() {
   };
 }
 
-export function MrLocationPanel({ rows }: { rows: DashboardExec["mr_by_cabang"] }) {
+export function MrLocationPanel({ rows }: { rows: DashboardExecB["mr_by_cabang"] }) {
   const filterLocation = useLocationFilter();
   const active = rows.filter((r) => r.aktif > 0).slice(0, 10);
   if (active.length === 0) return <EmptyNote>Tidak ada MR aktif.</EmptyNote>;
@@ -393,7 +397,7 @@ export function MrLocationPanel({ rows }: { rows: DashboardExec["mr_by_cabang"] 
   );
 }
 
-export function StockLocationPanel({ rows }: { rows: DashboardExec["stock_by_cabang"] }) {
+export function StockLocationPanel({ rows }: { rows: DashboardExecB["stock_by_cabang"] }) {
   const filterLocation = useLocationFilter();
   const shown = rows.slice(0, 10);
   if (shown.length === 0) {
@@ -516,7 +520,7 @@ export function RankedPanel({
   );
 }
 
-export function TopVendorsPanel({ rows }: { rows: DashboardExec["top_vendors"] }) {
+export function TopVendorsPanel({ rows }: { rows: DashboardExecB["top_vendors"] }) {
   if (rows.length === 0) return <EmptyNote>Tidak ada PO pada periode ini.</EmptyNote>;
   const max = Math.max(...rows.map((r) => r.po));
   return (
@@ -539,7 +543,7 @@ export function TopVendorsPanel({ rows }: { rows: DashboardExec["top_vendors"] }
   );
 }
 
-export function TopPartsPanel({ rows }: { rows: DashboardExec["top_parts"] }) {
+export function TopPartsPanel({ rows }: { rows: DashboardExecB["top_parts"] }) {
   if (rows.length === 0) return <EmptyNote>Tidak ada permintaan pada periode ini.</EmptyNote>;
   const max = Math.max(...rows.map((r) => r.mr));
   return (
@@ -565,151 +569,134 @@ export function TopPartsPanel({ rows }: { rows: DashboardExec["top_parts"] }) {
 }
 
 // ------------------------------------------------------------------
-// Kartu khusus
+// Sel khusus (dipakai di MetricGrid)
 // ------------------------------------------------------------------
 
 function leadValue(lt: LeadTime) {
-  return lt.cur === null
-    ? "-"
-    : lt.cur.toLocaleString("id-ID", { maximumFractionDigits: 1 });
-}
-
-export function LeadTimeTiles({ data }: { data: DashboardExec["lead_time"] }) {
-  const items: { key: keyof DashboardExec["lead_time"]; label: string; note: string }[] = [
-    { key: "mr_pr", label: "Lead time MR → PR", note: "PR" },
-    { key: "pr_po", label: "Lead time PR → PO", note: "PO" },
-    { key: "po_ri", label: "Lead time PO → diterima", note: "RI" },
-  ];
+  if (lt.cur === null) return "-";
   return (
     <>
-      {items.map((item) => {
+      {lt.cur.toLocaleString("id-ID", { maximumFractionDigits: 1 })}
+      <span className="ml-1 text-xs font-medium text-muted-foreground">hari</span>
+    </>
+  );
+}
+
+const LEAD_ITEMS: { key: keyof DashboardExecA["lead_time"]; label: string; note: string }[] = [
+  { key: "mr_pr", label: "Lead time MR → PR", note: "PR" },
+  { key: "pr_po", label: "Lead time PR → PO", note: "PO" },
+  { key: "po_ri", label: "Lead time PO → diterima", note: "RI" },
+];
+
+export function LeadTimeCells({ data }: { data: DashboardExecA["lead_time"] }) {
+  return (
+    <>
+      {LEAD_ITEMS.map((item) => {
         const lt = data[item.key];
         return (
-          <StatTile
+          <MetricCell
             key={item.key}
             label={item.label}
-            value={
-              <>
-                {leadValue(lt)}
-                {lt.cur !== null && (
-                  <span className="ml-1 text-sm font-medium text-muted-foreground">hari</span>
-                )}
-              </>
-            }
+            value={leadValue(lt)}
             hint={
               lt.cur === null ? (
-                `Belum ada ${item.note} pada periode ini`
+                `Belum ada ${item.note} di periode ini`
               ) : (
-                <>
-                  <Delta cur={lt.cur} prev={lt.prev} goodWhen="down" suffix=" hari" />
-                  <span className="block">Rata-rata dari {num(lt.n)} {item.note}</span>
-                </>
+                <Delta cur={lt.cur} prev={lt.prev} goodWhen="down" suffix=" hr" />
               )
             }
             icon={Timer}
             tone="info"
             active={lt.cur !== null}
-          />
+          >
+            {lt.cur !== null && (
+              <span className="block text-[11px] text-muted-foreground">
+                Rata-rata dari {num(lt.n)} {item.note}
+              </span>
+            )}
+          </MetricCell>
         );
       })}
     </>
   );
 }
 
-export function FulfillmentTile({ data }: { data: DashboardPeriod["mr_fulfillment"] }) {
+export function FulfillmentCell({ data }: { data: DashboardPeriod["mr_fulfillment"] }) {
   const percent = pct(data.qty_received, data.qty_request);
   return (
-    <StatTile
+    <MetricCell
       label="Qty MR sudah diterima"
       value={data.qty_request > 0 ? `${percent}%` : "-"}
       hint={
         data.qty_request > 0
-          ? `${num(data.qty_received)} dari ${num(data.qty_request)} qty MR periode ini`
-          : "Belum ada MR pada periode ini"
+          ? `${num(data.qty_received)} dari ${num(data.qty_request)} qty`
+          : "Belum ada MR di periode ini"
       }
       icon={PackageCheck}
       tone="info"
       active={data.qty_request > 0}
     >
       {data.qty_request > 0 && (
-        <span className="mt-2 block h-1.5 w-full rounded-full bg-muted/60">
+        <span className="block h-1.5 w-full rounded-full bg-muted/60">
           <span
             className="block h-full rounded-full bg-chart-dash-3"
             style={{ width: `${Math.min(percent, 100)}%` }}
           />
         </span>
       )}
-    </StatTile>
+    </MetricCell>
   );
 }
 
-/** Nilai PO (hanya dikirim server untuk role purchasing). */
-export function PoValueTiles({ rows }: { rows: PoValueRow[] }) {
+/** Dua sel nilai PO (hanya dikirim server untuk role purchasing). */
+export function PoValueCells({ rows }: { rows: PoValueRow[] }) {
   const { openList } = useDashboard();
-  const main = rows.find((r) => r.currency === "IDR") ?? rows[0];
+  const main = rows.find((r) => r.currency === "IDR") ?? rows[0] ?? null;
   const others = rows.filter((r) => r !== main);
-
-  if (!main) {
-    return (
-      <StatTile
-        label="Nilai PO periode ini"
-        value="Rp 0"
-        hint="Belum ada PO pada periode ini"
-        icon={Wallet}
-        active={false}
-      />
-    );
-  }
+  const currency = main?.currency ?? "IDR";
+  const cur = main?.cur ?? 0;
+  const outstanding = main?.outstanding ?? 0;
+  const extra = (pick: (r: PoValueRow) => number) => {
+    const list = others.filter((o) => pick(o) > 0);
+    if (list.length === 0) return null;
+    return list.map((o) => (
+      <span key={o.currency} className="block text-[11px] text-muted-foreground">
+        + {compactRupiah(pick(o), o.currency)}
+      </span>
+    ));
+  };
 
   return (
     <>
-      <StatTile
+      <MetricCell
         label="Nilai PO periode ini"
-        value={compactRupiah(main.cur, main.currency)}
+        value={compactRupiah(cur, currency)}
         hint={
-          <>
-            <Delta
-              cur={main.cur}
-              prev={main.prev}
-              format={(n) => compactRupiah(n, main.currency)}
-            />
-            <span className="block">Subtotal item, sebelum pajak & diskon</span>
-          </>
+          main ? (
+            <Delta cur={main.cur} prev={main.prev} format={(n) => compactRupiah(n, currency)} />
+          ) : (
+            "Belum ada PO di periode ini"
+          )
         }
         icon={Wallet}
         tone="info"
-        active={main.cur > 0}
+        active={cur > 0}
         onClick={() => openList("po_period")}
       >
-        {others.some((o) => o.cur > 0) && (
-          <div className="mt-2 space-y-0.5 text-xs text-muted-foreground">
-            {others
-              .filter((o) => o.cur > 0)
-              .map((o) => (
-                <p key={o.currency}>+ {compactRupiah(o.cur, o.currency)}</p>
-              ))}
-          </div>
-        )}
-      </StatTile>
-      <StatTile
+        {extra((o) => o.cur)}
+      </MetricCell>
+      <MetricCell
         label="Nilai PO belum diterima"
-        value={compactRupiah(main.outstanding, main.currency)}
-        hint="Sisa qty PO approved yang barangnya belum datang"
+        value={compactRupiah(outstanding, currency)}
+        hint="Sisa qty PO approved"
         icon={Hourglass}
         tone="warning"
-        active={main.outstanding > 0}
+        active={outstanding > 0}
         onClick={() => openList("po_not_received")}
       >
-        {others.some((o) => o.outstanding > 0) && (
-          <div className="mt-2 space-y-0.5 text-xs text-muted-foreground">
-            {others
-              .filter((o) => o.outstanding > 0)
-              .map((o) => (
-                <p key={o.currency}>+ {compactRupiah(o.outstanding, o.currency)}</p>
-              ))}
-          </div>
-        )}
-      </StatTile>
+        {extra((o) => o.outstanding)}
+      </MetricCell>
     </>
   );
 }
+

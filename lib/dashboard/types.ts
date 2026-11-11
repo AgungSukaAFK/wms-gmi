@@ -110,8 +110,6 @@ export type DashboardApproval = {
   mine: number;
   mine_rows: MyApprovalRow[];
   stale: number;
-  aging: AgingRow[] | null;
-  approvers: ApproverRow[] | null;
 };
 
 export type TrendPoint = { d: string; mr: number; pr: number; po: number; ri: number };
@@ -124,11 +122,17 @@ export type MrLevelBucket =
   | "CLOSE_1"
   | "CLOSE_2";
 
-export type DashboardExec = {
+/** Bagian exec_a: lead time, tren, level MR, antrian approval. */
+export type DashboardExecA = {
   lead_time: { mr_pr: LeadTime; pr_po: LeadTime; po_ri: LeadTime };
   trend: TrendPoint[];
   trend_from: string;
   mr_pipeline: Partial<Record<MrLevelBucket, number>>;
+  approval: { aging: AgingRow[]; approvers: ApproverRow[] };
+};
+
+/** Bagian exec_b: lokasi, stok, kategori, prioritas, vendor, barang. */
+export type DashboardExecB = {
   mr_by_cabang: {
     cabang_id: number | null;
     nama: string;
@@ -162,24 +166,39 @@ export type PoValueRow = {
   outstanding: number;
 };
 
-export type DashboardSummary = {
+/** Bagian dashboard (p_part di get_main_dashboard_summary). */
+export type DashboardPart = "core" | "period" | "exec_a" | "exec_b";
+
+type PartBase = {
   viewer: DashboardViewer | null;
   /** Lokasi yang benar-benar dipakai (kosong = semua). */
   cabang_ids: number[];
-  cabang_options: { id: number; nama: string }[];
   today: string;
   date_from: string;
   date_to: string;
   prev_from: string | null;
   prev_to: string | null;
+  trend_from: string;
+};
+
+/** Bagian core: dimuat lebih dulu, menentukan susunan halaman. */
+export type DashboardCore = PartBase & {
+  cabang_options: { id: number; nama: string }[];
   queue: DashboardQueue;
   approval: DashboardApproval;
+};
+
+export type DashboardPeriodPart = PartBase & {
   period: DashboardPeriod;
   /** null = user tidak berhak melihat nilai Rupiah. */
   po_value: PoValueRow[] | null;
-  /** null = user bukan atasan. */
-  exec: DashboardExec | null;
 };
+
+export type DashboardExecAPart = PartBase & { exec: DashboardExecA | null };
+export type DashboardExecBPart = PartBase & { exec: DashboardExecB | null };
+
+/** Hasil satu bagian: error dikembalikan (bukan dilempar) supaya hanya kartunya yang gagal. */
+export type PartResult<T> = { data: T | null; error: string | null };
 
 /** Jenis daftar drill-down (p_kind di get_main_dashboard_list). */
 export type ListKind =

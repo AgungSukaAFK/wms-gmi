@@ -46,7 +46,7 @@ export function DashboardFilterBar({
         <div
           role="group"
           aria-label="Periode"
-          className="flex max-w-full gap-1 overflow-x-auto rounded-lg border bg-muted/50 p-1 dark:bg-muted/10"
+          className="grid w-full grid-cols-3 gap-1 rounded-lg border bg-muted/50 p-1 sm:flex sm:w-auto dark:bg-muted/10"
         >
           {PERIOD_PRESETS.map((preset) => {
             const active = filters.preset === preset.value;

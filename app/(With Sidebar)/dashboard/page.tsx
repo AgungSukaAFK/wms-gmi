@@ -3,12 +3,15 @@ import { MainDashboard } from "@/components/dashboard/main/dashboard-view";
 import { businessToday } from "@/lib/business-date";
 import { resolveDashboardFilters } from "@/lib/dashboard/filters";
 import type { ListScope } from "@/lib/dashboard/types";
-import { fetchDashboardSummary } from "@/services/dashboard-actions";
+import { fetchDashboardPart } from "@/services/dashboard-actions";
 
-// Dashboard utama. Filter dibaca dari URL, lalu SATU panggilan RPC
-// (get_main_dashboard_summary, migration 20261111120000_main_dashboard.sql)
-// mengembalikan profil + hak akses + semua angka. Daftar di balik tiap kartu
-// diambil saat dibuka (get_main_dashboard_list).
+// Dashboard utama. Filter dibaca dari URL, lalu ringkasan diambil per bagian
+// (get_main_dashboard_summary, p_part) secara PARALEL:
+//   core   -> ditunggu; menentukan susunan halaman (profil, hak akses, antrian)
+//   period, exec_a, exec_b -> dikirim sebagai promise, tampil menyusul
+// Tiap bagian punya batas waktu statement sendiri; bagian yang gagal hanya
+// menampilkan error di kartunya. Daftar di balik tiap angka diambil saat
+// dibuka (get_main_dashboard_list).
 
 export default async function DashboardPage({
   searchParams,
@@ -17,9 +20,16 @@ export default async function DashboardPage({
 }) {
   const today = businessToday();
   const filters = resolveDashboardFilters(await searchParams, today);
-  const { data: summary, error } = await fetchDashboardSummary(filters);
 
-  if (!summary || !summary.viewer) {
+  // Semua dimulai bersamaan; hanya core yang ditunggu.
+  const corePromise = fetchDashboardPart(filters, "core");
+  const period = fetchDashboardPart(filters, "period");
+  const execA = fetchDashboardPart(filters, "exec_a");
+  const execB = fetchDashboardPart(filters, "exec_b");
+
+  const { data: core, error } = await corePromise;
+
+  if (!core || !core.viewer) {
     return (
       <Content title="Dashboard tidak bisa dimuat">
         <div className="space-y-2 text-sm">
@@ -31,25 +41,33 @@ export default async function DashboardPage({
           {error && (
             <p className="rounded-md bg-muted px-3 py-2 font-mono text-xs break-all">{error}</p>
           )}
-          {error?.includes("get_main_dashboard_summary") && (
-            <p className="text-muted-foreground">
-              Kemungkinan migration <code>20261111120000_main_dashboard.sql</code> belum dijalankan
-              di database ini.
-            </p>
-          )}
         </div>
       </Content>
     );
   }
 
   const scope: ListScope = {
-    today: summary.today,
-    cabangIds: summary.cabang_ids ?? [],
-    from: summary.date_from,
-    to: summary.date_to,
+    today: core.today,
+    cabangIds: core.cabang_ids ?? [],
+    from: core.date_from,
+    to: core.date_to,
     kategori: filters.kategori,
     priorities: filters.priorities,
   };
 
-  return <MainDashboard summary={summary} filters={filters} scope={scope} />;
+  const isExec = core.viewer.is_exec;
+
+  return (
+    <MainDashboard
+      core={core}
+      filters={filters}
+      scope={scope}
+      parts={{
+        period,
+        // Non-atasan: bagian exec tidak dipakai (RPC-nya mengembalikan null).
+        execA: isExec ? execA : null,
+        execB: isExec ? execB : null,
+      }}
+    />
+  );
 }

@@ -1,22 +1,35 @@
 "use client";
 
-// Blok dasar dashboard utama: judul section, kartu angka yang bisa diklik,
-// pembanding periode, dan bar HTML ringan (tanpa library chart).
+// Blok dasar dashboard utama.
+// - Panel      : <Content> dengan padding padat; tinggi ikut baris (h-full).
+// - MetricGrid : grid sel angka di dalam panel. Jumlah kolom mengikuti LEBAR
+//                PANEL (container query), dipilih supaya habis dibagi jumlah
+//                sel -> tidak ada sel yatim di baris terakhir.
+// - MetricCell : sel angka yang bisa diklik (membuka daftar sumber datanya).
+// - Bar HTML ringan untuk peringkat/komposisi (tanpa library chart).
 
-import { ArrowRight, Minus, TrendingDown, TrendingUp, type LucideIcon } from "lucide-react";
-import { Content } from "@/components/content";
+import { use } from "react";
 import {
-  PERIOD_CARDS,
-  QUEUE_CARDS,
-  type Tone,
-} from "@/components/dashboard/main/config";
+  AlertCircle,
+  ChevronRight,
+  Minus,
+  RotateCw,
+  TrendingDown,
+  TrendingUp,
+  type LucideIcon,
+} from "lucide-react";
+import { Content } from "@/components/content";
+import { PERIOD_CARDS, QUEUE_CARDS, type Tone } from "@/components/dashboard/main/config";
 import { useDashboard } from "@/components/dashboard/main/dashboard-context";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import type {
   CurPrev,
-  DashboardPeriod,
+  DashboardPeriodPart,
   DashboardQueue,
   ListArgs,
   ListKind,
+  PartResult,
   PeriodKey,
   QueueKey,
 } from "@/lib/dashboard/types";
@@ -40,30 +53,65 @@ export function compactRupiah(value: number, currency = "IDR") {
 }
 
 // ------------------------------------------------------------------
-// Section
+// Panel & section
 // ------------------------------------------------------------------
+
+/** Lebar panel di grid 12 kolom halaman (mobile selalu penuh). */
+const SPAN: Record<number, string> = {
+  4: "lg:col-span-4",
+  5: "lg:col-span-5",
+  6: "lg:col-span-6",
+  7: "lg:col-span-7",
+  8: "lg:col-span-8",
+  12: "lg:col-span-12",
+};
+
+const PANEL_CLASS =
+  "h-full gap-3 py-4 sm:py-5 [&>[data-slot=card-header]]:px-4 sm:[&>[data-slot=card-header]]:px-5 [&>[data-slot=card-content]]:px-4 sm:[&>[data-slot=card-content]]:px-5 [&_[data-slot=card-title]]:text-[0.95rem] [&_[data-slot=card-description]]:text-xs";
+
+export function Panel({
+  span = 12,
+  title,
+  description,
+  action,
+  fill = false,
+  className,
+  children,
+}: {
+  span?: 4 | 5 | 6 | 7 | 8 | 12;
+  /** Isi meregang mengisi tinggi panel (dipakai bersama MetricGrid fill). */
+  fill?: boolean;
+  title?: string;
+  description?: string;
+  action?: React.ReactNode;
+  className?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <Content
+      title={title}
+      description={description}
+      cardAction={action}
+      className={cn(PANEL_CLASS, SPAN[span], fill && "[&>[data-slot=card-content]]:flex-1", className)}
+    >
+      {children}
+    </Content>
+  );
+}
 
 export function SectionHeading({
   id,
   title,
   description,
-  action,
 }: {
   id?: string;
   title: string;
   description?: string;
-  action?: React.ReactNode;
 }) {
   return (
-    <div
-      id={id}
-      className="col-span-12 mt-2 flex scroll-mt-24 flex-wrap items-end justify-between gap-x-4 gap-y-2"
-    >
-      <div className="min-w-0">
-        <h2 className="text-base font-semibold tracking-tight">{title}</h2>
-        {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
-      </div>
-      {action}
+    <div id={id} className="col-span-12 -mb-1 mt-1 scroll-mt-24">
+      <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+      {description && <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>}
     </div>
   );
 }
@@ -72,18 +120,99 @@ export function EmptyNote({ children }: { children: React.ReactNode }) {
   return <p className="py-6 text-center text-sm text-muted-foreground">{children}</p>;
 }
 
+/** Kartu error satu bagian (bagian lain tetap tampil). */
+export function PartError({ message, compact = false }: { message: string; compact?: boolean }) {
+  const { refresh, pending } = useDashboard();
+  return (
+    <div
+      className={cn(
+        "flex flex-col items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 text-sm",
+        compact ? "p-3" : "p-4",
+      )}
+    >
+      <span className="flex items-start gap-2 text-destructive">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span className="font-medium">Bagian ini gagal dimuat.</span>
+      </span>
+      <span className="text-xs break-words text-muted-foreground">{message}</span>
+      <Button variant="outline" size="sm" className="h-7 text-xs" onClick={refresh} disabled={pending}>
+        <RotateCw className={cn(pending && "animate-spin")} /> Coba lagi
+      </Button>
+    </div>
+  );
+}
+
+/** Panel skeleton dengan tinggi kira-kira isi aslinya. */
+export function PanelSkeleton({
+  span = 12,
+  title,
+  rows = 4,
+}: {
+  span?: 4 | 5 | 6 | 7 | 8 | 12;
+  title?: string;
+  rows?: number;
+}) {
+  return (
+    <Panel span={span} title={title}>
+      <div className="space-y-3" aria-busy="true">
+        {Array.from({ length: rows }).map((_, i) => (
+          <Skeleton key={i} className="h-8 w-full" />
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 // ------------------------------------------------------------------
-// Kartu angka
+// Grid sel angka
 // ------------------------------------------------------------------
 
-const TONE_ICON: Record<Tone, string> = {
-  critical: "bg-destructive/10 text-destructive",
-  warning: "bg-warning/10 text-warning",
-  info: "bg-primary/10 text-primary",
-  neutral: "bg-muted text-muted-foreground",
+// Ditulis lengkap supaya terbaca Tailwind. Ukuran container: @sm 24rem,
+// @xl 36rem, @2xl 42rem, @3xl 48rem, @4xl 56rem, @5xl 64rem.
+const GRID_COLS: Record<number, string> = {
+  1: "grid-cols-1",
+  2: "grid-cols-2",
+  3: "grid-cols-1 @sm:grid-cols-3",
+  4: "grid-cols-2 @3xl:grid-cols-4",
+  5: "grid-cols-2 @xl:grid-cols-3 @4xl:grid-cols-5",
+  6: "grid-cols-2 @xl:grid-cols-3 @5xl:grid-cols-6",
+  7: "grid-cols-2 @xl:grid-cols-4",
+  8: "grid-cols-2 @2xl:grid-cols-4",
+  9: "grid-cols-2 @xl:grid-cols-3",
+  10: "grid-cols-2 @3xl:grid-cols-5",
+};
+const GRID_DEFAULT = "grid-cols-2 @xl:grid-cols-3 @4xl:grid-cols-4";
+
+export function MetricGrid({
+  count,
+  fill = false,
+  children,
+}: {
+  count: number;
+  /** Baris meregang rata mengisi tinggi panel (Panel fill). */
+  fill?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("@container", fill && "h-full")}>
+      <div className={cn("grid gap-2", fill && "h-full auto-rows-fr", GRID_COLS[count] ?? GRID_DEFAULT)}>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+const TONE_TEXT: Record<Tone, string> = {
+  critical: "text-destructive",
+  warning: "text-warning",
+  info: "text-primary",
+  neutral: "text-muted-foreground",
 };
 
-export function StatTile({
+const CELL_CLASS =
+  "group relative flex h-full min-w-0 flex-col rounded-lg border bg-background p-3 text-left";
+
+export function MetricCell({
   label,
   value,
   hint,
@@ -91,106 +220,103 @@ export function StatTile({
   tone = "neutral",
   active = true,
   onClick,
-  actionLabel = "Lihat daftar",
   children,
-  className,
 }: {
   label: string;
-  /** Sudah diformat. */
   value: React.ReactNode;
   hint?: React.ReactNode;
   icon?: LucideIcon;
   tone?: Tone;
-  /** false = angkanya nol: kartu diredam. */
+  /** false = nilainya nol / tidak ada: sel diredam. */
   active?: boolean;
   onClick?: () => void;
-  actionLabel?: string;
   children?: React.ReactNode;
-  className?: string;
 }) {
+  const body = (
+    <>
+      <span className="flex min-h-[2.75em] min-w-0 items-start gap-1.5 text-xs font-medium leading-snug text-muted-foreground">
+        {Icon && (
+          <Icon
+            className={cn("mt-px h-3.5 w-3.5 shrink-0", active ? TONE_TEXT[tone] : "text-muted-foreground/70")}
+          />
+        )}
+        <span className="line-clamp-2 min-w-0 flex-1">{label}</span>
+        {onClick && (
+          <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-opacity pointer-fine:opacity-0 pointer-fine:group-hover:opacity-100 pointer-fine:group-focus-visible:opacity-100" />
+        )}
+      </span>
+      <span
+        className={cn(
+          "mt-1 text-xl font-semibold leading-none tracking-tight",
+          !active && "text-muted-foreground",
+          active && tone === "critical" && "text-destructive",
+        )}
+      >
+        {value}
+      </span>
+      {hint && (
+        <span className="mt-1 block truncate text-[11px] leading-snug text-muted-foreground">{hint}</span>
+      )}
+      {children && (
+        <span className="mt-auto block pt-2">
+          <span className="block space-y-0.5 border-t pt-1.5">{children}</span>
+        </span>
+      )}
+    </>
+  );
+
+  if (!onClick) return <div className={CELL_CLASS}>{body}</div>;
   return (
-    <Content
-      size="xs"
+    <button
+      type="button"
+      onClick={onClick}
       className={cn(
-        "group relative col-span-6 gap-0 py-4 transition-colors [&>[data-slot=card-content]]:px-4 sm:[&>[data-slot=card-content]]:px-5",
-        onClick && "hover:border-primary/40 has-[button:focus-visible]:ring-2 has-[button:focus-visible]:ring-ring",
-        className,
+        CELL_CLASS,
+        "cursor-pointer transition-colors hover:border-primary/40 hover:bg-accent/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <p className="text-xs font-medium leading-snug text-muted-foreground">{label}</p>
-          <p
-            className={cn(
-              "mt-1 text-2xl font-semibold leading-tight tracking-tight",
-              !active && "text-muted-foreground",
-              active && tone === "critical" && "text-destructive",
-            )}
-          >
-            {value}
-          </p>
-          {hint && <p className="mt-0.5 text-xs leading-snug text-muted-foreground">{hint}</p>}
-        </div>
-        {Icon && (
-          <span
-            className={cn(
-              "hidden h-9 w-9 shrink-0 items-center justify-center rounded-md sm:flex",
-              active ? TONE_ICON[tone] : TONE_ICON.neutral,
-            )}
-          >
-            <Icon className="h-4 w-4" />
-          </span>
-        )}
-      </div>
-      {children}
-      {onClick && (
-        <>
-          <span className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-primary">
-            {actionLabel}
-            <ArrowRight className="h-3 w-3 transition-transform group-hover:translate-x-0.5" />
-          </span>
-          {/* Seluruh kartu jadi area klik. */}
-          <button
-            type="button"
-            onClick={onClick}
-            aria-label={`${label}: ${actionLabel.toLowerCase()}`}
-            className="absolute inset-0 cursor-pointer rounded-xl focus-visible:outline-none"
-          />
-        </>
-      )}
-    </Content>
+      {body}
+    </button>
   );
 }
 
-/** Baris rincian kecil di dalam kartu. */
+export function CellSkeleton() {
+  return (
+    <div className={cn(CELL_CLASS, "gap-2")} aria-busy="true">
+      <Skeleton className="h-3 w-3/4" />
+      <Skeleton className="mt-3 h-5 w-1/3" />
+      <Skeleton className="h-2.5 w-1/2" />
+    </div>
+  );
+}
+
+/** Baris rincian kecil di dalam sel. */
 export function SubCount({ label, value }: { label: string; value: number }) {
   return (
-    <p className="flex justify-between gap-2 text-xs text-muted-foreground">
+    <span className="flex justify-between gap-2 text-[11px] text-muted-foreground">
       <span className="truncate">{label}</span>
       <span className="font-medium tabular-nums text-foreground">{num(value)}</span>
-    </p>
+    </span>
   );
 }
 
-/** Kartu antrian (state saat ini) -> membuka daftar dengan kind yang sama. */
-export function QueueTile({
+/** Sel antrian (state saat ini) -> membuka daftar dengan kind yang sama. */
+export function QueueCell({
   queueKey,
   queue,
   label,
   children,
-  className,
 }: {
   queueKey: QueueKey;
   queue: DashboardQueue;
   label?: string;
   children?: React.ReactNode;
-  className?: string;
 }) {
   const { openList } = useDashboard();
   const def = QUEUE_CARDS[queueKey];
   const value = queue[queueKey] ?? 0;
   return (
-    <StatTile
+    <MetricCell
       label={label ?? def.label}
       value={num(value)}
       hint={def.hint}
@@ -198,10 +324,9 @@ export function QueueTile({
       tone={def.tone}
       active={value > 0}
       onClick={() => openList(queueKey)}
-      className={className}
     >
-      {children && <div className="mt-2 space-y-0.5">{children}</div>}
-    </StatTile>
+      {children}
+    </MetricCell>
   );
 }
 
@@ -225,21 +350,20 @@ export function Delta({
   format?: (n: number) => string;
 }) {
   if (cur === null || prev === null) {
-    return <span className="text-xs text-muted-foreground">Belum ada pembanding</span>;
+    return <span className="text-muted-foreground">Belum ada pembanding</span>;
   }
   const diff = cur - prev;
   const percent = prev !== 0 ? Math.round((diff / Math.abs(prev)) * 100) : null;
   const Icon = diff > 0 ? TrendingUp : diff < 0 ? TrendingDown : Minus;
   const good = goodWhen && diff !== 0 ? (diff > 0 ? "up" : "down") === goodWhen : null;
-  const prevText = format
-    ? format(prev)
-    : `${prev.toLocaleString("id-ID", { maximumFractionDigits: 1 })}${suffix}`;
+  const fmt = (n: number) =>
+    format ? format(n) : `${n.toLocaleString("id-ID", { maximumFractionDigits: 1 })}${suffix}`;
 
   return (
-    <span className="inline-flex flex-wrap items-center gap-x-1 text-xs text-muted-foreground">
+    <span className="inline-flex max-w-full items-center gap-1 text-muted-foreground">
       <Icon
         className={cn(
-          "h-3.5 w-3.5 shrink-0",
+          "h-3 w-3 shrink-0",
           good === true && "text-success",
           good === false && "text-destructive",
         )}
@@ -255,47 +379,57 @@ export function Delta({
         {diff === 0
           ? "Sama"
           : percent === null
-            ? `${diff > 0 ? "+" : "−"}${
-                format
-                  ? format(Math.abs(diff))
-                  : `${Math.abs(diff).toLocaleString("id-ID", { maximumFractionDigits: 1 })}${suffix}`
-              }`
+            ? `${diff > 0 ? "+" : "−"}${fmt(Math.abs(diff))}`
             : `${percent > 0 ? "+" : ""}${percent}%`}
       </span>
-      <span>dari {prevText}</span>
+      <span className="truncate">vs {fmt(prev)}</span>
     </span>
   );
 }
 
-/** Kartu jumlah dokumen pada periode + pembanding. */
-export function PeriodTile({
+/** Sel jumlah dokumen periode + pembanding (data dari bagian "period"). */
+export function PeriodCell({
   periodKey,
-  period,
   label,
   kind,
   args,
-  className,
 }: {
-  className?: string;
   periodKey: PeriodKey;
-  period: DashboardPeriod;
+  label?: string;
+  kind?: ListKind | null;
+  args?: ListArgs;
+}) {
+  const { parts } = useDashboard();
+  const result = use(parts.period);
+  return <PeriodCellView result={result} periodKey={periodKey} label={label} kind={kind} args={args} />;
+}
+
+function PeriodCellView({
+  result,
+  periodKey,
+  label,
+  kind,
+  args,
+}: {
+  result: PartResult<DashboardPeriodPart>;
+  periodKey: PeriodKey;
   label?: string;
   kind?: ListKind | null;
   args?: ListArgs;
 }) {
   const { openList } = useDashboard();
   const def = PERIOD_CARDS[periodKey];
-  const data: CurPrev = period[periodKey] ?? { cur: 0, prev: null };
+  const data: CurPrev | null = result.data?.period?.[periodKey] ?? null;
   const listKind = kind === undefined ? def.kind : kind;
   return (
-    <StatTile
+    <MetricCell
       label={label ?? `${def.label} dibuat`}
-      value={num(data.cur)}
-      hint={<Delta cur={data.cur} prev={data.prev} />}
+      value={data ? num(data.cur) : "-"}
+      hint={data ? <Delta cur={data.cur} prev={data.prev} /> : "Gagal dimuat"}
       icon={def.icon}
       tone="info"
-      onClick={listKind ? () => openList(listKind, args) : undefined}
-      className={className}
+      active={!!data && data.cur > 0}
+      onClick={data && listKind ? () => openList(listKind, args) : undefined}
     />
   );
 }
@@ -344,7 +478,7 @@ export function BarRow({
         </span>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{valueText}</span>
       </span>
-      <span className="mt-1.5 block h-2.5 w-full rounded-full bg-muted/60">
+      <span className="mt-1 block h-2 w-full rounded-full bg-muted/60">
         <span
           className="flex h-full gap-0.5 overflow-hidden rounded-full"
           style={{ width: `${Math.max(width, total > 0 ? 1.5 : 0)}%` }}
@@ -365,7 +499,7 @@ export function BarRow({
 
   if (!onClick) {
     return (
-      <div title={tooltip || undefined} className="block py-1.5">
+      <div title={tooltip || undefined} className="block py-1">
         {body}
       </div>
     );
@@ -375,7 +509,7 @@ export function BarRow({
       type="button"
       onClick={onClick}
       title={tooltip || undefined}
-      className="-mx-2 block w-[calc(100%+1rem)] cursor-pointer rounded-md px-2 py-1.5 text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+      className="-mx-2 block w-[calc(100%+1rem)] cursor-pointer rounded-md px-2 py-1 text-left transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       {body}
     </button>
@@ -421,7 +555,7 @@ export function SegmentedBar({
             />
           ))}
       </div>
-      <ul className="mt-3 space-y-0.5">
+      <ul className="mt-2 space-y-0.5">
         {parts.map((p) => {
           const row = (
             <>
