@@ -1,6 +1,12 @@
 "use server";
 
 import { createClient } from "@/lib/supabase/server";
+import {
+  isSpbBaseStatus,
+  isSpbCompletingStatus,
+  type SpbBaseStatus,
+  type SpbCompletingStatus,
+} from "@/lib/spb-status";
 import { revalidatePath } from "next/cache";
 import {
   postReturnSpb,
@@ -454,32 +460,61 @@ const SPB_SORT_COLUMNS: Record<string, string> = {
   spb_pic_gmi: "spb_pic_gmi",
   spb_pic_ppa: "spb_pic_ppa",
   spb_status: "spb_status",
+  spb_base_status: "spb_base_status",
+  spb_completing_status: "spb_completing_status",
 };
 
-export async function getSpbList(params?: {
+const SPB_LIST_SELECT = "*, details:spb_details(*), cabang(nama_cabang)";
+const SPB_LIST_STATUS_SELECT =
+  "spb_base_status, spb_base_missing, spb_completing_status";
+
+type SpbListParams = {
   search?: string;
   cabangIds?: number[];
   status?: string;
+  baseStatus?: string;
+  completingStatus?: string;
   dateFrom?: string;
   dateTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
-}) {
+};
+
+export async function getSpbList(params?: SpbListParams) {
+  const result = await querySpbList(params, true);
+  // Fallback selama jendela deploy: kalau migration status SPB belum
+  // dijalankan di DB, computed column-nya belum ada -> ulangi tanpa status
+  // (filter/sort status ikut diabaikan) supaya daftar SPB tetap tampil.
+  if (result.error && /spb_(base|completing)_/.test(result.error)) {
+    return querySpbList(params, false);
+  }
+  return result;
+}
+
+async function querySpbList(
+  params: SpbListParams | undefined,
+  withStatus: boolean,
+) {
   const supabase = await createClient();
   const page = params?.page ?? 1;
   const limit = params?.limit ?? 25;
   const from = (page - 1) * limit;
 
+  // Bertipe `string` supaya parser tipe select supabase-js tidak dipakai
+  // (string dinamis); hasil di-cast oleh pemanggil seperti sebelumnya.
+  const select: string = withStatus
+    ? `${SPB_LIST_SELECT}, ${SPB_LIST_STATUS_SELECT}`
+    : SPB_LIST_SELECT;
   let query = supabase
     .from("spb")
-    .select("*, details:spb_details(*), cabang(nama_cabang)", {
-      count: "exact",
-    })
+    .select(select, { count: "exact" })
     .eq("spb_is_deleted", false);
 
   const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
-  const sortColumn = SPB_SORT_COLUMNS[sortKeyRaw];
+  let sortColumn: string | undefined = SPB_SORT_COLUMNS[sortKeyRaw];
+  if (!withStatus && sortColumn?.startsWith("spb_base_")) sortColumn = undefined;
+  if (!withStatus && sortColumn?.startsWith("spb_completing_")) sortColumn = undefined;
   if (sortColumn) {
     query = query.order(sortColumn, { ascending: sortDirRaw === "asc" });
   } else {
@@ -487,6 +522,17 @@ export async function getSpbList(params?: {
   }
   // Tiebreaker: SPB hasil import punya created_at kembar -> pagination stabil.
   query = query.order("id", { ascending: false });
+
+  if (withStatus) {
+    const base = params?.baseStatus;
+    if (isSpbBaseStatus(base)) {
+      query = query.eq("spb_base_status", base);
+    }
+    const completing = params?.completingStatus;
+    if (isSpbCompletingStatus(completing)) {
+      query = query.eq("spb_completing_status", completing);
+    }
+  }
 
   if (params?.search) {
     query = query.or(
@@ -509,7 +555,12 @@ export async function getSpbList(params?: {
   const { data, error, count } = await query.range(from, from + limit - 1);
   if (error) return { data: [], count: 0, error: error.message };
 
-  return { data: data || [], count: count || 0, error: null as string | null };
+  // Select dinamis -> tipe baris tidak bisa disimpulkan supabase-js.
+  return {
+    data: (data || []) as unknown as Record<string, unknown>[],
+    count: count || 0,
+    error: null as string | null,
+  };
 }
 
 export async function getSpbByNo(spbNo: string) {
@@ -1807,6 +1858,8 @@ const SPB_REPORT_SORT_COLUMNS: Record<string, string> = {
   spb_tanggal: "spb_tanggal",
   spb_no: "spb_no",
   spb_status: "spb_status",
+  spb_base_status: "spb_base_status",
+  spb_completing_status: "spb_completing_status",
   po_no: "po_no",
   do_no: "do_no",
   invoice_no: "invoice_no",
@@ -1862,6 +1915,8 @@ export type SpbReportFilters = {
     >
   >;
   paymentStatus?: "all" | "paid" | "unpaid";
+  baseStatus?: SpbBaseStatus;
+  completingStatus?: SpbCompletingStatus;
 };
 
 function escapeIlike(value: string) {
@@ -1951,6 +2006,14 @@ export async function getSpbReport(params?: {
       query = query
         .not("invoice_no", "is", null)
         .eq("invoice_payment_status", filters.paymentStatus);
+    }
+    // Kolom status turunan dari migration 20261111100000; filter cuma
+    // dipasang kalau dipilih user (report tetap jalan sebelum migration).
+    if (isSpbBaseStatus(filters.baseStatus)) {
+      query = query.eq("spb_base_status", filters.baseStatus);
+    }
+    if (isSpbCompletingStatus(filters.completingStatus)) {
+      query = query.eq("spb_completing_status", filters.completingStatus);
     }
   }
 
@@ -2257,6 +2320,31 @@ export async function getSpbDashboardSummary(filters?: SpbDashboardFilters) {
   });
   if (error) return { data: null, error: error.message };
   return { data: data as SpbDashboardSummary, error: null as string | null };
+}
+
+export type SpbStatusSummary = {
+  base: { lengkap: number; belum_lengkap: number };
+  /** Jumlah SPB (non-cancelled) per field Base Status yang masih kosong. */
+  missing: Record<string, number>;
+  completing: {
+    quotation: number;
+    po_customer: number;
+    delivered: number;
+    invoiced: number;
+    paid: number;
+    cancelled: number;
+  };
+};
+
+/** Ringkasan Base Status & Completing Status (migration 20261111100000). */
+export async function getSpbStatusSummary(filters?: SpbDashboardFilters) {
+  const supabase = await createClient();
+  const { data, error } = await supabase.rpc("get_spb_status_summary", {
+    ...dashboardRpcArgs(filters),
+    p_no_wo: filters?.noWo?.trim() || null,
+  });
+  if (error) return { data: null, error: error.message };
+  return { data: data as SpbStatusSummary, error: null as string | null };
 }
 
 export async function getSpbWoItems(filters: SpbDashboardFilters) {

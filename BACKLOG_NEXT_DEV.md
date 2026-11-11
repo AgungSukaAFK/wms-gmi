@@ -115,16 +115,16 @@ Sudah ada:
 
 Sisa / perbaikan:
 - [ ] Review dengan user apakah angka & layout sesuai ekspektasi.
-- [ ] Ringkasan per Base Status & Completing Status (A2).
+- [x] Ringkasan per Base Status & Completing Status (A2).
 - [ ] Filter tambahan (lihat E2): section, PIC, kode/tipe unit, brand, site.
 - [ ] Export Excel.
 - [ ] Catatan teknis: `spb_po_details` tidak menyimpan qty (item masuk PO utuh). Kalau nanti butuh **partial PO per item**, skema harus diubah.
 
-### D2. Implementasi Base Status & Completing Status — **Konfirmasi (A2)**
-- Dihitung di view report SPB / RPC (tidak menambah kolom yang diinput manual).
-- Ditampilkan di list SPB, detail SPB, dashboard SPB, dan **tarikan/export SPB**.
-- Filter list SPB berdasarkan kedua status.
-- **DB:** update view report SPB + RPC dashboard → wajib migration.
+### D2. Implementasi Base Status & Completing Status — **Done (2026-11-11)**
+- Migration `20261111100000_spb_base_completing_status.sql`: computed column `spb_base_status`, `spb_base_missing`, `spb_completing_status` di tabel `spb`, kolom yang sama di `v_spb_report`, RPC `get_spb_status_summary`.
+- Tampil + filter di list SPB, Report SPB (termasuk export Excel), dan 2 kartu baru di Dashboard SPB.
+- Invoice yang di-reject tidak dihitung untuk Invoiced/Paid.
+- Belum ada halaman detail SPB tersendiri; status tampil di list.
 
 ---
 

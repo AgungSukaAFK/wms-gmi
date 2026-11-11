@@ -46,7 +46,12 @@ STABLE
 SECURITY INVOKER
 SET search_path = public
 AS $$
-  WITH s AS (
+  -- Catatan performa: flag has_po/has_do/has_inv dihitung lewat LEFT JOIN ke
+  -- himpunan spb_id DISTINCT (hash join, sekali scan per tabel). Jangan pakai
+  -- EXISTS ke CTE -- CTE yang dirujuk berkali-kali di-materialize tanpa index,
+  -- sehingga EXISTS jadi scan ulang per baris SPB (O(SPB x PO)) dan kena
+  -- statement timeout di data production.
+  WITH s AS MATERIALIZED (
     SELECT sp.id, sp.spb_status
     FROM public.spb sp
     WHERE sp.spb_is_deleted = FALSE
@@ -57,17 +62,17 @@ AS $$
       AND (NULLIF(btrim(p_no_wo), '') IS NULL
            OR lower(btrim(sp.spb_no_wo)) = lower(btrim(p_no_wo)))
   ),
-  po AS (
+  po AS MATERIALIZED (
     SELECT p.id, p.spb_id
     FROM public.spb_po p
     JOIN s ON s.id = p.spb_id
   ),
-  dlv AS (
+  dlv AS MATERIALIZED (
     SELECT d.id, po.spb_id
     FROM public.spb_do d
     JOIN po ON po.id = d.spb_po_id
   ),
-  inv AS (
+  inv AS MATERIALIZED (
     SELECT i.id, i.approval_status, i.payment_status, dlv.spb_id
     FROM public.spb_invoice i
     JOIN dlv ON dlv.id = i.spb_do_id
@@ -81,19 +86,25 @@ AS $$
     SELECT
       s.id,
       s.spb_status,
-      EXISTS (SELECT 1 FROM po  WHERE po.spb_id  = s.id) AS has_po,
-      EXISTS (SELECT 1 FROM dlv WHERE dlv.spb_id = s.id) AS has_do,
-      EXISTS (SELECT 1 FROM inv WHERE inv.spb_id = s.id) AS has_inv
+      fp.spb_id IS NOT NULL AS has_po,
+      fd.spb_id IS NOT NULL AS has_do,
+      fi.spb_id IS NOT NULL AS has_inv
     FROM s
+    LEFT JOIN (SELECT DISTINCT spb_id FROM po)  fp ON fp.spb_id = s.id
+    LEFT JOIN (SELECT DISTINCT spb_id FROM dlv) fd ON fd.spb_id = s.id
+    LEFT JOIN (SELECT DISTINCT spb_id FROM inv) fi ON fi.spb_id = s.id
   ),
   items AS (
     SELECT
       sd.dtl_spb_qty,
-      EXISTS (
-        SELECT 1 FROM public.spb_po_details pod WHERE pod.spb_dtl_id = sd.id
-      ) AS has_po
+      fpd.spb_dtl_id IS NOT NULL AS has_po
     FROM public.spb_details sd
     JOIN s ON s.id = sd.spb_id
+    LEFT JOIN (
+      SELECT DISTINCT pod.spb_dtl_id
+      FROM public.spb_po_details pod
+      JOIN po ON po.id = pod.spb_po_id
+    ) fpd ON fpd.spb_dtl_id = sd.id
     WHERE s.spb_status <> 'CANCELLED'
   )
   SELECT jsonb_build_object(

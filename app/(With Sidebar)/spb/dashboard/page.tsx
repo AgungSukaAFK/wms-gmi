@@ -3,7 +3,8 @@
 // Dashboard SPB: ringkasan jumlah SPB (per status & progress), SPB PO, DO,
 // Invoice, Return, dan qty item sudah/belum PO -- plus rincian item per
 // nomor WO. Data dari RPC get_spb_dashboard_summary / get_spb_wo_items
-// (migration 20261109100000). Semua filter disimpan di URL.
+// (migration 20261109100000) dan get_spb_status_summary (Base & Completing
+// Status, migration 20261111100000). Semua filter disimpan di URL.
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -56,10 +57,12 @@ import { cn, formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { getCabangList } from "@/services/master-actions";
 import {
   getSpbDashboardSummary,
+  getSpbStatusSummary,
   getSpbWoItems,
   searchSpbWoNumbers,
   type SpbDashboardFilters,
   type SpbDashboardSummary,
+  type SpbStatusSummary,
   type SpbWoItemRow,
 } from "@/services/spb-actions";
 
@@ -175,6 +178,112 @@ function BarRow({
   );
 }
 
+const COMPLETING_ROWS: {
+  key: keyof SpbStatusSummary["completing"];
+  label: string;
+  tone: string;
+}[] = [
+  { key: "quotation", label: "Quotation", tone: "bg-slate-500" },
+  { key: "po_customer", label: "PO Customer", tone: "bg-sky-500" },
+  { key: "delivered", label: "Delivered", tone: "bg-indigo-500" },
+  { key: "invoiced", label: "Invoiced", tone: "bg-violet-500" },
+  { key: "paid", label: "Paid", tone: "bg-emerald-500" },
+  { key: "cancelled", label: "Cancelled", tone: "bg-rose-500" },
+];
+
+function SpbStatusCards({
+  summary,
+  loading,
+  error,
+  listHref,
+}: {
+  summary: SpbStatusSummary | null;
+  loading: boolean;
+  error: string | null;
+  listHref: (extra?: Record<string, string>) => string;
+}) {
+  const baseTotal = summary ? summary.base.lengkap + summary.base.belum_lengkap : 0;
+  const completingTotal = summary
+    ? Object.values(summary.completing).reduce((a, b) => a + b, 0)
+    : 0;
+  const missing = summary
+    ? Object.entries(summary.missing).sort((a, b) => b[1] - a[1])
+    : [];
+
+  const body = (content: React.ReactNode) =>
+    loading && !summary ? (
+      <Skeleton className="h-40 w-full" />
+    ) : !summary ? (
+      <p className="text-xs text-muted-foreground">
+        {error ? `Gagal memuat status SPB: ${error}` : "Data status tidak tersedia."}
+      </p>
+    ) : (
+      content
+    );
+
+  return (
+    <>
+      <Content
+        size="md"
+        title="Base Status"
+        description="Kelengkapan data awal SPB sampai PIC PPA (tanpa Cancelled)."
+      >
+        {body(
+          <div className="space-y-3">
+            <BarRow
+              label="Lengkap"
+              value={summary?.base.lengkap ?? 0}
+              total={baseTotal}
+              tone="bg-emerald-500"
+              href={listHref({ base: "Lengkap" })}
+            />
+            <BarRow
+              label="Belum Lengkap"
+              value={summary?.base.belum_lengkap ?? 0}
+              total={baseTotal}
+              tone="bg-amber-500"
+              href={listHref({ base: "Belum Lengkap" })}
+            />
+            {missing.length > 0 && (
+              <div className="border-t border-border pt-3">
+                <p className="mb-2 text-[10px] font-bold uppercase text-muted-foreground">
+                  Data yang masih kosong
+                </p>
+                <div className="space-y-1 text-xs">
+                  {missing.map(([field, count]) => (
+                    <SubCount key={field} label={field} value={count} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>,
+        )}
+      </Content>
+
+      <Content
+        size="md"
+        title="Completing Status"
+        description="Tahap proses tertinggi yang sudah dicapai tiap SPB. Klik status untuk membuka daftar SPB."
+      >
+        {body(
+          <div className="space-y-3">
+            {COMPLETING_ROWS.map((row) => (
+              <BarRow
+                key={row.key}
+                label={row.label}
+                value={summary?.completing[row.key] ?? 0}
+                total={completingTotal}
+                tone={row.tone}
+                href={listHref({ progress: row.label })}
+              />
+            ))}
+          </div>,
+        )}
+      </Content>
+    </>
+  );
+}
+
 function WoCombobox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [open, setOpen] = useState(false);
   const [term, setTerm] = useState("");
@@ -266,6 +375,11 @@ export default function SpbDashboardPage() {
     data: SpbDashboardSummary | null;
   } | null>(null);
   const [woState, setWoState] = useState<{ key: string; data: SpbWoItemRow[] } | null>(null);
+  const [statusState, setStatusState] = useState<{
+    key: string;
+    data: SpbStatusSummary | null;
+    error: string | null;
+  } | null>(null);
 
   const filters = useMemo<SpbDashboardFilters>(
     () => ({
@@ -284,6 +398,8 @@ export default function SpbDashboardPage() {
     [noWo, woState, requestKey],
   );
   const woLoading = !!noWo && woState?.key !== requestKey;
+  const statusSummary = statusState?.data ?? null;
+  const statusLoading = statusState?.key !== requestKey;
 
   useEffect(() => {
     getCabangList().then((data) => setAvailableCabang((data || []) as CabangOption[]));
@@ -295,6 +411,19 @@ export default function SpbDashboardPage() {
       if (cancelled) return;
       if (res.error) toast.error(`Gagal memuat dashboard SPB: ${res.error}`);
       setSummaryState({ key: requestKey, data: res.data });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [filters, requestKey]);
+
+  // Terpisah dari ringkasan utama: kalau RPC status belum ada (migration
+  // belum dijalankan), kartu lain tetap tampil.
+  useEffect(() => {
+    let cancelled = false;
+    getSpbStatusSummary(filters).then((res) => {
+      if (cancelled) return;
+      setStatusState({ key: requestKey, data: res.data, error: res.error });
     });
     return () => {
       cancelled = true;
@@ -538,6 +667,13 @@ export default function SpbDashboardPage() {
           <p className="text-xs text-muted-foreground">Data dashboard tidak tersedia.</p>
         </Content>
       )}
+
+      <SpbStatusCards
+        summary={statusSummary}
+        loading={statusLoading}
+        error={statusState?.error ?? null}
+        listHref={spbListHref}
+      />
 
       <Content
         title={noWo ? `Item SPB untuk WO ${noWo}` : "Item per Nomor WO"}

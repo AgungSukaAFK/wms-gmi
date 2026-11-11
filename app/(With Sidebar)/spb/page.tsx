@@ -80,6 +80,12 @@ import { getCabangList } from "@/services/master-actions";
 import { UnitPicker } from "@/components/units/unit-picker";
 import { useAuthStore } from "@/stores/auth-store";
 import { formatDate } from "@/lib/utils";
+import {
+  SPB_BASE_STATUSES,
+  SPB_COMPLETING_STATUSES,
+  spbBaseStatusClass,
+  spbCompletingStatusClass,
+} from "@/lib/spb-status";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 
 type CabangOption = { id: number; nama_cabang: string };
@@ -99,6 +105,10 @@ type SpbRow = {
   spb_pic_ppa?: string | null;
   spb_status: string;
   approval_template_id?: number | null;
+  // Computed column (null kalau migration status SPB belum dijalankan).
+  spb_base_status?: string | null;
+  spb_base_missing?: string[] | null;
+  spb_completing_status?: string | null;
 };
 
 type SpbTemplateOption = { id: number; name: string | null; cabang_id: number | null };
@@ -129,6 +139,8 @@ const SPB_COLUMNS = [
   { id: "spb_pic_gmi", label: "PIC GMI", sortDirection: "asc" },
   { id: "spb_pic_ppa", label: "PIC PPA", sortDirection: "asc" },
   { id: "spb_status", label: "Status", sortDirection: "asc" },
+  { id: "spb_base_status", label: "Base Status", sortDirection: "asc" },
+  { id: "spb_completing_status", label: "Completing Status", sortDirection: "asc" },
 ] as const satisfies readonly ReorderableColumn[];
 type SpbColumnId = (typeof SPB_COLUMNS)[number]["id"];
 
@@ -148,6 +160,12 @@ export default function SpbPage() {
   const status = urlState.get("status", "all");
   const setStatus = (v: string) =>
     urlState.set({ status: v === "all" ? "" : v }, { resetPage: true });
+  const baseStatus = urlState.get("base", "all");
+  const setBaseStatus = (v: string) =>
+    urlState.set({ base: v === "all" ? "" : v }, { resetPage: true });
+  const completingStatus = urlState.get("progress", "all");
+  const setCompletingStatus = (v: string) =>
+    urlState.set({ progress: v === "all" ? "" : v }, { resetPage: true });
   const locationFilters = urlState.list("lokasi");
   const setLocationFilters = (v: string[]) =>
     urlState.set({ lokasi: v }, { resetPage: true });
@@ -211,6 +229,8 @@ export default function SpbPage() {
     const res = await getSpbList({
       search: debouncedSearch || undefined,
       status,
+      baseStatus: baseStatus === "all" ? undefined : baseStatus,
+      completingStatus: completingStatus === "all" ? undefined : completingStatus,
       cabangIds: locationFilters.length > 0 ? locationFilters.map(Number) : undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
@@ -232,7 +252,18 @@ export default function SpbPage() {
 
   useEffect(() => {
     fetchData();
-  }, [debouncedSearch, status, locationFilters, dateFrom, dateTo, sort, page, limit]);
+  }, [
+    debouncedSearch,
+    status,
+    baseStatus,
+    completingStatus,
+    locationFilters,
+    dateFrom,
+    dateTo,
+    sort,
+    page,
+    limit,
+  ]);
 
   useEffect(() => {
     getCabangList().then((data) => setAvailableCabang((data || []) as CabangOption[]));
@@ -256,6 +287,20 @@ export default function SpbPage() {
       label: "Status",
       value: status,
       onRemove: () => setStatus("all"),
+    });
+  if (baseStatus !== "all")
+    activeFilters.push({
+      key: "base",
+      label: "Base Status",
+      value: baseStatus,
+      onRemove: () => setBaseStatus("all"),
+    });
+  if (completingStatus !== "all")
+    activeFilters.push({
+      key: "progress",
+      label: "Completing Status",
+      value: completingStatus,
+      onRemove: () => setCompletingStatus("all"),
     });
   if (locationFilters.length > 0)
     activeFilters.push({
@@ -452,6 +497,37 @@ export default function SpbPage() {
         return (
           <TableCell>{row.spb_status}</TableCell>
         );
+      case "spb_base_status":
+        return (
+          <TableCell>
+            {row.spb_base_status ? (
+              <div className="flex flex-col items-start gap-0.5">
+                <span className={spbBaseStatusClass(row.spb_base_status)}>
+                  {row.spb_base_status}
+                </span>
+                {row.spb_base_missing && row.spb_base_missing.length > 0 && (
+                  <span className="text-[10px] text-muted-foreground">
+                    Kosong: {row.spb_base_missing.join(", ")}
+                  </span>
+                )}
+              </div>
+            ) : (
+              "-"
+            )}
+          </TableCell>
+        );
+      case "spb_completing_status":
+        return (
+          <TableCell>
+            {row.spb_completing_status ? (
+              <span className={spbCompletingStatusClass(row.spb_completing_status)}>
+                {row.spb_completing_status}
+              </span>
+            ) : (
+              "-"
+            )}
+          </TableCell>
+        );
     }
   };
 
@@ -511,6 +587,38 @@ export default function SpbPage() {
                 </Select>
               </FilterField>
 
+              <FilterField label="Base Status">
+                <Select value={baseStatus} onValueChange={setBaseStatus}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue placeholder="Filter base status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Base Status</SelectItem>
+                    {SPB_BASE_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
+
+              <FilterField label="Completing Status">
+                <Select value={completingStatus} onValueChange={setCompletingStatus}>
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-semibold text-foreground">
+                    <SelectValue placeholder="Filter completing status" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua Completing Status</SelectItem>
+                    {SPB_COMPLETING_STATUSES.map((s) => (
+                      <SelectItem key={s} value={s}>
+                        {s}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
+
               <FilterField label="Lokasi">
                 <MultiSelect
                   placeholder="Semua Lokasi"
@@ -554,7 +662,7 @@ export default function SpbPage() {
           <ColumnOrderReset onReset={columnOrder.resetOrder} />
         )}
         <StickyHeaderTable
-          className="min-w-[1500px]"
+          className="min-w-[1750px]"
           containerClassName="rounded-md border"
           header={
             <ReorderableHeaderRow
@@ -576,7 +684,7 @@ export default function SpbPage() {
             {loading ? (
               Array.from({ length: limit }, (_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={12}>
+                  <TableCell colSpan={14}>
                     <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
@@ -584,7 +692,7 @@ export default function SpbPage() {
             ) : rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={12}
+                  colSpan={14}
                   className="h-24 text-center text-muted-foreground"
                 >
                   Belum ada data SPB.

@@ -53,6 +53,14 @@ import * as XLSX from "xlsx";
 import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
 import { formatDate, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
+import {
+  SPB_BASE_STATUSES,
+  SPB_COMPLETING_STATUSES,
+  isSpbBaseStatus,
+  isSpbCompletingStatus,
+  spbBaseStatusClass,
+  spbCompletingStatusClass,
+} from "@/lib/spb-status";
 
 type SpbReportRow = {
   spb_id?: number | string | null;
@@ -85,6 +93,10 @@ type SpbReportRow = {
   invoice_email_date?: string | null;
   invoice_id?: number | string | null;
   invoice_payment_status?: "paid" | "unpaid" | null;
+  // Status turunan SPB (null kalau migration status SPB belum dijalankan).
+  spb_base_status?: string | null;
+  spb_base_missing?: string | null;
+  spb_completing_status?: string | null;
 };
 
 const PAYMENT_STATUS_LABEL: Record<string, string> = {
@@ -102,7 +114,19 @@ type FilterField =
   | { kind: "text"; column: TextFilterColumn; label: string }
   | { kind: "date"; column: DateFilterColumn; label: string }
   | { kind: "number"; column: NumberFilterColumn; label: string }
-  | { kind: "payment"; label: string };
+  | { kind: "payment"; label: string }
+  | {
+      kind: "select";
+      key: "spb_base_status" | "spb_completing_status";
+      label: string;
+      options: readonly string[];
+    };
+
+function filterFieldKey(field: FilterField) {
+  if (field.kind === "payment") return "payment";
+  if (field.kind === "select") return field.key;
+  return field.column;
+}
 
 // Urutan grup mengikuti urutan kolom tabel (SPB → PO → DO → Invoice).
 const FILTER_GROUPS: { title: string; fields: FilterField[] }[] = [
@@ -112,6 +136,18 @@ const FILTER_GROUPS: { title: string; fields: FilterField[] }[] = [
       { kind: "date", column: "spb_tanggal", label: "TGL SPB" },
       { kind: "text", column: "spb_no", label: "NO SPB" },
       { kind: "text", column: "spb_status", label: "STATUS" },
+      {
+        kind: "select",
+        key: "spb_base_status",
+        label: "BASE STATUS",
+        options: SPB_BASE_STATUSES,
+      },
+      {
+        kind: "select",
+        key: "spb_completing_status",
+        label: "COMPLETING STATUS",
+        options: SPB_COMPLETING_STATUSES,
+      },
       { kind: "date", column: "spb_created_at", label: "DATE INPUT SPB" },
       { kind: "text", column: "spb_no_wo", label: "NO WO" },
       { kind: "text", column: "spb_section", label: "SECTION" },
@@ -184,6 +220,8 @@ function buildFilterPayload(values: FilterValues): SpbReportFilters {
   const dates: NonNullable<SpbReportFilters["dates"]> = {};
   const numbers: NonNullable<SpbReportFilters["numbers"]> = {};
   let paymentStatus: SpbReportFilters["paymentStatus"];
+  let baseStatus: SpbReportFilters["baseStatus"];
+  let completingStatus: SpbReportFilters["completingStatus"];
   for (const group of FILTER_GROUPS) {
     for (const field of group.fields) {
       if (field.kind === "text") {
@@ -209,10 +247,18 @@ function buildFilterPayload(values: FilterValues): SpbReportFilters {
       } else if (field.kind === "payment") {
         const v = values.payment_status;
         if (v === "paid" || v === "unpaid") paymentStatus = v;
+      } else if (field.kind === "select") {
+        const v = values[field.key];
+        if (field.key === "spb_base_status" && isSpbBaseStatus(v)) {
+          baseStatus = v;
+        }
+        if (field.key === "spb_completing_status" && isSpbCompletingStatus(v)) {
+          completingStatus = v;
+        }
       }
     }
   }
-  return { text, dates, numbers, paymentStatus };
+  return { text, dates, numbers, paymentStatus, baseStatus, completingStatus };
 }
 
 function countActiveFilters(values: FilterValues) {
@@ -232,6 +278,8 @@ function countActiveFilters(values: FilterValues) {
         ) {
           count += 1;
         }
+      } else if (field.kind === "select") {
+        if (values[field.key]) count += 1;
       } else if (
         values.payment_status === "paid" ||
         values.payment_status === "unpaid"
@@ -263,6 +311,8 @@ const REPORT_COLUMNS = [
   { id: "no_wo", label: "NO WO" },
   { id: "date_input_spb", label: "DATE INPUT SPB" },
   { id: "spb_status", label: "STATUS", sortDirection: "asc" },
+  { id: "spb_base_status", label: "BASE STATUS", sortDirection: "asc" },
+  { id: "spb_completing_status", label: "COMPLETING STATUS", sortDirection: "asc" },
   { id: "po_no", label: "NO PO", sortDirection: "asc" },
   { id: "so_no", label: "NO SO" },
   { id: "date_input_po", label: "DATE INPUT PO" },
@@ -408,6 +458,9 @@ export default function SpbReportPage() {
         ),
       );
       toast.success("Status Payment berhasil diperbarui.");
+      // Completing Status (Invoiced/Paid) dihitung dari payment semua invoice
+      // SPB -> ambil ulang supaya ikut berubah.
+      void fetchData();
     }
     setUpdatingInvoiceId(null);
   };
@@ -507,6 +560,9 @@ export default function SpbReportPage() {
         "NO WO": row.spb_no_wo || "-",
         "DATE INPUT SPB": toExcelDate(row.spb_created_at),
         STATUS: row.spb_status || "-",
+        "BASE STATUS": row.spb_base_status || "-",
+        "DATA KOSONG": row.spb_base_missing || "-",
+        "COMPLETING STATUS": row.spb_completing_status || "-",
         "NO PO": row.po_no || "-",
         "NO SO": row.so_no || "-",
         "DATE INPUT PO": toExcelDate(row.po_created_at),
@@ -620,6 +676,37 @@ export default function SpbReportPage() {
       case "spb_status":
         return (
           <TableCell>{row.spb_status}</TableCell>
+        );
+      case "spb_base_status":
+        return (
+          <TableCell>
+            {row.spb_base_status ? (
+              <span
+                className={spbBaseStatusClass(row.spb_base_status)}
+                title={
+                  row.spb_base_missing
+                    ? `Kosong: ${row.spb_base_missing}`
+                    : undefined
+                }
+              >
+                {row.spb_base_status}
+              </span>
+            ) : (
+              "-"
+            )}
+          </TableCell>
+        );
+      case "spb_completing_status":
+        return (
+          <TableCell>
+            {row.spb_completing_status ? (
+              <span className={spbCompletingStatusClass(row.spb_completing_status)}>
+                {row.spb_completing_status}
+              </span>
+            ) : (
+              "-"
+            )}
+          </TableCell>
         );
       case "po_no":
         return (
@@ -824,7 +911,7 @@ export default function SpbReportPage() {
                   <div className="grid gap-2 sm:grid-cols-2">
                     {group.fields.map((field) => (
                       <FilterFieldInput
-                        key={field.kind === "payment" ? "payment" : field.column}
+                        key={filterFieldKey(field)}
                         field={field}
                         values={filterValues}
                         onChange={setFilterValue}
@@ -864,7 +951,7 @@ export default function SpbReportPage() {
             {loading ? (
               Array.from({ length: limit }, (_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={27}>
+                  <TableCell colSpan={29}>
                     <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
@@ -872,7 +959,7 @@ export default function SpbReportPage() {
             ) : rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={27}
+                  colSpan={29}
                   className="h-24 text-center text-muted-foreground"
                 >
                   Data report kosong.
@@ -987,6 +1074,32 @@ function FilterFieldInput({
             className={`${inputClass} w-full`}
           />
         </div>
+      </div>
+    );
+  }
+
+  if (field.kind === "select") {
+    return (
+      <div className="space-y-1">
+        <span className="text-[10px] font-semibold text-muted-foreground">
+          {field.label}
+        </span>
+        <Select
+          value={values[field.key] || "all"}
+          onValueChange={(v) => onChange(field.key, v === "all" ? "" : v)}
+        >
+          <SelectTrigger className={`${inputClass} w-full`}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Semua</SelectItem>
+            {field.options.map((option) => (
+              <SelectItem key={option} value={option}>
+                {option}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
     );
   }
