@@ -2,8 +2,12 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, FileSpreadsheet, Eye, PackageCheck, Printer } from "lucide-react";
+import { Plus, FileSpreadsheet, Eye, PackageCheck, Printer, Trash2 } from "lucide-react";
+import { toast } from "@/lib/toast";
+import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import { isConsignmentManager } from "@/lib/vendor-consignment-roles";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import {
   type ActiveFilter,
   FilterField,
@@ -51,7 +55,10 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { formatDate } from "@/lib/utils";
-import { getConsignmentPrList } from "@/services/vendor-consignment-actions";
+import {
+  deleteConsignmentPr,
+  getConsignmentPrList,
+} from "@/services/vendor-consignment-actions";
 
 const STATUS_TONE: Record<string, string> = {
   open: "bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/40 dark:text-amber-300 dark:border-amber-800",
@@ -135,13 +142,41 @@ export default function ConsignmentPrPage() {
   const limit = urlState.getNumber("limit", 25);
   const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
   const [detail, setDetail] = useState<any | null>(null);
+  const [canManage, setCanManage] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    const res = await getConsignmentPrList();
+    if (res.error) toast.error(res.error);
+    setRows(res.data || []);
+    setLoading(false);
+  };
 
   useEffect(() => {
-    getConsignmentPrList().then((res) => {
-      setRows(res.data || []);
-      setLoading(false);
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      const { data: roleRows } = await supabase
+        .from("user_roles")
+        .select("roles(name)")
+        .eq("user_id", user.id);
+      const roleNames = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
+      setCanManage(isConsignmentManager(roleNames));
     });
+    load();
   }, []);
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    const res = await deleteConsignmentPr(deleteTarget.id);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(`PR ${deleteTarget.pr_kode} dihapus.`);
+    load();
+  };
 
   const filtered = rows.filter((pr) => {
     const q = debouncedSearch.toLowerCase();
@@ -381,6 +416,14 @@ export default function ConsignmentPrPage() {
                           </Link>
                         </DropdownMenuItem>
                       )}
+                      {canManage && (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => setDeleteTarget(pr)}
+                        >
+                          <Trash2 className="mr-2 h-4 w-4" /> Hapus
+                        </DropdownMenuItem>
+                      )}
                     </RowActionsMenu>
                   </TableCell>
                 </TableRow>
@@ -443,6 +486,16 @@ export default function ConsignmentPrPage() {
           </div>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        destructive
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && setDeleteTarget(null)}
+        title={`Hapus PR ${deleteTarget?.pr_kode ?? ""}?`}
+        description="PR Konsinyasi beserta item-nya akan dihapus permanen. Ditolak kalau PR ini sudah punya GR Konsinyasi atau sudah dipakai di PO Rekonsil. Tindakan ini tidak bisa dibatalkan."
+        confirmText="Hapus"
+        onConfirm={handleDelete}
+      />
     </>
   );
 }

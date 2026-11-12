@@ -14,6 +14,10 @@ import {
   fetchPrItemGrQty,
   fetchRekonsilQtyByPart,
 } from "@/lib/vendor-consignment";
+import {
+  CONSIGNMENT_MANAGER_ROLES,
+  isConsignmentManager,
+} from "@/lib/vendor-consignment-roles";
 
 // ============================================================
 // KONSINYASI VENDOR (AC Part) -- supplier menitipkan barang di gudang GMI.
@@ -216,6 +220,67 @@ export async function getConsignmentPrList() {
     };
   });
   return { data: rows, error: null as string | null };
+}
+
+/**
+ * Hapus PR Konsinyasi (moderator/admin/PPIC) -- jaring pengaman salah input.
+ * Ditolak kalau PR sudah dipakai dokumen lain: GR Konsinyasi atau PO
+ * (langsung lewat pos.pr_id, po_items.pr_item_id, atau link PO-PR).
+ * Hapus GR / PO-nya dulu kalau memang mau dihapus.
+ */
+export async function deleteConsignmentPr(prId: number) {
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "Session expired" };
+  const roles = await getRoleNames(supabase, user.id);
+  if (!isConsignmentManager(roles))
+    return { error: "Hanya moderator/admin/PPIC yang dapat menghapus PR Konsinyasi." };
+
+  const { data: pr } = await supabase
+    .from("prs")
+    .select("id, pr_kode, pr_jenis, pr_items(id)")
+    .eq("id", prId)
+    .maybeSingle();
+  if (!pr || pr.pr_jenis !== "konsinyasi") return { error: "PR Konsinyasi tidak ditemukan." };
+  const itemIds = (pr.pr_items || []).map((i: any) => i.id);
+
+  const count = async (q: any) => {
+    const { count: n, error } = await q;
+    if (error) throw new Error(error.message);
+    return n || 0;
+  };
+  try {
+    const head = { count: "exact" as const, head: true };
+    const [grCount, poCount, poItemCount, linkCount] = await Promise.all([
+      count(supabase.from("vendor_consignment_gr").select("id", head).eq("pr_id", pr.id)),
+      count(supabase.from("pos").select("id", head).eq("pr_id", pr.id)),
+      itemIds.length
+        ? count(supabase.from("po_items").select("id", head).in("pr_item_id", itemIds))
+        : 0,
+      itemIds.length
+        ? count(supabase.from("po_item_pr_links").select("id", head).in("pr_item_id", itemIds))
+        : 0,
+    ]);
+    if (grCount > 0)
+      return { error: `PR ${pr.pr_kode} sudah punya ${grCount} GR Konsinyasi. Hapus GR-nya dulu.` };
+    if (poCount + poItemCount + linkCount > 0)
+      return { error: `PR ${pr.pr_kode} sudah dipakai di PO (Rekonsil). Hapus PO-nya dulu.` };
+  } catch (e: any) {
+    return { error: e?.message || "Gagal memeriksa pemakaian PR." };
+  }
+
+  // pr_items ikut terhapus (ON DELETE CASCADE).
+  const { data, error } = await supabase
+    .from("prs")
+    .delete()
+    .eq("id", pr.id)
+    .eq("pr_jenis", "konsinyasi")
+    .select("id");
+  if (error) return { error: error.message };
+  if (!data || data.length === 0) return { error: "PR tidak ditemukan atau sudah dihapus." };
+
+  revalidatePath("/pr");
+  revalidateConsignment();
+  return { success: true };
 }
 
 /** PR Konsinyasi approved yang masih punya sisa belum diterima (untuk GR). */
@@ -430,7 +495,7 @@ export async function resolveConsignmentGrComplaint(itemId: number, catatanResol
 }
 
 /**
- * Hapus GR (moderator/admin): stok konsinyasi yang masuk lewat GR ini
+ * Hapus GR (moderator/admin/PPIC): stok konsinyasi yang masuk lewat GR ini
  * dikurangi lagi. Ditolak kalau barangnya sudah ditransfer/dipakai (stok
  * konsinyasi di gudang itu tidak cukup) -- jaring pengaman salah input, bukan
  * jalur retur.
@@ -439,8 +504,8 @@ export async function deleteConsignmentGr(grId: number) {
   const { supabase, user } = await requireUser();
   if (!user) return { error: "Session expired" };
   const roles = await getRoleNames(supabase, user.id);
-  if (!roles.some((r) => r === "moderator" || r === "admin"))
-    return { error: "Hanya moderator/admin yang dapat menghapus GR Konsinyasi." };
+  if (!isConsignmentManager(roles))
+    return { error: "Hanya moderator/admin/PPIC yang dapat menghapus GR Konsinyasi." };
 
   const { data: gr } = await supabase
     .from("vendor_consignment_gr")
@@ -538,7 +603,7 @@ export async function getConsignmentMovements(key: {
 
 /**
  * Stock opname konsinyasi (per 3 bulan): set qty aktual hasil hitung fisik.
- * Selisihnya dicatat sebagai ADJUSTMENT di kartu stok. Moderator/admin.
+ * Selisihnya dicatat sebagai ADJUSTMENT di kartu stok. Moderator/admin/PPIC.
  */
 export async function adjustConsignmentStock(data: {
   vendorId: number;
@@ -550,8 +615,8 @@ export async function adjustConsignmentStock(data: {
   const { supabase, user } = await requireUser();
   if (!user) return { error: "Session expired" };
   const roles = await getRoleNames(supabase, user.id);
-  if (!roles.some((r) => r === "moderator" || r === "admin"))
-    return { error: "Hanya moderator/admin yang dapat melakukan stock opname konsinyasi." };
+  if (!isConsignmentManager(roles))
+    return { error: "Hanya moderator/admin/PPIC yang dapat melakukan stock opname konsinyasi." };
   if (!Number.isInteger(Number(data.qtyAktual)) || Number(data.qtyAktual) < 0)
     return { error: "Qty aktual harus bilangan bulat >= 0." };
   const catatan = data.catatan?.trim();
@@ -856,8 +921,8 @@ export async function reopenRekonsil(id: number) {
   const { supabase, user } = await requireUser();
   if (!user) return { error: "Session expired" };
   const roles = await getRoleNames(supabase, user.id);
-  if (!roles.some((r) => ["moderator", "admin", "purchasing"].includes(r)))
-    return { error: "Hanya purchasing/moderator/admin yang dapat membuka kembali rekonsil." };
+  if (!roles.some((r) => [...CONSIGNMENT_MANAGER_ROLES, "purchasing"].includes(r)))
+    return { error: "Hanya purchasing/moderator/admin/PPIC yang dapat membuka kembali rekonsil." };
   const { data, error } = await supabase
     .from("vendor_consignment_rekonsil")
     .update({ status: "draft", finalized_at: null, finalized_by: null })
@@ -882,9 +947,9 @@ export async function deleteRekonsil(id: number) {
   if (!rk) return { error: "Rekonsil tidak ditemukan." };
   if (rk.po_id) return { error: "Rekonsil sudah punya PO. Hapus PO-nya dulu." };
   const roles = await getRoleNames(supabase, user.id);
-  const isMod = roles.some((r) => r === "moderator" || r === "admin");
+  const isMod = isConsignmentManager(roles);
   if (!isMod && !(rk.status === "draft" && rk.created_by === user.id))
-    return { error: "Hanya pembuat (selama draft) atau moderator/admin yang dapat menghapus rekonsil." };
+    return { error: "Hanya pembuat (selama draft) atau moderator/admin/PPIC yang dapat menghapus rekonsil." };
 
   const { data, error } = await supabase
     .from("vendor_consignment_rekonsil")
@@ -911,8 +976,8 @@ export async function updateRekonsilBilling(
   const { supabase, user } = await requireUser();
   if (!user) return { error: "Session expired" };
   const roles = await getRoleNames(supabase, user.id);
-  if (!roles.some((r) => ["purchasing", "finance", "moderator", "admin"].includes(r)))
-    return { error: "Hanya purchasing/finance/moderator/admin yang dapat mengubah tagihan." };
+  if (!roles.some((r) => ["purchasing", "finance", ...CONSIGNMENT_MANAGER_ROLES].includes(r)))
+    return { error: "Hanya purchasing/finance/moderator/admin/PPIC yang dapat mengubah tagihan." };
   if (!["unpaid", "paid"].includes(data.payment_status)) return { error: "Status payment tidak valid." };
 
   const { data: rk } = await supabase

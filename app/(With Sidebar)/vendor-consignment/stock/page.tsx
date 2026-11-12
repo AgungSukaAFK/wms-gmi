@@ -5,6 +5,7 @@ import { Loader2, Warehouse, History, ClipboardCheck } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import { isConsignmentManager } from "@/lib/vendor-consignment-roles";
 import {
   type ActiveFilter,
   FilterField,
@@ -120,7 +121,7 @@ export default function ConsignmentStockPage() {
   const setPage = (p: number) => urlState.set({ page: p === 1 ? "" : p });
   const limit = urlState.getNumber("limit", 25);
   const setLimit = (n: number) => urlState.set({ limit: n === 25 ? "" : n });
-  const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
+  const [canManage, setCanManage] = useState(false);
 
   const [historyRow, setHistoryRow] = useState<any | null>(null);
   const [moves, setMoves] = useState<any[]>([]);
@@ -156,7 +157,7 @@ export default function ConsignmentStockPage() {
       if (!user) return;
       const { data: roleRows } = await supabase.from("user_roles").select("roles(name)").eq("user_id", user.id);
       const roleNames = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
-      setIsModeratorOrAdmin(roleNames.some((r: string) => r === "moderator" || r === "admin"));
+      setCanManage(isConsignmentManager(roleNames));
     };
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -405,7 +406,7 @@ export default function ConsignmentStockPage() {
                       >
                         <History className="mr-2 h-4 w-4" /> Kartu Stok
                       </DropdownMenuItem>
-                      {isModeratorOrAdmin && (
+                      {canManage && (
                         <DropdownMenuItem
                           onSelect={() => {
                             setOpnameRow(r);

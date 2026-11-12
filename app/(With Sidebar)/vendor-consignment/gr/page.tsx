@@ -6,6 +6,7 @@ import { Plus, Loader2, PackageCheck, Eye, Trash2, Printer, CheckCircle2 } from 
 import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
+import { isConsignmentManager } from "@/lib/vendor-consignment-roles";
 import {
   type ActiveFilter,
   FilterField,
@@ -97,7 +98,7 @@ export default function ConsignmentGrPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
-  const [isModeratorOrAdmin, setIsModeratorOrAdmin] = useState(false);
+  const [canManage, setCanManage] = useState(false);
   const columnOrder = useColumnOrder("wms:table-column-order:vendor-consignment-gr", GR_COLUMNS);
   // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
   const urlState = useUrlListState();
@@ -148,7 +149,7 @@ export default function ConsignmentGrPage() {
       if (!user) return;
       const { data: roleRows } = await supabase.from("user_roles").select("roles(name)").eq("user_id", user.id);
       const roleNames = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
-      setIsModeratorOrAdmin(roleNames.some((r: string) => r === "moderator" || r === "admin"));
+      setCanManage(isConsignmentManager(roleNames));
     };
     init();
     load();
@@ -418,7 +419,7 @@ export default function ConsignmentGrPage() {
                       >
                         <Eye className="mr-2 h-4 w-4" /> Lihat Detail
                       </DropdownMenuItem>
-                      {isModeratorOrAdmin && (
+                      {canManage && (
                         <DropdownMenuItem
                           className="text-destructive focus:text-destructive"
                           onSelect={() => setDeleteTarget(gr)}

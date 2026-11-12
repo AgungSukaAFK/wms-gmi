@@ -18,6 +18,10 @@ import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
 import {
+  CONSIGNMENT_MANAGER_ROLES,
+  isConsignmentManager,
+} from "@/lib/vendor-consignment-roles";
+import {
   type ActiveFilter,
   FilterField,
   FilterFields,
@@ -166,10 +170,10 @@ export default function RekonsilPage() {
   const [paymentStatus, setPaymentStatus] = useState<"unpaid" | "paid">("unpaid");
   const [paidAt, setPaidAt] = useState("");
 
-  const isMod = roles.some((r) => r === "moderator" || r === "admin");
+  const isMod = isConsignmentManager(roles);
   const canPo = roles.includes("purchasing");
-  const canBilling = roles.some((r) => ["purchasing", "finance", "moderator", "admin"].includes(r));
-  const canReopen = roles.some((r) => ["purchasing", "moderator", "admin"].includes(r));
+  const canBilling = roles.some((r) => ["purchasing", "finance", ...CONSIGNMENT_MANAGER_ROLES].includes(r));
+  const canReopen = roles.some((r) => ["purchasing", ...CONSIGNMENT_MANAGER_ROLES].includes(r));
 
   const load = async () => {
     setLoading(true);
