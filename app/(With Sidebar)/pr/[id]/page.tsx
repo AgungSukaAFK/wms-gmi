@@ -32,6 +32,7 @@ import {
   Save,
   RotateCcw,
   ArrowLeft,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -77,6 +78,7 @@ import {
   type PrItemPoCoverage,
 } from "@/lib/pr-po-coverage";
 import { StatusBadge } from "@/components/status-badge";
+import { isConsignmentManager } from "@/lib/vendor-consignment-roles";
 
 export default function PRDetailPage({
   params,
@@ -116,6 +118,7 @@ export default function PRDetailPage({
 
   // Moderator Edit state
   const [isModerator, setIsModerator] = useState(false);
+  const [canManageConsignment, setCanManageConsignment] = useState(false);
   const [cabangs, setCabangs] = useState<any[]>([]);
   const [modEditMode, setModEditMode] = useState(false);
   const [modSaving, setModSaving] = useState(false);
@@ -148,9 +151,9 @@ export default function PRDetailPage({
         .from("user_roles")
         .select("roles(name)")
         .eq("user_id", user.id);
-      setIsModerator(
-        (roleRows || []).some((r: any) => r.roles?.name === "moderator"),
-      );
+      const roleNames = (roleRows || []).map((r: any) => r.roles?.name).filter(Boolean);
+      setIsModerator(roleNames.includes("moderator"));
+      setCanManageConsignment(isConsignmentManager(roleNames));
     }
   };
 
@@ -283,6 +286,7 @@ export default function PRDetailPage({
     return deliveryRecords.some((dlv) => dlv.part_id === partId);
   };
 
+  const isConsignment = pr?.pr_jenis === "konsinyasi";
   const approvals: any[] = pr?.approvals ?? [];
   const nextPendingApproval = approvals.find(
     (a: any) => a.status === "pending",
@@ -530,7 +534,7 @@ export default function PRDetailPage({
       <Content>
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <Link href="/pr">
+            <Link href={isConsignment ? "/vendor-consignment/pr" : "/pr"}>
               <Button
                 variant="ghost"
                 size="icon"
@@ -602,6 +606,13 @@ export default function PRDetailPage({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
+            {isConsignment && canManageConsignment && !modEditMode && (
+              <Link href={`/vendor-consignment/pr/${prId}/edit`}>
+                <Button size="sm" className="gap-2 font-semibold">
+                  <Pencil className="h-4 w-4" /> Edit PR Konsinyasi
+                </Button>
+              </Link>
+            )}
             {isModerator && !modEditMode && (
               <Button
                 size="sm"
@@ -685,6 +696,8 @@ export default function PRDetailPage({
         </Content>
       )}
 
+      {/* PR Konsinyasi tidak pernah punya MR -- section ini selalu kosong. */}
+      {!isConsignment && (
       <Content title="Referensi Material Request">
         <div className="space-y-3">
           {linkedMrs.length === 0 ? (
@@ -713,6 +726,7 @@ export default function PRDetailPage({
           )}
         </div>
       </Content>
+      )}
 
       {(approvals.length > 0 || modEditMode) && (
         <Content title="Alur Approval">
@@ -1036,7 +1050,8 @@ export default function PRDetailPage({
         </div>
       </Content>
 
-      <Content>
+      {/* Panel me-return null kalau belum ada log -> sembunyikan kartunya. */}
+      <Content className="has-[[data-slot=card-content]:empty]:hidden">
         <ModeratorEditLogPanel
           docType="pr"
           docId={Number(prId)}

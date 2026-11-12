@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, FileSpreadsheet, Eye, PackageCheck, Printer, Trash2 } from "lucide-react";
+import { Plus, FileSpreadsheet, Eye, PackageCheck, Printer, Trash2, Pencil } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
@@ -145,13 +145,13 @@ export default function ConsignmentPrPage() {
   const [canManage, setCanManage] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<any | null>(null);
 
-  const load = async () => {
-    setLoading(true);
-    const res = await getConsignmentPrList();
-    if (res.error) toast.error(res.error);
-    setRows(res.data || []);
-    setLoading(false);
-  };
+  // `loading` sudah true saat mount; reload (setelah hapus) cukup ganti data.
+  const load = () =>
+    getConsignmentPrList().then((res) => {
+      if (res.error) toast.error(res.error);
+      setRows(res.data || []);
+      setLoading(false);
+    });
 
   useEffect(() => {
     const supabase = createClient();
@@ -413,6 +413,13 @@ export default function ConsignmentPrPage() {
                         <DropdownMenuItem asChild>
                           <Link href={`/vendor-consignment/gr/create?pr=${pr.id}`}>
                             <PackageCheck className="mr-2 h-4 w-4" /> Terima Barang (GR)
+                          </Link>
+                        </DropdownMenuItem>
+                      )}
+                      {canManage && (
+                        <DropdownMenuItem asChild>
+                          <Link href={`/vendor-consignment/pr/${pr.id}/edit`}>
+                            <Pencil className="mr-2 h-4 w-4" /> Edit
                           </Link>
                         </DropdownMenuItem>
                       )}

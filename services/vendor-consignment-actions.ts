@@ -18,6 +18,7 @@ import {
   CONSIGNMENT_MANAGER_ROLES,
   isConsignmentManager,
 } from "@/lib/vendor-consignment-roles";
+import { applyPrCompletionStatus, applyPrConversionStatus } from "@/lib/procurement-status";
 
 // ============================================================
 // KONSINYASI VENDOR (AC Part) -- supplier menitipkan barang di gudang GMI.
@@ -279,6 +280,225 @@ export async function deleteConsignmentPr(prId: number) {
   if (!data || data.length === 0) return { error: "PR tidak ditemukan atau sudah dihapus." };
 
   revalidatePath("/pr");
+  revalidateConsignment();
+  return { success: true };
+}
+
+/** Detail satu PR Konsinyasi + progres GR/PO per item (untuk halaman edit). */
+export async function getConsignmentPrDetail(prId: number) {
+  const supabase = await createClient();
+  const { data: pr, error } = await supabase
+    .from("prs")
+    .select(
+      "id, pr_kode, pr_tanggal, pr_status, pr_jenis, cabang_id, pr_vendor_id, approvals, cabang(nama_cabang), vendors:pr_vendor_id(id, vendor_name, vendor_no), profiles(nama), pr_items(id, part_id, part_number, part_name, satuan, qty, status)",
+    )
+    .eq("id", prId)
+    .maybeSingle();
+  if (error) return { data: null, error: error.message };
+  if (!pr || pr.pr_jenis !== "konsinyasi") return { data: null, error: "PR Konsinyasi tidak ditemukan." };
+
+  const items = await buildPrItemProgress(
+    supabase,
+    [...(pr.pr_items || [])].sort((a: any, b: any) => a.id - b.id),
+  );
+  const { count: grCount } = await supabase
+    .from("vendor_consignment_gr")
+    .select("id", { count: "exact", head: true })
+    .eq("pr_id", pr.id);
+  return {
+    data: {
+      ...pr,
+      pr_items: items,
+      gr_count: grCount || 0,
+      has_po: items.some((i: any) => i.qty_po > 0),
+    },
+    error: null as string | null,
+  };
+}
+
+export type ConsignmentPrEditInput = {
+  pr_kode: string;
+  pr_tanggal: string;
+  cabang_id: number;
+  vendor_id: number;
+  /** Item lama (pakai id) & item baru (tanpa id). Item lama yang tidak ada di sini dihapus. */
+  items: { id?: number; part_id: number; qty: number }[];
+};
+
+/**
+ * Edit PR Konsinyasi (moderator/admin/PPIC). Aturan agar tidak merusak data
+ * turunan:
+ *  - gudang & vendor terkunci begitu sudah ada GR (stok konsinyasi sudah
+ *    tercatat per vendor+gudang) atau sudah ter-PO;
+ *  - qty item tidak boleh di bawah qty yang sudah diterima (GR) / ter-PO;
+ *  - item yang sudah punya GR/PO tidak bisa dihapus.
+ * Jalur approval tidak diubah di sini (pakai Moderator Edit di /pr/[id]).
+ */
+export async function updateConsignmentPr(prId: number, data: ConsignmentPrEditInput) {
+  const { supabase, user } = await requireUser();
+  if (!user) return { error: "Session expired" };
+  const roles = await getRoleNames(supabase, user.id);
+  if (!isConsignmentManager(roles))
+    return { error: "Hanya moderator/admin/PPIC yang dapat mengedit PR Konsinyasi." };
+
+  const prKode = data.pr_kode?.trim();
+  if (!prKode) return { error: "Kode PR wajib diisi." };
+  if (!data.pr_tanggal) return { error: "Tanggal PR wajib diisi." };
+  if (!data.cabang_id) return { error: "Gudang penerima wajib dipilih." };
+  if (!data.vendor_id) return { error: "Vendor (supplier) wajib dipilih." };
+  const items = data.items || [];
+  if (items.length === 0) return { error: "Daftar item tidak boleh kosong." };
+  if (items.some((i) => !isPositiveInt(i.qty)))
+    return { error: "Qty item harus bilangan bulat lebih dari 0." };
+  if (new Set(items.map((i) => i.part_id)).size !== items.length)
+    return { error: "Part yang sama tidak boleh muncul dua kali." };
+
+  const { data: current, error: curErr } = await getConsignmentPrDetail(prId);
+  if (curErr || !current) return { error: curErr || "PR Konsinyasi tidak ditemukan." };
+  const oldItems: any[] = current.pr_items;
+  const oldById = new Map(oldItems.map((i) => [i.id, i]));
+
+  if (prKode !== current.pr_kode) {
+    const { data: dup } = await supabase
+      .from("prs")
+      .select("id")
+      .eq("pr_kode", prKode)
+      .neq("id", prId)
+      .maybeSingle();
+    if (dup) return { error: "Kode PR sudah digunakan. Gunakan kode lain." };
+  }
+
+  const locked = current.gr_count > 0 || current.has_po;
+  if (locked && Number(data.cabang_id) !== current.cabang_id)
+    return { error: "Gudang tidak bisa diubah: PR ini sudah punya GR / PO." };
+  if (locked && Number(data.vendor_id) !== current.pr_vendor_id)
+    return { error: "Vendor tidak bisa diubah: PR ini sudah punya GR / PO." };
+
+  // Item lama: validasi qty minimum & part tidak boleh diganti.
+  const keptIds = new Set<number>();
+  const updates: { id: number; qty: number }[] = [];
+  for (const i of items.filter((x) => x.id)) {
+    const old = oldById.get(i.id!);
+    if (!old) return { error: "Ada item yang bukan bagian dari PR ini." };
+    if (old.part_id !== i.part_id) return { error: `${old.part_number}: part item lama tidak bisa diganti.` };
+    keptIds.add(old.id);
+    const minQty = Math.max(old.qty_gr, old.qty_po);
+    if (Number(i.qty) < minQty)
+      return {
+        error: `${old.part_number}: qty minimal ${minQty} (sudah diterima ${old.qty_gr}, ter-PO ${old.qty_po}).`,
+      };
+    if (Number(i.qty) !== Number(old.qty)) updates.push({ id: old.id, qty: Number(i.qty) });
+  }
+  const removed = oldItems.filter((o) => !keptIds.has(o.id));
+  for (const o of removed) {
+    if (o.qty_gr > 0 || o.qty_po > 0)
+      return { error: `${o.part_number}: tidak bisa dihapus, sudah ada GR / PO.` };
+  }
+  const { count: grItemCount } = removed.length
+    ? await supabase
+        .from("vendor_consignment_gr_items")
+        .select("id", { count: "exact", head: true })
+        .in("pr_item_id", removed.map((o) => o.id))
+    : { count: 0 };
+  if ((grItemCount || 0) > 0)
+    return { error: "Ada item yang mau dihapus tapi sudah tercatat di GR (termasuk qty 0/komplain)." };
+
+  // Item baru: data part dari master barang.
+  const added = items.filter((x) => !x.id);
+  let addedRows: any[] = [];
+  if (added.length) {
+    const { data: parts } = await supabase
+      .from("barang")
+      .select("id, part_number, part_name, part_satuan")
+      .is("deleted_at", null)
+      .in("id", added.map((i) => i.part_id));
+    const partById = new Map((parts || []).map((p: any) => [p.id, p]));
+    if (added.some((i) => !partById.has(i.part_id)))
+      return { error: "Ada barang yang tidak ditemukan di master barang." };
+    addedRows = added.map((i) => {
+      const p: any = partById.get(i.part_id);
+      return {
+        pr_id: prId,
+        mr_id: null,
+        mr_item_id: null,
+        part_id: p.id,
+        part_number: p.part_number,
+        part_name: p.part_name,
+        satuan: p.part_satuan,
+        qty: Number(i.qty),
+      };
+    });
+  }
+
+  // Simpan.
+  const { error: headErr } = await supabase
+    .from("prs")
+    .update({
+      pr_kode: prKode,
+      pr_tanggal: data.pr_tanggal,
+      cabang_id: Number(data.cabang_id),
+      pr_vendor_id: Number(data.vendor_id),
+    })
+    .eq("id", prId);
+  if (headErr) return { error: headErr.message };
+
+  for (const u of updates) {
+    const { error } = await supabase.from("pr_items").update({ qty: u.qty }).eq("id", u.id);
+    if (error) return { error: error.message };
+  }
+  if (removed.length) {
+    const { error } = await supabase.from("pr_items").delete().in("id", removed.map((o) => o.id));
+    if (error) return { error: error.message };
+  }
+  if (addedRows.length) {
+    const { error } = await supabase.from("pr_items").insert(addedRows);
+    if (error) return { error: error.message };
+  }
+
+  // Progres PO & status completed bisa berubah karena qty/item berubah.
+  await applyPrConversionStatus(supabase, prId);
+  if (["approved", "completed"].includes(current.pr_status)) await applyPrCompletionStatus(supabase, prId);
+
+  // Audit log (tampil di Riwayat Edit halaman PR).
+  const changes: string[] = [];
+  if (prKode !== current.pr_kode) changes.push(`kode ${current.pr_kode} → ${prKode}`);
+  if (data.pr_tanggal !== String(current.pr_tanggal).slice(0, 10)) changes.push("tanggal");
+  if (Number(data.cabang_id) !== current.cabang_id) changes.push("gudang");
+  if (Number(data.vendor_id) !== current.pr_vendor_id) changes.push("vendor");
+  if (updates.length) changes.push(`${updates.length} qty item diubah`);
+  if (addedRows.length) changes.push(`${addedRows.length} item ditambah`);
+  if (removed.length) changes.push(`${removed.length} item dihapus`);
+  if (changes.length) {
+    const { data: me } = await supabase.from("profiles").select("nama").eq("id", user.id).maybeSingle();
+    await supabase.from("moderator_edit_logs").insert({
+      doc_type: "pr",
+      doc_id: prId,
+      user_id: user.id,
+      user_nama: me?.nama || user.email,
+      summary: `Edit PR Konsinyasi: ${changes.join(", ")}.`,
+      changes: {
+        before: {
+          pr_kode: current.pr_kode,
+          pr_tanggal: current.pr_tanggal,
+          cabang_id: current.cabang_id,
+          pr_vendor_id: current.pr_vendor_id,
+          items: oldItems.map((o) => ({ id: o.id, part_number: o.part_number, qty: o.qty })),
+        },
+        after: {
+          pr_kode: prKode,
+          pr_tanggal: data.pr_tanggal,
+          cabang_id: Number(data.cabang_id),
+          pr_vendor_id: Number(data.vendor_id),
+          updated: updates,
+          added: addedRows.map((r) => ({ part_number: r.part_number, qty: r.qty })),
+          removed: removed.map((o) => o.part_number),
+        },
+      },
+    });
+  }
+
+  revalidatePath("/pr");
+  revalidatePath(`/pr/${prId}`);
   revalidateConsignment();
   return { success: true };
 }
