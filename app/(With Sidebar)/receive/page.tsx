@@ -260,6 +260,200 @@ export default function ReceiveItemPage() {
     return count || 0;
   };
 
+  // Tarikan RI per baris item, dilengkapi asal permintaan: MR, Dept, Site,
+  // dan Proyek. Jalur data:
+  //   receive_items.mr_id -> mrs (lokasi peminta) -> working_orders.departemen
+  //   receive_items.po_item_id -> po_items (vendor, ref proyek PO outstanding)
+  //     -> pr_items (kode PR) -> mr_items.item_site_cabang_id (tujuan site)
+  // Dept: departemen WO (HO/BPP) kalau MR-nya punya WO, selain itu tipe
+  // cabang lokasi MR (HO/Branch) -- belum ada kolom departemen di MR/profil.
+  const buildRiItemSheetRows = async (riRows: any[]) => {
+    const CHUNK = 200;
+    const chunks = <T,>(arr: T[]) => {
+      const out: T[][] = [];
+      for (let i = 0; i < arr.length; i += CHUNK) out.push(arr.slice(i, i + CHUNK));
+      return out;
+    };
+    const one = (v: any) => (Array.isArray(v) ? v[0] : v);
+    const uniqIds = (arr: any[]) =>
+      Array.from(new Set(arr.filter((v) => v !== null && v !== undefined)));
+
+    // 1. Item RI
+    const items: any[] = [];
+    for (const ids of chunks(riRows.map((r) => r.id))) {
+      const { data, error } = await supabase
+        .from("receive_items")
+        .select(
+          "id, ri_id, part_number, part_name, satuan, qty, mr_id, po_item_id, cabang_penerima_id",
+        )
+        .in("ri_id", ids)
+        .order("id", { ascending: true });
+      if (error) throw error;
+      items.push(...(data || []));
+    }
+
+    // 2. Item PO (vendor, ref proyek/PR dari PO outstanding, link ke PR)
+    const poItemById = new Map<number, any>();
+    for (const ids of chunks(uniqIds(items.map((i) => i.po_item_id)))) {
+      const { data, error } = await supabase
+        .from("po_items")
+        .select(
+          "id, pr_item_id, ost_pr_ref, ost_proyek_ref, ost_keterangan, vendors(vendor_name)",
+        )
+        .in("id", ids);
+      if (error) throw error;
+      for (const row of data || []) poItemById.set(row.id, row);
+    }
+
+    // 3. Item PR -> kode PR + item MR asal
+    const prItemById = new Map<number, any>();
+    const prItemIds = uniqIds(
+      Array.from(poItemById.values()).map((p) => p.pr_item_id),
+    );
+    for (const ids of chunks(prItemIds)) {
+      const { data, error } = await supabase
+        .from("pr_items")
+        .select("id, mr_id, mr_item_id, prs(pr_kode)")
+        .in("id", ids);
+      if (error) throw error;
+      for (const row of data || []) prItemById.set(row.id, row);
+    }
+
+    // 4. Item MR -> tujuan site per item
+    const mrItemById = new Map<number, any>();
+    const mrItemIds = uniqIds(
+      Array.from(prItemById.values()).map((p) => p.mr_item_id),
+    );
+    for (const ids of chunks(mrItemIds)) {
+      const { data, error } = await supabase
+        .from("mr_items")
+        .select("id, mr_id, item_site_cabang_id")
+        .in("id", ids);
+      if (error) throw error;
+      for (const row of data || []) mrItemById.set(row.id, row);
+    }
+
+    // MR asal: dari receive_items.mr_id, fallback lewat jalur PR.
+    const resolveMrId = (item: any) => {
+      if (item.mr_id) return item.mr_id;
+      const prItem = prItemById.get(poItemById.get(item.po_item_id)?.pr_item_id);
+      return prItem?.mr_id ?? mrItemById.get(prItem?.mr_item_id)?.mr_id ?? null;
+    };
+
+    // 5. Header MR (lokasi peminta, PIC, kategori)
+    const mrById = new Map<number, any>();
+    for (const ids of chunks(uniqIds(items.map(resolveMrId)))) {
+      const { data, error } = await supabase
+        .from("mrs")
+        .select("id, mr_kode, mr_pic, kategori, cabang_id")
+        .in("id", ids);
+      if (error) throw error;
+      for (const row of data || []) mrById.set(row.id, row);
+    }
+
+    // 6. Departemen dari Working Order (kalau MR punya WO)
+    const woByMrId = new Map<number, { kode: string[]; dept: string[] }>();
+    for (const ids of chunks(Array.from(mrById.keys()))) {
+      const { data, error } = await supabase
+        .from("working_orders")
+        .select("mr_id, wo_kode, departemen")
+        .in("mr_id", ids);
+      if (error) throw error;
+      for (const row of data || []) {
+        const entry = woByMrId.get(row.mr_id) || { kode: [], dept: [] };
+        if (row.wo_kode) entry.kode.push(row.wo_kode);
+        if (row.departemen) entry.dept.push(row.departemen);
+        woByMrId.set(row.mr_id, entry);
+      }
+    }
+
+    // 7. Header PO (jenis, outstanding, referensi PR teks)
+    const poById = new Map<number, any>();
+    for (const ids of chunks(uniqIds(riRows.map((r) => r.pos?.id)))) {
+      const { data, error } = await supabase
+        .from("pos")
+        .select("id, po_kode, po_jenis, po_is_outstanding, po_pr_referensi")
+        .in("id", ids);
+      if (error) throw error;
+      for (const row of data || []) poById.set(row.id, row);
+    }
+
+    // 8. Semua cabang (termasuk non-aktif) untuk nama lokasi/site + tipe.
+    const { data: cabangAll, error: cabangErr } = await supabase
+      .from("cabang")
+      .select("id, nama_cabang, cabang_type");
+    if (cabangErr) throw cabangErr;
+    const cabangById = new Map<number, any>(
+      (cabangAll || []).map((c: any) => [c.id, c]),
+    );
+
+    const riById = new Map<number, any>(riRows.map((r) => [r.id, r]));
+    const uniqJoin = (arr: (string | null | undefined)[]) =>
+      Array.from(new Set(arr.filter(Boolean) as string[])).join(", ") || "-";
+
+    // Urutan mengikuti urutan RI di export, lalu urutan item.
+    const riOrder = new Map<number, number>(riRows.map((r, i) => [r.id, i]));
+    items.sort(
+      (a, b) =>
+        (riOrder.get(a.ri_id) ?? 0) - (riOrder.get(b.ri_id) ?? 0) || a.id - b.id,
+    );
+
+    return items.map((item, index) => {
+      const ri = riById.get(item.ri_id);
+      const po = poById.get(ri?.pos?.id);
+      const poItem = poItemById.get(item.po_item_id);
+      const prItem = prItemById.get(poItem?.pr_item_id);
+      const mrItem = mrItemById.get(prItem?.mr_item_id);
+      const mr = mrById.get(resolveMrId(item));
+      const mrCabang = cabangById.get(mr?.cabang_id);
+      const wo = mr ? woByMrId.get(mr.id) : undefined;
+      const tujuanSite =
+        cabangById.get(mrItem?.item_site_cabang_id)?.nama_cabang ||
+        mrCabang?.nama_cabang;
+
+      return {
+        NO: index + 1,
+        "KODE RECEIVE": ri?.ri_kode || "-",
+        TANGGAL: toExcelDate(ri?.ri_tanggal),
+        STATUS: ri?.ri_status || "-",
+        PIC: ri?.ri_pic || "-",
+        "LOKASI RI": ri?.cabang?.nama_cabang || "-",
+        "GUDANG PENERIMA":
+          cabangById.get(item.cabang_penerima_id)?.nama_cabang ||
+          ri?.cabang?.nama_cabang ||
+          "-",
+        "KODE PO": po?.po_kode || ri?.pos?.po_kode || "-",
+        "JENIS PO": po
+          ? po.po_is_outstanding
+            ? "Outstanding"
+            : po.po_jenis === "non_pr"
+              ? "Non-PR"
+              : "Reguler"
+          : "-",
+        VENDOR: one(poItem?.vendors)?.vendor_name || "-",
+        "KODE PR":
+          one(prItem?.prs)?.pr_kode ||
+          poItem?.ost_pr_ref ||
+          po?.po_pr_referensi ||
+          "-",
+        "KODE MR": mr?.mr_kode || "-",
+        "PEMINTA (PIC MR)": mr?.mr_pic || "-",
+        "KATEGORI MR": mr?.kategori || "-",
+        DEPT: uniqJoin(wo?.dept?.length ? wo.dept : [mrCabang?.cabang_type]),
+        "KODE WO": uniqJoin(wo?.kode || []),
+        "LOKASI / SITE PEMINTA": mrCabang?.nama_cabang || "-",
+        "TUJUAN SITE": tujuanSite || "-",
+        PROYEK: poItem?.ost_proyek_ref || "-",
+        "PART NUMBER": item.part_number || "-",
+        "NAMA BARANG": item.part_name || "-",
+        SATUAN: item.satuan || "-",
+        "QTY TERIMA": item.qty ?? 0,
+        "KETERANGAN PO": poItem?.ost_keterangan || "-",
+        "KETERANGAN RI": ri?.ri_keterangan || "-",
+      };
+    });
+  };
+
   const exportExcel = async (mode: ExcelDownloadMode) => {
     setExporting(true);
     const toastId = toast.loading("Menyiapkan data Receive...");
@@ -289,15 +483,7 @@ export default function ReceiveItemPage() {
         return;
       }
 
-      const sheetData = allRows.map((ri, index) => ({
-        NO: index + 1,
-        "KODE RECEIVE": ri.ri_kode || "-",
-        "PO ASAL": ri.pos?.po_kode || "-",
-        PIC: ri.ri_pic || "-",
-        LOKASI: ri.cabang?.nama_cabang || "-",
-        TANGGAL: toExcelDate(ri.ri_tanggal),
-        STATUS: ri.ri_status || "-",
-      }));
+      const sheetData = await buildRiItemSheetRows(allRows);
 
       const ws = jsonToSheetWithDates(sheetData, ["TANGGAL"]);
       const wb = XLSX.utils.book_new();
@@ -306,9 +492,10 @@ export default function ReceiveItemPage() {
         wb,
         `RECEIVE_ITEM_${new Date().toISOString().slice(0, 10)}.xlsx`,
       );
-      toast.success(`Export Excel berhasil (${allRows.length} baris).`, {
-        id: toastId,
-      });
+      toast.success(
+        `Export Excel berhasil (${allRows.length} RI, ${sheetData.length} baris item).`,
+        { id: toastId },
+      );
     } catch (err: any) {
       toast.error(`Gagal export Excel: ${err?.message || err}`, { id: toastId });
     } finally {
