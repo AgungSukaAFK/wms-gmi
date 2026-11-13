@@ -16,6 +16,8 @@ type DatePickerProps = {
   onChange?: Dispatch<Date | undefined>;
   placeholder?: string;
   className?: string;
+  /** Batas bulan terakhir yang bisa dipilih di dropdown (default: akhir tahun ini) */
+  endMonth?: Date;
 };
 
 export function DatePicker({
@@ -23,6 +25,7 @@ export function DatePicker({
   onChange,
   placeholder,
   className,
+  endMonth,
 }: DatePickerProps) {
   const [open, setOpen] = useState(false);
 
@@ -51,6 +54,8 @@ export function DatePicker({
           mode="single"
           selected={value}
           captionLayout="dropdown"
+          defaultMonth={value}
+          {...(endMonth ? { endMonth } : {})}
           onSelect={(date: Date | undefined) => {
             onChange?.(date);
             setOpen(false);

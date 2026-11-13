@@ -7,6 +7,7 @@ type DatePickerStringProps = {
   onChange: (value: string) => void;
   placeholder?: string;
   className?: string;
+  endMonth?: Date;
 };
 
 function toYmd(date: Date) {
@@ -28,6 +29,7 @@ export function DatePickerString({
   onChange,
   placeholder,
   className,
+  endMonth,
 }: DatePickerStringProps) {
   return (
     <DatePicker
@@ -35,6 +37,7 @@ export function DatePickerString({
       onChange={(date) => onChange(date ? toYmd(date) : "")}
       placeholder={placeholder}
       className={className}
+      endMonth={endMonth}
     />
   );
 }

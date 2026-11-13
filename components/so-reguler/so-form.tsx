@@ -861,6 +861,7 @@ export function SoForm({ editSoId }: { editSoId?: number }) {
                 value={soDueDate}
                 onChange={setSoDueDate}
                 placeholder="Tanpa deadline"
+                endMonth={new Date(new Date().getFullYear() + 1, 11)}
               />
               <div className="flex flex-wrap gap-1">
                 {[7, 14, 30].map((d) => {
