@@ -575,6 +575,11 @@ export function TemplateEditor({
                                 <div className="flex items-center border-b px-3 bg-muted/50">
                                   <Search className="mr-2 h-4 w-4 shrink-0 opacity-40" />
                                   <input
+                                    autoComplete="off"
+                                    data-1p-ignore="true"
+                                    data-lpignore="true"
+                                    data-bwignore="true"
+                                    data-form-type="other"
                                     className="flex h-11 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground"
                                     placeholder="Cari user (nama/email)..."
                                     value={

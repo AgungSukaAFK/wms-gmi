@@ -74,6 +74,11 @@ export function PoMoneyInput({
         {getPoCurrencySymbol(currency)}
       </span>
       <input
+        autoComplete="off"
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-bwignore="true"
+        data-form-type="other"
         type="text"
         inputMode={decimals > 0 ? "decimal" : "numeric"}
         disabled={disabled}

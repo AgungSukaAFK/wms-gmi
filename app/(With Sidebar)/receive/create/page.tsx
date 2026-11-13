@@ -683,6 +683,11 @@ export default function CreateReceivePage() {
                           <TableCell className="py-2 pr-4 align-middle">
                             <div className="flex items-center h-8 rounded-md border border-input bg-background overflow-hidden focus-within:ring-1 focus-within:ring-ring">
                               <input
+                                autoComplete="off"
+                                data-1p-ignore="true"
+                                data-lpignore="true"
+                                data-bwignore="true"
+                                data-form-type="other"
                                 type="text"
                                 inputMode="numeric"
                                 className="flex-1 h-full px-2 text-xs font-bold bg-transparent outline-none text-center"

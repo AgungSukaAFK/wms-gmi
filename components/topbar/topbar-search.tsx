@@ -128,6 +128,10 @@ const SearchField = forwardRef<
         aria-controls={listId}
         aria-activedescendant={expanded ? activeId : undefined}
         autoComplete="off"
+        data-1p-ignore="true"
+        data-lpignore="true"
+        data-bwignore="true"
+        data-form-type="other"
         className="h-full min-w-0 flex-1 bg-transparent px-2 text-base text-foreground outline-none placeholder:text-muted-foreground md:text-sm [&::-webkit-search-cancel-button]:hidden"
       />
       {query ? (

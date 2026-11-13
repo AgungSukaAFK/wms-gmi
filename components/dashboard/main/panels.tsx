@@ -3,9 +3,11 @@
 // Panel-panel dashboard utama (isi <Content>). Semua angka bisa diklik:
 // membuka daftar sumber datanya atau memfilter lokasi.
 
+import { useState } from "react";
 import Link from "next/link";
 import {
   ArrowRight,
+  CheckCheck,
   ChevronRight,
   CircleCheck,
   Hourglass,
@@ -20,6 +22,7 @@ import {
   MR_LEVELS,
   QUEUE_CARDS,
 } from "@/components/dashboard/main/config";
+import { BulkApprovalDialog } from "@/components/dashboard/main/bulk-approval-dialog";
 import { useDashboard } from "@/components/dashboard/main/dashboard-context";
 import {
   BarRow,
@@ -64,7 +67,8 @@ const MY_ROWS = 6;
 
 /** Dokumen yang gilirannya di-approve user ini. */
 export function MyApprovalsPanel({ rows, total }: { rows: MyApprovalRow[]; total: number }) {
-  const { openList } = useDashboard();
+  const { openList, refresh } = useDashboard();
+  const [bulkOpen, setBulkOpen] = useState(false);
 
   if (total === 0) {
     return (
@@ -108,16 +112,24 @@ export function MyApprovalsPanel({ rows, total }: { rows: MyApprovalRow[]; total
           );
         })}
       </ul>
-      {total > Math.min(rows.length, MY_ROWS) && (
-        <Button
-          variant="ghost"
-          size="sm"
-          className="mt-2 h-8 px-2 text-xs text-primary"
-          onClick={() => openList("approval_pending", { mine: true }, "Menunggu approval Anda")}
-        >
-          Lihat semua {num(total)} dokumen <ArrowRight />
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+        {total > Math.min(rows.length, MY_ROWS) ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-8 px-2 text-xs text-primary"
+            onClick={() => openList("approval_pending", { mine: true }, "Menunggu approval Anda")}
+          >
+            Lihat semua {num(total)} dokumen <ArrowRight />
+          </Button>
+        ) : (
+          <span />
+        )}
+        <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => setBulkOpen(true)}>
+          <CheckCheck /> Approve massal
         </Button>
-      )}
+      </div>
+      {bulkOpen && <BulkApprovalDialog onOpenChange={setBulkOpen} onDone={refresh} />}
     </div>
   );
 }

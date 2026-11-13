@@ -94,6 +94,11 @@ function IntCell({
 }) {
   return (
     <input
+      autoComplete="off"
+      data-1p-ignore="true"
+      data-lpignore="true"
+      data-bwignore="true"
+      data-form-type="other"
       data-ac-r={r}
       data-ac-c={c}
       inputMode="numeric"
@@ -125,6 +130,11 @@ function DecimalCell({
   const [text, setText] = useState<string | null>(null);
   return (
     <input
+      autoComplete="off"
+      data-1p-ignore="true"
+      data-lpignore="true"
+      data-bwignore="true"
+      data-form-type="other"
       data-ac-r={r}
       data-ac-c={c}
       inputMode="decimal"
@@ -355,6 +365,11 @@ const UnitBlock = memo(function UnitBlock({
         <td {...rs} className={cn(CELL, firstRowBorder, "min-w-40 p-0 align-top")}>
           {isAdmin ? (
             <input
+              autoComplete="off"
+              data-1p-ignore="true"
+              data-lpignore="true"
+              data-bwignore="true"
+              data-form-type="other"
               data-ac-r={rowIndex}
               data-ac-c={days + 3}
               value={draft.repair_option}
