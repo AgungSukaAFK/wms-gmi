@@ -59,18 +59,16 @@ import {
 } from "@/components/ui/select";
 import { toast } from "@/lib/toast";
 import { createPurchaseOrder } from "@/services/procurement-actions";
-import { revisePurchaseOrder } from "@/services/po-revision-actions";
-import { canRevisePO } from "@/lib/po-revision";
+import {
+  getPoEditAccess,
+  revisePurchaseOrder,
+} from "@/services/po-revision-actions";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { cn, formatDate, toYmdLocal } from "@/lib/utils";
 import { MRSignatureDialog } from "@/components/mr/mr-signature-dialog";
 import { DatePickerString } from "@/components/date-picker-string";
-import {
-  canViewPOPrice,
-  extractRoleNames,
-  maskedPriceText,
-} from "@/lib/po-price-access";
+import { canViewPOPrice, maskedPriceText } from "@/lib/po-price-access";
 import { PrConvertStatusBadge } from "@/components/pr/pr-convert-status-badge";
 import {
   computePoTotals,
@@ -250,6 +248,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     isEdit ? null : true,
   );
   const [revisionReason, setRevisionReason] = useState("");
+  // "revisi" = purchasing/moderator (approval diulang); "approver" = approver
+  // PO mengedit sebelum ada RI (approval tetap). Lihat getPoEditAccess.
+  const [editMode, setEditMode] = useState<"revisi" | "approver" | null>(null);
+  const [editDeniedReason, setEditDeniedReason] = useState<string | null>(null);
+  // Approver tanpa akses harga: harga/pajak/diskon/ongkir terkunci.
+  const [priceLocked, setPriceLocked] = useState(false);
+  const isApproverEdit = isEdit && editMode === "approver";
   // Item PO asli — dipakai ulang kalau PR asal dilepas lalu dipilih lagi,
   // supaya item lama tidak berubah jadi item baru (hapus + insert).
   const [editExistingItems, setEditExistingItems] = useState<any[]>([]);
@@ -440,9 +445,16 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         setSoCabangId((prev) => prev || String(profile.cabang_id));
       // Edit/Revisi PO: moderator juga boleh mengubah harga (lihat
       // lib/po-revision.ts); buat PO baru tetap khusus purchasing.
-      const revisable = canRevisePO(extractRoleNames(profile));
-      setCanViewPrice(isEdit ? revisable : canViewPOPrice(profile));
-      if (isEdit) setEditAllowed(revisable);
+      if (isEdit && editPoId) {
+        const access = await getPoEditAccess(editPoId);
+        setEditMode(access.mode);
+        setPriceLocked(access.mode === "approver" && access.priceLocked);
+        setEditDeniedReason(access.reason ?? null);
+        setCanViewPrice(access.mode !== null && !access.priceLocked);
+        setEditAllowed(access.mode !== null);
+      } else {
+        setCanViewPrice(canViewPOPrice(profile));
+      }
 
       // Edit: template lokasi PO juga ditawarkan, selain lokasi editor.
       let poCabangId: number | null = null;
@@ -1016,6 +1028,24 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       return toast.error("Pilih PR terlebih dahulu");
     if (chosen.length === 0)
       return toast.error("Tidak ada item terpilih untuk diproses ke PO");
+    if (isApproverEdit) {
+      // Edit approver: approval tidak diulang -> tanpa template & TTD.
+      if (!revisionReason.trim()) return toast.error("Alasan edit wajib diisi");
+      if (priceLocked && chosen.some((i) => !i.po_item_id))
+        return toast.error(
+          "Approver tanpa akses harga tidak bisa menambah item baru. Minta purchasing untuk menambah item.",
+        );
+      if (vendorMode === "single" && !selectedVendor)
+        return toast.error("Pilih vendor untuk PO ini.");
+      const noVendorItems = chosen.filter((item) => !item.vendor_id);
+      if (noVendorItems.length > 0) {
+        return toast.error(
+          `Vendor wajib diisi untuk: ${noVendorItems.map((i) => i.part_number).join(", ")}`,
+        );
+      }
+      void submitEdit([], "approver");
+      return;
+    }
     if (!selectedTemplateId) return toast.error("Pilih Alur Approval");
     if (!templates.find((t) => t.id.toString() === selectedTemplateId))
       return toast.error("Template approval tidak valid");
@@ -1056,6 +1086,73 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
   };
 
+  // Simpan Edit/Revisi PO. mode "approver": approval tidak diulang (server
+  // memakai approvals dari DB), harga dikunci kalau approver tanpa akses harga.
+  const submitEdit = async (approvalData: any[], mode: "revisi" | "approver") => {
+    if (!editPoId) return;
+    const headerPayload = {
+      po_tanggal: poTanggal,
+      po_currency: poCurrency,
+      po_tax_mode: taxMode,
+      po_harga_termasuk_pajak: hargaTermasukPajak,
+      po_ppn_mode: ppnMode,
+      po_ppn_rate: ppnRate,
+      po_ppn_amount: ppnAmountManual,
+      po_diskon_mode: diskonMode,
+      po_diskon_value: diskonValue,
+      po_ongkir: ongkir,
+      po_pph_type: pphType || null,
+      po_pph_mode: pphMode,
+      po_pph_rate: pphType ? pphRate : 0,
+      po_pph_amount: pphType ? pphAmountManual : 0,
+    };
+    setSubmitting(true);
+    try {
+      const result = await revisePurchaseOrder(editPoId, {
+        ...headerPayload,
+        mode,
+        reason: revisionReason.trim(),
+        po_kode: poKode,
+        po_estimasi: poEstimasi || null,
+        po_payment_term: poPaymentTerm || null,
+        po_keterangan: poKeterangan || null,
+        po_pr_referensi: isNonPr ? prReferensi.trim() || null : null,
+        approvals: approvalData,
+        items: poItems
+          .filter((i) => i.selected && i.qty > 0)
+          .map((i) => ({
+            po_item_id: i.po_item_id ?? null,
+            mr_id: i.mr_id,
+            pr_item_id: i.pr_item_id,
+            pr_id: i.pr_id,
+            so_item_id: i.so_item_id ?? null,
+            part_id: i.part_id,
+            part_number: i.part_number,
+            part_name: i.part_name,
+            satuan: i.satuan,
+            qty: i.qty,
+            harga: i.harga,
+            vendor_id: i.vendor_id,
+            ...itemTaxPayload(i),
+          })),
+      });
+      if (result.success) {
+        toast.success(
+          mode === "approver"
+            ? `PO berhasil diedit (Rev. ${result.revision}). Approval tidak diulang.`
+            : `PO berhasil direvisi (Rev. ${result.revision}). Approval diulang dari awal.`,
+        );
+        router.push(`/po/${editPoId}`);
+      } else {
+        toast.error(result.error || "Gagal menyimpan revisi PO");
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleConfirmSignature = async (signature: {
     id: string;
     image_url: string;
@@ -1091,66 +1188,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       };
     });
 
-    const headerPayload = {
-      po_tanggal: poTanggal,
-      po_currency: poCurrency,
-      po_tax_mode: taxMode,
-      po_harga_termasuk_pajak: hargaTermasukPajak,
-      po_ppn_mode: ppnMode,
-      po_ppn_rate: ppnRate,
-      po_ppn_amount: ppnAmountManual,
-      po_diskon_mode: diskonMode,
-      po_diskon_value: diskonValue,
-      po_ongkir: ongkir,
-      po_pph_type: pphType || null,
-      po_pph_mode: pphMode,
-      po_pph_rate: pphType ? pphRate : 0,
-      po_pph_amount: pphType ? pphAmountManual : 0,
-    };
-
     if (isEdit && editPoId) {
-      setSubmitting(true);
-      try {
-        const result = await revisePurchaseOrder(editPoId, {
-          ...headerPayload,
-          reason: revisionReason.trim(),
-          po_kode: poKode,
-          po_estimasi: poEstimasi || null,
-          po_payment_term: poPaymentTerm || null,
-          po_keterangan: poKeterangan || null,
-          po_pr_referensi: isNonPr ? prReferensi.trim() || null : null,
-          approvals: approvalData,
-          items: poItems
-            .filter((i) => i.selected && i.qty > 0)
-            .map((i) => ({
-              po_item_id: i.po_item_id ?? null,
-              mr_id: i.mr_id,
-              pr_item_id: i.pr_item_id,
-              pr_id: i.pr_id,
-              so_item_id: i.so_item_id ?? null,
-              part_id: i.part_id,
-              part_number: i.part_number,
-              part_name: i.part_name,
-              satuan: i.satuan,
-              qty: i.qty,
-              harga: i.harga,
-              vendor_id: i.vendor_id,
-              ...itemTaxPayload(i),
-            })),
-        });
-        if (result.success) {
-          toast.success(
-            `PO berhasil direvisi (Rev. ${result.revision}). Approval diulang dari awal.`,
-          );
-          router.push(`/po/${editPoId}`);
-        } else {
-          toast.error(result.error || "Gagal menyimpan revisi PO");
-        }
-      } catch (err: any) {
-        toast.error(err.message);
-      } finally {
-        setSubmitting(false);
-      }
+      await submitEdit(approvalData, "revisi");
       return;
     }
 
@@ -1236,7 +1275,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
           <p className="font-bold text-foreground uppercase">
             {!editPo
               ? "Purchase Order tidak ditemukan"
-              : "Hanya purchasing atau moderator yang dapat mengedit PO"}
+              : editDeniedReason ||
+                "Hanya approver PO, purchasing, atau moderator yang dapat mengedit PO"}
           </p>
           <Link href={editPo ? `/po/${editPoId}` : "/po"}>
             <Button variant="outline" className="gap-2">
@@ -1291,7 +1331,24 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         </div>
       </Content>
 
-      {isEdit && (
+      {isApproverEdit && (
+        <Content>
+          <div className="rounded-lg border border-primary/40 bg-primary/10 px-3 py-2.5 flex items-start gap-2">
+            <History className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+            <p className="text-[11px] font-semibold text-primary leading-relaxed">
+              Edit sebagai approver (akan jadi Rev. {nextRevision}). PO belum
+              punya Receive Item, jadi masih bisa diubah.{" "}
+              <strong>Status approval tidak diulang</strong> — perubahan
+              tercatat di Riwayat PO dan PIC + approver lain mendapat
+              notifikasi.
+              {priceLocked &&
+                " Harga, pajak, diskon, ongkir, dan mata uang dikunci (khusus purchasing); item baru tidak bisa ditambahkan."}
+            </p>
+          </div>
+        </Content>
+      )}
+
+      {isEdit && !isApproverEdit && (
         <Content>
           <div className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2.5 flex items-start gap-2">
             <History className="h-4 w-4 text-warning shrink-0 mt-0.5" />
@@ -2051,7 +2108,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   )}
                 </p>
               </div>
-              <div className="space-y-1.5 w-full max-w-[14rem]">
+              <div
+                className={cn(
+                  "space-y-1.5 w-full max-w-[14rem]",
+                  priceLocked && "pointer-events-none opacity-50",
+                )}
+                aria-disabled={priceLocked}
+              >
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
                   <CreditCard className="h-3 w-3" /> Mata Uang
                 </Label>
@@ -2076,7 +2139,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   Berlaku untuk harga, pajak, diskon & ongkir PO ini.
                 </p>
               </div>
-              <div className="space-y-1.5 w-full max-w-xs">
+              <div
+                className={cn(
+                  "space-y-1.5 w-full max-w-xs",
+                  priceLocked && "pointer-events-none opacity-50",
+                )}
+                aria-disabled={priceLocked}
+              >
                 <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
                   <Percent className="h-3 w-3" /> Pajak (PPN / PPh)
                 </Label>
@@ -2256,7 +2325,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                           <PoItemTaxPicker
                             value={itemTaxOf(item)}
                             onChange={(t) => updateItemTax(idx, t)}
-                            disabled={!item.selected}
+                            disabled={!item.selected || priceLocked}
                           />
                         </TableCell>
                       )}
@@ -2444,7 +2513,13 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 />
               </div>
 
-              {/* Pajak, Diskon & Ongkir */}
+              {/* Pajak, Diskon & Ongkir (dikunci untuk approver tanpa akses harga) */}
+              {priceLocked ? (
+                <div className="md:col-span-2 rounded-xl border border-border bg-muted/20 p-4 text-[11px] font-semibold text-muted-foreground">
+                  Pajak, diskon, ongkos kirim & mata uang dikunci — hanya
+                  purchasing yang dapat mengubahnya. Nilai lama dipertahankan.
+                </div>
+              ) : (
               <div className="md:col-span-2 space-y-4 rounded-xl border border-border bg-muted/20 p-4">
                 <div className="flex items-center gap-2">
                   <Percent className="w-4 h-4 text-muted-foreground" />
@@ -2724,6 +2799,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   vendor, tidak mengurangi Total PO di ringkasan bawah.
                 </p>
               </div>
+              )}
 
               {isEdit && (
                 <div className="md:col-span-2 space-y-2">
@@ -2742,7 +2818,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 </div>
               )}
 
-              {/* Approval Template */}
+              {/* Approval Template (edit approver: approval tetap, tidak dipilih ulang) */}
+              {!isApproverEdit && (
               <div className="md:col-span-2 space-y-2">
                 <Label className="text-[11px] font-bold uppercase text-muted-foreground">
                   Alur Approval <span className="text-destructive">*</span>
@@ -2874,6 +2951,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   </div>
                 </div>
               </div>
+              )}
             </div>
 
             {/* Summary */}
@@ -3028,7 +3106,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 disabled={
                   submitting ||
                   !poKode.trim() ||
-                  !selectedTemplateId ||
+                  (!isApproverEdit && !selectedTemplateId) ||
                   (isEdit && !revisionReason.trim())
                 }
               >
@@ -3040,9 +3118,11 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                 ) : (
                   <>
                     <CheckCircle2 className="h-4 w-4" />
-                    {isEdit
-                      ? `Simpan Revisi (Rev. ${nextRevision})`
-                      : "Buat Purchase Order"}
+                    {isApproverEdit
+                      ? `Simpan Edit (Rev. ${nextRevision})`
+                      : isEdit
+                        ? `Simpan Revisi (Rev. ${nextRevision})`
+                        : "Buat Purchase Order"}
                   </>
                 )}
               </Button>

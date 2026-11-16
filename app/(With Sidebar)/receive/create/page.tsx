@@ -29,6 +29,7 @@ import {
   ShoppingCart,
   AlertCircle,
   Package,
+  FilePenLine,
 } from "lucide-react";
 import {
   Popover,
@@ -50,7 +51,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "@/lib/toast";
-import { createReceive } from "@/services/procurement-actions";
+import {
+  createReceive,
+  reviseRejectedReceive,
+} from "@/services/procurement-actions";
 import { useDebounce } from "use-debounce";
 import Link from "next/link";
 import { DatePickerString } from "@/components/date-picker-string";
@@ -83,6 +87,15 @@ interface ReceiveItem {
 export default function CreateReceivePage() {
   const router = useRouter();
   const supabase = createClient();
+  // Mode revisi RI ditolak: /receive/create?revisi=<ri_id>. PO & kode RI
+  // dikunci, item/qty/gudang/tanggal/keterangan bisa diubah, approval diulang
+  // dari awal dengan template RI yang sama (lihat reviseRejectedReceive).
+  const searchParams = useSearchParams();
+  const revisiId = Number(searchParams.get("revisi")) || null;
+  const isRevision = Boolean(revisiId);
+  const [revisiRi, setRevisiRi] = useState<any>(null);
+  const [revisiError, setRevisiError] = useState<string | null>(null);
+  const [revisiNote, setRevisiNote] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [loading, setLoading] = useState(false);
 
@@ -121,8 +134,71 @@ export default function CreateReceivePage() {
   };
 
   useEffect(() => {
+    if (isRevision) return;
     fetchApprovedPOs();
-  }, [debouncedPoSearch]);
+  }, [debouncedPoSearch, isRevision]);
+
+  useEffect(() => {
+    if (revisiId) loadRevision(revisiId);
+  }, [revisiId]);
+
+  const loadRevision = async (riId: number) => {
+    setLoading(true);
+    setRevisiError(null);
+    const { data: ri } = await supabase
+      .from("receives")
+      .select(
+        "id, ri_kode, ri_status, ri_tanggal, ri_keterangan, rejection_reason, ri_revision, approvals, po_id",
+      )
+      .eq("id", riId)
+      .maybeSingle();
+    if (!ri) {
+      setRevisiError("RI tidak ditemukan.");
+      setLoading(false);
+      return;
+    }
+    if (ri.ri_status !== "rejected") {
+      setRevisiError(
+        `RI ${ri.ri_kode} berstatus ${ri.ri_status}. Hanya RI yang ditolak yang bisa direvisi.`,
+      );
+      setLoading(false);
+      return;
+    }
+    setRevisiRi(ri);
+    setRiKode(ri.ri_kode);
+    setRiTanggal(String(ri.ri_tanggal).slice(0, 10));
+    setRiKeterangan(ri.ri_keterangan || "");
+
+    const [{ data: po }, { data: riItems }] = await Promise.all([
+      supabase
+        .from("pos")
+        .select(
+          "id, po_kode, po_tanggal, po_receive_status, po_jenis, po_is_outstanding, cabang_id, cabang(nama_cabang), prs(cabang_id, cabang(nama_cabang))",
+        )
+        .eq("id", ri.po_id)
+        .maybeSingle(),
+      supabase
+        .from("receive_items")
+        .select("po_item_id, qty, cabang_penerima_id")
+        .eq("ri_id", riId)
+        .order("id"),
+    ]);
+    if (!po) {
+      setRevisiError("PO asal RI tidak ditemukan.");
+      setLoading(false);
+      return;
+    }
+    const prefill = new Map<number, { qty: number; cabang: number | null }>();
+    for (const it of riItems || []) {
+      const cur = prefill.get(it.po_item_id);
+      prefill.set(it.po_item_id, {
+        qty: (cur?.qty || 0) + (Number(it.qty) || 0),
+        cabang: cur?.cabang ?? it.cabang_penerima_id ?? null,
+      });
+    }
+    await handleSelectPO(po, prefill);
+    setLoading(false);
+  };
 
   const fetchUser = async () => {
     const {
@@ -163,7 +239,8 @@ export default function CreateReceivePage() {
       .select(
         "id, po_kode, po_tanggal, po_receive_status, po_jenis, po_is_outstanding, cabang_id, cabang(nama_cabang), prs(cabang_id, cabang(nama_cabang))",
       )
-      .eq("po_status", "approved")
+      // 'closed' = ada item dibatalkan; item aktif lainnya masih bisa diterima.
+      .in("po_status", ["approved", "closed"])
       .neq("po_receive_status", "complete")
       .order("created_at", { ascending: false })
       .limit(50);
@@ -177,7 +254,11 @@ export default function CreateReceivePage() {
     setLoading(false);
   };
 
-  const handleSelectPO = async (po: any) => {
+  const handleSelectPO = async (
+    po: any,
+    // Mode revisi: qty & gudang penerima dari RI yang ditolak (po_item_id ->).
+    prefill?: Map<number, { qty: number; cabang: number | null }>,
+  ) => {
     setSelectedPo(po);
     setPoPopoverOpen(false);
 
@@ -232,7 +313,13 @@ export default function CreateReceivePage() {
     }
 
     const receiveItems: ReceiveItem[] = (poItems || [])
-      .map((item: any) => ({
+      .map((item: any) => {
+        const sisa = Math.max(
+          0,
+          item.qty - (item.qty_received ?? 0) - (pendingByPoItem.get(item.id) || 0),
+        );
+        const pre = prefill?.get(item.id);
+        return {
         po_item_id: item.id,
         part_id: item.part_id,
         part_number: item.part_number,
@@ -247,15 +334,19 @@ export default function CreateReceivePage() {
         mr_id: item.mr_id,
         pr_item_id: item.pr_item_id ?? null,
         vendor_name: item.vendors?.vendor_name ?? null,
-        qty_receive: Math.max(
-          0,
-          item.qty - (item.qty_received ?? 0) - (pendingByPoItem.get(item.id) || 0),
-        ), // default to full remaining
+        // Default: seluruh sisa. Mode revisi: qty RI yang ditolak (item PO
+        // yang tidak ada di RI tsb = 0, bisa ditambahkan).
+        qty_receive: prefill ? Math.min(sisa, pre?.qty ?? 0) : sisa,
         // default: cabang PR (PO Outstanding tanpa PR: lokasi PO), bisa
         // diganti per baris (PO Non-PR: dikunci)
         cabang_penerima_id:
-          lockedCabangId ?? po.prs?.cabang_id ?? po.cabang_id ?? null,
-      }))
+          lockedCabangId ??
+          pre?.cabang ??
+          po.prs?.cabang_id ??
+          po.cabang_id ??
+          null,
+        };
+      })
       .filter((i: ReceiveItem) => i.qty_sisa > 0);
 
     setItems(receiveItems);
@@ -282,7 +373,48 @@ export default function CreateReceivePage() {
     );
   };
 
+  const handleSubmitRevision = async () => {
+    if (!revisiRi) return;
+    if (!revisiNote.trim()) return toast.error("Catatan revisi wajib diisi");
+    const activeItems = items.filter((i) => i.qty_receive > 0);
+    if (activeItems.length === 0)
+      return toast.error("Tidak ada item yang akan diterima (qty = 0 semua)");
+    if (activeItems.some((i) => !i.cabang_penerima_id))
+      return toast.error("Gudang penerima wajib dipilih untuk setiap item.");
+
+    setSubmitting(true);
+    try {
+      const result = await reviseRejectedReceive(revisiRi.id, {
+        ri_tanggal: riTanggal,
+        ri_keterangan: riKeterangan || null,
+        note: revisiNote,
+        items: activeItems.map((item) => ({
+          part_id: item.part_id,
+          part_number: item.part_number,
+          part_name: item.part_name,
+          satuan: item.satuan,
+          qty: item.qty_receive,
+          po_id: selectedPo.id,
+          mr_id: item.mr_id,
+          po_item_id: item.po_item_id,
+          cabang_penerima_id: item.cabang_penerima_id as number,
+        })),
+      });
+      if (result.success) {
+        toast.success("Revisi RI disimpan, approval diulang dari awal");
+        router.push(`/receive?ri=${revisiRi.id}`);
+      } else {
+        toast.error(result.error || "Gagal menyimpan revisi");
+      }
+    } catch (err: any) {
+      toast.error(err.message);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleSubmit = async () => {
+    if (isRevision) return handleSubmitRevision();
     if (!riKode.trim()) return toast.error("Kode RI wajib diisi");
     if (!selectedPo) return toast.error("Pilih Purchase Order");
     if (!selectedTemplateId)
@@ -354,14 +486,60 @@ export default function CreateReceivePage() {
           </div>
           <div>
             <h1 className="text-xl font-bold text-foreground tracking-tight uppercase">
-              Buat Penerimaan Barang
+              {isRevision ? "Revisi Penerimaan Barang" : "Buat Penerimaan Barang"}
             </h1>
             <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1">
-              Receive Item dari Purchase Order yang disetujui
+              {isRevision
+                ? "Perbaiki RI yang ditolak lalu ajukan ulang approval dari awal"
+                : "Receive Item dari Purchase Order yang disetujui"}
             </p>
           </div>
         </div>
       </Content>
+
+      {isRevision && revisiError && (
+        <Content>
+          <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3">
+            <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+            <p className="text-xs font-semibold text-destructive">{revisiError}</p>
+          </div>
+        </Content>
+      )}
+
+      {isRevision && revisiRi && (
+        <Content>
+          <div className="space-y-3">
+            <div className="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/5 p-3">
+              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
+              <div className="text-xs leading-relaxed">
+                <p className="font-bold text-foreground">
+                  {revisiRi.ri_kode} ditolak
+                  {(() => {
+                    const r = (revisiRi.approvals || []).find(
+                      (a: any) => a.status === "rejected",
+                    );
+                    return r?.nama ? ` oleh ${r.nama}` : "";
+                  })()}
+                </p>
+                <p className="text-muted-foreground">
+                  Alasan: {revisiRi.rejection_reason || "-"}
+                </p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label className="text-[11px] font-bold uppercase text-muted-foreground">
+                Catatan Revisi <span className="text-destructive">*</span>
+              </Label>
+              <Textarea
+                value={revisiNote}
+                onChange={(e) => setRevisiNote(e.target.value)}
+                placeholder="Apa yang diperbaiki? Mis. qty PN XXX dikoreksi dari 10 jadi 8, barang YYY dihapus karena salah kirim."
+                className="resize-none min-h-16 font-medium text-sm"
+              />
+            </div>
+          </div>
+        </Content>
+      )}
 
       {/* Section 1: Header Info */}
       <Content>
@@ -386,6 +564,7 @@ export default function CreateReceivePage() {
                   onChange={(e) => setRiKode(e.target.value)}
                   placeholder="RI-XXX-0001"
                   className="h-10 font-bold text-sm"
+                  disabled={isRevision}
                 />
               </div>
             </div>
@@ -425,6 +604,11 @@ export default function CreateReceivePage() {
               </Label>
               <div className="flex items-center gap-2">
                 <CheckCircle2 className="w-4 h-4 text-muted-foreground shrink-0" />
+                {isRevision ? (
+                  <div className="flex h-10 w-full items-center rounded-md border border-border bg-muted/40 px-3 py-2 text-xs font-semibold text-muted-foreground">
+                    Sama seperti RI asal (diulang dari tahap pertama)
+                  </div>
+                ) : (
                 <Select
                   value={selectedTemplateId}
                   onValueChange={setSelectedTemplateId}
@@ -449,6 +633,7 @@ export default function CreateReceivePage() {
                     )}
                   </SelectContent>
                 </Select>
+                )}
               </div>
             </div>
 
@@ -464,6 +649,7 @@ export default function CreateReceivePage() {
                     <Button
                       variant="outline"
                       className="flex-1 justify-start gap-2 h-10 font-bold text-xs"
+                      disabled={isRevision}
                     >
                       <Search className="h-3.5 w-3.5 text-muted-foreground" />
                       {selectedPo ? (
@@ -581,8 +767,10 @@ export default function CreateReceivePage() {
                 <div className="flex items-center gap-2 p-3 bg-primary/5 border border-primary/20 rounded-lg">
                   <AlertCircle className="h-4 w-4 text-primary shrink-0" />
                   <p className="text-[10px] font-bold text-primary uppercase">
-                    Set qty menjadi 0 untuk melewati item tersebut. Qty tidak
-                    boleh melebihi sisa yang belum diterima.
+                    {isRevision
+                      ? "Qty terisi dari RI yang ditolak. Ubah qty / gudang, set 0 untuk menghapus item, atau isi qty item lain dari PO yang sama untuk menambahkannya."
+                      : "Set qty menjadi 0 untuk melewati item tersebut."}{" "}
+                    Qty tidak boleh melebihi sisa yang belum diterima.
                     {isNonPrPo(selectedPo) &&
                       " PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA, konversi ke PN PR lewat Job Costing."}
                     {isSoPo(selectedPo) &&
@@ -742,7 +930,10 @@ export default function CreateReceivePage() {
                     className="gap-2 font-bold text-xs uppercase px-6 h-10"
                     onClick={handleSubmit}
                     disabled={
-                      submitting || !riKode.trim() || totalItemsToReceive === 0
+                      submitting ||
+                      !riKode.trim() ||
+                      totalItemsToReceive === 0 ||
+                      (isRevision && (!revisiRi || !revisiNote.trim()))
                     }
                   >
                     {submitting ? (
@@ -752,8 +943,14 @@ export default function CreateReceivePage() {
                       </>
                     ) : (
                       <>
-                        <CheckCircle2 className="h-4 w-4" />
-                        Simpan & Ajukan Approval
+                        {isRevision ? (
+                          <FilePenLine className="h-4 w-4" />
+                        ) : (
+                          <CheckCircle2 className="h-4 w-4" />
+                        )}
+                        {isRevision
+                          ? "Simpan Revisi & Ajukan Ulang"
+                          : "Simpan & Ajukan Approval"}
                       </>
                     )}
                   </Button>

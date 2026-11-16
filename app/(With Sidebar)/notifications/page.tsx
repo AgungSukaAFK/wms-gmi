@@ -45,7 +45,7 @@ const notifTypeColor: Record<string, string> = {
 };
 
 const notifTypeLabel: Record<string, string> = {
-  approval_needed: "Perlu Tindakan",
+  approval_needed: "Permintaan Approval",
   approved: "Disetujui",
   rejected: "Ditolak",
   document_completed: "Selesai",
@@ -68,6 +68,21 @@ function formatRelativeTime(dateStr: string) {
   return formatDate(date);
 }
 
+// document_type di tabel notifications (kode singkat) -> nama di RPC
+// get_pending_approvals_for_user, supaya riwayat "Permintaan Approval" bisa
+// dicek: masih menunggu user atau sudah diproses.
+const NOTIF_DOC_TYPE_TO_PENDING: Record<string, string> = {
+  MR: "Material Request",
+  PR: "Purchase Request",
+  PO: "Purchase Order",
+  RI: "Receive Item",
+  WO: "Working Order",
+  "Item Transfer": "Item Transfer",
+};
+
+const pendingKey = (type: string | null | undefined, id: number | null) =>
+  `${type ?? ""}#${id ?? ""}`;
+
 const levelLabel: Record<string, string> = {
   menyetujui: "Menyetujui",
   mengetahui: "Mengetahui",
@@ -80,10 +95,14 @@ const levelLabel: Record<string, string> = {
 function NotificationItem({
   notif,
   onMarkRead,
+  isActionable,
 }: {
   notif: Notification;
   onMarkRead: (id: number, isRead: boolean) => void;
+  /** Khusus approval_needed: dokumen masih menunggu tindakan user. */
+  isActionable: boolean;
 }) {
+  const isApprovalRequest = notif.type === "approval_needed";
   return (
     <div
       className={`flex gap-3 rounded-lg border p-4 transition-colors hover:bg-accent/40 ${
@@ -108,6 +127,17 @@ function NotificationItem({
             >
               {notifTypeLabel[notif.type] ?? notif.type}
             </span>
+            {isApprovalRequest && (
+              <span
+                className={`text-[10px] font-bold px-1.5 py-0.5 rounded uppercase ${
+                  isActionable
+                    ? "bg-primary text-primary-foreground"
+                    : "bg-muted text-muted-foreground"
+                }`}
+              >
+                {isActionable ? "Menunggu Anda" : "Sudah diproses"}
+              </span>
+            )}
             {notif.document_type && (
               <span className="text-[10px] font-bold text-muted-foreground uppercase">
                 {notif.document_type}
@@ -132,12 +162,12 @@ function NotificationItem({
           {notif.document_url && (
             <Link href={notif.document_url}>
               <Button
-                variant="outline"
+                variant={isApprovalRequest && isActionable ? "default" : "outline"}
                 size="sm"
                 className="h-7 text-[10px] font-bold uppercase gap-1.5"
               >
                 <ExternalLink className="h-3 w-3" />
-                Buka Dokumen
+                {isApprovalRequest && isActionable ? "Buka & Proses" : "Lihat Dokumen"}
               </Button>
             </Link>
           )}
@@ -291,6 +321,9 @@ export default function NotificationsPage() {
   };
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;
+  const pendingKeys = new Set(
+    pending.map((p) => pendingKey(p.document_type, p.document_id)),
+  );
   const totalPages = Math.ceil(notifTotal / LIMIT);
 
   return (
@@ -501,6 +534,12 @@ export default function NotificationsPage() {
                       key={notif.id}
                       notif={notif}
                       onMarkRead={handleMarkRead}
+                      isActionable={pendingKeys.has(
+                        pendingKey(
+                          NOTIF_DOC_TYPE_TO_PENDING[notif.document_type ?? ""],
+                          notif.document_id,
+                        ),
+                      )}
                     />
                   ))}
                 </div>

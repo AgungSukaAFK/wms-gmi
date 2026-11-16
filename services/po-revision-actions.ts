@@ -15,11 +15,14 @@ import {
   refreshSoStatus,
 } from "@/lib/so-reguler";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import { PO_APPROVER_EDITABLE_STATUSES, isPoApprover } from "@/lib/po-item-status";
 import { normalizeItemTax, normalizePoTaxMode } from "@/lib/po-tax";
 import {
+  PO_ITEM_SELECT,
   buildPoRevisionSnapshot,
   canRevisePO,
   diffPoRevision,
+  flattenPoItems,
   summarizePoRevision,
 } from "@/lib/po-revision";
 import {
@@ -70,7 +73,28 @@ export type PoRevisionPayload = {
   po_pr_referensi?: string | null;
   approvals: any[];
   items: PoRevisionItemInput[];
+  // "revisi" (default) = purchasing/moderator, approval diulang dari awal.
+  // "approver" = approver PO mengedit sebelum ada RI, approval TIDAK diulang.
+  mode?: "revisi" | "approver";
 };
+
+// Field header yang mengandung harga/pajak -- dikunci untuk edit approver
+// yang tidak punya akses harga (nilai diambil dari DB, bukan payload).
+const PRICE_HEADER_KEYS = [
+  "po_currency",
+  "po_tax_mode",
+  "po_harga_termasuk_pajak",
+  "po_ppn_mode",
+  "po_ppn_rate",
+  "po_ppn_amount",
+  "po_diskon_mode",
+  "po_diskon_value",
+  "po_ongkir",
+  "po_pph_type",
+  "po_pph_mode",
+  "po_pph_rate",
+  "po_pph_amount",
+] as const;
 
 function itemTaxColumns(i: PoRevisionItemInput) {
   const t = normalizeItemTax({
@@ -79,23 +103,6 @@ function itemTaxColumns(i: PoRevisionItemInput) {
     pphRate: i.item_pph_rate,
   });
   return { item_ppn_rate: t.ppnRate, item_pph_type: t.pphType, item_pph_rate: t.pphRate };
-}
-
-const PO_ITEM_SELECT =
-  "id, part_id, part_number, part_name, satuan, qty, qty_received, harga, vendor_id, mr_id, pr_item_id, so_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name), pr_items(pr_id, prs(pr_kode))";
-
-function flattenPoItems(rows: any[]) {
-  return (rows || []).map((r: any) => {
-    const prItem = Array.isArray(r.pr_items) ? r.pr_items[0] : r.pr_items;
-    const pr = Array.isArray(prItem?.prs) ? prItem.prs[0] : prItem?.prs;
-    const vendor = Array.isArray(r.vendors) ? r.vendors[0] : r.vendors;
-    return {
-      ...r,
-      pr_id: prItem?.pr_id ?? null,
-      pr_kode: pr?.pr_kode ?? null,
-      vendor_name: vendor?.vendor_name ?? null,
-    };
-  });
 }
 
 /**
@@ -124,16 +131,35 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
   const roleNames: string[] = ((myProfile as any)?.user_roles || [])
     .map((ur: any) => (Array.isArray(ur.roles) ? ur.roles[0]?.name : ur.roles?.name))
     .filter(Boolean);
-  if (!canRevisePO(roleNames)) {
+  const isApproverMode = payload.mode === "approver";
+  const hasPriceAccess = canRevisePO(roleNames);
+  if (!isApproverMode && !hasPriceAccess) {
     return { error: "Hanya purchasing atau moderator yang dapat mengedit PO." };
   }
-  const editorRole = roleNames.includes("purchasing") ? "purchasing" : "moderator";
+  const editorRole = isApproverMode
+    ? "approver"
+    : roleNames.includes("purchasing")
+      ? "purchasing"
+      : "moderator";
 
   const reason = payload.reason?.trim();
   if (!reason) return { error: "Alasan revisi wajib diisi." };
 
   const { data: po } = await supabase.from("pos").select("*").eq("id", poId).single();
   if (!po) return { error: "PO tidak ditemukan." };
+  if (po.po_status === "closed") {
+    return {
+      error:
+        "PO sudah CLOSED (ada item yang dibatalkan), tidak bisa diedit lagi. Item yang masih aktif tetap bisa diterima lewat RI.",
+    };
+  }
+  if (isApproverMode) {
+    const access = await checkApproverEditAccess(supabase, po, user.id);
+    if (access) return { error: access };
+  }
+  // Approver tanpa akses harga: harga, pajak, diskon & ongkir dikunci ke
+  // nilai di DB (payload diabaikan) dan item baru tidak bisa ditambah.
+  const priceLocked = isApproverMode && !hasPriceAccess;
   // PO rejected sudah membebaskan qty PR/SO-nya (bisa sudah di-PO ulang di PO
   // lain), jadi saat dihidupkan lagi lewat revisi, SELURUH qty item wajib
   // lolos cek sisa PR/SO -- tidak ada pengecualian "qty tidak dinaikkan".
@@ -154,6 +180,32 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
 
   const items = payload.items || [];
   if (items.length === 0) return { error: "PO harus punya minimal 1 item." };
+
+  const { data: currentRows } = await supabase
+    .from("po_items")
+    .select(PO_ITEM_SELECT)
+    .eq("po_id", poId);
+  const currentItems = flattenPoItems(currentRows || []);
+  const currentById = new Map(currentItems.map((i: any) => [i.id, i]));
+
+  if (priceLocked) {
+    if (items.some((i) => !i.po_item_id)) {
+      return {
+        error:
+          "Approver tanpa akses harga tidak bisa menambah item baru (harga wajib diisi). Minta purchasing untuk menambah item.",
+      };
+    }
+    for (const i of items) {
+      const cur: any = currentById.get(i.po_item_id as number);
+      if (!cur) continue;
+      i.harga = num(cur.harga);
+      i.item_ppn_rate = num(cur.item_ppn_rate);
+      i.item_pph_type = cur.item_pph_type || null;
+      i.item_pph_rate = num(cur.item_pph_rate);
+    }
+    for (const k of PRICE_HEADER_KEYS) (payload as any)[k] = po[k];
+  }
+
   // PO Outstanding (import ERP) boleh punya harga 0 apa adanya dari ERP.
   const hargaOk = (h: number) => (po.po_is_outstanding ? h >= 0 : h > 0);
   const incomplete = items.filter((i) => !i.vendor_id || !hargaOk(i.harga) || !(i.qty > 0));
@@ -164,13 +216,6 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
         .join(", ")}`,
     };
   }
-
-  const { data: currentRows } = await supabase
-    .from("po_items")
-    .select(PO_ITEM_SELECT)
-    .eq("po_id", poId);
-  const currentItems = flattenPoItems(currentRows || []);
-  const currentById = new Map(currentItems.map((i: any) => [i.id, i]));
 
   // Item lama: link (PR/SO/barang) diambil dari DB, yang bisa diubah cuma
   // qty, harga, vendor. Item baru: dari payload.
@@ -349,15 +394,23 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     }
   }
 
-  // Approval diulang dari awal: step pertama (editor) approved + TTD, sisanya
-  // dipaksa pending supaya payload client tidak bisa melompati approval.
-  const approvals = (payload.approvals || []).map((a: any, idx: number) =>
-    idx === 0
-      ? a
-      : { ...a, status: "pending", processed_at: null, signature_url: null, notes: null, snapshot: null },
-  );
-  const allApproved = approvals.every((a: any) => a.status === "approved");
-  const newStatus = approvals.length === 0 || allApproved ? "approved" : "open";
+  // Revisi: approval diulang dari awal -- step pertama (editor) approved +
+  // TTD, sisanya dipaksa pending supaya payload client tidak bisa melompati
+  // approval. Edit approver: approval & status PO tetap seperti di DB.
+  let approvals: any[];
+  let newStatus: string;
+  if (isApproverMode) {
+    approvals = po.approvals || [];
+    newStatus = po.po_status;
+  } else {
+    approvals = (payload.approvals || []).map((a: any, idx: number) =>
+      idx === 0
+        ? a
+        : { ...a, status: "pending", processed_at: null, signature_url: null, notes: null, snapshot: null },
+    );
+    const allApproved = approvals.every((a: any) => a.status === "approved");
+    newStatus = approvals.length === 0 || allApproved ? "approved" : "open";
+  }
 
   const snapshotBefore = buildPoRevisionSnapshot(po, currentItems);
 
@@ -494,8 +547,39 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     changes,
     snapshot_before: snapshotBefore,
     snapshot_after: snapshotAfter,
+    revision_kind: isApproverMode ? "edit_approver" : "revisi",
+    approval_reset: !isApproverMode,
   });
   if (logErr) console.error("Gagal mencatat po_revisions:", logErr.message);
+
+  if (isApproverMode) {
+    // Approval tidak diulang: cukup kabari PIC + approver lain bahwa isi PO
+    // berubah (bukan permintaan approval baru).
+    const recipients = new Set<string>();
+    if (po.po_pic_id) recipients.add(po.po_pic_id);
+    for (const a of approvals) {
+      const uid = a?.userid || a?.user_id;
+      if (uid) recipients.add(uid);
+    }
+    recipients.delete(user.id);
+    for (const uid of recipients) {
+      createNotification({
+        userId: uid,
+        type: "general",
+        title: `PO diedit approver (Rev. ${nextRevision})`,
+        message: `PO ${poKode} diedit oleh ${editorName}: ${reason}. Perubahan: ${summary}. Approval tidak diulang.`,
+        documentType: "PO",
+        documentId: poId,
+        documentUrl: `/po/${poId}`,
+        metadata: { document_number: poKode, revision_no: nextRevision },
+      }).catch(console.error);
+    }
+    revalidatePath("/po");
+    revalidatePath(`/po/${poId}`);
+    revalidatePath("/pr");
+    if (poJenis === "so") revalidatePath("/so-reguler/so");
+    return { success: true, revision: nextRevision };
+  }
 
   // Notifikasi: approver yang pending + PIC PO (kalau bukan editornya sendiri).
   notifyApprovers(approvals, "PO", poId, poKode, `/po/${poId}`).catch(console.error);
@@ -524,7 +608,7 @@ export async function getPoRevisions(poId: number) {
   const { data, error } = await supabase
     .from("po_revisions")
     .select(
-      "id, revision_no, edited_by, edited_by_nama, edited_by_role, reason, summary, changes, snapshot_before, created_at",
+      "id, revision_no, edited_by, edited_by_nama, edited_by_role, reason, summary, changes, snapshot_before, revision_kind, approval_reset, created_at",
     )
     .eq("po_id", poId)
     .order("revision_no", { ascending: false });
@@ -534,4 +618,84 @@ export async function getPoRevisions(poId: number) {
 
 function num(v: any) {
   return Number(v) || 0;
+}
+
+/**
+ * Syarat edit PO oleh approver: user ada di jalur approval (bukan step
+ * pertama/pembuat), PO masih open/approved, bukan PO Rekonsil Konsinyasi, dan
+ * belum ada Receive Item (RI rejected tidak dihitung). Mengembalikan pesan
+ * error atau null kalau boleh.
+ */
+async function checkApproverEditAccess(
+  supabase: any,
+  po: any,
+  userId: string,
+): Promise<string | null> {
+  if (!isPoApprover(po.approvals, userId)) {
+    return "Anda bukan approver PO ini.";
+  }
+  if (!(PO_APPROVER_EDITABLE_STATUSES as readonly string[]).includes(po.po_status)) {
+    return `PO berstatus ${po.po_status}, tidak bisa diedit approver.`;
+  }
+  if (po.po_jenis === "konsinyasi") {
+    return "PO Rekonsil Konsinyasi tidak bisa diedit.";
+  }
+  const { count } = await supabase
+    .from("receives")
+    .select("id", { count: "exact", head: true })
+    .eq("po_id", po.id)
+    .neq("ri_status", "rejected");
+  if (count && count > 0) {
+    return "PO sudah memiliki dokumen Receive Item, tidak bisa diedit approver lagi.";
+  }
+  return null;
+}
+
+/**
+ * Hak edit PO untuk user yang login -- dipakai halaman detail (tombol Edit)
+ * dan form edit (mode revisi vs mode approver).
+ */
+export async function getPoEditAccess(poId: number): Promise<{
+  mode: "revisi" | "approver" | null;
+  priceLocked: boolean;
+  reason?: string;
+}> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { mode: null, priceLocked: true, reason: "Session expired." };
+
+  const [{ data: profile }, { data: po }] = await Promise.all([
+    supabase.from("profiles").select("id, user_roles(roles(name))").eq("id", user.id).single(),
+    supabase
+      .from("pos")
+      .select("id, po_status, po_jenis, approvals")
+      .eq("id", poId)
+      .maybeSingle(),
+  ]);
+  if (!po) return { mode: null, priceLocked: true, reason: "PO tidak ditemukan." };
+  const roleNames: string[] = ((profile as any)?.user_roles || [])
+    .map((ur: any) => (Array.isArray(ur.roles) ? ur.roles[0]?.name : ur.roles?.name))
+    .filter(Boolean);
+  const hasPriceAccess = canRevisePO(roleNames);
+
+  if (po.po_status === "closed") {
+    return {
+      mode: null,
+      priceLocked: !hasPriceAccess,
+      reason: "PO sudah CLOSED (ada item yang dibatalkan), tidak bisa diedit lagi.",
+    };
+  }
+  if (isPoApprover(po.approvals, user.id)) {
+    const blocked = await checkApproverEditAccess(supabase, po, user.id);
+    if (!blocked) return { mode: "approver", priceLocked: !hasPriceAccess };
+    if (!hasPriceAccess) return { mode: null, priceLocked: true, reason: blocked };
+  }
+  if (hasPriceAccess) return { mode: "revisi", priceLocked: false };
+  return {
+    mode: null,
+    priceLocked: true,
+    reason: "Hanya approver PO, purchasing, atau moderator yang dapat mengedit PO.",
+  };
 }

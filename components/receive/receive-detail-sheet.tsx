@@ -39,11 +39,18 @@ import {
   Trash2,
   Save,
   RotateCcw,
+  FilePenLine,
+  History,
 } from "lucide-react";
+import Link from "next/link";
 import { Separator } from "@/components/ui/separator";
 import { cn, formatDate, formatDateTime } from "@/lib/utils";
 import { toast } from "@/lib/toast";
-import { approveReceive, rejectReceive } from "@/services/procurement-actions";
+import {
+  approveReceive,
+  getReceiveRevisions,
+  rejectReceive,
+} from "@/services/procurement-actions";
 import {
   moderatorEditReceive,
   ModeratorApprovalStep,
@@ -81,6 +88,8 @@ export function ReceiveDetailSheet({
   // item (selama belum completed), dan jalur/status approval, di luar giliran
   // approval normal. Lihat catatan lengkap di moderatorEditReceive.
   const [isModerator, setIsModerator] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [revisions, setRevisions] = useState<any[]>([]);
   const [modEditMode, setModEditMode] = useState(false);
   const [modSaving, setModSaving] = useState(false);
   const [modTanggal, setModTanggal] = useState("");
@@ -101,6 +110,7 @@ export function ReceiveDetailSheet({
     } else if (!open) {
       setReceive(null);
       setItems([]);
+      setRevisions([]);
       setPendingAction(null);
       setRejectionReason("");
       setModEditMode(false);
@@ -114,6 +124,7 @@ export function ReceiveDetailSheet({
     if (!user) {
       setCurrentUser(null);
       setIsModerator(false);
+      setIsAdmin(false);
       return;
     }
 
@@ -124,11 +135,11 @@ export function ReceiveDetailSheet({
       .single();
 
     setCurrentUser(profile || { id: user.id });
-    setIsModerator(
-      ((profile as any)?.roles || []).some(
-        (r: any) => r.roles?.name === "moderator",
-      ),
+    const roleNames: string[] = ((profile as any)?.roles || []).map(
+      (r: any) => r.roles?.name,
     );
+    setIsModerator(roleNames.includes("moderator"));
+    setIsAdmin(roleNames.includes("admin"));
   };
 
   const fetchDetail = async (id: number) => {
@@ -137,7 +148,7 @@ export function ReceiveDetailSheet({
       .from("receives")
       .select(
         `
-          id, ri_kode, ri_tanggal, ri_pic, ri_pic_id, ri_keterangan, ri_status, approvals, rejection_reason, created_at,
+          id, ri_kode, ri_tanggal, ri_pic, ri_pic_id, ri_keterangan, ri_status, approvals, rejection_reason, created_at, created_by, ri_revision,
           cabang(id, nama_cabang),
           pos(id, po_kode)
         `,
@@ -155,6 +166,9 @@ export function ReceiveDetailSheet({
 
     setItems(riItems || []);
     setLoading(false);
+
+    const rev = await getReceiveRevisions(id);
+    setRevisions(rev.data || []);
   };
 
   const totalQty = items.reduce((sum, i) => sum + (i.qty || 0), 0);
@@ -166,6 +180,15 @@ export function ReceiveDetailSheet({
     Boolean(currentUser?.id) &&
     Boolean(nextPendingApproval) &&
     nextPendingApproval.userid === currentUser.id;
+
+  // Revisi RI ditolak: pembuat, PIC, atau moderator/admin (dicek ulang di server).
+  const canRevise =
+    receive?.ri_status === "rejected" &&
+    Boolean(currentUser?.id) &&
+    (currentUser.id === receive?.created_by ||
+      currentUser.id === receive?.ri_pic_id ||
+      isModerator ||
+      isAdmin);
 
   const openApproveFlow = () => {
     setPendingAction("approve");
@@ -414,6 +437,11 @@ export function ReceiveDetailSheet({
                   <div className="flex items-center justify-between gap-2">
                     <p className="font-black text-lg text-foreground font-mono uppercase tracking-wide">
                       {receive.ri_kode}
+                      {Number(receive.ri_revision) > 0 && (
+                        <span className="ml-2 align-middle text-[10px] font-bold text-primary normal-case">
+                          Revisi {receive.ri_revision}
+                        </span>
+                      )}
                     </p>
                     <StatusBadge status={receive.ri_status === "completed" || receive.ri_status === "rejected" ? receive.ri_status : "open"} tone="solid" />
                   </div>
@@ -611,6 +639,91 @@ export function ReceiveDetailSheet({
                   <div className="rounded-md border border-red-200 bg-red-50 p-3 text-[10px] text-red-700 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800">
                     <span className="font-bold uppercase">Alasan Reject:</span>{" "}
                     {receive.rejection_reason}
+                  </div>
+                )}
+
+                {!modEditMode && receive?.ri_status === "rejected" && (
+                  <div className="space-y-2 rounded-md border border-border p-3">
+                    <p className="text-[10px] font-bold uppercase text-muted-foreground">
+                      RI ditolak
+                    </p>
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      {canRevise
+                        ? "Perbaiki qty, barang, atau gudang penerima, lalu ajukan ulang. Approval akan diulang dari tahap pertama."
+                        : "Hanya pembuat RI, PIC RI, atau moderator yang bisa merevisi dan mengajukan ulang RI ini."}
+                    </p>
+                    {canRevise && (
+                      <Button
+                        asChild
+                        className="w-full h-8 gap-1.5 text-[10px] font-bold uppercase"
+                      >
+                        <Link href={`/receive/create?revisi=${receive.id}`}>
+                          <FilePenLine className="h-3.5 w-3.5" />
+                          Revisi &amp; Ajukan Ulang
+                        </Link>
+                      </Button>
+                    )}
+                  </div>
+                )}
+
+                {!modEditMode && revisions.length > 0 && (
+                  <div className="space-y-2">
+                    <p className="text-[10px] font-black uppercase text-muted-foreground flex items-center gap-1.5">
+                      <History className="h-3.5 w-3.5" />
+                      Riwayat Revisi
+                    </p>
+                    <div className="rounded-lg border border-border divide-y divide-border">
+                      {revisions.map((rev) => {
+                        const c = rev.changes || {};
+                        const lines: string[] = [
+                          ...(c.changed || []).map(
+                            (x: any) =>
+                              `${x.part_number}: ${x.qty_before} → ${x.qty_after}${x.gudang_changed ? " (gudang diubah)" : ""}`,
+                          ),
+                          ...(c.added || []).map(
+                            (x: any) => `+ ${x.part_number} (${x.qty})`,
+                          ),
+                          ...(c.removed || []).map(
+                            (x: any) => `− ${x.part_number} (${x.qty})`,
+                          ),
+                        ];
+                        return (
+                          <div key={rev.id} className="p-3 space-y-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="text-[11px] font-bold text-foreground">
+                                Revisi {rev.revision_no}
+                                {rev.revised_by_nama ? ` · ${rev.revised_by_nama}` : ""}
+                              </p>
+                              <span className="text-[10px] text-muted-foreground whitespace-nowrap">
+                                {formatDateTime(rev.created_at)}
+                              </span>
+                            </div>
+                            {rev.rejection_reason && (
+                              <p className="text-[10px] text-red-700 dark:text-red-300">
+                                Ditolak{rev.rejected_by_nama ? ` oleh ${rev.rejected_by_nama}` : ""}:{" "}
+                                {rev.rejection_reason}
+                              </p>
+                            )}
+                            {rev.note && (
+                              <p className="text-[10px] text-foreground">
+                                Catatan revisi: {rev.note}
+                              </p>
+                            )}
+                            {lines.length > 0 ? (
+                              <ul className="text-[10px] text-muted-foreground space-y-0.5">
+                                {lines.map((l, i) => (
+                                  <li key={i} className="font-mono">{l}</li>
+                                ))}
+                              </ul>
+                            ) : (
+                              <p className="text-[10px] text-muted-foreground">
+                                Item tidak berubah.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
                 )}
 

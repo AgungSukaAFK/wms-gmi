@@ -80,7 +80,7 @@ const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
  * tengah malam UTC; timestamptz diambil jam lokalnya lalu "dipalsukan" jadi
  * UTC supaya di Excel tampil sama dengan jam di aplikasi (WIB/WITA/WIT).
  */
-function toCellDate(value?: string | null): Date | null {
+export function toCellDate(value?: string | null): Date | null {
   if (!value) return null;
   const ymd = YMD_RE.exec(value);
   if (ymd) {
@@ -104,7 +104,7 @@ function toCellDate(value?: string | null): Date | null {
 const orNull = (v: unknown) =>
   v === null || v === undefined || v === "" ? null : v;
 
-interface ColumnDef {
+export interface ColumnDef {
   header: string;
   width: number;
   numFmt?: string;
@@ -120,7 +120,7 @@ interface ColumnDef {
  * `rows` berisi nilai sel; `statusKeys[i]` (opsional) = status mentah baris i
  * untuk pewarnaan kolom bertanda `statusKey`.
  */
-function writeTableSheet(
+export function writeTableSheet(
   ws: Worksheet,
   title: string,
   subtitle: string,
@@ -229,7 +229,7 @@ function writeTableSheet(
   };
 }
 
-function formatExportedAt(d: Date) {
+export function formatExportedAt(d: Date) {
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }

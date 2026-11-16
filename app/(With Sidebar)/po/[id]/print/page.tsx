@@ -73,7 +73,7 @@ export default function POPrintPage() {
     let itemsQuery = supabase
       .from("po_items")
       .select(
-        "id, part_number, part_name, satuan, qty, harga, qty_received, vendor_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
+        "id, part_number, part_name, satuan, qty, harga, qty_received, qty_cancelled, vendor_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
       )
       .eq("po_id", id)
       .order("created_at");
@@ -317,6 +317,12 @@ export default function POPrintPage() {
                         {poTax.taxMode === "item" && (
                           <div className="text-[9px] text-slate-600 mt-0.5">
                             Pajak: {formatItemTax(itemTaxFromRow(item))}
+                          </div>
+                        )}
+                        {Number(item.qty_cancelled) > 0 && (
+                          <div className="text-[9px] font-bold text-red-700 mt-0.5 uppercase">
+                            Dibatalkan {item.qty_cancelled} {item.satuan}
+                            {Number(item.qty) > 0 ? " (sisa sudah diterima)" : ""}
                           </div>
                         )}
                       </td>

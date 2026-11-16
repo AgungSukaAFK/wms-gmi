@@ -1216,9 +1216,24 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
 
   const { data: currentItems } = await supabase
     .from("po_items")
-    .select("id, part_number, qty, qty_received, pr_item_id")
+    .select("id, part_number, qty, qty_received, qty_cancelled, pr_item_id")
     .eq("po_id", poId);
   const itemById = new Map((currentItems || []).map((i: any) => [i.id, i]));
+
+  // Item yang sudah dibatalkan (PO closed) terkunci: qty-nya = qty diterima
+  // dan qty batalnya sudah dikembalikan ke PR/SO.
+  const cancelledTouched = [
+    ...(payload.deletedItemIds || []),
+    ...(payload.updatedItems || []).map((u) => u.id),
+  ]
+    .map((id) => itemById.get(id))
+    .find((i: any) => i && Number(i.qty_cancelled) > 0);
+  if (cancelledTouched) {
+    return {
+      error: `Item ${cancelledTouched.part_number} sudah dibatalkan, tidak bisa diedit / dihapus.`,
+    };
+  }
+  const hasCancelledItem = (currentItems || []).some((i: any) => Number(i.qty_cancelled) > 0);
 
   // RI yang masih menunggu approval ikut dihitung "sudah diterima" untuk
   // guard di bawah (kalau tidak, RI itu nanti memposting melebihi qty PO).
@@ -1292,8 +1307,20 @@ export async function moderatorEditPO(poId: number, payload: ModeratorPoEditPayl
   }
 
   const previousApprovedLike = APPROVED_LIKE_STATUSES.includes(po.po_status);
-  const newStatus = deriveStatus(payload.approvals);
-  const newApprovedLike = newStatus === "approved";
+  const derivedStatus = deriveStatus(payload.approvals);
+  // PO closed (ada item dibatalkan) tidak boleh keluar dari approved: qty
+  // item batal sudah dikembalikan ke PR/SO. Tetap 'closed' kalau approved.
+  if (hasCancelledItem && derivedStatus !== "approved") {
+    return {
+      error:
+        "PO ini sudah CLOSED karena ada item yang dibatalkan. Status approval tidak bisa diubah keluar dari approved.",
+    };
+  }
+  const newStatus: string =
+    hasCancelledItem || (po.po_status === "closed" && derivedStatus === "approved")
+      ? "closed"
+      : derivedStatus;
+  const newApprovedLike = newStatus === "approved" || newStatus === "closed";
 
   if (newStatus === "rejected") {
     const rejectedStep = payload.approvals.find((a) => a.status === "rejected");
@@ -1741,7 +1768,7 @@ export async function moderatorEditReceive(riId: number, payload: ModeratorRecei
         "RI",
         riId,
         ri.ri_kode,
-        `/receive`,
+        `/receive?ri=${riId}`,
         myProfile?.nama || "Moderator",
       ).catch(console.error);
     } else if (newStatus === "rejected") {
@@ -1751,13 +1778,13 @@ export async function moderatorEditReceive(riId: number, payload: ModeratorRecei
         "RI",
         riId,
         ri.ri_kode,
-        `/receive`,
+        `/receive?ri=${riId}`,
         myProfile?.nama || "Moderator",
         payload.rejection_reason,
       ).catch(console.error);
     }
   }
-  notifyApprovers(payload.approvals, "RI", riId, ri.ri_kode, `/receive`).catch(console.error);
+  notifyApprovers(payload.approvals, "RI", riId, ri.ri_kode, `/receive?ri=${riId}`).catch(console.error);
 
   revalidatePath("/receive");
   revalidatePath("/po");

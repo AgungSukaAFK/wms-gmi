@@ -106,7 +106,16 @@ export function PoRevisionHistory({
 function RevisionEntry({ rev, canViewPrice }: { rev: any; canViewPrice: boolean }) {
   const [open, setOpen] = useState(false);
   const changes: PoRevisionChanges | null = rev.changes || null;
-  const prevApprovals: any[] = rev.snapshot_before?.approvals || [];
+  // Edit approver & pembatalan item tidak me-reset approval (data lama
+  // sebelum kolom ini ada = revisi biasa, approval di-reset).
+  const approvalReset = rev.approval_reset !== false;
+  const kindLabel =
+    rev.revision_kind === "batal_item"
+      ? "Batal Item"
+      : rev.revision_kind === "edit_approver"
+        ? "Edit Approver"
+        : null;
+  const prevApprovals: any[] = approvalReset ? rev.snapshot_before?.approvals || [] : [];
   const currency = changes?.totals.currency || "IDR";
   const money = (v: number) =>
     canViewPrice ? formatPoMoney(v, currency as any) : RESTRICTED;
@@ -134,6 +143,19 @@ function RevisionEntry({ rev, canViewPrice }: { rev: any; canViewPrice: boolean 
                 {rev.edited_by_role}
               </Badge>
             )}
+            {kindLabel && (
+              <Badge
+                variant="outline"
+                className={cn(
+                  "text-[8px] font-bold uppercase",
+                  rev.revision_kind === "batal_item"
+                    ? "border-destructive/40 text-destructive"
+                    : "border-primary/40 text-primary",
+                )}
+              >
+                {kindLabel}
+              </Badge>
+            )}
           </div>
           <span className="text-[9px] font-bold text-muted-foreground uppercase">
             {formatDateTime(rev.created_at)}
@@ -141,13 +163,16 @@ function RevisionEntry({ rev, canViewPrice }: { rev: any; canViewPrice: boolean 
         </div>
 
         <div className="rounded-md border-l-2 border-warning bg-warning/5 px-2.5 py-1.5">
-          <p className="text-[9px] font-bold uppercase text-muted-foreground">Alasan</p>
+          <p className="text-[9px] font-bold uppercase text-muted-foreground">
+            {rev.revision_kind === "batal_item" ? "Alasan Pembatalan" : "Alasan"}
+          </p>
           <p className="text-[11px] text-foreground whitespace-pre-wrap">{rev.reason}</p>
         </div>
 
         {rev.summary && (
           <p className="text-[11px] text-muted-foreground leading-relaxed">
-            Perubahan: {rev.summary}. Approval diulang dari awal.
+            Perubahan: {rev.summary}.{" "}
+            {approvalReset ? "Approval diulang dari awal." : "Approval tidak diulang."}
           </p>
         )}
 

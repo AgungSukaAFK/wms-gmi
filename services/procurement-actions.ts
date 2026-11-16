@@ -28,6 +28,7 @@ import {
 } from "@/services/notification-actions";
 import { evaluateMrFreeze, evaluateMrItemFreeze } from "@/services/freeze-actions";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import { isPoReceivable } from "@/lib/po-item-status";
 import { normalizeItemTax, normalizePoTaxMode } from "@/lib/po-tax";
 import {
   computeSoItemRemaining,
@@ -1246,6 +1247,105 @@ export async function updateMRItemSSStatus(itemId: number, status: string) {
   return { success: true };
 }
 
+type ReceiveItemInput = {
+  part_id: number;
+  part_number: string;
+  part_name: string;
+  satuan: string;
+  qty: number;
+  po_id: number;
+  // null untuk item PO Non-PR (tidak terikat MR).
+  mr_id: number | null;
+  po_item_id?: number | null;
+  cabang_penerima_id: number;
+};
+
+/**
+ * Validasi item RI di server (dipakai create & revisi RI ditolak). Data item
+ * (part, satuan, MR) ditimpa dari po_items -- jangan percaya payload client.
+ * Mengembalikan pesan error, atau null kalau valid.
+ */
+async function _validateReceiveItems(
+  supabase: any,
+  poId: number,
+  items: ReceiveItemInput[],
+): Promise<string | null> {
+  const { data: poHeader } = await supabase
+    .from("pos")
+    .select("po_jenis, cabang_id, po_status")
+    .eq("id", poId)
+    .maybeSingle();
+  if (!poHeader) return "PO tidak ditemukan.";
+  // 'closed' = ada item yang dibatalkan; item lain yang masih aktif tetap
+  // bisa diterima (qty item batal sudah = qty diterima, jadi sisanya 0).
+  if (!isPoReceivable(poHeader.po_status)) {
+    return `PO berstatus ${poHeader.po_status}, tidak bisa diterima.`;
+  }
+  if (!items?.length) return "Tidak ada item yang diterima.";
+
+  // Validasi qty per item PO: data item diambil dari po_items (bukan payload),
+  // dan qty tidak boleh melebihi sisa = qty PO - sudah diterima - qty di RI
+  // lain yang masih menunggu approval (supaya dua RI pending tidak sama-sama
+  // menerima qty yang sama). RI rejected tidak dihitung pending.
+  if (items.some((i) => !i.po_item_id)) {
+    return "Setiap item RI wajib merujuk item PO.";
+  }
+  if (items.some((i) => !(i.qty > 0) || !Number.isInteger(Number(i.qty)))) {
+    return "Qty terima harus bilangan bulat lebih dari 0.";
+  }
+  if (items.some((i) => !i.cabang_penerima_id)) {
+    return "Gudang penerima wajib dipilih untuk setiap item.";
+  }
+  const poItemIds = Array.from(new Set(items.map((i) => Number(i.po_item_id))));
+  const { data: poItemRows } = await supabase
+    .from("po_items")
+    .select("id, po_id, part_id, part_number, part_name, satuan, qty, qty_received, mr_id")
+    .in("id", poItemIds);
+  const poItemById = new Map((poItemRows || []).map((r: any) => [r.id, r]));
+  const pending = await fetchPoItemPendingReceiveQty(supabase, poItemIds);
+  const requested = new Map<number, number>();
+  for (const item of items) {
+    const pi: any = poItemById.get(Number(item.po_item_id));
+    if (!pi || pi.po_id !== poId) {
+      return `Item ${item.part_number} bukan bagian dari PO ini.`;
+    }
+    item.po_id = pi.po_id;
+    item.part_id = pi.part_id;
+    item.part_number = pi.part_number;
+    item.part_name = pi.part_name;
+    item.satuan = pi.satuan;
+    item.mr_id = pi.mr_id ?? null;
+    requested.set(pi.id, (requested.get(pi.id) || 0) + Number(item.qty));
+  }
+  for (const [poItemId, qty] of requested) {
+    const pi: any = poItemById.get(poItemId);
+    const sisa =
+      (Number(pi.qty) || 0) - (Number(pi.qty_received) || 0) - (pending.get(poItemId) || 0);
+    if (qty > sisa) {
+      return `Qty terima ${pi.part_number} (${qty}) melebihi sisa PO yang belum diterima (${Math.max(0, sisa)}, sudah termasuk RI lain yang masih menunggu approval).`;
+    }
+  }
+
+  // PO dari SO: barang wajib mendarat di gudang penerima PO (pos.cabang_id),
+  // dari sana baru dikirim ke customer lewat DO Reguler.
+  if (
+    poHeader.po_jenis === "so" &&
+    items.some((i) => Number(i.cabang_penerima_id) !== Number(poHeader.cabang_id))
+  ) {
+    return "Barang PO dari SO wajib diterima di gudang penerima PO.";
+  }
+  // PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA (lihat lib/po-non-pr.ts).
+  if (poHeader.po_jenis === "non_pr") {
+    const nonPrCabang = await resolveNonPrReceiveCabang(supabase);
+    if (!nonPrCabang) return NON_PR_RECEIVE_CABANG_MISSING_MESSAGE;
+    if (items.some((i) => i.cabang_penerima_id !== nonPrCabang.id)) {
+      return `Barang PO Non-PR wajib diterima di gudang ${nonPrCabang.nama_cabang}.`;
+    }
+  }
+
+  return null;
+}
+
 /**
  * RECEIVE (Goods Receipt) SERVICES
  */
@@ -1278,84 +1378,8 @@ export async function createReceive(data: {
     return { error: "Kode Receive wajib diisi manual." };
   }
 
-  // PO Non-PR: gudang penerima dikunci ke GMI-JAKARTA (lihat lib/po-non-pr.ts),
-  // divalidasi ulang di server -- jangan percaya payload client.
-  const { data: poHeader } = await supabase
-    .from("pos")
-    .select("po_jenis, cabang_id, po_status")
-    .eq("id", data.po_id)
-    .maybeSingle();
-  if (!poHeader) return { error: "PO tidak ditemukan." };
-  if (poHeader.po_status !== "approved") {
-    return { error: `PO berstatus ${poHeader.po_status}, tidak bisa diterima.` };
-  }
-  if (!data.items?.length) return { error: "Tidak ada item yang diterima." };
-
-  // Validasi qty per item PO di server: data item diambil dari po_items (bukan
-  // payload), dan qty tidak boleh melebihi sisa = qty PO - sudah diterima -
-  // qty di RI lain yang masih menunggu approval (supaya dua RI pending tidak
-  // sama-sama menerima qty yang sama).
-  {
-    if (data.items.some((i) => !i.po_item_id)) {
-      return { error: "Setiap item RI wajib merujuk item PO." };
-    }
-    if (data.items.some((i) => !(i.qty > 0) || !Number.isInteger(Number(i.qty)))) {
-      return { error: "Qty terima harus bilangan bulat lebih dari 0." };
-    }
-    if (data.items.some((i) => !i.cabang_penerima_id)) {
-      return { error: "Gudang penerima wajib dipilih untuk setiap item." };
-    }
-    const poItemIds = Array.from(new Set(data.items.map((i) => Number(i.po_item_id))));
-    const { data: poItemRows } = await supabase
-      .from("po_items")
-      .select("id, po_id, part_id, part_number, part_name, satuan, qty, qty_received, mr_id")
-      .in("id", poItemIds);
-    const poItemById = new Map((poItemRows || []).map((r: any) => [r.id, r]));
-    const pending = await fetchPoItemPendingReceiveQty(supabase, poItemIds);
-    const requested = new Map<number, number>();
-    for (const item of data.items) {
-      const pi: any = poItemById.get(Number(item.po_item_id));
-      if (!pi || pi.po_id !== data.po_id) {
-        return { error: `Item ${item.part_number} bukan bagian dari PO ini.` };
-      }
-      item.po_id = pi.po_id;
-      item.part_id = pi.part_id;
-      item.part_number = pi.part_number;
-      item.part_name = pi.part_name;
-      item.satuan = pi.satuan;
-      item.mr_id = pi.mr_id ?? null;
-      requested.set(pi.id, (requested.get(pi.id) || 0) + Number(item.qty));
-    }
-    for (const [poItemId, qty] of requested) {
-      const pi: any = poItemById.get(poItemId);
-      const sisa =
-        (Number(pi.qty) || 0) - (Number(pi.qty_received) || 0) - (pending.get(poItemId) || 0);
-      if (qty > sisa) {
-        return {
-          error: `Qty terima ${pi.part_number} (${qty}) melebihi sisa PO yang belum diterima (${Math.max(0, sisa)}, sudah termasuk RI lain yang masih menunggu approval).`,
-        };
-      }
-    }
-  }
-  // PO dari SO: barang wajib mendarat di gudang penerima PO (pos.cabang_id),
-  // dari sana baru dikirim ke customer lewat DO Reguler.
-  if (
-    poHeader?.po_jenis === "so" &&
-    data.items.some(
-      (i) => Number(i.cabang_penerima_id) !== Number(poHeader.cabang_id),
-    )
-  ) {
-    return { error: "Barang PO dari SO wajib diterima di gudang penerima PO." };
-  }
-  if (poHeader?.po_jenis === "non_pr") {
-    const nonPrCabang = await resolveNonPrReceiveCabang(supabase);
-    if (!nonPrCabang) return { error: NON_PR_RECEIVE_CABANG_MISSING_MESSAGE };
-    if (data.items.some((i) => i.cabang_penerima_id !== nonPrCabang.id)) {
-      return {
-        error: `Barang PO Non-PR wajib diterima di gudang ${nonPrCabang.nama_cabang}.`,
-      };
-    }
-  }
+  const itemsInvalid = await _validateReceiveItems(supabase, data.po_id, data.items);
+  if (itemsInvalid) return { error: itemsInvalid };
 
   const { data: existingRi } = await supabase
     .from("receives")
@@ -1432,7 +1456,7 @@ export async function createReceive(data: {
     .insert(itemsToInsert);
   if (itemsError) return { error: itemsError.message };
 
-  notifyApprovers(approvals, "RI", ri.id, ri.ri_kode, `/receive`).catch(
+  notifyApprovers(approvals, "RI", ri.id, ri.ri_kode, `/receive?ri=${ri.id}`).catch(
     console.error,
   );
 
@@ -1541,13 +1565,13 @@ export async function approveReceive(riId: number, signatureUrl: string) {
       "RI",
       riId,
       receive.ri_kode,
-      `/receive`,
+      `/receive?ri=${riId}`,
       justProcessed?.nama,
     ).catch(console.error);
   }
   if (!isAllDone) {
     const remaining = updatedApprovals.filter((a: any) => a.status === "pending");
-    notifyApprovers(remaining, "RI", riId, receive.ri_kode, `/receive`).catch(
+    notifyApprovers(remaining, "RI", riId, receive.ri_kode, `/receive?ri=${riId}`).catch(
       console.error,
     );
   }
@@ -1580,7 +1604,7 @@ export async function rejectReceive(
 
   const { data: receive } = await supabase
     .from("receives")
-    .select("id, approvals, ri_status, ri_kode, ri_pic_id")
+    .select("id, approvals, ri_status, ri_kode, ri_pic_id, created_by")
     .eq("id", riId)
     .single();
   if (!receive) return { error: "Receive tidak ditemukan" };
@@ -1640,22 +1664,271 @@ export async function rejectReceive(
   const rejecter = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "rejected",
   );
-  if (receive.ri_pic_id) {
-    notifyDocumentOwner(
+  // Penolakan dikabari ke pembuat RI, PIC RI, dan approver yang sebelumnya
+  // sudah approve (mereka perlu tahu RI-nya dibatalkan & akan direvisi).
+  const recipients = new Set<string>(
+    [
+      receive.created_by,
       receive.ri_pic_id,
+      ...updatedApprovals
+        .filter((a: any) => a.status === "approved")
+        .map((a: any) => a.userid || a.user_id),
+    ].filter((id): id is string => Boolean(id) && id !== user.id),
+  );
+  for (const recipientId of recipients) {
+    notifyDocumentOwner(
+      recipientId,
       "rejected",
       "RI",
       riId,
       receive.ri_kode,
-      `/receive`,
+      `/receive?ri=${riId}`,
       rejecter?.nama,
-      reason,
+      reason.trim(),
     ).catch(console.error);
   }
 
   revalidatePath("/receive");
   revalidatePath("/po");
   return { success: true };
+}
+
+/**
+ * REVISI RI YANG DITOLAK
+ *
+ * RI berstatus rejected boleh direvisi oleh pembuat RI, PIC RI, atau
+ * moderator/admin: tanggal, keterangan, dan item (qty, gudang penerima,
+ * tambah/hapus item dari PO yang sama). Kode RI & PO tetap. Setelah disimpan,
+ * status kembali open dan alur approval diulang dari step pertama (template
+ * yang sama). Snapshot ronde yang ditolak dicatat di receive_revisions.
+ */
+export async function reviseRejectedReceive(
+  riId: number,
+  payload: {
+    ri_tanggal: string;
+    ri_keterangan?: string | null;
+    note: string;
+    items: ReceiveItemInput[];
+  },
+) {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired" };
+
+  const note = payload.note?.trim();
+  if (!note) return { error: "Catatan revisi wajib diisi." };
+  if (!payload.ri_tanggal) return { error: "Tanggal penerimaan wajib diisi." };
+
+  const { data: ri } = await supabase
+    .from("receives")
+    .select(
+      "id, ri_kode, po_id, cabang_id, ri_status, approvals, approval_template_id, ri_pic, ri_pic_id, created_by, ri_tanggal, ri_keterangan, rejection_reason, ri_revision",
+    )
+    .eq("id", riId)
+    .maybeSingle();
+  if (!ri) return { error: "Receive tidak ditemukan." };
+  if (ri.ri_status !== "rejected") {
+    return { error: "Hanya RI berstatus ditolak yang bisa direvisi." };
+  }
+
+  const isOwner = user.id === ri.created_by || user.id === ri.ri_pic_id;
+  if (!isOwner && !(await _isModeratorOrAdmin(supabase))) {
+    return {
+      error: "Revisi RI hanya bisa dilakukan oleh pembuat RI, PIC RI, atau moderator.",
+    };
+  }
+
+  const items: ReceiveItemInput[] = (payload.items || []).map((i) => ({
+    ...i,
+    po_id: ri.po_id,
+  }));
+  const itemsInvalid = await _validateReceiveItems(supabase, ri.po_id, items);
+  if (itemsInvalid) return { error: itemsInvalid };
+
+  const { data: oldItems } = await supabase
+    .from("receive_items")
+    .select(
+      "po_id, mr_id, part_id, part_number, part_name, satuan, qty, po_item_id, cabang_penerima_id",
+    )
+    .eq("ri_id", riId)
+    .order("id");
+
+  // Approval ulang dari awal: bangun ulang dari template RI (ikut perubahan
+  // template terbaru); kalau template sudah tidak valid, reset ronde lama.
+  const oldApprovals: any[] = Array.isArray(ri.approvals) ? ri.approvals : [];
+  let approvals: any[] = ri.approval_template_id
+    ? await _buildApprovalFlow(
+        supabase,
+        "Receive Item",
+        ri.cabang_id,
+        ri.created_by || ri.ri_pic_id || user.id,
+        ri.approval_template_id,
+      )
+    : [];
+  if (!approvals.length) {
+    approvals = oldApprovals.map((a) => ({
+      ...a,
+      status: "pending",
+      processed_at: null,
+      notes: null,
+      signature_url: null,
+      snapshot: null,
+    }));
+  }
+  if (!approvals.length) {
+    return { error: "Alur approval RI tidak ditemukan. Hubungi moderator." };
+  }
+
+  // Ringkasan perubahan item per item PO (untuk riwayat revisi).
+  const sumByPoItem = (rows: any[]) => {
+    const m = new Map<number, { part_number: string; qty: number; cabang: string }>();
+    for (const r of rows) {
+      const key = Number(r.po_item_id);
+      const e = m.get(key) || { part_number: r.part_number, qty: 0, cabang: "" };
+      e.qty += Number(r.qty) || 0;
+      e.cabang = [e.cabang, String(r.cabang_penerima_id)].filter(Boolean).join(",");
+      m.set(key, e);
+    }
+    return m;
+  };
+  const before = sumByPoItem(oldItems || []);
+  const after = sumByPoItem(items);
+  const changes = {
+    added: [] as { part_number: string; qty: number }[],
+    removed: [] as { part_number: string; qty: number }[],
+    changed: [] as {
+      part_number: string;
+      qty_before: number;
+      qty_after: number;
+      gudang_changed: boolean;
+    }[],
+  };
+  for (const [key, a] of after) {
+    const b = before.get(key);
+    if (!b) changes.added.push({ part_number: a.part_number, qty: a.qty });
+    else if (b.qty !== a.qty || b.cabang !== a.cabang)
+      changes.changed.push({
+        part_number: a.part_number,
+        qty_before: b.qty,
+        qty_after: a.qty,
+        gudang_changed: b.cabang !== a.cabang,
+      });
+  }
+  for (const [key, b] of before) {
+    if (!after.has(key)) changes.removed.push({ part_number: b.part_number, qty: b.qty });
+  }
+
+  const rejectedStep = oldApprovals.find((a) => a.status === "rejected");
+  const nextRevision = (Number(ri.ri_revision) || 0) + 1;
+
+  // Claim: rejected -> open (kondisional) supaya dua revisi bersamaan tidak
+  // saling menimpa.
+  const { data: claimed, error: claimErr } = await supabase
+    .from("receives")
+    .update({
+      ri_status: "open",
+      approvals: approvals as any,
+      rejection_reason: null,
+      completed_at: null,
+      ri_tanggal: payload.ri_tanggal,
+      ri_keterangan: payload.ri_keterangan?.trim() || null,
+      ri_revision: nextRevision,
+    })
+    .eq("id", riId)
+    .eq("ri_status", "rejected")
+    .select("id");
+  if (claimErr) return { error: claimErr.message };
+  if (!claimed?.length) {
+    return { error: "RI ini baru saja diproses oleh request lain. Muat ulang halaman." };
+  }
+
+  // Gagal di tengah jalan -> kembalikan item & header ke kondisi ditolak.
+  const restore = async (message: string) => {
+    await supabase.from("receive_items").delete().eq("ri_id", riId);
+    if (oldItems?.length) {
+      await supabase
+        .from("receive_items")
+        .insert(oldItems.map((o: any) => ({ ...o, ri_id: riId })));
+    }
+    await supabase
+      .from("receives")
+      .update({
+        ri_status: "rejected",
+        approvals: oldApprovals as any,
+        rejection_reason: ri.rejection_reason,
+        ri_tanggal: ri.ri_tanggal,
+        ri_keterangan: ri.ri_keterangan,
+        ri_revision: ri.ri_revision ?? 0,
+      })
+      .eq("id", riId);
+    return { error: message };
+  };
+
+  const { error: delErr } = await supabase.from("receive_items").delete().eq("ri_id", riId);
+  if (delErr) return restore(`Gagal menghapus item lama: ${delErr.message}`);
+
+  const { error: insErr } = await supabase.from("receive_items").insert(
+    items.map((item) => ({
+      ri_id: riId,
+      po_id: ri.po_id,
+      mr_id: item.mr_id ?? null,
+      part_id: item.part_id,
+      part_number: item.part_number,
+      part_name: item.part_name,
+      satuan: item.satuan,
+      qty: item.qty,
+      po_item_id: item.po_item_id ?? null,
+      cabang_penerima_id: item.cabang_penerima_id,
+    })),
+  );
+  if (insErr) return restore(`Gagal menyimpan item revisi: ${insErr.message}`);
+
+  const { data: editor } = await supabase
+    .from("profiles")
+    .select("nama")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  const { error: logErr } = await supabase.from("receive_revisions").insert({
+    ri_id: riId,
+    revision_no: nextRevision,
+    revised_by: user.id,
+    revised_by_nama: editor?.nama ?? null,
+    note,
+    rejection_reason: ri.rejection_reason ?? rejectedStep?.notes ?? null,
+    rejected_by_nama: rejectedStep?.nama ?? null,
+    changes,
+    snapshot_before: {
+      header: { ri_tanggal: ri.ri_tanggal, ri_keterangan: ri.ri_keterangan },
+      items: oldItems || [],
+      approvals: oldApprovals,
+    },
+  });
+  if (logErr) console.error("Gagal mencatat receive_revisions:", logErr.message);
+
+  notifyApprovers(approvals, "RI", riId, ri.ri_kode, `/receive?ri=${riId}`).catch(
+    console.error,
+  );
+
+  revalidatePath("/receive");
+  revalidatePath("/po");
+  return { success: true, revision: nextRevision };
+}
+
+/** Riwayat revisi RI (terbaru dulu). */
+export async function getReceiveRevisions(riId: number) {
+  const supabase = await createClient();
+  const { data, error } = await supabase
+    .from("receive_revisions")
+    .select(
+      "id, revision_no, revised_by_nama, note, rejection_reason, rejected_by_nama, changes, created_at",
+    )
+    .eq("ri_id", riId)
+    .order("revision_no", { ascending: false });
+  if (error) return { error: error.message, data: [] as any[] };
+  return { data: data || [] };
 }
 
 /**

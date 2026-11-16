@@ -69,8 +69,25 @@ import { PoTaxSummary } from "@/components/po/po-tax-summary";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 import { StatusBadge } from "@/components/status-badge";
+import { SOFT } from "@/lib/constants/status";
+import {
+  PO_ITEM_SYSTEM_STATUS_LABEL,
+  PO_STATUS_COLORS,
+  PO_STATUS_LABELS,
+  poItemSystemStatus,
+} from "@/lib/po-item-status";
 
-const STATUS_LABELS: Record<string, string> = { open: "Pending Approval" };
+const STATUS_LABELS = PO_STATUS_LABELS;
+
+const ITEM_STATUS_TONE: Record<string, string> = {
+  menunggu_approval: SOFT.gray,
+  ditolak: SOFT.red,
+  menunggu_terima: SOFT.sky,
+  partial: SOFT.amber,
+  diterima: SOFT.emerald,
+  dibatalkan: SOFT.red,
+  partial_dibatalkan: SOFT.orange,
+};
 
 interface PODetailSheetProps {
   poId: number | null;
@@ -172,7 +189,7 @@ export function PODetailSheet({
       const { data: items } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, mr_id, pr_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
+          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, qty_cancelled, cancel_reason, item_detail_status, item_estimasi, mr_id, pr_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
         )
         .eq("po_id", poId!)
         .order("vendor_id", { nullsFirst: false });
@@ -446,7 +463,14 @@ export function PODetailSheet({
                         Outstanding
                       </Badge>
                     )}
-                    {po && <StatusBadge status={po.po_status} label={STATUS_LABELS[po.po_status ?? ""]} tone="solid" />}
+                    {po && (
+                      <StatusBadge
+                        status={po.po_status}
+                        label={STATUS_LABELS[po.po_status ?? ""]}
+                        color={PO_STATUS_COLORS[po.po_status ?? ""]}
+                        tone="solid"
+                      />
+                    )}
                     {po && getReceiveBadge(po.po_receive_status)}
                   </div>
                 </div>
@@ -840,7 +864,19 @@ export function PODetailSheet({
                     <h3 className="text-[11px] font-bold text-foreground uppercase tracking-tight">
                       Daftar Item (per Vendor)
                     </h3>
+                    <a
+                      href={`/po/${poId}`}
+                      className="ml-auto text-[9px] font-bold uppercase text-primary hover:underline"
+                    >
+                      Kelola status per barang →
+                    </a>
                   </div>
+                  {po?.po_status === "closed" && (
+                    <div className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2 text-[10px] font-semibold text-orange-800 dark:border-orange-800 dark:bg-orange-900/30 dark:text-orange-200">
+                      PO CLOSED — ada item yang dibatalkan. Item aktif lainnya
+                      tetap bisa diterima lewat RI.
+                    </div>
+                  )}
                   {itemsByVendor.map(([vendorKey, group]) => {
                     const total = group.items.reduce(
                       (sum, it) => sum + it.qty * it.harga,
@@ -867,7 +903,7 @@ export function PODetailSheet({
                                 formatCurrency(total),
                               )}
                             </span>
-                            {["approved", "completed"].includes(
+                            {["approved", "completed", "closed"].includes(
                               po?.po_status,
                             ) && (
                               <Button
@@ -941,9 +977,39 @@ export function PODetailSheet({
                                         </span>
                                       )}
                                     </p>
+                                    {(() => {
+                                      const sys = poItemSystemStatus(item, po?.po_status);
+                                      return (
+                                        <div className="mt-1 flex flex-wrap items-center gap-1">
+                                          <Badge
+                                            variant="outline"
+                                            className={cn(
+                                              "text-[8px] font-bold uppercase px-1.5 py-0",
+                                              ITEM_STATUS_TONE[sys],
+                                            )}
+                                          >
+                                            {PO_ITEM_SYSTEM_STATUS_LABEL[sys]}
+                                          </Badge>
+                                          {item.item_detail_status && (
+                                            <span className="text-[9px] font-bold text-foreground">
+                                              {item.item_detail_status}
+                                            </span>
+                                          )}
+                                          {item.item_estimasi && (
+                                            <span className="text-[9px] font-semibold text-primary">
+                                              · ETA {formatDate(item.item_estimasi)}
+                                            </span>
+                                          )}
+                                        </div>
+                                      );
+                                    })()}
                                   </TableCell>
                                   <TableCell className="text-right py-2.5">
-                                    {modEditMode ? (
+                                    {modEditMode && Number(item.qty_cancelled) > 0 ? (
+                                      <span className="text-[9px] font-bold text-destructive uppercase">
+                                        {item.qty} · batal {item.qty_cancelled}
+                                      </span>
+                                    ) : modEditMode ? (
                                       modDeletedItemIds.includes(item.id) ? (
                                         <span className="text-[9px] font-bold text-destructive italic">
                                           Dihapus
@@ -981,6 +1047,11 @@ export function PODetailSheet({
                                         <span className="text-[9px] text-muted-foreground ml-1">
                                           {item.satuan}
                                         </span>
+                                        {Number(item.qty_cancelled) > 0 && (
+                                          <span className="block text-[9px] font-bold text-destructive uppercase">
+                                            Batal {item.qty_cancelled}
+                                          </span>
+                                        )}
                                       </>
                                     )}
                                   </TableCell>

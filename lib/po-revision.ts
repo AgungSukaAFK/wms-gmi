@@ -11,6 +11,24 @@ import {
 } from "@/lib/po-tax";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 
+// Kolom po_items untuk snapshot revisi (join vendor & PR).
+export const PO_ITEM_SELECT =
+  "id, part_id, part_number, part_name, satuan, qty, qty_received, qty_cancelled, harga, vendor_id, mr_id, pr_item_id, so_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name), pr_items(pr_id, prs(pr_kode))";
+
+export function flattenPoItems(rows: any[]) {
+  return (rows || []).map((r: any) => {
+    const prItem = Array.isArray(r.pr_items) ? r.pr_items[0] : r.pr_items;
+    const pr = Array.isArray(prItem?.prs) ? prItem.prs[0] : prItem?.prs;
+    const vendor = Array.isArray(r.vendors) ? r.vendors[0] : r.vendors;
+    return {
+      ...r,
+      pr_id: prItem?.pr_id ?? null,
+      pr_kode: pr?.pr_kode ?? null,
+      vendor_name: vendor?.vendor_name ?? null,
+    };
+  });
+}
+
 export const PO_REVISION_ROLES = ["purchasing", "moderator"] as const;
 
 export function canRevisePO(roleNames: string[]): boolean {
@@ -26,6 +44,8 @@ export type PoRevisionItemSnapshot = {
   satuan: string;
   qty: number;
   qty_received: number;
+  // Qty dibatalkan (snapshot lama tidak punya -> 0).
+  qty_cancelled?: number;
   harga: number;
   vendor_id: number | null;
   vendor_name: string | null;
@@ -105,6 +125,7 @@ export function buildPoRevisionSnapshot(po: any, items: any[]): PoRevisionSnapsh
       satuan: i.satuan || "",
       qty: num(i.qty),
       qty_received: num(i.qty_received),
+      qty_cancelled: num(i.qty_cancelled),
       harga: num(i.harga),
       vendor_id: i.vendor_id ?? null,
       vendor_name: i.vendor_name ?? i.vendors?.vendor_name ?? null,
@@ -245,6 +266,13 @@ export function diffPoRevision(
     const changes: PoRevisionFieldChange[] = [];
     if (b.qty !== a.qty)
       changes.push({ field: "qty", label: "Qty", before: String(b.qty), after: String(a.qty) });
+    if (num(b.qty_cancelled) !== num(a.qty_cancelled))
+      changes.push({
+        field: "qty_cancelled",
+        label: "Qty Dibatalkan",
+        before: String(num(b.qty_cancelled)),
+        after: String(num(a.qty_cancelled)),
+      });
     if (b.harga !== a.harga)
       changes.push({
         field: "harga",
@@ -293,5 +321,5 @@ export function summarizePoRevision(c: PoRevisionChanges): string {
   if (c.items.removed.length) parts.push(`${c.items.removed.length} item dihapus`);
   if (c.items.changed.length) parts.push(`${c.items.changed.length} item diubah`);
   if (c.header.length) parts.push(c.header.map((h) => h.label.toLowerCase()).join(", "));
-  return parts.length ? parts.join("; ") : "tanpa perubahan data (approval diulang)";
+  return parts.length ? parts.join("; ") : "tanpa perubahan data";
 }

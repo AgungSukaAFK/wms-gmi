@@ -89,7 +89,8 @@ export async function notifyApprovers(
     user_id?: string;
     status: string;
     nama?: string;
-    level?: string;
+    level?: string | number;
+    approval_role?: string;
   }>,
   documentType: string,
   documentId: number,
@@ -98,20 +99,31 @@ export async function notifyApprovers(
 ) {
   const supabase = await createClient();
 
-  const pending = approvals.filter((a) => a.status === "pending");
+  // Approval berurutan: yang perlu bertindak SEKARANG hanya pemilik step
+  // pending pertama. Dulu semua approver pending dikabari sekaligus, jadi
+  // approver step belakang menerima "Perlu persetujuan" padahal belum
+  // gilirannya (dan dikabari ulang setiap step sebelumnya approve).
+  // Dokumen yang sudah ada step ditolak tidak perlu tindakan siapa pun.
+  if (approvals.some((a) => a.status === "rejected")) return;
+  const next = approvals.find((a) => a.status === "pending");
+  if (!next) return;
 
-  if (pending.length === 0) return;
+  // RI/PO/PR/MR menyimpan angka step di `level`; peran ada di approval_role.
+  const role =
+    next.approval_role === "mengetahui" || next.level === "mengetahui"
+      ? "mengetahui"
+      : "menyetujui";
 
-  const rows = pending
+  const rows = [next]
     .map((a) => ({
       user_id: a.user_id ?? a.userid,
       type: "approval_needed" as NotificationType,
-      title: `Perlu persetujuan: ${documentType}`,
-      message: `Dokumen ${documentNumber} memerlukan persetujuan Anda sebagai ${a.level === "menyetujui" ? "penyetuju" : "pengetahui"}.`,
+      title: `Perlu ${role === "mengetahui" ? "diketahui" : "persetujuan"}: ${documentType} ${documentNumber}`,
+      message: `Giliran Anda ${role === "mengetahui" ? "mengetahui" : "menyetujui"} dokumen ${documentNumber}. Buka dokumen untuk memproses.`,
       document_type: documentType,
       document_id: documentId,
       document_url: documentUrl,
-      metadata: { document_number: documentNumber, level: a.level },
+      metadata: { document_number: documentNumber, level: role },
     }))
     .filter((r) => !!r.user_id);
 

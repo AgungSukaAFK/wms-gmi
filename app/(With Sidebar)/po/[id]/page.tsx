@@ -64,6 +64,13 @@ import {
   maskedPriceText,
 } from "@/lib/po-price-access";
 import { canRevisePO } from "@/lib/po-revision";
+import {
+  PO_STATUS_COLORS,
+  PO_STATUS_LABELS,
+  canManagePoItems,
+} from "@/lib/po-item-status";
+import { getPoEditAccess } from "@/services/po-revision-actions";
+import { PoItemStatusPanel } from "@/components/po/po-item-status-panel";
 import { PoRevisionHistory } from "@/components/po/po-revision-history";
 import Link from "next/link";
 import { Content } from "@/components/content";
@@ -78,7 +85,7 @@ import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 import { PoOutstandingPanel } from "@/components/po/po-outstanding-panel";
 import { StatusBadge } from "@/components/status-badge";
 
-const STATUS_LABELS: Record<string, string> = { open: "Pending Approval" };
+const STATUS_LABELS = PO_STATUS_LABELS;
 
 export default function PODetailPage({
   params,
@@ -96,6 +103,13 @@ export default function PODetailPage({
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [canViewPrice, setCanViewPrice] = useState(false);
   const [canRevise, setCanRevise] = useState(false);
+  const [roleNames, setRoleNames] = useState<string[]>([]);
+  // Hak edit PO (revisi purchasing/moderator atau edit approver sebelum RI).
+  const [editAccess, setEditAccess] = useState<{
+    mode: "revisi" | "approver" | null;
+    reason?: string;
+  }>({ mode: null });
+  const [pendingRiQty, setPendingRiQty] = useState<Record<number, number>>({});
 
   // Approval states
   const [isRejectDialogOpen, setIsRejectDialogOpen] = useState(false);
@@ -140,6 +154,7 @@ export default function PODetailPage({
         .single();
       setCanViewPrice(canViewPOPrice(profile));
       setCanRevise(canRevisePO(extractRoleNames(profile as any)));
+      setRoleNames(extractRoleNames(profile as any));
       setIsModerator(
         ((profile as any)?.roles || []).some(
           (r: any) => r.roles?.name === "moderator",
@@ -176,12 +191,32 @@ export default function PODetailPage({
       const { data: items } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, mr_id, pr_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
+          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, qty_cancelled, cancel_reason, cancelled_by_nama, cancelled_at, item_detail_status, item_estimasi, item_status_note, item_status_updated_by_nama, item_status_updated_at, mr_id, pr_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
         )
         .eq("po_id", poId)
         .order("vendor_id", { nullsFirst: false });
 
       setPoItems(items || []);
+
+      // Qty yang masih di RI menunggu approval (per item PO).
+      const itemIds = (items || []).map((i: any) => i.id);
+      if (itemIds.length > 0) {
+        const { data: pendingRows } = await supabase
+          .from("receive_items")
+          .select("po_item_id, qty, receives!inner(ri_status)")
+          .in("po_item_id", itemIds)
+          .eq("receives.ri_status", "open");
+        const pendingMap: Record<number, number> = {};
+        for (const r of pendingRows || []) {
+          pendingMap[r.po_item_id] = (pendingMap[r.po_item_id] || 0) + Number(r.qty || 0);
+        }
+        setPendingRiQty(pendingMap);
+      } else {
+        setPendingRiQty({});
+      }
+      getPoEditAccess(Number(poId))
+        .then((res) => setEditAccess({ mode: res.mode, reason: res.reason }))
+        .catch(() => setEditAccess({ mode: null }));
 
       const prItemIds = Array.from(
         new Set((items || []).map((i: any) => i.pr_item_id).filter(Boolean)),
@@ -494,7 +529,12 @@ export default function PODetailPage({
                     Outstanding
                   </Badge>
                 )}
-                <StatusBadge status={po?.po_status} label={STATUS_LABELS[po?.po_status ?? ""]} tone="solid" />
+                <StatusBadge
+                  status={po?.po_status}
+                  label={STATUS_LABELS[po?.po_status ?? ""]}
+                  color={PO_STATUS_COLORS[po?.po_status ?? ""]}
+                  tone="solid"
+                />
                 {getReceiveBadge(po?.po_receive_status)}
               </div>
               <p className="text-[10px] text-muted-foreground font-bold uppercase mt-1 flex items-center gap-1.5">
@@ -506,9 +546,18 @@ export default function PODetailPage({
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {canRevise && !modEditMode && po && (
+            {editAccess.mode && !modEditMode && po && (
               <Link href={`/po/${poId}/edit`}>
-                <Button size="sm" variant="outline" className="gap-2 font-semibold">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="gap-2 font-semibold"
+                  title={
+                    editAccess.mode === "approver"
+                      ? "Edit sebagai approver (sebelum ada RI) — approval tidak diulang"
+                      : "Revisi PO — approval diulang dari awal"
+                  }
+                >
                   <Pencil className="h-4 w-4" /> Edit PO
                 </Button>
               </Link>
@@ -563,7 +612,7 @@ export default function PODetailPage({
                 </Button>
               </>
             )}
-            {["approved", "completed"].includes(po?.po_status) && (
+            {["approved", "completed", "closed"].includes(po?.po_status) && (
               <Button
                 onClick={() => window.open(`/po/${poId}/print`, "_blank")}
                 variant="outline"
@@ -693,6 +742,20 @@ export default function PODetailPage({
           </div>
         )}
       </Content>
+
+      {po && poItems.length > 0 && !modEditMode && (
+        <Content title="Status per Barang">
+          <PoItemStatusPanel
+            poId={Number(poId)}
+            poStatus={po.po_status}
+            poJenis={po.po_jenis}
+            items={poItems}
+            canManage={canManagePoItems(roleNames, po.approvals, currentUser?.id)}
+            pendingRiQty={pendingRiQty}
+            onChanged={fetchDetails}
+          />
+        </Content>
+      )}
 
       {po?.po_jenis === "non_pr" && (
         <Content title="PO Non-PR — Job Costing & Link PR">
@@ -931,7 +994,7 @@ export default function PODetailPage({
                     <span className="text-[10px] font-bold text-foreground">
                       {maskedPriceText(canViewPrice, formatCurrency(total))}
                     </span>
-                    {["approved", "completed"].includes(po?.po_status) && (
+                    {["approved", "completed", "closed"].includes(po?.po_status) && (
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1004,7 +1067,11 @@ export default function PODetailPage({
                             </p>
                           </TableCell>
                           <TableCell className="text-right py-2.5">
-                            {modEditMode ? (
+                            {modEditMode && Number(item.qty_cancelled) > 0 ? (
+                              <span className="text-[9px] font-bold text-destructive uppercase">
+                                {item.qty} {item.satuan} · batal {item.qty_cancelled}
+                              </span>
+                            ) : modEditMode ? (
                               modDeletedItemIds.includes(item.id) ? (
                                 <span className="text-[9px] font-bold text-destructive italic">
                                   Dihapus
@@ -1042,6 +1109,11 @@ export default function PODetailPage({
                                 <span className="text-[9px] text-muted-foreground ml-1">
                                   {item.satuan}
                                 </span>
+                                {Number(item.qty_cancelled) > 0 && (
+                                  <span className="block text-[9px] font-bold text-destructive uppercase">
+                                    Batal {item.qty_cancelled}
+                                  </span>
+                                )}
                               </>
                             )}
                           </TableCell>

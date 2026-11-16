@@ -3,8 +3,8 @@
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate } from "@/lib/utils";
-import * as XLSX from "xlsx";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import { buildPoExportWorkbook } from "@/lib/po-export";
+import { downloadWorkbook } from "@/lib/item-transfer-export";
 import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
 import {
@@ -93,6 +93,8 @@ const PO_STATUS_OPTIONS = [
   { label: "Approved", value: "approved" },
   { label: "Rejected", value: "rejected" },
   { label: "Completed", value: "completed" },
+  // PO 'closed' = ada item yang dibatalkan (lib/po-item-status.ts).
+  { label: "Closed (Item Dibatalkan)", value: "closed" },
 ];
 
 const PO_RECEIVE_OPTIONS = [
@@ -267,7 +269,11 @@ export default function POListPage() {
 
     if (statusFilters.length > 0) {
       const expanded = statusFilters.flatMap((s) =>
-        s === "completed" ? completedFilterStatuses() : [s],
+        // 'closed' di PO punya arti sendiri (item dibatalkan), bukan legacy
+        // "selesai" -- jadi tidak ikut filter Completed.
+        s === "completed"
+          ? completedFilterStatuses().filter((x) => x !== "closed")
+          : [s],
       );
       query = query.in("po_status", Array.from(new Set(expanded)));
     }
@@ -403,67 +409,30 @@ export default function POListPage() {
         return;
       }
 
-      // PR asal (bisa >1) per PO via po_items.pr_item_id -> pr_items.pr_id.
-      const poIds = allRows.map((po) => po.id);
-      const prCodesByPo = new Map<number, string[]>();
-      for (let i = 0; i < poIds.length; i += 1000) {
-        const chunk = poIds.slice(i, i + 1000);
-        const { data } = await supabase
-          .from("po_items")
-          .select("po_id, pr_item_id, pr_items(pr_id, prs(pr_kode))")
-          .in("po_id", chunk);
-        for (const row of data || []) {
-          const prItem = Array.isArray(row.pr_items)
-            ? row.pr_items[0]
-            : (row.pr_items as any);
-          const prs = prItem?.prs;
-          const kode = Array.isArray(prs) ? prs[0]?.pr_kode : prs?.pr_kode;
-          if (!kode) continue;
-          const list = prCodesByPo.get(row.po_id) || [];
-          list.push(kode);
-          prCodesByPo.set(row.po_id, list);
-        }
-      }
-
-      const sheetData = allRows.map((po, index) => {
-        const vendorNames = Array.from(
-          new Set(
-            (po.po_items || [])
-              .map((i: any) => i.vendors?.vendor_name)
-              .filter(Boolean),
-          ),
-        );
-        return {
-          NO: index + 1,
-          "KODE PO": po.po_kode || "-",
-          "PR ASAL":
-            po.po_jenis === "non_pr"
-              ? `NON-PR${po.po_pr_referensi ? ` (Ref: ${po.po_pr_referensi})` : ""}`
-              : po.po_jenis === "so"
-                ? `SO ${po.so_reguler?.so_kode || "-"}`
-                : Array.from(new Set(prCodesByPo.get(po.id) || [])).join(", ") ||
-                po.prs?.pr_kode ||
-                "-",
-          VENDOR: vendorNames.join(", ") || "-",
-          PIC: po.po_pic || "-",
-          TANGGAL: toExcelDate(po.po_tanggal),
-          ESTIMASI: toExcelDate(po.po_estimasi),
-          STATUS: po.po_status || "-",
-          "RECEIVE STATUS": po.po_receive_status || "-",
-          OUTSTANDING: po.po_is_outstanding ? "Ya" : "",
-        };
-      });
-
-      const ws = jsonToSheetWithDates(sheetData, ["TANGGAL", "ESTIMASI"]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Purchase Order");
-      XLSX.writeFile(
-        wb,
+      // 2 sheet styled (Ringkasan PO + Detail Item) -- lihat lib/po-export.ts.
+      const filterParts =
+        mode === "all"
+          ? []
+          : [
+              ...(debouncedSearch ? [`Cari "${debouncedSearch}"`] : []),
+              ...activeFilters.map((f) => `${f.label}: ${f.value}`),
+            ];
+      const { workbook, poCount, itemCount } = await buildPoExportWorkbook(
+        supabase,
+        allRows,
+        {
+          canViewPrice: Boolean(userProfile?.isPurchasing),
+          filterDescription: filterParts.join("; ") || "Semua data",
+        },
+      );
+      await downloadWorkbook(
+        workbook,
         `PURCHASE_ORDER_${new Date().toISOString().slice(0, 10)}.xlsx`,
       );
-      toast.success(`Export Excel berhasil (${allRows.length} baris).`, {
-        id: toastId,
-      });
+      toast.success(
+        `Export Excel berhasil (${poCount} PO, ${itemCount} baris item).`,
+        { id: toastId },
+      );
     } catch (err: any) {
       toast.error(`Gagal export Excel: ${err?.message || err}`, { id: toastId });
     } finally {
@@ -635,8 +604,16 @@ export default function POListPage() {
             Rejected
           </Badge>
         );
-      case "completed":
       case "closed":
+        return (
+          <Badge
+            className="bg-orange-500 text-white font-semibold text-[10px] uppercase"
+            title="Ada item yang dibatalkan; item aktif tetap bisa diterima"
+          >
+            Closed
+          </Badge>
+        );
+      case "completed":
         return (
           <Badge className="bg-foreground text-background font-semibold text-[10px] uppercase">
             Completed

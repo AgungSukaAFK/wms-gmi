@@ -49,7 +49,7 @@ export const receiveHandler: ImportHandler = {
       }
       const poCode = str(list[0].values.po_kode)!;
       const po = poByCode.get(keyOf(poCode));
-      const docErr = !po ? `PO ${poCode} tidak ditemukan` : po.po_status !== "approved" ? `PO ${po.po_kode} berstatus ${po.po_status} (harus approved)` : null;
+      const docErr = !po ? `PO ${poCode} tidak ditemukan` : !["approved", "closed"].includes(po.po_status) ? `PO ${po.po_kode} berstatus ${po.po_status} (harus approved)` : null;
       if (docErr) {
         for (const r of list) results.push(fail(r.row, docErr, code));
         continue;

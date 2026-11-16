@@ -159,6 +159,8 @@ export async function syncPoReceiveAndCompletion(supabase: any, poId: number) {
   const someReceived = rows.some((i: any) => (i.qty_received || 0) > 0);
   const receiveStatus = allReceived ? "complete" : someReceived ? "partial" : "pending";
 
+  // PO 'closed' (ada item yang dibatalkan) tetap closed -- tidak naik ke
+  // completed walau sisa item aktifnya sudah diterima semua.
   const patch: Record<string, any> = {};
   if (receiveStatus !== po.po_receive_status) patch.po_receive_status = receiveStatus;
   if (po.po_status === "approved" && receiveStatus === "complete") patch.po_status = "completed";

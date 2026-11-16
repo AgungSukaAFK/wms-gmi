@@ -159,6 +159,23 @@ export default function ReceiveItemPage() {
   );
   const [sheetOpen, setSheetOpen] = useState(false);
 
+  // Deep link dari notifikasi / tab "Perlu Tindakan": /receive?ri=<id>
+  // (alias lama ?highlight=<id>) langsung membuka detail RI-nya.
+  const deepLinkRiId = Number(urlState.get("ri") || urlState.get("highlight"));
+  useEffect(() => {
+    if (Number.isInteger(deepLinkRiId) && deepLinkRiId > 0) {
+      setSelectedReceiveId(deepLinkRiId);
+      setSheetOpen(true);
+    }
+  }, [deepLinkRiId]);
+
+  const handleSheetOpenChange = (open: boolean) => {
+    setSheetOpen(open);
+    if (!open && (urlState.get("ri") || urlState.get("highlight"))) {
+      urlState.set({ ri: "", highlight: "" }, { replace: true });
+    }
+  };
+
   const fetchUser = async () => {
     const {
       data: { user },
@@ -895,7 +912,7 @@ export default function ReceiveItemPage() {
       <ReceiveDetailSheet
         receiveId={selectedReceiveId}
         open={sheetOpen}
-        onOpenChange={setSheetOpen}
+        onOpenChange={handleSheetOpenChange}
       />
     </>
   );
