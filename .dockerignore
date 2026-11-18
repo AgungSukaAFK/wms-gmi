@@ -1,0 +1,19 @@
+.git
+.github
+.next
+node_modules
+.env*
+.claude
+temp_ga_web
+docs
+*.md
+*.xls
+*.xlsx
+*.csv
+*.txt
+tsconfig.tsbuildinfo
+Import 23 Oktober
+SPB
+Vendor Cons
+Dockerfile
+.dockerignore

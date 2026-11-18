@@ -10,7 +10,7 @@ import {
   syncPoReceiveAndCompletion,
 } from "@/lib/procurement-status";
 import { recomputeMrItemsFulfillment } from "@/lib/mr-fulfillment";
-import { refreshSoStatus } from "@/lib/so-reguler";
+import { fetchPoSoIds, refreshSoStatus } from "@/lib/so-reguler";
 
 export type CascadeDeleteDocType = "mr" | "pr" | "po" | "receive" | "delivery" | "item_transfer";
 
@@ -196,8 +196,7 @@ async function collectCascadeSurvivors(
       await addMrItemsOfPrItems((data || []).map((r: any) => r.id));
     } else if (docType === "po") {
       out.prIds.push(...(await fetchPoSourcePrIds(supabase, docId)));
-      const { data: po } = await supabase.from("pos").select("so_id").eq("id", docId).maybeSingle();
-      if (po?.so_id) out.soIds.push(po.so_id);
+      out.soIds.push(...(await fetchPoSoIds(supabase, docId)));
       const { data } = await supabase.from("po_items").select("pr_item_id").eq("po_id", docId);
       await addMrItemsOfPrItems((data || []).map((r: any) => r.pr_item_id).filter(Boolean));
     } else if (docType === "receive") {
@@ -205,8 +204,7 @@ async function collectCascadeSurvivors(
       if (ri?.po_id) {
         out.poIds.push(ri.po_id);
         out.prIds.push(...(await fetchPoSourcePrIds(supabase, ri.po_id)));
-        const { data: po } = await supabase.from("pos").select("so_id").eq("id", ri.po_id).maybeSingle();
-        if (po?.so_id) out.soIds.push(po.so_id);
+        out.soIds.push(...(await fetchPoSoIds(supabase, ri.po_id)));
       }
       const { data } = await supabase
         .from("receive_items")

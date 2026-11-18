@@ -32,8 +32,9 @@ import { isPoReceivable } from "@/lib/po-item-status";
 import { normalizeItemTax, normalizePoTaxMode } from "@/lib/po-tax";
 import {
   computeSoItemRemaining,
+  fetchPoSoIds,
   fetchSoItemFulfillment,
-  refreshSoStatus,
+  refreshSoStatuses,
 } from "@/lib/so-reguler";
 
 // ============================================================
@@ -2211,7 +2212,9 @@ export async function createPurchaseOrder(data: {
   po_jenis?: "reguler" | "non_pr" | "so" | "konsinyasi";
   vendor_consignment_rekonsil_id?: number | null;
   po_pr_referensi?: string;
+  // PO dari SO: SO utama (lama, 1 SO) dan/atau semua SO yang dipilih.
   so_id?: number | null;
+  so_ids?: number[];
   // PO dari SO: gudang penerima barang (dipilih di form, default gudang akun).
   so_cabang_id?: number | null;
   approvals?: any[];
@@ -2249,44 +2252,76 @@ export async function createPurchaseOrder(data: {
   // PO dari SO: lokasi PO = gudang penerima pilihan pembuat PO (RI dikunci ke
   // sini). SO sendiri tidak punya lokasi sejak revisi 2026-10-16.
   let soCabangId: number | null = null;
+  // PO dari SO bisa merujuk lebih dari satu SO (2026-11-18). Sumber kebenaran
+  // per item = so_item_id; pos.so_id cuma "SO utama" (backward-compat).
+  let poSoIds: number[] = [];
   if (poJenis === "so") {
-    if (!data.so_id) return { error: "PO dari SO wajib memilih SO Reguler." };
     if (!data.so_cabang_id)
       return { error: "PO dari SO wajib memilih gudang penerima." };
     if (data.items.some((i) => i.pr_item_id || i.mr_id || i.pr_id)) {
       return { error: "PO dari SO tidak boleh berisi item dari PR." };
     }
-    const { data: so } = await supabase
-      .from("so_reguler")
-      .select("id, so_kode, so_status, so_reguler_items(id, qty)")
-      .eq("id", data.so_id)
-      .maybeSingle();
-    if (!so) return { error: "SO Reguler tidak ditemukan." };
-    if (so.so_status === "cancelled" || so.so_status === "completed") {
-      return { error: `SO ${so.so_kode} sudah ${so.so_status === "cancelled" ? "dibatalkan" : "selesai"}.` };
+    if (data.items.some((i) => !i.so_item_id)) {
+      return { error: "Semua item PO dari SO harus berasal dari item SO Reguler." };
     }
-    const soItems = new Map<number, number>(
-      (so.so_reguler_items || []).map((i: any) => [i.id, i.qty]),
+    const requestedSoIds = Array.from(
+      new Set(
+        [...(data.so_ids ?? []), data.so_id]
+          .map((id) => Number(id))
+          .filter((id) => id > 0),
+      ),
     );
-    if (data.items.some((i) => !i.so_item_id || !soItems.has(i.so_item_id))) {
-      return { error: `Semua item PO harus berasal dari SO ${so.so_kode}.` };
+    if (requestedSoIds.length === 0)
+      return { error: "PO dari SO wajib memilih minimal satu SO Reguler." };
+
+    const soItemIds = Array.from(new Set(data.items.map((i) => Number(i.so_item_id))));
+    const { data: soItemRows } = await supabase
+      .from("so_reguler_items")
+      .select("id, qty, part_id, so_id, so_reguler(id, so_kode, so_status)")
+      .in("id", soItemIds);
+    const soItems = new Map<number, any>(
+      (soItemRows || []).map((r: any) => [Number(r.id), r]),
+    );
+    const soOf = (r: any) => (Array.isArray(r?.so_reguler) ? r.so_reguler[0] : r?.so_reguler);
+    for (const item of data.items) {
+      const row = soItems.get(Number(item.so_item_id));
+      const so = soOf(row);
+      if (!row || !so) return { error: `Item SO untuk ${item.part_number} tidak ditemukan.` };
+      if (!requestedSoIds.includes(Number(so.id))) {
+        return { error: `Item ${item.part_number} berasal dari SO ${so.so_kode} yang tidak dipilih.` };
+      }
+      if (so.so_status === "cancelled" || so.so_status === "completed") {
+        return { error: `SO ${so.so_kode} sudah ${so.so_status === "cancelled" ? "dibatalkan" : "selesai"}.` };
+      }
+      if (Number(row.part_id) !== Number(item.part_id)) {
+        return { error: `Barang ${item.part_number} tidak sama dengan item SO ${so.so_kode}.` };
+      }
     }
     // Guard sisa qty SO yang belum di-PO / di-DO (race-condition guard).
-    const fulfillment = await fetchSoItemFulfillment(
-      supabase,
-      Array.from(soItems.keys()),
-    );
+    // Dijumlah per item SO supaya baris ganda tidak lolos satu per satu.
+    const fulfillment = await fetchSoItemFulfillment(supabase, soItemIds);
+    const requested = new Map<number, number>();
     for (const item of data.items) {
-      const { sisaPo } = computeSoItemRemaining(
-        soItems.get(item.so_item_id!)!,
-        fulfillment.get(item.so_item_id!),
-      );
-      if (!(item.qty > 0) || item.qty > sisaPo) {
+      if (!(item.qty > 0)) return { error: `Qty ${item.part_number} harus lebih dari 0.` };
+      const id = Number(item.so_item_id);
+      requested.set(id, (requested.get(id) || 0) + item.qty);
+    }
+    for (const [id, qty] of requested) {
+      const row = soItems.get(id);
+      const { sisaPo } = computeSoItemRemaining(Number(row.qty), fulfillment.get(id));
+      if (qty > sisaPo) {
+        const it = data.items.find((i) => Number(i.so_item_id) === id)!;
         return {
-          error: `Qty ${item.part_number} melebihi sisa SO yang belum di-PO/DO (sisa ${sisaPo}).`,
+          error: `Qty ${it.part_number} (SO ${soOf(row).so_kode}) melebihi sisa SO yang belum di-PO/DO (sisa ${sisaPo}).`,
         };
       }
     }
+    // SO yang benar-benar dipakai item, urut sesuai pilihan user. SO yang
+    // dipilih tapi tidak punya item terpilih tidak ikut tercatat.
+    const usedSoIds = new Set(
+      Array.from(soItems.values()).map((r: any) => Number(soOf(r).id)),
+    );
+    poSoIds = requestedSoIds.filter((id) => usedSoIds.has(id));
     soCabangId = Number(data.so_cabang_id);
   } else if (data.items.some((i) => i.so_item_id)) {
     return { error: "Item SO hanya bisa diproses lewat PO jenis SO." };
@@ -2445,7 +2480,8 @@ export async function createPurchaseOrder(data: {
         po_jenis: poJenis,
         po_pr_referensi:
           poJenis === "non_pr" ? data.po_pr_referensi?.trim() || null : null,
-        so_id: poJenis === "so" ? data.so_id : null,
+        // SO utama (SO pertama). Semua SO tetap terbaca lewat item.
+        so_id: poJenis === "so" ? (poSoIds[0] ?? null) : null,
         // Reguler: biarkan NULL -> trigger pos_fill_cabang_from_pr mengisi dari
         // PR (lokasi PO reguler = lokasi PR, seperti sebelumnya). Non-PR:
         // lokasi pembuat PO. SO: gudang penerima yang dipilih.
@@ -2535,7 +2571,7 @@ export async function createPurchaseOrder(data: {
   await Promise.all(
     sourcePrIds.map((prId) => applyPrConversionStatus(supabase, prId)),
   );
-  if (poJenis === "so") await refreshSoStatus(supabase, data.so_id);
+  if (poJenis === "so") await refreshSoStatuses(supabase, poSoIds);
 
   // Notify pending PO approvers
   if (approvals.length > 0) {
@@ -2716,8 +2752,9 @@ export async function rejectPO(poId: number, reason: string) {
   for (const prId of await fetchPoSourcePrIds(supabase, poId)) {
     await applyPrConversionStatus(supabase, prId);
   }
-  // Rejection juga membebaskan qty SO untuk di-PO ulang / langsung DO.
-  await refreshSoStatus(supabase, po.so_id);
+  // Rejection juga membebaskan qty SO (semua SO di PO ini) untuk di-PO ulang
+  // / langsung DO.
+  await refreshSoStatuses(supabase, await fetchPoSoIds(supabase, poId));
 
   const rejecter = updatedApprovals.find(
     (a: any) => a.userid === user.id && a.status === "rejected",
@@ -2787,13 +2824,14 @@ export async function deletePO(poId: number) {
   // PR sumber dicatat SEBELUM PO dihapus supaya progres konversinya bisa
   // dihitung ulang (PO yang hilang membebaskan qty PR).
   const sourcePrIds = await fetchPoSourcePrIds(supabase, poId);
+  const sourceSoIds = await fetchPoSoIds(supabase, poId);
   const { error } = await supabase.from("pos").delete().eq("id", poId);
   if (error) return { error: error.message };
   for (const prId of sourcePrIds) {
     await applyPrConversionStatus(supabase, prId);
     await applyPrCompletionStatus(supabase, prId);
   }
-  await refreshSoStatus(supabase, po.so_id);
+  await refreshSoStatuses(supabase, sourceSoIds);
   revalidatePath("/po");
   revalidatePath("/pr");
   return { success: true };

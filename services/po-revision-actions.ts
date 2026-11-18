@@ -11,8 +11,9 @@ import {
 } from "@/lib/procurement-status";
 import {
   computeSoItemRemaining,
+  fetchPoSoIds,
   fetchSoItemFulfillment,
-  refreshSoStatus,
+  refreshSoStatuses,
 } from "@/lib/so-reguler";
 import { normalizePoCurrency } from "@/lib/po-currency";
 import { PO_APPROVER_EDITABLE_STATUSES, isPoApprover } from "@/lib/po-item-status";
@@ -362,36 +363,74 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     }
   }
 
-  // Guard sisa qty SO (tanpa menghitung PO ini sendiri).
+  // Guard sisa qty SO (tanpa menghitung PO ini sendiri). PO dari SO boleh
+  // merujuk banyak SO (2026-11-18): item baru boleh dari SO mana pun yang
+  // masih open/partial; item lama tetap terikat ke item SO-nya.
+  let soIdsBefore: number[] = [];
+  let soIdsAfter: number[] = [];
   if (poJenis === "so") {
-    const { data: so } = await supabase
-      .from("so_reguler")
-      .select("id, so_kode, so_reguler_items(id, qty)")
-      .eq("id", po.so_id)
-      .maybeSingle();
-    if (!so) return { error: "SO Reguler sumber PO tidak ditemukan." };
-    const soQty = new Map<number, number>(
-      (so.so_reguler_items || []).map((i: any) => [i.id, num(i.qty)]),
-    );
-    const effSoItemId = (i: PoRevisionItemInput) =>
-      i.po_item_id ? currentById.get(i.po_item_id)?.so_item_id : i.so_item_id;
-    if (items.some((i) => !effSoItemId(i) || !soQty.has(effSoItemId(i)))) {
-      return { error: `Semua item PO harus berasal dari SO ${so.so_kode}.` };
+    soIdsBefore = await fetchPoSoIds(supabase, poId);
+    const effSoItemId = (i: PoRevisionItemInput): number | null => {
+      const id = i.po_item_id ? currentById.get(i.po_item_id)?.so_item_id : i.so_item_id;
+      return id ? Number(id) : null;
+    };
+    if (items.some((i) => !effSoItemId(i))) {
+      return { error: "Semua item PO dari SO harus berasal dari item SO Reguler." };
     }
-    const fulfillment = await fetchSoItemFulfillment(supabase, Array.from(soQty.keys()), {
+    const soItemIds = Array.from(new Set(items.map((i) => effSoItemId(i)!)));
+    const { data: soItemRows } = await supabase
+      .from("so_reguler_items")
+      .select("id, qty, part_id, so_id, so_reguler(id, so_kode, so_status)")
+      .in("id", soItemIds);
+    const soItems = new Map<number, any>(
+      (soItemRows || []).map((r: any) => [Number(r.id), r]),
+    );
+    const soOf = (r: any) => (Array.isArray(r?.so_reguler) ? r.so_reguler[0] : r?.so_reguler);
+    for (const i of items) {
+      const row = soItems.get(effSoItemId(i)!);
+      const so = soOf(row);
+      if (!row || !so) return { error: `Item SO untuk ${i.part_number} tidak ditemukan.` };
+      if (!i.po_item_id) {
+        if (so.so_status === "cancelled" || so.so_status === "completed") {
+          return {
+            error: `SO ${so.so_kode} sudah ${so.so_status === "cancelled" ? "dibatalkan" : "selesai"}, item ${i.part_number} tidak bisa ditambahkan.`,
+          };
+        }
+        if (Number(row.part_id) !== Number(i.part_id)) {
+          return { error: `Barang ${i.part_number} tidak sama dengan item SO ${so.so_kode}.` };
+        }
+      }
+    }
+    const fulfillment = await fetchSoItemFulfillment(supabase, soItemIds, {
       excludePoId: poId,
     });
+    // Dijumlah per item SO (baris ganda tidak boleh lolos satu per satu).
+    const totals = new Map<number, { qty: number; original: number; part: string }>();
     for (const i of items) {
-      const soItemId = effSoItemId(i)!;
-      const { sisaPo } = computeSoItemRemaining(soQty.get(soItemId)!, fulfillment.get(soItemId));
-      const original =
-        i.po_item_id && !wasRejected ? num(currentById.get(i.po_item_id).qty) : 0;
-      if (i.qty > sisaPo && i.qty > original) {
+      const id = effSoItemId(i)!;
+      const t = totals.get(id) || { qty: 0, original: 0, part: i.part_number };
+      t.qty += num(i.qty);
+      t.original += i.po_item_id && !wasRejected ? num(currentById.get(i.po_item_id).qty) : 0;
+      totals.set(id, t);
+    }
+    for (const [id, t] of totals) {
+      const row = soItems.get(id);
+      const { sisaPo } = computeSoItemRemaining(num(row.qty), fulfillment.get(id));
+      if (t.qty > sisaPo && t.qty > t.original) {
         return {
-          error: `Qty ${i.part_number} melebihi sisa SO yang belum di-PO/DO (sisa ${sisaPo}).`,
+          error: `Qty ${t.part} (SO ${soOf(row).so_kode}) melebihi sisa SO yang belum di-PO/DO (sisa ${sisaPo}).`,
         };
       }
     }
+    // SO utama dipertahankan selama masih dipakai item; kalau tidak, SO
+    // pertama yang tersisa.
+    const used = new Set(Array.from(soItems.values()).map((r: any) => Number(soOf(r).id)));
+    soIdsAfter = [
+      ...(po.so_id && used.has(Number(po.so_id)) ? [Number(po.so_id)] : []),
+      ...items
+        .map((i) => Number(soOf(soItems.get(effSoItemId(i)!)).id))
+        .filter((id) => id !== Number(po.so_id)),
+    ].filter((id, idx, arr) => arr.indexOf(id) === idx);
   }
 
   // Revisi: approval diulang dari awal -- step pertama (editor) approved +
@@ -508,6 +547,7 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
     po_status: newStatus,
     po_receive_status: receiveStatus,
     po_revision: nextRevision,
+    ...(poJenis === "so" && soIdsAfter.length > 0 ? { so_id: soIdsAfter[0] } : {}),
   };
   const { error: headerErr } = await supabase.from("pos").update(headerPatch).eq("id", poId);
   if (headerErr) return { error: headerErr.message };
@@ -529,7 +569,8 @@ export async function revisePurchaseOrder(poId: number, payload: PoRevisionPaylo
   for (const prId of involvedPrIds) {
     await applyPrCompletionStatus(supabase, prId);
   }
-  if (poJenis === "so") await refreshSoStatus(supabase, po.so_id);
+  // SO yang dilepas dari PO juga disegarkan (qty-nya bebas lagi).
+  if (poJenis === "so") await refreshSoStatuses(supabase, [...soIdsBefore, ...soIdsAfter]);
 
   // Riwayat.
   const snapshotAfter = buildPoRevisionSnapshot({ ...po, ...headerPatch }, afterItems);

@@ -77,6 +77,7 @@ import { ListSearchInput } from "@/components/list-search-input";
 import { RowActionsMenu } from "@/components/row-actions-menu";
 import { StickyHeaderTable } from "@/components/sticky-header-table";
 import { TablePaginationFooter } from "@/components/table-pagination-footer";
+import { poSoRefs } from "@/lib/so-reguler";
 
 const PO_SORT_COLUMNS: Record<string, string> = {
   po_kode: "po_kode",
@@ -247,7 +248,7 @@ export default function POListPage() {
       `
         id, po_kode, po_tanggal, po_estimasi, po_status, po_receive_status,
         po_pic, po_detail_status, po_payment_term, approvals, created_at,
-        po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), cabang_id,
+        po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), so_refs:po_items(so_reguler_items(so_reguler(id, so_kode))), cabang_id,
         po_is_outstanding, cabang(nama_cabang),
         prs(
           id, pr_kode, cabang_id,
@@ -735,15 +736,18 @@ export default function POListPage() {
                   >
                     SO
                   </Badge>
-                  {po.so_reguler?.so_kode && (
-                    <Link
-                      href={`/so-reguler/so/${po.so_id}`}
-                      onClick={(e) => e.stopPropagation()}
-                      className="truncate max-w-40 hover:underline"
-                    >
-                      {po.so_reguler.so_kode}
-                    </Link>
-                  )}
+                  {poSoRefs(po).map((so, i, arr) => (
+                    <React.Fragment key={so.id}>
+                      <Link
+                        href={`/so-reguler/so/${so.id}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="truncate max-w-40 hover:underline"
+                      >
+                        {so.so_kode}
+                      </Link>
+                      {i < arr.length - 1 && <span>,</span>}
+                    </React.Fragment>
+                  ))}
                 </div>
               ) : po.po_jenis === "non_pr" ? (
                 <div className="flex items-center gap-1 text-[9px] text-muted-foreground font-mono">

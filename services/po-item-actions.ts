@@ -12,7 +12,7 @@ import {
   fetchPoSourcePrIds,
   syncPoReceiveAndCompletion,
 } from "@/lib/procurement-status";
-import { refreshSoStatus } from "@/lib/so-reguler";
+import { fetchPoSoIds, refreshSoStatuses } from "@/lib/so-reguler";
 import {
   PO_ITEM_SELECT,
   buildPoRevisionSnapshot,
@@ -169,7 +169,8 @@ export async function cancelPoItem(poItemId: number, reason: string) {
     await applyPrConversionStatus(supabase, prId);
     await applyPrCompletionStatus(supabase, prId);
   }
-  if (po.so_id) await refreshSoStatus(supabase, po.so_id);
+  if (po.po_jenis === "so" || po.so_id)
+    await refreshSoStatuses(supabase, await fetchPoSoIds(supabase, po.id));
 
   // Riwayat PO + log status barang.
   const { data: afterRows } = await supabase
@@ -236,7 +237,7 @@ export async function cancelPoItem(poItemId: number, reason: string) {
   revalidatePath(`/po/${po.id}`);
   revalidatePath("/pr");
   revalidatePath("/receive");
-  if (po.so_id) revalidatePath("/so-reguler/so");
+  if (po.po_jenis === "so" || po.so_id) revalidatePath("/so-reguler/so");
   return { success: true, cancelledQty: cancelQty };
 }
 

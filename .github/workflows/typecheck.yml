@@ -1,0 +1,24 @@
+name: Typecheck
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: typecheck-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tsc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci --no-audit --no-fund
+      # Generate next-env.d.ts + route types, lalu cek TypeScript.
+      - run: npx next typegen
+      - run: npx tsc --noEmit

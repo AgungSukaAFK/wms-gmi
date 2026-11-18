@@ -84,6 +84,7 @@ import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 import { PoNonPrPanel } from "@/components/po/po-non-pr-panel";
 import { PoOutstandingPanel } from "@/components/po/po-outstanding-panel";
 import { StatusBadge } from "@/components/status-badge";
+import { poSoRefs } from "@/lib/so-reguler";
 
 const STATUS_LABELS = PO_STATUS_LABELS;
 
@@ -174,7 +175,7 @@ export default function PODetailPage({
           po_pic, po_pic_id, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
+          po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), so_refs:po_items(so_reguler_items(so_reguler(id, so_kode))), po_currency, po_revision,
           po_is_outstanding, cabang_id, cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
@@ -191,7 +192,7 @@ export default function PODetailPage({
       const { data: items } = await supabase
         .from("po_items")
         .select(
-          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, qty_cancelled, cancel_reason, cancelled_by_nama, cancelled_at, item_detail_status, item_estimasi, item_status_note, item_status_updated_by_nama, item_status_updated_at, mr_id, pr_item_id, item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
+          "id, part_id, part_number, part_name, satuan, qty, harga, vendor_id, qty_received, qty_cancelled, cancel_reason, cancelled_by_nama, cancelled_at, item_detail_status, item_estimasi, item_status_note, item_status_updated_by_nama, item_status_updated_at, mr_id, pr_item_id, so_item_id, so_reguler_items(so_reguler(id, so_kode)), item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)",
         )
         .eq("po_id", poId)
         .order("vendor_id", { nullsFirst: false });
@@ -785,21 +786,23 @@ export default function PODetailPage({
       {po?.po_jenis === "so" && (
         <Content title="Referensi SO Reguler">
           <div className="flex flex-wrap items-center gap-2">
-            {po.so_reguler ? (
-              <Link href={`/so-reguler/so/${po.so_reguler.id}`}>
-                <Badge
-                  variant="outline"
-                  className="text-[10px] font-bold uppercase font-mono hover:bg-muted transition-colors cursor-pointer"
-                >
-                  {po.so_reguler.so_kode}
-                </Badge>
-              </Link>
+            {poSoRefs(po).length > 0 ? (
+              poSoRefs(po).map((so) => (
+                <Link key={so.id} href={`/so-reguler/so/${so.id}`}>
+                  <Badge
+                    variant="outline"
+                    className="text-[10px] font-bold uppercase font-mono hover:bg-muted transition-colors cursor-pointer"
+                  >
+                    {so.so_kode}
+                  </Badge>
+                </Link>
+              ))
             ) : (
               <span className="text-xs text-muted-foreground italic">-</span>
             )}
             <span className="text-[10px] text-muted-foreground font-medium">
               Diterima di gudang {po.cabang?.nama_cabang || "-"}, lalu dikirim
-              ke customer lewat DO Reguler dari SO ini.
+              ke customer lewat DO Reguler dari SO masing-masing item.
             </span>
           </div>
         </Content>
@@ -1046,6 +1049,22 @@ export default function PODetailPage({
                             >
                               {item.part_number}
                             </span>
+                            {(() => {
+                              const si = Array.isArray(item.so_reguler_items)
+                                ? item.so_reguler_items[0]
+                                : item.so_reguler_items;
+                              const so = Array.isArray(si?.so_reguler)
+                                ? si.so_reguler[0]
+                                : si?.so_reguler;
+                              return so?.so_kode ? (
+                                <Link
+                                  href={`/so-reguler/so/${so.id}`}
+                                  className="mt-0.5 block text-[9px] font-bold font-mono uppercase text-primary hover:underline"
+                                >
+                                  SO {so.so_kode}
+                                </Link>
+                              ) : null;
+                            })()}
                           </TableCell>
                           <TableCell className="py-2.5 min-w-0">
                             <p
