@@ -17,6 +17,7 @@ import {
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { Input } from "@/components/ui/input";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
@@ -51,6 +52,7 @@ import {
   Building2,
   Calendar,
   Eye,
+  MapPin,
 } from "lucide-react";
 import { getWorkingOrderList } from "@/services/working-order-actions";
 import { canManageWoFormula } from "@/lib/wo-formula-permissions";
@@ -90,6 +92,8 @@ const getWoSortValue = (wo: any, key: string) => {
   return wo[key];
 };
 
+type PartLike = { part_number?: string | null; part_name?: string | null };
+
 export default function WorkingOrderListPage() {
   const router = useRouter();
   const supabase = createClient();
@@ -107,6 +111,17 @@ export default function WorkingOrderListPage() {
   const statusFilters = urlState.list("status");
   const setStatusFilters = (v: string[]) =>
     urlState.set({ status: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const departemenFilters = urlState.list("departemen");
+  const setDepartemenFilters = (v: string[]) =>
+    urlState.set({ departemen: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -154,8 +169,45 @@ export default function WorkingOrderListPage() {
     const tanggal = (wo.wo_tanggal || "").slice(0, 10);
     const matchTanggal =
       (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
-    return matchSearch && matchStatus && matchTanggal;
+    const matchLokasi =
+      locationFilters.length === 0 ||
+      locationFilters.includes(String(wo.gudang_cabang_id ?? ""));
+    const matchDepartemen =
+      departemenFilters.length === 0 ||
+      departemenFilters.includes(wo.departemen ?? "");
+    const b = barangFilter.toLowerCase();
+    const matchBarang =
+      !b ||
+      (wo.working_order_items || []).some(
+        (i: PartLike | undefined) =>
+          i?.part_number?.toLowerCase().includes(b) ||
+          i?.part_name?.toLowerCase().includes(b),
+      );
+    return (
+      matchSearch &&
+      matchStatus &&
+      matchTanggal &&
+      matchLokasi &&
+      matchDepartemen &&
+      matchBarang
+    );
   });
+
+  // Opsi gudang & departemen diambil dari data yang sudah dimuat.
+  const locationOptions = [
+    ...new Map(
+      wos
+        .filter((wo) => wo.gudang_cabang_id != null && wo.cabang?.nama_cabang)
+        .map((wo) => [String(wo.gudang_cabang_id), wo.cabang.nama_cabang as string]),
+    ),
+  ]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const departemenOptions = [
+    ...new Set(wos.map((wo) => wo.departemen).filter(Boolean) as string[]),
+  ]
+    .sort((a, b) => a.localeCompare(b))
+    .map((d) => ({ value: d, label: d }));
 
   const sorted = sortRows(filtered, sortOrder, getWoSortValue);
   const totalCount = sorted.length;
@@ -169,6 +221,7 @@ export default function WorkingOrderListPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -184,6 +237,30 @@ export default function WorkingOrderListPage() {
       label: "Status",
       value: optionLabels(WO_STATUS_OPTIONS, statusFilters),
       onRemove: () => setStatusFilters([]),
+    });
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Gudang",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (departemenFilters.length > 0)
+    activeFilters.push({
+      key: "departemen",
+      label: "Departemen",
+      value: departemenFilters.join(", "),
+      onRemove: () => setDepartemenFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
     });
   if (dateFrom || dateTo)
     activeFilters.push({
@@ -310,6 +387,33 @@ export default function WorkingOrderListPage() {
                   selected={statusFilters}
                   onChange={setStatusFilters}
                   options={WO_STATUS_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Gudang">
+                <MultiSelect
+                  placeholder="Semua Gudang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Departemen">
+                <MultiSelect
+                  placeholder="Semua Departemen"
+                  searchable
+                  selected={departemenFilters}
+                  onChange={setDepartemenFilters}
+                  options={departemenOptions}
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
                 />
               </FilterField>
             </FilterFields>

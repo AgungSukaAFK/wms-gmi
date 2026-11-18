@@ -135,6 +135,11 @@ export default function SoRegulerPage() {
     barangFilter,
     (value) => urlState.set({ barang: value }, { resetPage: true }),
   );
+  const customerFilter = urlState.get("customer");
+  const [customerInput, setCustomerInput, resetCustomerInput] =
+    useUrlSearchInput(customerFilter, (value) =>
+      urlState.set({ customer: value }, { resetPage: true }),
+    );
   const sortOrder = urlState.get("sort", "created_at_desc");
   const setSortOrder = (v: string) =>
     urlState.set({ sort: v === "created_at_desc" ? "" : v });
@@ -163,7 +168,7 @@ export default function SoRegulerPage() {
     let query = supabase
       .from("so_reguler")
       .select(
-        `*, customer:customers!customer_id(customer_name), so_reguler_items(count)${barangEmbed}`,
+        `*, customer:customers!customer_id${customerFilter ? "!inner" : ""}(customer_name), so_reguler_items(count)${barangEmbed}`,
         { count: "exact" },
       );
 
@@ -180,6 +185,12 @@ export default function SoRegulerPage() {
     if (dateTo) query = query.lte("so_tanggal", dateTo);
     if (dueFrom) query = query.gte("so_due_date", dueFrom);
     if (dueTo) query = query.lte("so_due_date", dueTo);
+    if (customerFilter) {
+      query = query.or(
+        `customer_name.ilike.${orIlikePattern(customerFilter)},customer_no.ilike.${orIlikePattern(customerFilter)}`,
+        { referencedTable: "customer" },
+      );
+    }
 
     if (barangFilter) {
       query = query.or(
@@ -217,6 +228,7 @@ export default function SoRegulerPage() {
     dueFrom,
     dueTo,
     barangFilter,
+    customerFilter,
     sortOrder,
     page,
     limit,
@@ -230,6 +242,7 @@ export default function SoRegulerPage() {
   const resetFilters = () => {
     resetSearchQuery();
     resetBarangInput();
+    resetCustomerInput();
     urlState.reset();
   };
 
@@ -252,6 +265,16 @@ export default function SoRegulerPage() {
       label: "Kategori",
       value: optionLabels(SO_KATEGORI_FILTER_OPTIONS, kategoriFilters),
       onRemove: () => setKategoriFilters([]),
+    });
+  if (customerFilter)
+    activeFilters.push({
+      key: "customer",
+      label: "Customer",
+      value: customerFilter,
+      onRemove: () => {
+        resetCustomerInput();
+        urlState.set({ customer: "" }, { resetPage: true });
+      },
     });
   if (asalFilters.length > 0)
     activeFilters.push({
@@ -413,6 +436,14 @@ export default function SoRegulerPage() {
                   placeholder="Part number / nama"
                   value={barangInput}
                   onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+              <FilterField label="Customer">
+                <Input
+                  placeholder="Nama / kode customer"
+                  value={customerInput}
+                  onChange={(e) => setCustomerInput(e.target.value)}
                   className="h-9 text-xs font-medium"
                 />
               </FilterField>

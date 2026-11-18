@@ -21,7 +21,14 @@ import {
   FilterField,
   FilterFields,
   FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
 } from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
   ColumnOrderReset,
@@ -40,6 +47,7 @@ import {
   ArrowRight,
   CalendarClock,
   AlertTriangle,
+  MapPin,
 } from "lucide-react";
 import type { PlanningSupply } from "@/type";
 import { businessToday } from "@/lib/business-date";
@@ -79,6 +87,12 @@ const PLANNING_STATUS_LABEL: Record<string, string> = {
   all: "Semua Status",
 };
 
+const DEADLINE_LABEL: Record<string, string> = {
+  overdue: "Lewat deadline",
+  on_time: "Belum lewat",
+  no_deadline: "Tanpa deadline",
+};
+
 const PLANNING_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
 // Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di SORT_ACCESSORS.
@@ -110,6 +124,21 @@ export default function PlanningSupplyPage() {
   const statusFilter = urlState.get("status", "active");
   const setStatusFilter = (v: string) =>
     urlState.set({ status: v === "active" ? "" : v }, { resetPage: true });
+  const sourceFilters = urlState.list("asal");
+  const setSourceFilters = (v: string[]) =>
+    urlState.set({ asal: v }, { resetPage: true });
+  const destFilters = urlState.list("tujuan");
+  const setDestFilters = (v: string[]) =>
+    urlState.set({ tujuan: v }, { resetPage: true });
+  const deadlineFilter = urlState.get("kondisi");
+  const setDeadlineFilter = (v: string) =>
+    urlState.set({ kondisi: v === "all" ? "" : v }, { resetPage: true });
+  const deadlineFrom = urlState.get("deadline_dari");
+  const setDeadlineFrom = (v: string) =>
+    urlState.set({ deadline_dari: v }, { resetPage: true });
+  const deadlineTo = urlState.get("deadline_sampai");
+  const setDeadlineTo = (v: string) =>
+    urlState.set({ deadline_sampai: v }, { resetPage: true });
   const sortOrder = urlState.get("sort", "");
   const setSortOrder = (v: string) => urlState.set({ sort: v });
   const page = urlState.getNumber("page", 1);
@@ -181,18 +210,67 @@ export default function PlanningSupplyPage() {
 
   const filtered = useMemo(() => {
     const q = debouncedSearch.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter((r) =>
-      [
-        r.part_number,
-        r.part_name,
-        r.mrs?.mr_kode,
-        r.deliveries?.dlv_kode,
-      ]
-        .filter(Boolean)
-        .some((v) => String(v).toLowerCase().includes(q)),
-    );
-  }, [rows, debouncedSearch]);
+    return rows.filter((r) => {
+      if (
+        q &&
+        ![r.part_number, r.part_name, r.mrs?.mr_kode, r.deliveries?.dlv_kode]
+          .filter(Boolean)
+          .some((v) => String(v).toLowerCase().includes(q))
+      )
+        return false;
+      if (
+        sourceFilters.length > 0 &&
+        !sourceFilters.includes(String(r.source_cabang_id))
+      )
+        return false;
+      if (
+        destFilters.length > 0 &&
+        !destFilters.includes(String(r.dest_cabang_id))
+      )
+        return false;
+      const deadline = (r.deadline || "").slice(0, 10);
+      if (deadlineFrom && (!deadline || deadline < deadlineFrom)) return false;
+      if (deadlineTo && (!deadline || deadline > deadlineTo)) return false;
+      const overdue =
+        r.status === "in_transit" && !!deadline && deadline < today;
+      if (deadlineFilter === "overdue" && !overdue) return false;
+      if (deadlineFilter === "on_time" && overdue) return false;
+      if (deadlineFilter === "no_deadline" && deadline) return false;
+      return true;
+    });
+  }, [
+    rows,
+    debouncedSearch,
+    sourceFilters,
+    destFilters,
+    deadlineFrom,
+    deadlineTo,
+    deadlineFilter,
+    today,
+  ]);
+
+  // Opsi gudang diambil dari data yang sudah dimuat.
+  const cabangOptions = (
+    pick: (r: PlanningSupply) => [number, string | undefined],
+  ) =>
+    [
+      ...new Map(
+        rows
+          .map(pick)
+          .filter(([, name]) => !!name)
+          .map(([id, name]) => [String(id), name as string]),
+      ),
+    ]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  const sourceOptions = cabangOptions((r) => [
+    r.source_cabang_id,
+    r.source_cabang?.nama_cabang,
+  ]);
+  const destOptions = cabangOptions((r) => [
+    r.dest_cabang_id,
+    r.dest_cabang?.nama_cabang,
+  ]);
 
   const sorted = useMemo(() => {
     const [sortKeyRaw, sortDirRaw] = sortOrder.split(/_(asc|desc)$/);
@@ -241,6 +319,42 @@ export default function PlanningSupplyPage() {
       label: "Status",
       value: PLANNING_STATUS_LABEL[statusFilter] ?? statusFilter,
       onRemove: () => setStatusFilter("active"),
+    });
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+  if (sourceFilters.length > 0)
+    activeFilters.push({
+      key: "asal",
+      label: "Gudang Asal",
+      value: optionLabels(sourceOptions, sourceFilters),
+      onRemove: () => setSourceFilters([]),
+    });
+  if (destFilters.length > 0)
+    activeFilters.push({
+      key: "tujuan",
+      label: "Gudang Tujuan",
+      value: optionLabels(destOptions, destFilters),
+      onRemove: () => setDestFilters([]),
+    });
+  if (DEADLINE_LABEL[deadlineFilter])
+    activeFilters.push({
+      key: "kondisi",
+      label: "Deadline",
+      value: DEADLINE_LABEL[deadlineFilter],
+      onRemove: () => setDeadlineFilter("all"),
+    });
+  if (deadlineFrom || deadlineTo)
+    activeFilters.push({
+      key: "deadline",
+      label: "Tgl Deadline",
+      value: formatFilterRange(deadlineFrom, deadlineTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set(
+          { deadline_dari: "", deadline_sampai: "" },
+          { resetPage: true },
+        ),
     });
 
   // Satu sel per id kolom; urutannya diatur useColumnOrder.
@@ -395,7 +509,69 @@ export default function PlanningSupplyPage() {
                   </SelectContent>
                 </Select>
               </FilterField>
+              <FilterField label="Gudang Asal">
+                <MultiSelect
+                  placeholder="Semua Gudang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={sourceFilters}
+                  onChange={setSourceFilters}
+                  options={sourceOptions}
+                />
+              </FilterField>
+              {isModerator && (
+                <FilterField label="Gudang Tujuan">
+                  <MultiSelect
+                    placeholder="Semua Gudang"
+                    icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                    searchable
+                    selected={destFilters}
+                    onChange={setDestFilters}
+                    options={destOptions}
+                  />
+                </FilterField>
+              )}
+              <FilterField label="Kondisi Deadline">
+                <Select
+                  value={deadlineFilter || "all"}
+                  onValueChange={setDeadlineFilter}
+                >
+                  <SelectTrigger className="h-9 border-input bg-background text-xs font-bold text-foreground">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua</SelectItem>
+                    {Object.entries(DEADLINE_LABEL).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
             </FilterFields>
+            <FilterRangeFields>
+              <FilterField label="Deadline">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={deadlineFrom}
+                      onChange={setDeadlineFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={deadlineTo}
+                      onChange={setDeadlineTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
           </FilterPanel>
         </div>
       </Content>

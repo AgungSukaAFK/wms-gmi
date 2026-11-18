@@ -16,6 +16,7 @@ import {
   CalendarRange,
   Snowflake,
   Eye,
+  MapPin,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
@@ -30,6 +31,14 @@ import {
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
@@ -62,6 +71,11 @@ const SCHEDULED_STATUS_OPTIONS = [
   { label: "Rejected", value: "rejected" },
 ];
 
+const FROZEN_OPTIONS = [
+  { label: "Ada item frozen", value: "yes" },
+  { label: "Tanpa item frozen", value: "no" },
+];
+
 const SCHEDULED_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
 // Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getScheduledSortValue.
@@ -80,6 +94,13 @@ type ScheduledColumnId = (typeof SCHEDULED_COLUMNS)[number]["id"];
 const getScheduledSortValue = (mr: any, key: string) =>
   key === "cabang" ? mr.cabang?.nama_cabang : mr[key];
 
+type ScheduledItem = {
+  part_number?: string | null;
+  part_name?: string | null;
+  item_due_date?: string | null;
+  is_item_frozen?: boolean | null;
+};
+
 export default function ScheduledMRPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -97,6 +118,23 @@ export default function ScheduledMRPage() {
   const statusFilters = urlState.list("status");
   const setStatusFilters = (v: string[]) =>
     urlState.set({ status: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const frozenFilter = urlState.get("frozen");
+  const setFrozenFilter = (v: string) =>
+    urlState.set({ frozen: v === "all" ? "" : v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
+  const dueFrom = urlState.get("due_dari");
+  const setDueFrom = (v: string) =>
+    urlState.set({ due_dari: v }, { resetPage: true });
+  const dueTo = urlState.get("due_sampai");
+  const setDueTo = (v: string) =>
+    urlState.set({ due_sampai: v }, { resetPage: true });
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -151,8 +189,49 @@ export default function ScheduledMRPage() {
     const tanggal = (mr.mr_tanggal || "").slice(0, 10);
     const matchTanggal =
       (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
-    return matchSearch && matchStatus && matchTanggal;
+    const items: ScheduledItem[] = mr.mr_items || [];
+    const matchLokasi =
+      locationFilters.length === 0 ||
+      locationFilters.includes(String(mr.cabang_id ?? ""));
+    const hasFrozen = items.some((i) => i.is_item_frozen);
+    const matchFrozen =
+      !frozenFilter || (frozenFilter === "yes" ? hasFrozen : !hasFrozen);
+    const b = barangFilter.toLowerCase();
+    const matchBarang =
+      !b ||
+      items.some(
+        (i) =>
+          i.part_number?.toLowerCase().includes(b) ||
+          i.part_name?.toLowerCase().includes(b),
+      );
+    // Ada minimal satu item yang due date-nya masuk rentang.
+    const matchDue =
+      (!dueFrom && !dueTo) ||
+      items.some((i) => {
+        const d = (i.item_due_date || "").slice(0, 10);
+        return d && (!dueFrom || d >= dueFrom) && (!dueTo || d <= dueTo);
+      });
+    return (
+      matchSearch &&
+      matchStatus &&
+      matchTanggal &&
+      matchLokasi &&
+      matchFrozen &&
+      matchBarang &&
+      matchDue
+    );
   });
+
+  // Opsi cabang diambil dari data yang sudah dimuat.
+  const locationOptions = [
+    ...new Map(
+      mrs
+        .filter((mr) => mr.cabang_id != null && mr.cabang?.nama_cabang)
+        .map((mr) => [String(mr.cabang_id), mr.cabang.nama_cabang as string]),
+    ),
+  ]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   const sorted = sortRows(filtered, sortOrder, getScheduledSortValue);
   const totalCount = sorted.length;
@@ -166,6 +245,7 @@ export default function ScheduledMRPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -181,6 +261,38 @@ export default function ScheduledMRPage() {
       label: "Status",
       value: optionLabels(SCHEDULED_STATUS_OPTIONS, statusFilters),
       onRemove: () => setStatusFilters([]),
+    });
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Cabang",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (frozenFilter)
+    activeFilters.push({
+      key: "frozen",
+      label: "Frozen",
+      value: filterOptionLabel(FROZEN_OPTIONS, frozenFilter),
+      onRemove: () => setFrozenFilter(""),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
+    });
+  if (dueFrom || dueTo)
+    activeFilters.push({
+      key: "due",
+      label: "Due Date Item",
+      value: formatFilterRange(dueFrom, dueTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ due_dari: "", due_sampai: "" }, { resetPage: true }),
     });
   if (dateFrom || dateTo)
     activeFilters.push({
@@ -302,6 +414,39 @@ export default function ScheduledMRPage() {
                   options={SCHEDULED_STATUS_OPTIONS}
                 />
               </FilterField>
+              <FilterField label="Cabang">
+                <MultiSelect
+                  placeholder="Semua Cabang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Frozen">
+                <Select value={frozenFilter || "all"} onValueChange={setFrozenFilter}>
+                  <SelectTrigger className="h-9 text-xs font-medium">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua</SelectItem>
+                    {FROZEN_OPTIONS.map((o) => (
+                      <SelectItem key={o.value} value={o.value}>
+                        {o.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
             </FilterFields>
 
             <FilterRangeFields>
@@ -319,6 +464,26 @@ export default function ScheduledMRPage() {
                     <DatePickerString
                       value={dateTo}
                       onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+              <FilterField label="Due Date Item">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dueFrom}
+                      onChange={setDueFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dueTo}
+                      onChange={setDueTo}
                       placeholder="Sampai"
                       className="h-9 w-full text-xs font-medium"
                     />

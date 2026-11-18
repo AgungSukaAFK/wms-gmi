@@ -257,7 +257,7 @@ export async function getScheduledMaterialRequests() {
   const { data, error } = await supabase
     .from("mrs")
     .select(
-      "id, mr_kode, mr_tanggal, mr_due_date, mr_status, mr_pic, cabang(nama_cabang), mr_items(id, item_due_date, item_priority, is_item_frozen)",
+      "id, mr_kode, mr_tanggal, mr_due_date, mr_status, mr_pic, cabang_id, cabang(nama_cabang), mr_items(id, part_number, part_name, item_due_date, item_priority, is_item_frozen)",
     )
     .eq("mr_type", "scheduled")
     .order("created_at", { ascending: false });

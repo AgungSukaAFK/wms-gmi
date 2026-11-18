@@ -13,6 +13,7 @@ import {
   FilterPanel,
   filterOptionLabel,
 } from "@/components/filter-panel";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
   ColumnOrderReset,
@@ -98,6 +99,14 @@ const getStockSortValue = (r: any, key: string) => {
   return r[key];
 };
 
+const QTY_OPTIONS = [
+  { label: "Ada stok (> 0)", value: "ada" },
+  { label: "Kosong (0)", value: "kosong" },
+  { label: "Minus (< 0)", value: "minus" },
+];
+
+const qtyKey = (qty: number) => (qty > 0 ? "ada" : qty < 0 ? "minus" : "kosong");
+
 export default function ConsignmentStockPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -115,6 +124,9 @@ export default function ConsignmentStockPage() {
   const cabangId = urlState.get("gudang", "all");
   const setCabangId = (v: string) =>
     urlState.set({ gudang: v === "all" ? "" : v }, { resetPage: true });
+  const qtyFilters = urlState.list("qty");
+  const setQtyFilters = (v: string[]) =>
+    urlState.set({ qty: v }, { resetPage: true });
   const sortOrder = urlState.get("sort", "");
   const setSortOrder = (v: string) => urlState.set({ sort: v });
   const page = urlState.getNumber("page", 1);
@@ -172,12 +184,14 @@ export default function ConsignmentStockPage() {
     const q = debouncedSearch.toLowerCase();
     return rows.filter(
       (r) =>
-        !q ||
-        r.barang?.part_number?.toLowerCase().includes(q) ||
-        r.barang?.part_name?.toLowerCase().includes(q) ||
-        r.vendors?.vendor_name?.toLowerCase().includes(q),
+        (qtyFilters.length === 0 ||
+          qtyFilters.includes(qtyKey(Number(r.qty) || 0))) &&
+        (!q ||
+          r.barang?.part_number?.toLowerCase().includes(q) ||
+          r.barang?.part_name?.toLowerCase().includes(q) ||
+          r.vendors?.vendor_name?.toLowerCase().includes(q)),
     );
-  }, [rows, debouncedSearch]);
+  }, [rows, debouncedSearch, qtyFilters]);
 
   const totalQty = filtered.reduce((a, r) => a + (Number(r.qty) || 0), 0);
 
@@ -255,6 +269,15 @@ export default function ConsignmentStockPage() {
         cabangId,
       ),
       onRemove: () => setCabangId("all"),
+    });
+  if (qtyFilters.length > 0)
+    activeFilters.push({
+      key: "qty",
+      label: "Qty",
+      value: qtyFilters
+        .map((v) => filterOptionLabel(QTY_OPTIONS, v))
+        .join(", "),
+      onRemove: () => setQtyFilters([]),
     });
 
   // Satu sel per id kolom; urutannya diatur useColumnOrder.
@@ -338,6 +361,14 @@ export default function ConsignmentStockPage() {
                     ))}
                   </SelectContent>
                 </Select>
+              </FilterField>
+              <FilterField label="Qty">
+                <MultiSelect
+                  placeholder="Semua"
+                  selected={qtyFilters}
+                  onChange={setQtyFilters}
+                  options={QTY_OPTIONS}
+                />
               </FilterField>
             </FilterFields>
           </FilterPanel>

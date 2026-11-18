@@ -476,6 +476,10 @@ type SpbListParams = {
   completingStatus?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** Kode unit / tipe unit / brand. */
+  unit?: string;
+  /** Part number / nama barang di item SPB. */
+  barang?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -503,9 +507,14 @@ async function querySpbList(
 
   // Bertipe `string` supaya parser tipe select supabase-js tidak dipakai
   // (string dinamis); hasil di-cast oleh pemanggil seperti sebelumnya.
-  const select: string = withStatus
-    ? `${SPB_LIST_SELECT}, ${SPB_LIST_STATUS_SELECT}`
-    : SPB_LIST_SELECT;
+  // Filter isi item lewat embed alias, tanpa ikut mengambil datanya.
+  const barangEmbed = params?.barang
+    ? ", barang_cocok:spb_details!inner(id)"
+    : "";
+  const select: string =
+    (withStatus
+      ? `${SPB_LIST_SELECT}, ${SPB_LIST_STATUS_SELECT}`
+      : SPB_LIST_SELECT) + barangEmbed;
   let query = supabase
     .from("spb")
     .select(select, { count: "exact" })
@@ -541,6 +550,19 @@ async function querySpbList(
   }
   if (params?.cabangIds && params.cabangIds.length > 0) {
     query = query.in("cabang_id", params.cabangIds);
+  }
+  if (params?.unit) {
+    const p = orIlikePattern(params.unit);
+    query = query.or(
+      `spb_kode_unit.ilike.${p},spb_tipe_unit.ilike.${p},spb_brand.ilike.${p}`,
+    );
+  }
+  if (params?.barang) {
+    const p = orIlikePattern(params.barang);
+    query = query.or(
+      `dtl_spb_part_number.ilike.${p},dtl_spb_part_name.ilike.${p}`,
+      { referencedTable: "barang_cocok" },
+    );
   }
   if (params?.status && params.status !== "all") {
     query = query.eq("spb_status", params.status);
@@ -882,6 +904,10 @@ export async function getSpbPoList(params?: {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** Lokasi = cabang SPB asal. */
+  cabangIds?: number[];
+  /** Part number / nama barang di item PO. */
+  barang?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -891,14 +917,21 @@ export async function getSpbPoList(params?: {
   const limit = params?.limit ?? 25;
   const from = (page - 1) * limit;
 
-  let query = supabase
-    .from("spb_po")
-    .select(
-      "*, spb:spb_id(id, spb_no, spb_tanggal, spb_status, spb_gudang), details:spb_po_details(*)",
-      {
-        count: "exact",
-      },
+  const filterCabang = !!params?.cabangIds?.length;
+  // Filter isi item lewat embed alias, tanpa ikut mengambil datanya.
+  const barangEmbed = params?.barang
+    ? ", barang_cocok:spb_po_details!inner(id, dtl:spb_dtl_id!inner(id))"
+    : "";
+  const select: string = `*, spb:spb_id${filterCabang ? "!inner" : ""}(id, spb_no, spb_tanggal, spb_status, spb_gudang, cabang_id), details:spb_po_details(*)${barangEmbed}`;
+  let query = supabase.from("spb_po").select(select, { count: "exact" });
+
+  if (filterCabang) query = query.in("spb.cabang_id", params!.cabangIds!);
+  if (params?.barang) {
+    query = query.or(
+      `dtl_spb_part_number.ilike.${orIlikePattern(params.barang)},dtl_spb_part_name.ilike.${orIlikePattern(params.barang)}`,
+      { referencedTable: "barang_cocok.dtl" },
     );
+  }
 
   const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
   const sortColumn = SPB_PO_SORT_COLUMNS[sortKeyRaw];
@@ -1079,6 +1112,10 @@ export async function getSpbDoList(params?: {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** Lokasi = cabang SPB asal. */
+  cabangIds?: number[];
+  /** Status part (teks bebas, mis. DELIVERED). */
+  statusPart?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -1088,12 +1125,15 @@ export async function getSpbDoList(params?: {
   const limit = params?.limit ?? 25;
   const from = (page - 1) * limit;
 
-  let query = supabase
-    .from("spb_do")
-    .select(
-      "*, po:spb_po_id(id, po_no, so_no, spb:spb_id(id, spb_no, spb_gudang, spb_status)), details:spb_do_details(*)",
-      { count: "exact" },
-    );
+  const filterCabang = !!params?.cabangIds?.length;
+  const inner = filterCabang ? "!inner" : "";
+  const select: string = `*, po:spb_po_id${inner}(id, po_no, so_no, spb:spb_id${inner}(id, spb_no, spb_gudang, spb_status, cabang_id)), details:spb_do_details(*)`;
+  let query = supabase.from("spb_do").select(select, { count: "exact" });
+
+  if (filterCabang) query = query.in("po.spb.cabang_id", params!.cabangIds!);
+  if (params?.statusPart) {
+    query = query.ilike("do_status_part", `%${params.statusPart}%`);
+  }
 
   const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
   const sortColumn = SPB_DO_SORT_COLUMNS[sortKeyRaw];
@@ -1228,6 +1268,13 @@ export async function getSpbInvoiceList(params?: {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** Rentang Tanggal Email ke Site. */
+  emailFrom?: string;
+  emailTo?: string;
+  /** Lokasi = cabang SPB asal. */
+  cabangIds?: number[];
+  approvalStatus?: string[];
+  paymentStatus?: string[];
   page?: number;
   limit?: number;
   sort?: string;
@@ -1237,12 +1284,18 @@ export async function getSpbInvoiceList(params?: {
   const limit = params?.limit ?? 25;
   const from = (page - 1) * limit;
 
-  let query = supabase
-    .from("spb_invoice")
-    .select(
-      "*, do:spb_do_id(id, do_no, po:spb_po_id(id, po_no, spb:spb_id(id, spb_no, spb_status))), details:spb_invoice_details(*)",
-      { count: "exact" },
-    );
+  const filterCabang = !!params?.cabangIds?.length;
+  const inner = filterCabang ? "!inner" : "";
+  const select: string = `*, do:spb_do_id${inner}(id, do_no, po:spb_po_id${inner}(id, po_no, spb:spb_id${inner}(id, spb_no, spb_status, cabang_id))), details:spb_invoice_details(*)`;
+  let query = supabase.from("spb_invoice").select(select, { count: "exact" });
+
+  if (filterCabang) query = query.in("do.po.spb.cabang_id", params!.cabangIds!);
+  if (params?.approvalStatus?.length)
+    query = query.in("approval_status", params.approvalStatus);
+  if (params?.paymentStatus?.length)
+    query = query.in("payment_status", params.paymentStatus);
+  if (params?.emailFrom) query = query.gte("invoice_email_date", params.emailFrom);
+  if (params?.emailTo) query = query.lte("invoice_email_date", params.emailTo);
 
   const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
   const sortColumn = SPB_INVOICE_SORT_COLUMNS[sortKeyRaw];
@@ -1369,6 +1422,11 @@ export async function getReturnSpbList(params?: {
   search?: string;
   dateFrom?: string;
   dateTo?: string;
+  /** Lokasi = cabang SPB asal. */
+  cabangIds?: number[];
+  approvalStatus?: string[];
+  /** Part number / nama barang yang diretur. */
+  barang?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -1378,14 +1436,23 @@ export async function getReturnSpbList(params?: {
   const limit = params?.limit ?? 25;
   const from = (page - 1) * limit;
 
-  let query = supabase
-    .from("return_spb")
-    .select(
-      "*, spb:spb_id(id, spb_no, spb_status), details:return_spb_details(*)",
-      {
-        count: "exact",
-      },
+  const filterCabang = !!params?.cabangIds?.length;
+  // Filter isi item lewat embed alias, tanpa ikut mengambil datanya.
+  const barangEmbed = params?.barang
+    ? ", barang_cocok:return_spb_details!inner(id, part:part_id!inner(id))"
+    : "";
+  const select: string = `*, spb:spb_id${filterCabang ? "!inner" : ""}(id, spb_no, spb_status, cabang_id), details:return_spb_details(*)${barangEmbed}`;
+  let query = supabase.from("return_spb").select(select, { count: "exact" });
+
+  if (filterCabang) query = query.in("spb.cabang_id", params!.cabangIds!);
+  if (params?.approvalStatus?.length)
+    query = query.in("approval_status", params.approvalStatus);
+  if (params?.barang) {
+    query = query.or(
+      `part_number.ilike.${orIlikePattern(params.barang)},part_name.ilike.${orIlikePattern(params.barang)}`,
+      { referencedTable: "barang_cocok.part" },
     );
+  }
 
   const [sortKeyRaw, sortDirRaw] = (params?.sort || "").split(/_(asc|desc)$/);
   const sortColumn = RETURN_SPB_SORT_COLUMNS[sortKeyRaw];

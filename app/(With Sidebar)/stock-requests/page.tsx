@@ -22,7 +22,9 @@ import {
   FilterField,
   FilterFields,
   FilterPanel,
+  filterOptionLabel,
 } from "@/components/filter-panel";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
   ColumnOrderReset,
@@ -48,7 +50,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ClipboardList, CheckCircle2, Loader2, Settings2 } from "lucide-react";
+import { ClipboardList, CheckCircle2, Loader2, MapPin, Settings2 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import {
   getStockSettingRequests,
@@ -75,6 +77,11 @@ const REQUEST_STATUS_LABEL: Record<string, string> = {
   resolved: "Selesai",
   all: "Semua",
 };
+
+const REASON_OPTIONS = Object.entries(REASON_META).map(([value, m]) => ({
+  value,
+  label: m.label,
+}));
 
 const REQUEST_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
@@ -121,6 +128,12 @@ export default function StockRequestsPage() {
     statusParam === "resolved" || statusParam === "all" ? statusParam : "open";
   const setStatusFilter = (v: string) =>
     urlState.set({ status: v === "open" ? "" : v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const reasonFilters = urlState.list("alasan");
+  const setReasonFilters = (v: string[]) =>
+    urlState.set({ alasan: v }, { resetPage: true });
   const [denied, setDenied] = useState(false);
   const [resolvingId, setResolvingId] = useState<number | null>(null);
   const sortOrder = urlState.get("sort", "");
@@ -167,6 +180,13 @@ export default function StockRequestsPage() {
   };
 
   const filtered = rows.filter((r) => {
+    if (
+      locationFilters.length > 0 &&
+      !locationFilters.includes(String(r.cabang_id ?? ""))
+    )
+      return false;
+    if (reasonFilters.length > 0 && !reasonFilters.includes(r.reason))
+      return false;
     const q = debouncedSearch.toLowerCase();
     if (!q) return true;
     return [
@@ -222,8 +242,37 @@ export default function StockRequestsPage() {
     urlState.reset();
   };
 
+  // Opsi cabang diambil dari data yang sudah dimuat.
+  const locationOptions = [
+    ...new Map(
+      rows
+        .filter((r) => r.cabang_id != null && r.cabang?.nama_cabang)
+        .map((r) => [String(r.cabang_id), r.cabang.nama_cabang as string]),
+    ),
+  ]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+
   // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
   const activeFilters: ActiveFilter[] = [];
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Cabang",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (reasonFilters.length > 0)
+    activeFilters.push({
+      key: "alasan",
+      label: "Alasan",
+      value: optionLabels(REASON_OPTIONS, reasonFilters),
+      onRemove: () => setReasonFilters([]),
+    });
   if (statusFilter !== "open")
     activeFilters.push({
       key: "status",
@@ -323,6 +372,24 @@ export default function StockRequestsPage() {
                     <SelectItem value="all">Semua</SelectItem>
                   </SelectContent>
                 </Select>
+              </FilterField>
+              <FilterField label="Cabang">
+                <MultiSelect
+                  placeholder="Semua Cabang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Alasan">
+                <MultiSelect
+                  placeholder="Semua Alasan"
+                  selected={reasonFilters}
+                  onChange={setReasonFilters}
+                  options={REASON_OPTIONS}
+                />
               </FilterField>
             </FilterFields>
           </FilterPanel>

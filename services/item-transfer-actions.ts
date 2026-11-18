@@ -1749,3 +1749,146 @@ export async function moderatorEditItemTransfer(
   revalidatePath("/stock");
   return { success: true };
 }
+
+// ============================================================
+// EDIT MASSAL PIC & PENERIMA (moderator, dari list Item Transfer)
+// ============================================================
+
+export type BulkItemTransferPeopleResult = {
+  id: number;
+  it_kode: string;
+  ok: boolean;
+  // Field yang benar-benar diubah, atau alasan gagal/dilewati.
+  message: string;
+};
+
+/**
+ * Ganti PIC dan/atau Penerima banyak Item Transfer sekaligus. Hanya kolom
+ * orang (pic, uid_pic, uid_receiver) yang disentuh: stok, item, dan jalur
+ * approval tidak berubah, jadi approval TIDAK diulang. Penerima IT yang sudah
+ * selesai (barang dikonfirmasi diterima) dilewati -- sama dengan aturan
+ * Moderator Edit. Setiap IT yang berubah dicatat di moderator_edit_logs.
+ */
+export async function bulkUpdateItemTransferPeople(
+  itIds: number[],
+  payload: { uid_pic?: string | null; uid_receiver?: string | null; reason?: string },
+): Promise<{ error: string } | { success: true; results: BulkItemTransferPeopleResult[] }> {
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { error: "Session expired." };
+
+  const { data: roleRows } = await supabase
+    .from("user_roles")
+    .select("roles(name)")
+    .eq("user_id", user.id);
+  const isModerator = (roleRows || []).some((r: any) => r?.roles?.name === "moderator");
+  if (!isModerator) return { error: "Hanya moderator yang dapat mengedit Item Transfer secara massal." };
+
+  const ids = Array.from(new Set((itIds || []).map(Number).filter((n) => Number.isInteger(n) && n > 0)));
+  if (ids.length === 0) return { error: "Pilih minimal satu Item Transfer." };
+  if (ids.length > 500) return { error: "Maksimal 500 Item Transfer per edit massal." };
+
+  const setPic = payload.uid_pic !== undefined;
+  const setReceiver = payload.uid_receiver !== undefined;
+  if (!setPic && !setReceiver) return { error: "Pilih PIC dan/atau Penerima yang ingin diubah." };
+
+  // Validasi user tujuan: harus ada & aktif.
+  const targetUids = [setPic ? payload.uid_pic : null, setReceiver ? payload.uid_receiver : null].filter(
+    Boolean,
+  ) as string[];
+  const { data: targetProfiles } =
+    targetUids.length > 0
+      ? await supabase.from("profiles").select("id, nama, is_active").in("id", targetUids)
+      : { data: [] as any[] };
+  const profileById = new Map((targetProfiles || []).map((p: any) => [p.id, p]));
+  for (const uid of targetUids) {
+    const p = profileById.get(uid);
+    if (!p) return { error: "User yang dipilih tidak ditemukan." };
+    if (p.is_active === false) return { error: `User ${p.nama} sudah tidak aktif.` };
+  }
+  const picName = setPic && payload.uid_pic ? profileById.get(payload.uid_pic)?.nama ?? null : null;
+
+  const { data: rows, error: fetchErr } = await supabase
+    .from("item_transfers")
+    .select("id, it_kode, status, pic, uid_pic, uid_receiver")
+    .in("id", ids);
+  if (fetchErr) return { error: fetchErr.message };
+
+  const { data: myProfile } = await supabase
+    .from("profiles")
+    .select("nama")
+    .eq("id", user.id)
+    .single();
+  const reason = payload.reason?.trim() || "";
+
+  const byId = new Map((rows || []).map((r: any) => [r.id, r]));
+  const results: BulkItemTransferPeopleResult[] = [];
+  const logs: any[] = [];
+
+  for (const id of ids) {
+    const it = byId.get(id);
+    if (!it) {
+      results.push({ id, it_kode: `#${id}`, ok: false, message: "Item Transfer tidak ditemukan." });
+      continue;
+    }
+    const patch: Record<string, any> = {};
+    const notes: string[] = [];
+    if (setPic && (it.uid_pic ?? null) !== (payload.uid_pic ?? null)) {
+      patch.uid_pic = payload.uid_pic ?? null;
+      patch.pic = picName;
+    }
+    if (setReceiver && (it.uid_receiver ?? null) !== (payload.uid_receiver ?? null)) {
+      if (it.status === "completed") notes.push("Penerima dilewati: barang sudah diterima");
+      else patch.uid_receiver = payload.uid_receiver ?? null;
+    }
+
+    if (Object.keys(patch).length === 0) {
+      results.push({
+        id,
+        it_kode: it.it_kode,
+        ok: notes.length === 0,
+        message: notes.length > 0 ? notes.join("; ") : "Tidak ada perubahan (sudah sama)",
+      });
+      continue;
+    }
+
+    const { error: updErr } = await supabase
+      .from("item_transfers")
+      .update({ ...patch, updated_at: new Date().toISOString() })
+      .eq("id", id);
+    if (updErr) {
+      results.push({ id, it_kode: it.it_kode, ok: false, message: updErr.message });
+      continue;
+    }
+
+    const changed = [
+      "uid_pic" in patch ? "PIC" : null,
+      "uid_receiver" in patch ? "penerima" : null,
+    ].filter(Boolean) as string[];
+    results.push({
+      id,
+      it_kode: it.it_kode,
+      ok: true,
+      message: [`${changed.join(" & ")} diubah`, ...notes].join("; "),
+    });
+    const before = Object.fromEntries(Object.keys(patch).map((k) => [k, it[k] ?? null]));
+    logs.push({
+      doc_type: "item_transfer",
+      doc_id: id,
+      user_id: user.id,
+      user_nama: myProfile?.nama || user.email,
+      summary: `Edit massal: ${changed.join("/")}` + (reason ? `. Alasan: ${reason}` : ""),
+      changes: { reason: reason || null, bulk: true, before, after: patch },
+    });
+  }
+
+  if (logs.length > 0) {
+    const { error: logErr } = await supabase.from("moderator_edit_logs").insert(logs);
+    if (logErr) console.error("bulkUpdateItemTransferPeople log:", logErr.message);
+  }
+
+  revalidatePath("/item-transfer");
+  return { success: true, results };
+}

@@ -57,6 +57,7 @@ import {
   ArrowRight,
   Calendar as CalendarIcon,
   Eye,
+  Pencil,
   Trash2,
   X,
 } from "lucide-react";
@@ -68,6 +69,7 @@ import {
   BulkDeleteItemTransferDialog,
   type BulkDeleteItemTransferRow,
 } from "@/components/item-transfer/bulk-delete-item-transfer-dialog";
+import { BulkEditItemTransferDialog } from "@/components/item-transfer/bulk-edit-item-transfer-dialog";
 import { formatDate } from "@/lib/utils";
 import { summarizeApprovals } from "@/lib/approval-progress";
 import {
@@ -160,7 +162,7 @@ export default function ItemTransferPage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [exporting, setExporting] = useState(false);
 
-  // Hapus massal (moderator). Pilihan bertahan saat ganti halaman, direset
+  // Edit & hapus massal (moderator). Pilihan bertahan saat ganti halaman, direset
   // saat filter/pencarian berubah supaya tidak ada IT tersembunyi ikut terhapus.
   const profile = useAuthStore((s) => s.profile);
   const isModerator = (profile?.roles || []).some((r: any) => r?.name === "moderator");
@@ -182,6 +184,7 @@ export default function ItemTransferPage() {
     setSelectedRows({});
   }
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
   const selectedList = Object.values(selectedRows);
   const pageAllSelected = rows.length > 0 && rows.every((r) => selectedRows[r.id]);
 
@@ -688,7 +691,7 @@ export default function ItemTransferPage() {
 
       <Content>
         {isModerator && selectedList.length > 0 && (
-          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-destructive/20 bg-destructive/5 px-3 py-2">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
             <span className="text-xs font-bold text-foreground">
               {selectedList.length} Item Transfer dipilih
             </span>
@@ -700,6 +703,13 @@ export default function ItemTransferPage() {
                 onClick={() => setSelectedRows({})}
               >
                 <X className="h-3.5 w-3.5" /> Batal Pilih
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-bold"
+                onClick={() => setBulkEditOpen(true)}
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit Terpilih
               </Button>
               <Button
                 variant="destructive"
@@ -822,6 +832,15 @@ export default function ItemTransferPage() {
         onOpenChange={setDetailOpen}
         onUpdate={fetchData}
       />
+
+      {isModerator && bulkEditOpen && (
+        <BulkEditItemTransferDialog
+          open={bulkEditOpen}
+          onOpenChange={setBulkEditOpen}
+          rows={selectedList}
+          onFinished={fetchData}
+        />
+      )}
 
       {isModerator && bulkDeleteOpen && (
         <BulkDeleteItemTransferDialog

@@ -2,6 +2,7 @@
 
 import { Fragment, useEffect, useState } from "react";
 import {
+  MapPin,
   Plus,
   Printer,
   ShieldAlert,
@@ -23,12 +24,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   type ActiveFilter,
   FilterField,
+  FilterFields,
   FilterPanel,
   FilterRange,
   FilterRangeFields,
+  filterOptionLabel,
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
 import { RowActionsMenu } from "@/components/row-actions-menu";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -89,6 +93,17 @@ export default function SpbPoPage() {
   const dateTo = urlState.get("sampai");
   const setDateTo = (v: string) =>
     urlState.set({ sampai: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
+  const [availableCabang, setAvailableCabang] = useState<
+    { id: number; nama_cabang: string }[]
+  >([]);
   const sort = urlState.get("sort", "created_at_desc");
   const setSort = (v: string) =>
     urlState.set({ sort: v === "created_at_desc" ? "" : v });
@@ -113,6 +128,9 @@ export default function SpbPoPage() {
       search: debouncedSearch || undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
+      cabangIds:
+        locationFilters.length > 0 ? locationFilters.map(Number) : undefined,
+      barang: barangFilter || undefined,
       sort,
       page,
       limit,
@@ -130,15 +148,59 @@ export default function SpbPoPage() {
 
   useEffect(() => {
     fetchList();
-  }, [debouncedSearch, dateFrom, dateTo, sort, page, limit]);
+  }, [
+    debouncedSearch,
+    dateFrom,
+    dateTo,
+    locationFilters,
+    barangFilter,
+    sort,
+    page,
+    limit,
+  ]);
+
+  useEffect(() => {
+    supabase
+      .from("cabang")
+      .select("id, nama_cabang")
+      .eq("is_active", true)
+      .order("nama_cabang")
+      .then(({ data }) => setAvailableCabang(data || []));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const resetFilters = () => {
     resetSearch();
+    resetBarangInput();
     urlState.reset();
   };
 
+  const locationOptions = availableCabang.map((c) => ({
+    label: c.nama_cabang,
+    value: c.id.toString(),
+  }));
+
   // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
   const activeFilters: ActiveFilter[] = [];
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Lokasi",
+      value: locationFilters
+        .map((v) => filterOptionLabel(locationOptions, v))
+        .join(", "),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
+    });
   if (dateFrom || dateTo)
     activeFilters.push({
       key: "tanggal",
@@ -270,6 +332,26 @@ export default function SpbPoPage() {
           />
 
           <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Lokasi">
+                <MultiSelect
+                  placeholder="Semua Lokasi"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+            </FilterFields>
             <FilterRangeFields>
               <FilterField label="SO Date">
                 <FilterRange

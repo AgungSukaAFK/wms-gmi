@@ -18,6 +18,7 @@ import {
   ArrowRight,
   Trash2,
   Eye,
+  MapPin,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
@@ -32,6 +33,7 @@ import {
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { Input } from "@/components/ui/input";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
@@ -92,6 +94,8 @@ type IkColumnId = (typeof IK_COLUMNS)[number]["id"];
 const getIkSortValue = (ik: any, key: string) =>
   key === "so_no" ? ik.so?.so_no : ik[key];
 
+type PartLike = { part_number?: string | null; part_name?: string | null };
+
 export default function ConsignmentIkPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -109,6 +113,17 @@ export default function ConsignmentIkPage() {
   const asalFilters = urlState.list("asal");
   const setAsalFilters = (v: string[]) =>
     urlState.set({ asal: v }, { resetPage: true });
+  const asalGudangFilters = urlState.list("gudang");
+  const setAsalGudangFilters = (v: string[]) =>
+    urlState.set({ gudang: v }, { resetPage: true });
+  const tujuanFilters = urlState.list("tujuan");
+  const setTujuanFilters = (v: string[]) =>
+    urlState.set({ tujuan: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -168,8 +183,43 @@ export default function ConsignmentIkPage() {
     const tanggal = (ik.ik_tanggal || "").slice(0, 10);
     const matchTanggal =
       (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
-    return matchSearch && matchAsal && matchTanggal;
+    const matchGudang =
+      asalGudangFilters.length === 0 ||
+      asalGudangFilters.includes(String(ik.dari_cabang_id ?? ""));
+    const matchTujuan =
+      tujuanFilters.length === 0 || tujuanFilters.includes(tujuanIk(ik));
+    const b = barangFilter.toLowerCase();
+    const matchBarang =
+      !b ||
+      (ik.consignment_ik_items || []).some(
+        (i: PartLike | undefined) =>
+          i?.part_number?.toLowerCase().includes(b) ||
+          i?.part_name?.toLowerCase().includes(b),
+      );
+    return (
+      matchSearch &&
+      matchAsal &&
+      matchTanggal &&
+      matchGudang &&
+      matchTujuan &&
+      matchBarang
+    );
   });
+
+  // Opsi gudang asal & tujuan diambil dari data yang sudah dimuat.
+  const asalGudangOptions = [
+    ...new Map(
+      iks
+        .filter((ik) => ik.dari_cabang_id != null && ik.cabang_asal?.nama_cabang)
+        .map((ik) => [String(ik.dari_cabang_id), ik.cabang_asal.nama_cabang as string]),
+    ),
+  ]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const tujuanOptions = [...new Set(iks.map(tujuanIk))]
+    .filter((t) => t !== "-")
+    .sort((a, b) => a.localeCompare(b))
+    .map((t) => ({ value: t, label: t }));
 
   const sorted = sortRows(filtered, sortOrder, getIkSortValue);
   const totalCount = sorted.length;
@@ -194,6 +244,7 @@ export default function ConsignmentIkPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -209,6 +260,30 @@ export default function ConsignmentIkPage() {
       label: "Asal Data",
       value: optionLabels(ASAL_OPTIONS, asalFilters),
       onRemove: () => setAsalFilters([]),
+    });
+  if (asalGudangFilters.length > 0)
+    activeFilters.push({
+      key: "gudang",
+      label: "Gudang Asal",
+      value: optionLabels(asalGudangOptions, asalGudangFilters),
+      onRemove: () => setAsalGudangFilters([]),
+    });
+  if (tujuanFilters.length > 0)
+    activeFilters.push({
+      key: "tujuan",
+      label: "Tujuan",
+      value: tujuanFilters.join(", "),
+      onRemove: () => setTujuanFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
     });
   if (dateFrom || dateTo)
     activeFilters.push({
@@ -309,6 +384,33 @@ export default function ConsignmentIkPage() {
                   selected={asalFilters}
                   onChange={setAsalFilters}
                   options={ASAL_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Gudang Asal">
+                <MultiSelect
+                  placeholder="Semua Gudang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={asalGudangFilters}
+                  onChange={setAsalGudangFilters}
+                  options={asalGudangOptions}
+                />
+              </FilterField>
+              <FilterField label="Tujuan (Site)">
+                <MultiSelect
+                  placeholder="Semua Tujuan"
+                  searchable
+                  selected={tujuanFilters}
+                  onChange={setTujuanFilters}
+                  options={tujuanOptions}
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
                 />
               </FilterField>
             </FilterFields>

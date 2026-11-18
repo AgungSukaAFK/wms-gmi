@@ -35,6 +35,7 @@ import {
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { Input } from "@/components/ui/input";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
@@ -98,6 +99,8 @@ const getPenerimaanSortValue = (r: any, key: string) => {
   return r[key];
 };
 
+type PartLike = { part_number?: string | null; part_name?: string | null };
+
 export default function ConsignmentPenerimaanPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -115,6 +118,14 @@ export default function ConsignmentPenerimaanPage() {
   const statusFilters = urlState.list("status");
   const setStatusFilters = (v: string[]) =>
     urlState.set({ status: v }, { resetPage: true });
+  const customerFilters = urlState.list("customer");
+  const setCustomerFilters = (v: string[]) =>
+    urlState.set({ customer: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -183,8 +194,32 @@ export default function ConsignmentPenerimaanPage() {
     const tanggal = (r.tanggal_terima || "").slice(0, 10);
     const matchTanggal =
       (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
-    return matchSearch && matchStatus && matchTanggal;
+    const matchCustomer =
+      customerFilters.length === 0 ||
+      customerFilters.includes(String(r.customer_id ?? ""));
+    const b = barangFilter.toLowerCase();
+    const matchBarang =
+      !b ||
+      (r.consignment_penerimaan_items || []).some(
+        (i: PartLike | undefined) =>
+          i?.part_number?.toLowerCase().includes(b) ||
+          i?.part_name?.toLowerCase().includes(b),
+      );
+    return (
+      matchSearch && matchStatus && matchTanggal && matchCustomer && matchBarang
+    );
   });
+
+  // Opsi customer diambil dari data yang sudah dimuat.
+  const customerOptions = [
+    ...new Map(
+      rows
+        .filter((r) => r.customer_id != null && r.customer?.customer_name)
+        .map((r) => [String(r.customer_id), r.customer.customer_name as string]),
+    ),
+  ]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   const sorted = sortRows(filtered, sortOrder, getPenerimaanSortValue);
   const totalCount = sorted.length;
@@ -237,6 +272,7 @@ export default function ConsignmentPenerimaanPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -246,6 +282,23 @@ export default function ConsignmentPenerimaanPage() {
     values: string[],
   ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
   const activeFilters: ActiveFilter[] = [];
+  if (customerFilters.length > 0)
+    activeFilters.push({
+      key: "customer",
+      label: "Customer",
+      value: optionLabels(customerOptions, customerFilters),
+      onRemove: () => setCustomerFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
+    });
   if (statusFilters.length > 0)
     activeFilters.push({
       key: "status",
@@ -351,6 +404,23 @@ export default function ConsignmentPenerimaanPage() {
                   selected={statusFilters}
                   onChange={setStatusFilters}
                   options={STATUS_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Customer">
+                <MultiSelect
+                  placeholder="Semua Customer"
+                  searchable
+                  selected={customerFilters}
+                  onChange={setCustomerFilters}
+                  options={customerOptions}
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
                 />
               </FilterField>
             </FilterFields>

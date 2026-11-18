@@ -6,6 +6,25 @@ import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   ColumnOrderReset,
   ReorderableHeaderRow,
   ReorderableTableHead,
@@ -51,6 +70,11 @@ const STATUS_FILTERS: { value: JcProgressStatus | "outstanding" | "all"; label: 
   { value: "all", label: "Semua" },
 ];
 
+const LINK_PR_LABEL: Record<string, string> = {
+  ada: "Sudah ada link PR",
+  belum: "Belum ada link PR",
+};
+
 // Harus sama dengan kolom yang dicari di query.
 const NON_PR_SEARCH_FIELDS = ["Part Number", "Nama Barang"];
 
@@ -84,7 +108,7 @@ export default function PoNonPrListPage() {
   // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
   const urlState = useUrlListState();
   const debouncedSearch = urlState.get("search");
-  const [searchQuery, setSearchQuery] = useUrlSearchInput(
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
     debouncedSearch,
     (value) => urlState.set({ search: value }, { resetPage: true }),
   );
@@ -93,6 +117,20 @@ export default function PoNonPrListPage() {
     STATUS_FILTERS.find((f) => f.value === statusParam)?.value ?? "outstanding";
   const setStatusFilter = (v: string) =>
     urlState.set({ status: v === "outstanding" ? "" : v }, { resetPage: true });
+  const poFilter = urlState.get("po");
+  const [poInput, setPoInput, resetPoInput] = useUrlSearchInput(
+    poFilter,
+    (value) => urlState.set({ po: value }, { resetPage: true }),
+  );
+  const linkPrFilter = urlState.get("link_pr");
+  const setLinkPrFilter = (v: string) =>
+    urlState.set({ link_pr: v === "all" ? "" : v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
   const sortOrder = urlState.get("sort", "");
   const setSortOrder = (v: string) => urlState.set({ sort: v });
   const page = urlState.getNumber("page", 1);
@@ -145,6 +183,14 @@ export default function PoNonPrListPage() {
   );
 
   const filtered = enriched.filter((r) => {
+    const po = poFilter.toLowerCase();
+    if (po && !r.po?.po_kode?.toLowerCase().includes(po)) return false;
+    const tanggal = (r.po?.po_tanggal || "").slice(0, 10);
+    if (dateFrom && tanggal < dateFrom) return false;
+    if (dateTo && tanggal > dateTo) return false;
+    const hasLink = (r.po_item_pr_links?.length || 0) > 0;
+    if (linkPrFilter === "ada" && !hasLink) return false;
+    if (linkPrFilter === "belum" && hasLink) return false;
     if (statusFilter === "all") return true;
     if (statusFilter === "outstanding")
       return r.status === "belum_jc" || r.status === "partial";
@@ -164,6 +210,43 @@ export default function PoNonPrListPage() {
     setSortOrder(nextSort);
     setPage(1);
   };
+
+  // Tab status di atas tidak ikut di-reset: itu tampilan utama halaman ini.
+  const resetFilters = () => {
+    resetSearchQuery();
+    resetPoInput();
+    urlState.set(
+      { search: "", po: "", link_pr: "", dari: "", sampai: "" },
+      { resetPage: true },
+    );
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (poFilter)
+    activeFilters.push({
+      key: "po",
+      label: "No. PO",
+      value: poFilter,
+      onRemove: () => {
+        resetPoInput();
+        urlState.set({ po: "" }, { resetPage: true });
+      },
+    });
+  if (LINK_PR_LABEL[linkPrFilter])
+    activeFilters.push({
+      key: "link_pr",
+      label: "Link PR",
+      value: LINK_PR_LABEL[linkPrFilter],
+      onRemove: () => setLinkPrFilter("all"),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tanggal PO",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
 
   // Satu sel per id kolom; urutannya diatur useColumnOrder.
   const renderCell = (r: any, id: NonPrColumnId) => {
@@ -280,6 +363,56 @@ export default function PoNonPrListPage() {
             onChange={setSearchQuery}
             searchableFields={NON_PR_SEARCH_FIELDS}
           />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="No. PO">
+                <Input
+                  placeholder="Kode PO"
+                  value={poInput}
+                  onChange={(e) => setPoInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+              <FilterField label="Link PR">
+                <Select value={linkPrFilter || "all"} onValueChange={setLinkPrFilter}>
+                  <SelectTrigger className="h-9 text-xs font-medium">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">Semua</SelectItem>
+                    {Object.entries(LINK_PR_LABEL).map(([value, label]) => (
+                      <SelectItem key={value} value={value}>
+                        {label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FilterField>
+            </FilterFields>
+            <FilterRangeFields>
+              <FilterField label="Tanggal PO">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 

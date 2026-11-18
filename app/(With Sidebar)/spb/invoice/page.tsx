@@ -5,6 +5,7 @@ import {
   BadgeDollarSign,
   Check,
   ChevronsUpDown,
+  MapPin,
   Plus,
   Printer,
   ShieldAlert,
@@ -28,12 +29,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   type ActiveFilter,
   FilterField,
+  FilterFields,
   FilterPanel,
   FilterRange,
   FilterRangeFields,
+  filterOptionLabel,
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
 import { RowActionsMenu } from "@/components/row-actions-menu";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -137,6 +141,17 @@ const SPB_INVOICE_COLUMNS = [
 ] as const satisfies readonly ReorderableColumn[];
 type SpbInvoiceColumnId = (typeof SPB_INVOICE_COLUMNS)[number]["id"];
 
+const APPROVAL_STATUS_OPTIONS = [
+  { label: "Open", value: "open" },
+  { label: "Completed", value: "completed" },
+  { label: "Rejected", value: "rejected" },
+];
+
+const PAYMENT_STATUS_OPTIONS = [
+  { label: "Paid", value: "paid" },
+  { label: "Unpaid", value: "unpaid" },
+];
+
 export default function SpbInvoicePage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -156,6 +171,24 @@ export default function SpbInvoicePage() {
   const dateTo = urlState.get("sampai");
   const setDateTo = (v: string) =>
     urlState.set({ sampai: v }, { resetPage: true });
+  const emailFrom = urlState.get("email_dari");
+  const setEmailFrom = (v: string) =>
+    urlState.set({ email_dari: v }, { resetPage: true });
+  const emailTo = urlState.get("email_sampai");
+  const setEmailTo = (v: string) =>
+    urlState.set({ email_sampai: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const approvalFilters = urlState.list("approval");
+  const setApprovalFilters = (v: string[]) =>
+    urlState.set({ approval: v }, { resetPage: true });
+  const paymentFilters = urlState.list("payment");
+  const setPaymentFilters = (v: string[]) =>
+    urlState.set({ payment: v }, { resetPage: true });
+  const [availableCabang, setAvailableCabang] = useState<
+    { id: number; nama_cabang: string }[]
+  >([]);
   const sort = urlState.get("sort", "created_at_desc");
   const setSort = (v: string) =>
     urlState.set({ sort: v === "created_at_desc" ? "" : v });
@@ -206,6 +239,12 @@ export default function SpbInvoicePage() {
       search: debouncedSearch || undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
+      emailFrom: emailFrom || undefined,
+      emailTo: emailTo || undefined,
+      cabangIds:
+        locationFilters.length > 0 ? locationFilters.map(Number) : undefined,
+      approvalStatus: approvalFilters.length > 0 ? approvalFilters : undefined,
+      paymentStatus: paymentFilters.length > 0 ? paymentFilters : undefined,
       sort,
       page,
       limit,
@@ -232,15 +271,75 @@ export default function SpbInvoicePage() {
 
   useEffect(() => {
     fetchList();
-  }, [debouncedSearch, dateFrom, dateTo, sort, page, limit]);
+  }, [
+    debouncedSearch,
+    dateFrom,
+    dateTo,
+    emailFrom,
+    emailTo,
+    locationFilters,
+    approvalFilters,
+    paymentFilters,
+    sort,
+    page,
+    limit,
+  ]);
+
+  useEffect(() => {
+    supabase
+      .from("cabang")
+      .select("id, nama_cabang")
+      .eq("is_active", true)
+      .order("nama_cabang")
+      .then(({ data }) => setAvailableCabang(data || []));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const resetFilters = () => {
     resetSearch();
     urlState.reset();
   };
 
+  const locationOptions = availableCabang.map((c) => ({
+    label: c.nama_cabang,
+    value: c.id.toString(),
+  }));
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+
   // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
   const activeFilters: ActiveFilter[] = [];
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Lokasi",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (approvalFilters.length > 0)
+    activeFilters.push({
+      key: "approval",
+      label: "Approval",
+      value: optionLabels(APPROVAL_STATUS_OPTIONS, approvalFilters),
+      onRemove: () => setApprovalFilters([]),
+    });
+  if (paymentFilters.length > 0)
+    activeFilters.push({
+      key: "payment",
+      label: "Payment",
+      value: optionLabels(PAYMENT_STATUS_OPTIONS, paymentFilters),
+      onRemove: () => setPaymentFilters([]),
+    });
+  if (emailFrom || emailTo)
+    activeFilters.push({
+      key: "email",
+      label: "Tgl Email",
+      value: formatFilterRange(emailFrom, emailTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ email_dari: "", email_sampai: "" }, { resetPage: true }),
+    });
   if (dateFrom || dateTo)
     activeFilters.push({
       key: "tanggal",
@@ -519,6 +618,34 @@ export default function SpbInvoicePage() {
           />
 
           <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Lokasi">
+                <MultiSelect
+                  placeholder="Semua Lokasi"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Approval">
+                <MultiSelect
+                  placeholder="Semua Approval"
+                  selected={approvalFilters}
+                  onChange={setApprovalFilters}
+                  options={APPROVAL_STATUS_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Status Payment">
+                <MultiSelect
+                  placeholder="Semua"
+                  selected={paymentFilters}
+                  onChange={setPaymentFilters}
+                  options={PAYMENT_STATUS_OPTIONS}
+                />
+              </FilterField>
+            </FilterFields>
             <FilterRangeFields>
               <FilterField label="Tanggal Invoice">
                 <FilterRange
@@ -534,6 +661,26 @@ export default function SpbInvoicePage() {
                     <DatePickerString
                       value={dateTo}
                       onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+              <FilterField label="Tanggal Email ke Site">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={emailFrom}
+                      onChange={setEmailFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={emailTo}
+                      onChange={setEmailTo}
                       placeholder="Sampai"
                       className="h-9 w-full text-xs font-medium"
                     />

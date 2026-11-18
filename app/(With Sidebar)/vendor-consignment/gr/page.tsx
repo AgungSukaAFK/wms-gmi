@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Loader2, PackageCheck, Eye, Trash2, Printer, CheckCircle2 } from "lucide-react";
+import { Plus, Loader2, PackageCheck, Eye, Trash2, Printer, CheckCircle2, MapPin } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
@@ -14,9 +14,11 @@ import {
   FilterPanel,
   FilterRange,
   FilterRangeFields,
+  filterOptionLabel,
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { MultiSelect } from "@/components/ui/multi-select";
 import { DatePickerString } from "@/components/date-picker-string";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
@@ -73,6 +75,13 @@ import {
 // Harus sama dengan kolom yang dicari di `filtered`.
 const GR_SEARCH_FIELDS = ["Kode GR", "Surat Jalan", "Kode PR", "Vendor"];
 
+const KOMPLAIN_LABELS: Record<string, string> = {
+  open: "Belum selesai",
+  any: "Ada komplain",
+  resolved: "Komplain selesai",
+  none: "Tanpa komplain",
+};
+
 const GR_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
 // Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getGrSortValue.
@@ -94,6 +103,8 @@ const getGrSortValue = (gr: any, key: string) => {
   return gr[key];
 };
 
+type PartLike = { part_number?: string | null; part_name?: string | null };
+
 export default function ConsignmentGrPage() {
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
@@ -110,6 +121,17 @@ export default function ConsignmentGrPage() {
   const komplainFilter = urlState.get("komplain", "all");
   const setKomplainFilter = (v: string) =>
     urlState.set({ komplain: v === "all" ? "" : v }, { resetPage: true });
+  const vendorFilters = urlState.list("vendor");
+  const setVendorFilters = (v: string[]) =>
+    urlState.set({ vendor: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -159,8 +181,38 @@ export default function ConsignmentGrPage() {
   const hasOpenComplaint = (gr: any) =>
     (gr.vendor_consignment_gr_items || []).some((i: any) => i.resolution_status === "open");
 
+  const hasComplaint = (gr: { vendor_consignment_gr_items?: { status: string }[] }) =>
+    (gr.vendor_consignment_gr_items || []).some((i) => i.status === "komplain");
+
   const filtered = rows.filter((gr) => {
     if (komplainFilter === "open" && !hasOpenComplaint(gr)) return false;
+    if (komplainFilter === "any" && !hasComplaint(gr)) return false;
+    if (
+      komplainFilter === "resolved" &&
+      (!hasComplaint(gr) || hasOpenComplaint(gr))
+    )
+      return false;
+    if (komplainFilter === "none" && hasComplaint(gr)) return false;
+    if (
+      vendorFilters.length > 0 &&
+      !vendorFilters.includes(String(gr.vendor_id ?? ""))
+    )
+      return false;
+    if (
+      locationFilters.length > 0 &&
+      !locationFilters.includes(String(gr.cabang_id ?? ""))
+    )
+      return false;
+    const b = barangFilter.toLowerCase();
+    if (
+      b &&
+      !(gr.vendor_consignment_gr_items || []).some(
+        (i: PartLike | undefined) =>
+          i?.part_number?.toLowerCase().includes(b) ||
+          i?.part_name?.toLowerCase().includes(b),
+      )
+    )
+      return false;
     const tanggal = (gr.gr_tanggal || "").slice(0, 10);
     if (dateFrom && tanggal < dateFrom) return false;
     if (dateTo && tanggal > dateTo) return false;
@@ -211,17 +263,60 @@ export default function ConsignmentGrPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
+  // Opsi vendor & gudang diambil dari data yang sudah dimuat.
+  const uniqueOptions = (pick: (gr: (typeof rows)[number]) => [unknown, unknown]) => {
+    const map = new Map<string, string>();
+    for (const gr of rows) {
+      const [id, name] = pick(gr);
+      if (id != null && name) map.set(String(id), String(name));
+    }
+    return [...map]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  };
+  const vendorOptions = uniqueOptions((gr) => [gr.vendor_id, gr.vendors?.vendor_name]);
+  const locationOptions = uniqueOptions((gr) => [gr.cabang_id, gr.cabang?.nama_cabang]);
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+
   // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
   const activeFilters: ActiveFilter[] = [];
-  if (komplainFilter === "open")
+  if (KOMPLAIN_LABELS[komplainFilter])
     activeFilters.push({
       key: "komplain",
       label: "Komplain",
-      value: "Belum selesai",
+      value: KOMPLAIN_LABELS[komplainFilter],
       onRemove: () => setKomplainFilter("all"),
+    });
+  if (vendorFilters.length > 0)
+    activeFilters.push({
+      key: "vendor",
+      label: "Vendor",
+      value: optionLabels(vendorOptions, vendorFilters),
+      onRemove: () => setVendorFilters([]),
+    });
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Gudang",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
     });
   if (dateFrom || dateTo)
     activeFilters.push({
@@ -329,8 +424,38 @@ export default function ConsignmentGrPage() {
                   <SelectContent>
                     <SelectItem value="all">Semua GR</SelectItem>
                     <SelectItem value="open">Komplain belum selesai</SelectItem>
+                    <SelectItem value="any">Ada komplain</SelectItem>
+                    <SelectItem value="resolved">Komplain sudah selesai</SelectItem>
+                    <SelectItem value="none">Tanpa komplain</SelectItem>
                   </SelectContent>
                 </Select>
+              </FilterField>
+              <FilterField label="Vendor">
+                <MultiSelect
+                  placeholder="Semua Vendor"
+                  searchable
+                  selected={vendorFilters}
+                  onChange={setVendorFilters}
+                  options={vendorOptions}
+                />
+              </FilterField>
+              <FilterField label="Gudang">
+                <MultiSelect
+                  placeholder="Semua Gudang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
               </FilterField>
             </FilterFields>
 

@@ -239,6 +239,14 @@ const DASHBOARD_SORT_COLUMNS: Record<string, string> = {
  */
 export async function getConsignmentDashboardReport(params?: {
   search?: string;
+  /** Nama / kode customer. */
+  customer?: string;
+  /** "belum" (belum ada IK), "Partial", "Full". */
+  kirimStatus?: string[];
+  dateFrom?: string;
+  dateTo?: string;
+  dueFrom?: string;
+  dueTo?: string;
   page?: number;
   limit?: number;
   sort?: string;
@@ -268,6 +276,24 @@ export async function getConsignmentDashboardReport(params?: {
       `so_no.ilike.${orIlikePattern(params.search)},no_po.ilike.${orIlikePattern(params.search)},site.ilike.${orIlikePattern(params.search)},part_number.ilike.${orIlikePattern(params.search)},part_name.ilike.${orIlikePattern(params.search)},part_number_customer.ilike.${orIlikePattern(params.search)}`,
     );
   }
+
+  if (params?.customer) {
+    const p = orIlikePattern(params.customer);
+    query = query.or(`customer_name.ilike.${p},customer_no.ilike.${p}`);
+  }
+  const kirim = params?.kirimStatus || [];
+  if (kirim.length > 0) {
+    const done = kirim.filter((k) => k === "Partial" || k === "Full");
+    const parts = [
+      ...(kirim.includes("belum") ? ["partial_full.is.null"] : []),
+      ...(done.length > 0 ? [`partial_full.in.(${done.join(",")})`] : []),
+    ];
+    if (parts.length > 0) query = query.or(parts.join(","));
+  }
+  if (params?.dateFrom) query = query.gte("so_tanggal_input", params.dateFrom);
+  if (params?.dateTo) query = query.lte("so_tanggal_input", params.dateTo);
+  if (params?.dueFrom) query = query.gte("due_date", params.dueFrom);
+  if (params?.dueTo) query = query.lte("due_date", params.dueTo);
 
   const { data, error, count } = await query.range(from, from + limit - 1);
   if (error) return { data: [], count: 0, error: error.message };

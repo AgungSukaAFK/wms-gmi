@@ -13,6 +13,7 @@ import {
   Undo2,
   ShoppingCart,
   Receipt,
+  MapPin,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
@@ -146,6 +147,18 @@ export default function RekonsilPage() {
   const statusFilters = urlState.list("status");
   const setStatusFilters = (v: string[]) =>
     urlState.set({ status: v }, { resetPage: true });
+  const vendorFilters = urlState.list("vendor");
+  const setVendorFilters = (v: string[]) =>
+    urlState.set({ vendor: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const periodeFrom = urlState.get("periode_dari");
+  const setPeriodeFrom = (v: string) =>
+    urlState.set({ periode_dari: v }, { resetPage: true });
+  const periodeTo = urlState.get("periode_sampai");
+  const setPeriodeTo = (v: string) =>
+    urlState.set({ periode_sampai: v }, { resetPage: true });
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -205,6 +218,21 @@ export default function RekonsilPage() {
     const tanggal = (rk.rk_tanggal || "").slice(0, 10);
     if (dateFrom && tanggal < dateFrom) return false;
     if (dateTo && tanggal > dateTo) return false;
+    if (
+      vendorFilters.length > 0 &&
+      !vendorFilters.includes(String(rk.vendor_id ?? ""))
+    )
+      return false;
+    if (
+      locationFilters.length > 0 &&
+      !locationFilters.includes(String(rk.cabang_id ?? ""))
+    )
+      return false;
+    // Periode rekonsil yang beririsan dengan rentang filter.
+    const awal = (rk.periode_awal || "").slice(0, 10);
+    const akhir = (rk.periode_akhir || awal).slice(0, 10);
+    if (periodeFrom && akhir < periodeFrom) return false;
+    if (periodeTo && awal > periodeTo) return false;
     const q = debouncedSearch.toLowerCase();
     if (!q) return true;
     return (
@@ -291,12 +319,48 @@ export default function RekonsilPage() {
     urlState.reset();
   };
 
+  // Opsi vendor & site diambil dari data yang sudah dimuat.
+  const uniqueOptions = (pick: (rk: (typeof rows)[number]) => [unknown, unknown]) => {
+    const map = new Map<string, string>();
+    for (const rk of rows) {
+      const [id, name] = pick(rk);
+      if (id != null && name) map.set(String(id), String(name));
+    }
+    return [...map]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  };
+  const vendorOptions = uniqueOptions((rk) => [rk.vendor_id, rk.vendors?.vendor_name]);
+  const locationOptions = uniqueOptions((rk) => [rk.cabang_id, rk.cabang?.nama_cabang]);
+
   // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
   const optionLabels = (
     options: { label: string; value: string }[],
     values: string[],
   ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
   const activeFilters: ActiveFilter[] = [];
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Site",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (vendorFilters.length > 0)
+    activeFilters.push({
+      key: "vendor",
+      label: "Vendor",
+      value: optionLabels(vendorOptions, vendorFilters),
+      onRemove: () => setVendorFilters([]),
+    });
+  if (periodeFrom || periodeTo)
+    activeFilters.push({
+      key: "periode",
+      label: "Periode",
+      value: formatFilterRange(periodeFrom, periodeTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ periode_dari: "", periode_sampai: "" }, { resetPage: true }),
+    });
   if (statusFilters.length > 0)
     activeFilters.push({
       key: "status",
@@ -421,6 +485,25 @@ export default function RekonsilPage() {
                   options={RK_STATUS_OPTIONS}
                 />
               </FilterField>
+              <FilterField label="Site">
+                <MultiSelect
+                  placeholder="Semua Site"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Vendor">
+                <MultiSelect
+                  placeholder="Semua Vendor"
+                  searchable
+                  selected={vendorFilters}
+                  onChange={setVendorFilters}
+                  options={vendorOptions}
+                />
+              </FilterField>
             </FilterFields>
 
             <FilterRangeFields>
@@ -438,6 +521,26 @@ export default function RekonsilPage() {
                     <DatePickerString
                       value={dateTo}
                       onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+              <FilterField label="Periode Rekonsil">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={periodeFrom}
+                      onChange={setPeriodeFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={periodeTo}
+                      onChange={setPeriodeTo}
                       placeholder="Sampai"
                       className="h-9 w-full text-xs font-medium"
                     />

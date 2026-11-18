@@ -716,7 +716,7 @@ export async function getWorkingOrderList() {
   const { data, error } = await supabase
     .from("working_orders")
     .select(
-      "*, mrs(mr_kode), cabang:gudang_cabang_id(nama_cabang), working_order_items(id)",
+      "*, mrs(mr_kode), cabang:gudang_cabang_id(nama_cabang), working_order_items(id, part_number, part_name)",
     )
     .order("created_at", { ascending: false });
   if (error) return { data: [], error: error.message };

@@ -107,6 +107,17 @@ export default function ConsignmentSoPage() {
     barangFilter,
     (value) => urlState.set({ barang: value }, { resetPage: true }),
   );
+  const customerFilter = urlState.get("customer");
+  const [customerInput, setCustomerInput, resetCustomerInput] =
+    useUrlSearchInput(customerFilter, (value) =>
+      urlState.set({ customer: value }, { resetPage: true }),
+    );
+  const dueFrom = urlState.get("due_dari");
+  const setDueFrom = (v: string) =>
+    urlState.set({ due_dari: v }, { resetPage: true });
+  const dueTo = urlState.get("due_sampai");
+  const setDueTo = (v: string) =>
+    urlState.set({ due_sampai: v }, { resetPage: true });
   const sortOrder = urlState.get("sort", "created_at_desc");
   const setSortOrder = (v: string) =>
     urlState.set({ sort: v === "created_at_desc" ? "" : v });
@@ -127,7 +138,7 @@ export default function ConsignmentSoPage() {
     let query = supabase
       .from("consignment_so")
       .select(
-        `*, customer:customers!customer_id(customer_name, customer_no), items:consignment_so_items(id)${barangEmbed}`,
+        `*, customer:customers!customer_id${customerFilter ? "!inner" : ""}(customer_name, customer_no), items:consignment_so_items(id)${barangEmbed}`,
         { count: "exact" },
       );
 
@@ -141,6 +152,14 @@ export default function ConsignmentSoPage() {
       query = query.eq("so_is_import", asalFilters[0] === "import");
     if (dateFrom) query = query.gte("so_tanggal_input", dateFrom);
     if (dateTo) query = query.lte("so_tanggal_input", dateTo);
+    if (dueFrom) query = query.gte("due_date", dueFrom);
+    if (dueTo) query = query.lte("due_date", dueTo);
+    if (customerFilter) {
+      query = query.or(
+        `customer_name.ilike.${orIlikePattern(customerFilter)},customer_no.ilike.${orIlikePattern(customerFilter)}`,
+        { referencedTable: "customer" },
+      );
+    }
 
     if (barangFilter) {
       query = query.or(
@@ -177,6 +196,9 @@ export default function ConsignmentSoPage() {
     dateFrom,
     dateTo,
     barangFilter,
+    customerFilter,
+    dueFrom,
+    dueTo,
     sortOrder,
     page,
     limit,
@@ -190,6 +212,7 @@ export default function ConsignmentSoPage() {
   const resetFilters = () => {
     resetSearchQuery();
     resetBarangInput();
+    resetCustomerInput();
     urlState.reset();
   };
 
@@ -212,6 +235,24 @@ export default function ConsignmentSoPage() {
       label: "Tanggal",
       value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
       onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+  if (customerFilter)
+    activeFilters.push({
+      key: "customer",
+      label: "Customer",
+      value: customerFilter,
+      onRemove: () => {
+        resetCustomerInput();
+        urlState.set({ customer: "" }, { resetPage: true });
+      },
+    });
+  if (dueFrom || dueTo)
+    activeFilters.push({
+      key: "due",
+      label: "Due Date",
+      value: formatFilterRange(dueFrom, dueTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ due_dari: "", due_sampai: "" }, { resetPage: true }),
     });
   if (barangFilter)
     activeFilters.push({
@@ -343,6 +384,15 @@ export default function ConsignmentSoPage() {
                   className="h-9 text-xs font-medium"
                 />
               </FilterField>
+
+              <FilterField label="Customer">
+                <Input
+                  placeholder="Nama / kode customer"
+                  value={customerInput}
+                  onChange={(e) => setCustomerInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
             </FilterFields>
 
             <FilterRangeFields>
@@ -360,6 +410,26 @@ export default function ConsignmentSoPage() {
                     <DatePickerString
                       value={dateTo}
                       onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+              <FilterField label="Due Date">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dueFrom}
+                      onChange={setDueFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dueTo}
+                      onChange={setDueTo}
                       placeholder="Sampai"
                       className="h-9 w-full text-xs font-medium"
                     />

@@ -115,6 +115,11 @@ export default function DoRegulerPage() {
     barangFilter,
     (value) => urlState.set({ barang: value }, { resetPage: true }),
   );
+  const customerFilter = urlState.get("customer");
+  const [customerInput, setCustomerInput, resetCustomerInput] =
+    useUrlSearchInput(customerFilter, (value) =>
+      urlState.set({ customer: value }, { resetPage: true }),
+    );
   const sortOrder = urlState.get("sort", "created_at_desc");
   const setSortOrder = (v: string) =>
     urlState.set({ sort: v === "created_at_desc" ? "" : v });
@@ -144,7 +149,7 @@ export default function DoRegulerPage() {
     let query = supabase
       .from("do_reguler")
       .select(
-        `*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id(customer_name), so:so_reguler!so_id(so_kode)${barangEmbed}`,
+        `*, dari:cabang!dari_cabang_id(nama_cabang), customer:customers!customer_id${customerFilter ? "!inner" : ""}(customer_name), so:so_reguler!so_id(so_kode)${barangEmbed}`,
         { count: "exact" },
       );
 
@@ -158,6 +163,12 @@ export default function DoRegulerPage() {
       query = query.in("dari_cabang_id", locationFilters);
     if (dateFrom) query = query.gte("do_tanggal", dateFrom);
     if (dateTo) query = query.lte("do_tanggal", dateTo);
+    if (customerFilter) {
+      query = query.or(
+        `customer_name.ilike.${orIlikePattern(customerFilter)},customer_no.ilike.${orIlikePattern(customerFilter)}`,
+        { referencedTable: "customer" },
+      );
+    }
 
     if (barangFilter) {
       query = query.or(
@@ -192,6 +203,7 @@ export default function DoRegulerPage() {
     dateFrom,
     dateTo,
     barangFilter,
+    customerFilter,
     sortOrder,
     page,
     limit,
@@ -205,6 +217,7 @@ export default function DoRegulerPage() {
   const resetFilters = () => {
     resetSearchQuery();
     resetBarangInput();
+    resetCustomerInput();
     urlState.reset();
   };
 
@@ -239,6 +252,16 @@ export default function DoRegulerPage() {
       label: "Tanggal",
       value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
       onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+  if (customerFilter)
+    activeFilters.push({
+      key: "customer",
+      label: "Customer",
+      value: customerFilter,
+      onRemove: () => {
+        resetCustomerInput();
+        urlState.set({ customer: "" }, { resetPage: true });
+      },
     });
   if (barangFilter)
     activeFilters.push({
@@ -369,6 +392,14 @@ export default function DoRegulerPage() {
                   placeholder="Part number / nama"
                   value={barangInput}
                   onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+              <FilterField label="Customer">
+                <Input
+                  placeholder="Nama / kode customer"
+                  value={customerInput}
+                  onChange={(e) => setCustomerInput(e.target.value)}
                   className="h-9 text-xs font-medium"
                 />
               </FilterField>

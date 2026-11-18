@@ -10,6 +10,20 @@ import {
 import { Content } from "@/components/content";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
+import { Input } from "@/components/ui/input";
+import {
   ColumnOrderReset,
   ReorderableHeaderRow,
   ReorderableTableHead,
@@ -216,6 +230,12 @@ const COLUMNS: Column[] = [
   { key: "durasi_kirim_gmi_do", label: "Tgl Kirim GMI - Tgl DO PO Out", render: DASH },
 ];
 
+const KIRIM_OPTIONS = [
+  { label: "Belum dikirim (IK)", value: "belum" },
+  { label: "Partial", value: "Partial" },
+  { label: "Full", value: "Full" },
+];
+
 // Harus sama dengan kolom yang dicari di getConsignmentDashboardReport.
 const DASHBOARD_SEARCH_FIELDS = [
   "No. SO",
@@ -247,9 +267,30 @@ export default function DashboardConsignmentPage() {
   );
   const urlState = useUrlListState();
   const debouncedSearch = urlState.get("search");
-  const [search, setSearch] = useUrlSearchInput(debouncedSearch, (value) =>
-    urlState.set({ search: value }, { resetPage: true }),
+  const [search, setSearch, resetSearch] = useUrlSearchInput(
+    debouncedSearch,
+    (value) => urlState.set({ search: value }, { resetPage: true }),
   );
+  const customerFilter = urlState.get("customer");
+  const [customerInput, setCustomerInput, resetCustomerInput] =
+    useUrlSearchInput(customerFilter, (value) =>
+      urlState.set({ customer: value }, { resetPage: true }),
+    );
+  const kirimFilters = urlState.list("kirim");
+  const setKirimFilters = (v: string[]) =>
+    urlState.set({ kirim: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
+  const dueFrom = urlState.get("due_dari");
+  const setDueFrom = (v: string) =>
+    urlState.set({ due_dari: v }, { resetPage: true });
+  const dueTo = urlState.get("due_sampai");
+  const setDueTo = (v: string) =>
+    urlState.set({ due_sampai: v }, { resetPage: true });
   const sort = urlState.get("sort", "so_tanggal_input_desc");
   const setSort = (v: string) =>
     urlState.set({ sort: v === "so_tanggal_input_desc" ? "" : v });
@@ -287,6 +328,12 @@ export default function DashboardConsignmentPage() {
     setLoading(true);
     const res = await getConsignmentDashboardReport({
       search: debouncedSearch || undefined,
+      customer: customerFilter || undefined,
+      kirimStatus: kirimFilters.length > 0 ? kirimFilters : undefined,
+      dateFrom: dateFrom || undefined,
+      dateTo: dateTo || undefined,
+      dueFrom: dueFrom || undefined,
+      dueTo: dueTo || undefined,
       sort,
       page,
       limit,
@@ -300,7 +347,18 @@ export default function DashboardConsignmentPage() {
       setTotal(res.count || 0);
     }
     setLoading(false);
-  }, [debouncedSearch, sort, page, limit]);
+  }, [
+    debouncedSearch,
+    customerFilter,
+    kirimFilters,
+    dateFrom,
+    dateTo,
+    dueFrom,
+    dueTo,
+    sort,
+    page,
+    limit,
+  ]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -311,6 +369,49 @@ export default function DashboardConsignmentPage() {
     setSort(nextSort);
     setPage(1);
   };
+
+  const resetFilters = () => {
+    resetSearch();
+    resetCustomerInput();
+    urlState.reset();
+  };
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (customerFilter)
+    activeFilters.push({
+      key: "customer",
+      label: "Customer",
+      value: customerFilter,
+      onRemove: () => {
+        resetCustomerInput();
+        urlState.set({ customer: "" }, { resetPage: true });
+      },
+    });
+  if (kirimFilters.length > 0)
+    activeFilters.push({
+      key: "kirim",
+      label: "Status Kirim",
+      value: kirimFilters
+        .map((v) => filterOptionLabel(KIRIM_OPTIONS, v))
+        .join(", "),
+      onRemove: () => setKirimFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Tgl Input SO",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+  if (dueFrom || dueTo)
+    activeFilters.push({
+      key: "due",
+      label: "Due Date",
+      value: formatFilterRange(dueFrom, dueTo, formatFilterDate),
+      onRemove: () =>
+        urlState.set({ due_dari: "", due_sampai: "" }, { resetPage: true }),
+    });
 
   return (
     <>
@@ -397,6 +498,72 @@ export default function DashboardConsignmentPage() {
               onChange={setSearch}
               searchableFields={DASHBOARD_SEARCH_FIELDS}
             />
+            <FilterPanel
+              activeFilters={activeFilters}
+              onReset={resetFilters}
+              className="mt-3"
+            >
+              <FilterFields>
+                <FilterField label="Customer">
+                  <Input
+                    placeholder="Nama / kode customer"
+                    value={customerInput}
+                    onChange={(e) => setCustomerInput(e.target.value)}
+                    className="h-9 text-xs font-medium"
+                  />
+                </FilterField>
+                <FilterField label="Status Kirim (IK)">
+                  <MultiSelect
+                    placeholder="Semua"
+                    selected={kirimFilters}
+                    onChange={setKirimFilters}
+                    options={KIRIM_OPTIONS}
+                  />
+                </FilterField>
+              </FilterFields>
+              <FilterRangeFields>
+                <FilterField label="Tgl Input SO">
+                  <FilterRange
+                    from={
+                      <DatePickerString
+                        value={dateFrom}
+                        onChange={setDateFrom}
+                        placeholder="Dari"
+                        className="h-9 w-full text-xs font-medium"
+                      />
+                    }
+                    to={
+                      <DatePickerString
+                        value={dateTo}
+                        onChange={setDateTo}
+                        placeholder="Sampai"
+                        className="h-9 w-full text-xs font-medium"
+                      />
+                    }
+                  />
+                </FilterField>
+                <FilterField label="Due Date">
+                  <FilterRange
+                    from={
+                      <DatePickerString
+                        value={dueFrom}
+                        onChange={setDueFrom}
+                        placeholder="Dari"
+                        className="h-9 w-full text-xs font-medium"
+                      />
+                    }
+                    to={
+                      <DatePickerString
+                        value={dueTo}
+                        onChange={setDueTo}
+                        placeholder="Sampai"
+                        className="h-9 w-full text-xs font-medium"
+                      />
+                    }
+                  />
+                </FilterField>
+              </FilterRangeFields>
+            </FilterPanel>
             <p className="mt-2 text-[10px] font-medium text-muted-foreground">
               Kolom fase supply, pengiriman, PR/PO GMI, dan rekonsiliasi masih
               placeholder (&ldquo;-&rdquo;) &mdash; akan diisi setelah fitur tahap

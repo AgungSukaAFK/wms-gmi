@@ -10,6 +10,19 @@ import { Warehouse } from "lucide-react";
 import { Content } from "@/components/content";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
+  type ActiveFilter,
+  FilterField,
+  FilterFields,
+  FilterPanel,
+  FilterRange,
+  FilterRangeFields,
+  filterOptionLabel,
+  formatFilterDate,
+  formatFilterRange,
+} from "@/components/filter-panel";
+import { DatePickerString } from "@/components/date-picker-string";
+import { MultiSelect } from "@/components/ui/multi-select";
+import {
   ColumnOrderReset,
   ReorderableHeaderRow,
   ReorderableTableHead,
@@ -26,6 +39,11 @@ import { getCustomerStockList } from "@/services/consignment-penerimaan-actions"
 
 // Harus sama dengan kolom yang dicari di `filtered`.
 const STOCK_SEARCH_FIELDS = ["Customer", "Part Number", "Nama Barang"];
+
+const QTY_OPTIONS = [
+  { label: "Stok positif (> 0)", value: "positif" },
+  { label: "Stok minus (< 0)", value: "minus" },
+];
 
 const STOCK_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
@@ -47,10 +65,22 @@ export default function CustomerStockPage() {
   // Filter, sort & halaman disimpan di URL (hooks/use-url-list-state.ts).
   const urlState = useUrlListState();
   const debouncedSearch = urlState.get("search");
-  const [searchQuery, setSearchQuery] = useUrlSearchInput(
+  const [searchQuery, setSearchQuery, resetSearchQuery] = useUrlSearchInput(
     debouncedSearch,
     (value) => urlState.set({ search: value }, { resetPage: true }),
   );
+  const customerFilters = urlState.list("customer");
+  const setCustomerFilters = (v: string[]) =>
+    urlState.set({ customer: v }, { resetPage: true });
+  const qtyFilters = urlState.list("qty");
+  const setQtyFilters = (v: string[]) =>
+    urlState.set({ qty: v }, { resetPage: true });
+  const dateFrom = urlState.get("dari");
+  const setDateFrom = (v: string) =>
+    urlState.set({ dari: v }, { resetPage: true });
+  const dateTo = urlState.get("sampai");
+  const setDateTo = (v: string) =>
+    urlState.set({ sampai: v }, { resetPage: true });
   const sortOrder = urlState.get("sort", "");
   const setSortOrder = (v: string) => urlState.set({ sort: v });
   const page = urlState.getNumber("page", 1);
@@ -66,6 +96,21 @@ export default function CustomerStockPage() {
   }, []);
 
   const filtered = rows.filter((r) => {
+    if (
+      customerFilters.length > 0 &&
+      !customerFilters.includes(String(r.customer_id ?? ""))
+    )
+      return false;
+    if (qtyFilters.length > 0) {
+      const key = Number(r.qty) < 0 ? "minus" : "positif";
+      if (!qtyFilters.includes(key)) return false;
+    }
+    // updated_at = timestamp; bandingkan per tanggal lokal.
+    const updated = r.updated_at
+      ? new Date(r.updated_at).toLocaleDateString("en-CA")
+      : "";
+    if (dateFrom && (!updated || updated < dateFrom)) return false;
+    if (dateTo && (!updated || updated > dateTo)) return false;
     const q = debouncedSearch.toLowerCase();
     if (!q) return true;
     return (
@@ -84,6 +129,50 @@ export default function CustomerStockPage() {
     setSortOrder(nextSort);
     setPage(1);
   };
+
+  const resetFilters = () => {
+    resetSearchQuery();
+    urlState.reset();
+  };
+
+  // Opsi customer diambil dari data yang sudah dimuat.
+  const customerOptions = [
+    ...new Map(
+      rows
+        .filter((r) => r.customer_id != null && r.customer_name)
+        .map((r) => [String(r.customer_id), r.customer_name as string]),
+    ),
+  ]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+  const optionLabels = (
+    options: { label: string; value: string }[],
+    values: string[],
+  ) => values.map((v) => filterOptionLabel(options, v)).join(", ");
+
+  // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
+  const activeFilters: ActiveFilter[] = [];
+  if (customerFilters.length > 0)
+    activeFilters.push({
+      key: "customer",
+      label: "Customer",
+      value: optionLabels(customerOptions, customerFilters),
+      onRemove: () => setCustomerFilters([]),
+    });
+  if (qtyFilters.length > 0)
+    activeFilters.push({
+      key: "qty",
+      label: "Qty",
+      value: optionLabels(QTY_OPTIONS, qtyFilters),
+      onRemove: () => setQtyFilters([]),
+    });
+  if (dateFrom || dateTo)
+    activeFilters.push({
+      key: "tanggal",
+      label: "Update Terakhir",
+      value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
+      onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
 
   // Satu sel per id kolom; urutannya diatur useColumnOrder.
   const renderCell = (r: any, id: StockColumnId) => {
@@ -140,6 +229,50 @@ export default function CustomerStockPage() {
             onChange={setSearchQuery}
             searchableFields={STOCK_SEARCH_FIELDS}
           />
+
+          <FilterPanel activeFilters={activeFilters} onReset={resetFilters}>
+            <FilterFields>
+              <FilterField label="Customer">
+                <MultiSelect
+                  placeholder="Semua Customer"
+                  searchable
+                  selected={customerFilters}
+                  onChange={setCustomerFilters}
+                  options={customerOptions}
+                />
+              </FilterField>
+              <FilterField label="Qty">
+                <MultiSelect
+                  placeholder="Semua"
+                  selected={qtyFilters}
+                  onChange={setQtyFilters}
+                  options={QTY_OPTIONS}
+                />
+              </FilterField>
+            </FilterFields>
+            <FilterRangeFields>
+              <FilterField label="Update Terakhir">
+                <FilterRange
+                  from={
+                    <DatePickerString
+                      value={dateFrom}
+                      onChange={setDateFrom}
+                      placeholder="Dari"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                  to={
+                    <DatePickerString
+                      value={dateTo}
+                      onChange={setDateTo}
+                      placeholder="Sampai"
+                      className="h-9 w-full text-xs font-medium"
+                    />
+                  }
+                />
+              </FilterField>
+            </FilterRangeFields>
+          </FilterPanel>
         </div>
       </Content>
 
@@ -181,7 +314,7 @@ export default function CustomerStockPage() {
                   colSpan={4}
                   className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
                 >
-                  {debouncedSearch
+                  {debouncedSearch || activeFilters.length > 0
                     ? "Tidak ada data yang sesuai filter"
                     : "Belum ada stok di customer"}
                 </TableCell>

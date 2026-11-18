@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, FileSpreadsheet, Eye, PackageCheck, Printer, Trash2, Pencil } from "lucide-react";
+import { Plus, FileSpreadsheet, Eye, PackageCheck, Printer, Trash2, Pencil, MapPin } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { createClient } from "@/lib/supabase/client";
 import { Content } from "@/components/content";
@@ -19,6 +19,7 @@ import {
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { Input } from "@/components/ui/input";
 import { DatePickerString } from "@/components/date-picker-string";
 import { MultiSelect } from "@/components/ui/multi-select";
 import { ListSearchInput } from "@/components/list-search-input";
@@ -91,6 +92,15 @@ const PR_STATUS_OPTIONS = [
   { label: "Rejected", value: "rejected" },
 ];
 
+const PROGRESS_OPTIONS = [
+  { label: "Belum ada", value: "none" },
+  { label: "Sebagian", value: "partial" },
+  { label: "Lengkap", value: "full" },
+];
+
+const progressKey = (done: number, total: number) =>
+  done <= 0 ? "none" : done >= total ? "full" : "partial";
+
 const PR_HEAD_CLASS = "text-[10px] font-black uppercase text-muted-foreground";
 
 // Kolom sebelum "Aksi". Id kolom yang bisa di-sort = key di getPrSortValue.
@@ -115,6 +125,8 @@ const canCreateGr = (pr: any) =>
   ["approved", "completed"].includes(pr.pr_status) &&
   (pr.pr_items || []).some((i: any) => i.sisa_gr > 0);
 
+type PartLike = { part_number?: string | null; part_name?: string | null };
+
 export default function ConsignmentPrPage() {
   const [loading, setLoading] = useState(true);
   const [rows, setRows] = useState<any[]>([]);
@@ -129,6 +141,23 @@ export default function ConsignmentPrPage() {
   const statusFilters = urlState.list("status");
   const setStatusFilters = (v: string[]) =>
     urlState.set({ status: v }, { resetPage: true });
+  const vendorFilters = urlState.list("vendor");
+  const setVendorFilters = (v: string[]) =>
+    urlState.set({ vendor: v }, { resetPage: true });
+  const locationFilters = urlState.list("lokasi");
+  const setLocationFilters = (v: string[]) =>
+    urlState.set({ lokasi: v }, { resetPage: true });
+  const grFilters = urlState.list("gr");
+  const setGrFilters = (v: string[]) =>
+    urlState.set({ gr: v }, { resetPage: true });
+  const poFilters = urlState.list("po");
+  const setPoFilters = (v: string[]) =>
+    urlState.set({ po: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const dateFrom = urlState.get("dari");
   const setDateFrom = (v: string) =>
     urlState.set({ dari: v }, { resetPage: true });
@@ -184,14 +213,63 @@ export default function ConsignmentPrPage() {
       !q ||
       pr.pr_kode?.toLowerCase().includes(q) ||
       pr.vendors?.vendor_name?.toLowerCase().includes(q) ||
-      (pr.pr_items || []).some((i: any) => i.part_number?.toLowerCase().includes(q));
+      (pr.pr_items || []).some((i: PartLike | undefined) => i?.part_number?.toLowerCase().includes(q));
     const matchStatus =
       statusFilters.length === 0 || statusFilters.includes(pr.pr_status);
     const tanggal = (pr.pr_tanggal || "").slice(0, 10);
     const matchTanggal =
       (!dateFrom || tanggal >= dateFrom) && (!dateTo || tanggal <= dateTo);
-    return matchSearch && matchStatus && matchTanggal;
+    const matchVendor =
+      vendorFilters.length === 0 ||
+      vendorFilters.includes(String(pr.pr_vendor_id ?? ""));
+    const matchLokasi =
+      locationFilters.length === 0 ||
+      locationFilters.includes(String(pr.cabang_id ?? ""));
+    const matchGr =
+      grFilters.length === 0 ||
+      grFilters.includes(progressKey(pr.total_gr, pr.total_qty));
+    const matchPo =
+      poFilters.length === 0 ||
+      poFilters.includes(progressKey(pr.total_po, pr.total_qty));
+    const b = barangFilter.toLowerCase();
+    const matchBarang =
+      !b ||
+      (pr.pr_items || []).some(
+        (i: PartLike | undefined) =>
+          i?.part_number?.toLowerCase().includes(b) ||
+          i?.part_name?.toLowerCase().includes(b),
+      );
+    return (
+      matchSearch &&
+      matchStatus &&
+      matchTanggal &&
+      matchVendor &&
+      matchLokasi &&
+      matchGr &&
+      matchPo &&
+      matchBarang
+    );
   });
+
+  // Opsi vendor & gudang diambil dari data yang sudah dimuat.
+  const uniqueOptions = (pick: (pr: (typeof rows)[number]) => [unknown, unknown]) => {
+    const map = new Map<string, string>();
+    for (const pr of rows) {
+      const [id, name] = pick(pr);
+      if (id != null && name) map.set(String(id), String(name));
+    }
+    return [...map]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  };
+  const vendorOptions = uniqueOptions((pr) => [
+    pr.pr_vendor_id,
+    pr.vendors?.vendor_name,
+  ]);
+  const locationOptions = uniqueOptions((pr) => [
+    pr.cabang_id,
+    pr.cabang?.nama_cabang,
+  ]);
 
   const sorted = sortRows(filtered, sortOrder, getPrSortValue);
   const totalCount = sorted.length;
@@ -205,6 +283,7 @@ export default function ConsignmentPrPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -220,6 +299,44 @@ export default function ConsignmentPrPage() {
       label: "Status",
       value: optionLabels(PR_STATUS_OPTIONS, statusFilters),
       onRemove: () => setStatusFilters([]),
+    });
+  if (vendorFilters.length > 0)
+    activeFilters.push({
+      key: "vendor",
+      label: "Vendor",
+      value: optionLabels(vendorOptions, vendorFilters),
+      onRemove: () => setVendorFilters([]),
+    });
+  if (locationFilters.length > 0)
+    activeFilters.push({
+      key: "lokasi",
+      label: "Gudang",
+      value: optionLabels(locationOptions, locationFilters),
+      onRemove: () => setLocationFilters([]),
+    });
+  if (grFilters.length > 0)
+    activeFilters.push({
+      key: "gr",
+      label: "Progres GR",
+      value: optionLabels(PROGRESS_OPTIONS, grFilters),
+      onRemove: () => setGrFilters([]),
+    });
+  if (poFilters.length > 0)
+    activeFilters.push({
+      key: "po",
+      label: "Progres PO",
+      value: optionLabels(PROGRESS_OPTIONS, poFilters),
+      onRemove: () => setPoFilters([]),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
     });
   if (dateFrom || dateTo)
     activeFilters.push({
@@ -315,6 +432,49 @@ export default function ConsignmentPrPage() {
                   selected={statusFilters}
                   onChange={setStatusFilters}
                   options={PR_STATUS_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Vendor">
+                <MultiSelect
+                  placeholder="Semua Vendor"
+                  searchable
+                  selected={vendorFilters}
+                  onChange={setVendorFilters}
+                  options={vendorOptions}
+                />
+              </FilterField>
+              <FilterField label="Gudang">
+                <MultiSelect
+                  placeholder="Semua Gudang"
+                  icon={<MapPin className="h-3 w-3 text-muted-foreground" />}
+                  searchable
+                  selected={locationFilters}
+                  onChange={setLocationFilters}
+                  options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Progres GR">
+                <MultiSelect
+                  placeholder="Semua"
+                  selected={grFilters}
+                  onChange={setGrFilters}
+                  options={PROGRESS_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Progres PO">
+                <MultiSelect
+                  placeholder="Semua"
+                  selected={poFilters}
+                  onChange={setPoFilters}
+                  options={PROGRESS_OPTIONS}
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
                 />
               </FilterField>
             </FilterFields>

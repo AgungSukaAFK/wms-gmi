@@ -175,6 +175,16 @@ export default function SpbPage() {
   const dateTo = urlState.get("sampai");
   const setDateTo = (v: string) =>
     urlState.set({ sampai: v }, { resetPage: true });
+  const unitFilter = urlState.get("unit");
+  const [unitInput, setUnitInput, resetUnitInput] = useUrlSearchInput(
+    unitFilter,
+    (value) => urlState.set({ unit: value }, { resetPage: true }),
+  );
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const [availableCabang, setAvailableCabang] = useState<CabangOption[]>([]);
   const sort = urlState.get("sort", "created_at_desc");
   const setSort = (v: string) =>
@@ -234,6 +244,8 @@ export default function SpbPage() {
       cabangIds: locationFilters.length > 0 ? locationFilters.map(Number) : undefined,
       dateFrom: dateFrom || undefined,
       dateTo: dateTo || undefined,
+      unit: unitFilter || undefined,
+      barang: barangFilter || undefined,
       sort,
       page,
       limit,
@@ -260,6 +272,8 @@ export default function SpbPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    unitFilter,
+    barangFilter,
     sort,
     page,
     limit,
@@ -271,6 +285,8 @@ export default function SpbPage() {
 
   const resetFilters = () => {
     resetSearch();
+    resetUnitInput();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -310,6 +326,26 @@ export default function SpbPage() {
         .map((v) => filterOptionLabel(locationOptions, v))
         .join(", "),
       onRemove: () => setLocationFilters([]),
+    });
+  if (unitFilter)
+    activeFilters.push({
+      key: "unit",
+      label: "Unit",
+      value: unitFilter,
+      onRemove: () => {
+        resetUnitInput();
+        urlState.set({ unit: "" }, { resetPage: true });
+      },
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
     });
   if (dateFrom || dateTo)
     activeFilters.push({
@@ -627,6 +663,22 @@ export default function SpbPage() {
                   selected={locationFilters}
                   onChange={setLocationFilters}
                   options={locationOptions}
+                />
+              </FilterField>
+              <FilterField label="Unit">
+                <Input
+                  placeholder="Kode / tipe / brand"
+                  value={unitInput}
+                  onChange={(e) => setUnitInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
+                />
+              </FilterField>
+              <FilterField label="Barang">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
                 />
               </FilterField>
             </FilterFields>

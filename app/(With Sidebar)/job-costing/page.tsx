@@ -14,6 +14,7 @@ import {
   formatFilterDate,
   formatFilterRange,
 } from "@/components/filter-panel";
+import { Input } from "@/components/ui/input";
 import { ListSearchInput } from "@/components/list-search-input";
 import {
   ColumnOrderReset,
@@ -129,6 +130,11 @@ export default function JobCostingListPage() {
   const dateTo = urlState.get("sampai");
   const setDateTo = (v: string) =>
     urlState.set({ sampai: v }, { resetPage: true });
+  const barangFilter = urlState.get("barang");
+  const [barangInput, setBarangInput, resetBarangInput] = useUrlSearchInput(
+    barangFilter,
+    (value) => urlState.set({ barang: value }, { resetPage: true }),
+  );
   const sortOrder = urlState.get("sort", "newest");
   const setSortOrder = (v: string) =>
     urlState.set({ sort: v === "newest" ? "" : v });
@@ -155,12 +161,22 @@ export default function JobCostingListPage() {
     setLoading(true);
     const from = (page - 1) * limit;
 
+    // Filter isi item lewat embed alias, tanpa ikut mengambil datanya.
+    const barangEmbed = barangFilter
+      ? ", barang_cocok:job_costing_items!inner(id)"
+      : "";
     let query = supabase
       .from("job_costing")
       .select(
-        "*, cabang!job_costing_cabang_id_fkey(nama_cabang), job_costing_items(id, qty, unit_price)",
+        `*, cabang!job_costing_cabang_id_fkey(nama_cabang), job_costing_items(id, qty, unit_price)${barangEmbed}`,
         { count: "exact" },
       );
+    if (barangFilter) {
+      query = query.or(
+        `part_number.ilike.${orIlikePattern(barangFilter)},part_name.ilike.${orIlikePattern(barangFilter)},description.ilike.${orIlikePattern(barangFilter)}`,
+        { referencedTable: "barang_cocok" },
+      );
+    }
 
     if (debouncedSearch) {
       query = query.or(
@@ -205,6 +221,7 @@ export default function JobCostingListPage() {
     locationFilters,
     dateFrom,
     dateTo,
+    barangFilter,
     sortOrder,
     page,
     limit,
@@ -227,6 +244,7 @@ export default function JobCostingListPage() {
 
   const resetFilters = () => {
     resetSearchQuery();
+    resetBarangInput();
     urlState.reset();
   };
 
@@ -261,6 +279,16 @@ export default function JobCostingListPage() {
       label: "Tanggal",
       value: formatFilterRange(dateFrom, dateTo, formatFilterDate),
       onRemove: () => urlState.set({ dari: "", sampai: "" }, { resetPage: true }),
+    });
+  if (barangFilter)
+    activeFilters.push({
+      key: "barang",
+      label: "Barang",
+      value: barangFilter,
+      onRemove: () => {
+        resetBarangInput();
+        urlState.set({ barang: "" }, { resetPage: true });
+      },
     });
 
   const handleRowClick = (id: number) => {
@@ -389,6 +417,15 @@ export default function JobCostingListPage() {
                   selected={statusFilters}
                   onChange={setStatusFilters}
                   options={JOB_STATUS_OPTIONS}
+                />
+              </FilterField>
+
+              <FilterField label="Barang (Komponen)">
+                <Input
+                  placeholder="Part number / nama"
+                  value={barangInput}
+                  onChange={(e) => setBarangInput(e.target.value)}
+                  className="h-9 text-xs font-medium"
                 />
               </FilterField>
 
