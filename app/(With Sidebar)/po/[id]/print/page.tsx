@@ -16,6 +16,7 @@ import {
 } from "@/lib/po-tax";
 import { formatPoMoney, normalizePoCurrency } from "@/lib/po-currency";
 import { useGoBack } from "@/hooks/use-go-back";
+import { poSoRefs } from "@/lib/so-reguler";
 
 export default function POPrintPage() {
   const { id } = useParams();
@@ -60,7 +61,7 @@ export default function POPrintPage() {
         po_payment_term, po_pic, approvals,
         po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
         po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-        po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency, po_revision,
+        po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), so_refs:po_items(so_reguler_items(so_reguler(id, so_kode))), po_currency, po_revision,
         cabang(nama_cabang),
         prs(pr_kode, cabang(nama_cabang))
       `,
@@ -213,7 +214,7 @@ export default function POPrintPage() {
                   : {po?.po_jenis === "non_pr"
                     ? po?.po_pr_referensi || "-"
                     : po?.po_jenis === "so"
-                      ? `SO ${po?.so_reguler?.so_kode || "-"}`
+                      ? `SO ${poSoRefs(po).map((so) => so.so_kode).join(", ") || "-"}`
                       : po?.prs?.pr_kode || "-"}
                 </span>
               </div>

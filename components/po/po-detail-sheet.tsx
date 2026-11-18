@@ -76,6 +76,7 @@ import {
   PO_STATUS_LABELS,
   poItemSystemStatus,
 } from "@/lib/po-item-status";
+import { poSoRefs } from "@/lib/so-reguler";
 
 const STATUS_LABELS = PO_STATUS_LABELS;
 
@@ -172,7 +173,7 @@ export function PODetailSheet({
           po_pic, po_pic_id, po_detail_status, po_payment_term, po_keterangan, approvals, created_at,
           po_harga_termasuk_pajak, po_ppn_mode, po_ppn_rate, po_ppn_amount,
           po_diskon_mode, po_diskon_value, po_ongkir, po_pph_type, po_pph_mode,
-          po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), po_currency,
+          po_pph_rate, po_pph_amount, po_tax_mode, po_jenis, po_pr_referensi, so_id, so_reguler(id, so_kode), so_refs:po_items(so_reguler_items(so_reguler(id, so_kode))), po_currency,
           po_is_outstanding, cabang_id, cabang(nama_cabang),
           prs(
             id, pr_kode, cabang_id,
@@ -535,7 +536,7 @@ export function PODetailSheet({
                       {po?.po_jenis === "non_pr"
                         ? `NON-PR${po.po_pr_referensi ? ` · ${po.po_pr_referensi}` : ""}`
                         : po?.po_jenis === "so"
-                        ? `SO ${po.so_reguler?.so_kode || "-"}`
+                        ? `SO ${poSoRefs(po).map((so) => so.so_kode).join(", ") || "-"}`
                         : linkedPrs.length > 0
                         ? linkedPrs.map((pr) => (
                             <Badge

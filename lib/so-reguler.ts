@@ -275,3 +275,62 @@ export async function refreshSoStatus(supabase: any, soId: number | null | undef
     await supabase.from("so_reguler").update({ so_status: next }).eq("id", soId);
   }
 }
+
+// ============================================================
+// PO dari SO: 1 PO bisa merujuk BANYAK SO (sejak 2026-11-18).
+// Sumber kebenaran = po_items.so_item_id -> so_reguler_items.so_id.
+// pos.so_id tetap diisi "SO utama" (SO pertama) demi backward-compat
+// (CHECK pos_so_requires_so_check + code lama yang membaca kolom ini).
+// ============================================================
+
+/**
+ * Semua SO yang dirujuk sebuah PO: SO utama (pos.so_id) + SO dari tiap item.
+ * Panggil SEBELUM PO/item dihapus kalau hasilnya dipakai untuk refresh status.
+ */
+export async function fetchPoSoIds(supabase: any, poId: number): Promise<number[]> {
+  const [{ data: po }, { data: rows }] = await Promise.all([
+    supabase.from("pos").select("so_id").eq("id", poId).maybeSingle(),
+    supabase
+      .from("po_items")
+      .select("so_item_id, so_reguler_items(so_id)")
+      .eq("po_id", poId)
+      .not("so_item_id", "is", null),
+  ]);
+  const ids = new Set<number>();
+  if (po?.so_id) ids.add(Number(po.so_id));
+  for (const r of rows ?? []) {
+    const si = rel(r, "so_reguler_items");
+    if (si?.so_id) ids.add(Number(si.so_id));
+  }
+  return Array.from(ids);
+}
+
+/** refreshSoStatus untuk banyak SO sekaligus (unik, berurutan). */
+export async function refreshSoStatuses(
+  supabase: any,
+  soIds: (number | null | undefined)[],
+) {
+  const uniq = Array.from(new Set(soIds.filter((id): id is number => Boolean(id))));
+  for (const id of uniq) await refreshSoStatus(supabase, id);
+}
+
+/**
+ * Embed PostgREST untuk menampilkan semua SO sebuah PO. Pakai bersama
+ * poSoRefs(): `pos.select("..., so_reguler(id, so_kode), " + PO_SO_REFS_EMBED)`.
+ */
+export const PO_SO_REFS_EMBED =
+  "so_refs:po_items(so_reguler_items(so_reguler(id, so_kode)))";
+
+/** Daftar SO unik sebuah PO (SO utama dulu), dari hasil PO_SO_REFS_EMBED. */
+export function poSoRefs(po: any): { id: number; so_kode: string }[] {
+  const map = new Map<number, { id: number; so_kode: string }>();
+  const add = (s: any) => {
+    const so = Array.isArray(s) ? s[0] : s;
+    if (so?.id && !map.has(Number(so.id))) {
+      map.set(Number(so.id), { id: Number(so.id), so_kode: so.so_kode });
+    }
+  };
+  add(po?.so_reguler);
+  for (const it of po?.so_refs ?? []) add(rel(rel(it, "so_reguler_items"), "so_reguler"));
+  return Array.from(map.values());
+}

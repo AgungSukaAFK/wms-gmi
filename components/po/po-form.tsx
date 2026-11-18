@@ -105,8 +105,12 @@ type Step = 1 | 2 | 3;
 interface POItem {
   // null semua untuk item PO Non-PR (dipilih bebas dari master barang).
   mr_id: number | null;
-  // Diisi untuk PO dari SO Reguler.
+  // Diisi untuk PO dari SO Reguler (1 PO bisa dari banyak SO).
   so_item_id?: number | null;
+  so_id?: number | null;
+  so_kode?: string;
+  // Qty asli di SO (preview langkah 1).
+  qty_so?: number;
   pr_item_id: number | null;
   pr_id: number | null;
   pr_kode: string;
@@ -178,13 +182,15 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const [isOutstanding, setIsOutstanding] = useState(false);
   const isFreeItems = isNonPr || isOutstanding;
 
-  // PO dari SO Reguler: 1 PO = 1 SO, item = sisa SO yang belum di-PO/DO.
-  const [selectedSo, setSelectedSo] = useState<any | null>(null);
+  // PO dari SO Reguler: bisa lebih dari 1 SO (2026-11-18), item = sisa SO
+  // yang belum di-PO/DO. Tiap baris item tetap terikat ke 1 item SO.
+  const [selectedSos, setSelectedSos] = useState<any[]>([]);
+  const [loadingSoIds, setLoadingSoIds] = useState<number[]>([]);
+  const [expandedSoIds, setExpandedSoIds] = useState<number[]>([]);
   const [soResults, setSoResults] = useState<any[]>([]);
   const [soSearch, setSoSearch] = useState("");
   const [debouncedSoSearch] = useDebounce(soSearch, 300);
   const [soPopoverOpen, setSoPopoverOpen] = useState(false);
-  const [soLoading, setSoLoading] = useState(false);
   // Gudang penerima PO dari SO (SO tidak punya lokasi). Default gudang akun.
   const [soCabangId, setSoCabangId] = useState("");
   const [cabangOptions, setCabangOptions] = useState<
@@ -273,7 +279,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     }
     if (initialSoId) {
       setPoJenis("so");
-      handleSelectSo(initialSoId);
+      handleToggleSo({ id: initialSoId });
     }
   }, []);
 
@@ -299,57 +305,122 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     run();
   }, [debouncedSoSearch, soPopoverOpen]);
 
-  const handleSelectSo = async (soId: number) => {
-    setSoPopoverOpen(false);
-    setSoSearch("");
-    setSoLoading(true);
-    const { data: so } = await supabase
-      .from("so_reguler")
-      .select(
-        "id, so_kode, so_status, customer_po_no, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)",
-      )
-      .eq("id", soId)
-      .maybeSingle();
-    if (!so || so.so_status === "cancelled" || so.so_status === "completed") {
-      setSoLoading(false);
-      toast.error(so ? `SO ${so.so_kode} tidak bisa di-PO (status ${so.so_status}).` : "SO tidak ditemukan.");
-      return;
-    }
+  const SO_SELECT =
+    "id, so_kode, so_status, so_tanggal, customer_po_no, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty)";
+
+  // Baris item PO untuk satu SO. Sisa dihitung tanpa PO yang sedang diedit;
+  // item yang sudah ada di PO lama digabung (qty, harga, vendor, pajak).
+  const buildSoRows = async (
+    so: any,
+    opts: {
+      existingBySoItem?: Map<number, any>;
+      defaultSelected: boolean;
+      vendor?: PoVendorOption | null;
+    },
+  ): Promise<POItem[]> => {
     const soItems: any[] = [...(so.so_reguler_items || [])].sort(
       (a, b) => a.id - b.id,
     );
     const fulfillment = await fetchSoItemFulfillment(
       supabase,
       soItems.map((i) => i.id),
+      editPoId ? { excludePoId: editPoId } : undefined,
     );
-    const nextItems: POItem[] = soItems.map((i) => {
+    const vendor = opts.vendor === undefined ? selectedVendor : opts.vendor;
+    return soItems.map((i) => {
       const { sisaPo } = computeSoItemRemaining(i.qty, fulfillment.get(i.id));
-      return {
+      const base: POItem = {
         mr_id: null,
         pr_item_id: null,
         pr_id: null,
         pr_kode: "",
         so_item_id: i.id,
+        so_id: so.id,
+        so_kode: so.so_kode,
+        qty_so: Number(i.qty) || 0,
         part_id: i.part_id,
         part_number: i.part_number,
         part_name: i.part_name,
         satuan: i.satuan,
         remaining: sisaPo,
-        selected: sisaPo > 0,
+        selected: opts.defaultSelected && sisaPo > 0,
         qty: sisaPo,
         harga: 0,
-        vendor_id: selectedVendor?.id ?? null,
-        vendor: selectedVendor,
+        vendor_id: vendor?.id ?? null,
+        vendor: vendor ?? null,
       };
+      const e = opts.existingBySoItem?.get(i.id);
+      return e ? mergeExistingItem(base, e) : base;
     });
-    setSoLoading(false);
-    if (!nextItems.some((i) => i.remaining > 0)) {
-      toast.error(`Semua item SO ${so.so_kode} sudah di-PO / dikirim.`);
+  };
+
+  // Tambah / lepas SO dari PO (mirip pilih banyak PR).
+  const handleToggleSo = async (soRef: { id: number; so_kode?: string }) => {
+    setSoPopoverOpen(false);
+    setSoSearch("");
+    if (loadingSoIds.includes(soRef.id)) return;
+    const isSelected = selectedSos.some((s) => s.id === soRef.id);
+    if (isSelected) {
+      const received = poItems.find(
+        (i) => i.so_id === soRef.id && (i.qty_received || 0) > 0,
+      );
+      if (received) {
+        toast.error(
+          `SO ${soRef.so_kode || ""} tidak bisa dilepas: item ${received.part_number} sudah ada barang diterima.`,
+        );
+        return;
+      }
+      setSelectedSos((prev) => prev.filter((s) => s.id !== soRef.id));
+      setPoItems((prev) => prev.filter((i) => i.so_id !== soRef.id));
+      setExpandedSoIds((prev) => prev.filter((id) => id !== soRef.id));
       return;
     }
-    setSelectedSo(so);
-    setPoItems(nextItems);
+
+    setLoadingSoIds((prev) => [...prev, soRef.id]);
+    try {
+      const { data: so } = await supabase
+        .from("so_reguler")
+        .select(SO_SELECT)
+        .eq("id", soRef.id)
+        .maybeSingle();
+      if (!so || so.so_status === "cancelled" || so.so_status === "completed") {
+        toast.error(
+          so
+            ? `SO ${so.so_kode} tidak bisa di-PO (status ${so.so_status}).`
+            : "SO tidak ditemukan.",
+        );
+        return;
+      }
+      const existingMap = new Map<number, any>(
+        editExistingItems
+          .filter((e: any) => e.so_item_id)
+          .map((e: any) => [e.so_item_id, e]),
+      );
+      const rows = await buildSoRows(so, {
+        existingBySoItem: existingMap,
+        defaultSelected: true,
+      });
+      if (!rows.some((i) => i.remaining > 0 || i.po_item_id)) {
+        toast.error(`Semua item SO ${so.so_kode} sudah di-PO / dikirim.`);
+        return;
+      }
+      setSelectedSos((prev) =>
+        prev.some((s) => s.id === so.id) ? prev : [...prev, so],
+      );
+      setPoItems((prev) => [...prev.filter((i) => i.so_id !== so.id), ...rows]);
+      setExpandedSoIds((prev) => [...prev, so.id]);
+    } catch (err) {
+      console.error(err);
+      toast.error("Gagal memuat item SO. Silakan coba lagi.");
+    } finally {
+      setLoadingSoIds((prev) => prev.filter((id) => id !== soRef.id));
+    }
   };
+
+  const toggleSoExpanded = (soId: number) =>
+    setExpandedSoIds((prev) =>
+      prev.includes(soId) ? prev.filter((id) => id !== soId) : [...prev, soId],
+    );
 
   useEffect(() => {
     fetchApprovedPRs();
@@ -382,7 +453,8 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
     setPoJenis(next);
     setSelectedPrs([]);
     setExpandedPrIds([]);
-    setSelectedSo(null);
+    setSelectedSos([]);
+    setExpandedSoIds([]);
     setPoItems([]);
   };
 
@@ -674,7 +746,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       const { data: po } = await supabase
         .from("pos")
         .select(
-          "*, cabang(nama_cabang), so_reguler(id, so_kode, so_status, customer_po_no, customer:customers!customer_id(customer_name), so_reguler_items(id, part_id, part_number, part_name, satuan, qty))",
+          "*, cabang(nama_cabang)",
         )
         .eq("id", poId)
         .maybeSingle();
@@ -738,39 +810,40 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
       } else if (jenis === "non_pr") {
         nextItems = existing.map((e: any) => existingToItem(e));
       } else if (jenis === "so") {
-        const so = Array.isArray(po.so_reguler) ? po.so_reguler[0] : po.so_reguler;
-        if (so) {
-          setSelectedSo(so);
-          const soItems: any[] = [...(so.so_reguler_items || [])].sort(
-            (a, b) => a.id - b.id,
+        // Semua SO yang dirujuk item PO (SO utama dulu).
+        const soItemIds = existing
+          .map((e: any) => e.so_item_id)
+          .filter((id: any): id is number => Boolean(id));
+        const { data: soItemRows } = soItemIds.length
+          ? await supabase.from("so_reguler_items").select("id, so_id").in("id", soItemIds)
+          : { data: [] as any[] };
+        const soIds = Array.from(
+          new Set<number>(
+            [po.so_id, ...(soItemRows || []).map((r: any) => r.so_id)]
+              .filter(Boolean)
+              .map(Number),
+          ),
+        );
+        const { data: soRows } = soIds.length
+          ? await supabase.from("so_reguler").select(SO_SELECT).in("id", soIds)
+          : { data: [] as any[] };
+        const soList = (soRows || []).sort(
+          (a: any, b: any) => soIds.indexOf(a.id) - soIds.indexOf(b.id),
+        );
+        setSelectedSos(soList);
+        setExpandedSoIds(soList.map((so: any) => so.id));
+        const bySoItem = new Map<number, any>(
+          existing.map((e: any) => [e.so_item_id, e]),
+        );
+        for (const so of soList) {
+          // Item SO yang bukan bagian PO lama jangan otomatis tercentang.
+          nextItems.push(
+            ...(await buildSoRows(so, {
+              existingBySoItem: bySoItem,
+              defaultSelected: false,
+              vendor: vendor ?? null,
+            })),
           );
-          const fulfillment = await fetchSoItemFulfillment(
-            supabase,
-            soItems.map((i) => i.id),
-            { excludePoId: poId },
-          );
-          const bySoItem = new Map(existing.map((e: any) => [e.so_item_id, e]));
-          nextItems = soItems.map((i) => {
-            const { sisaPo } = computeSoItemRemaining(i.qty, fulfillment.get(i.id));
-            const base: POItem = {
-              mr_id: null,
-              pr_item_id: null,
-              pr_id: null,
-              pr_kode: "",
-              so_item_id: i.id,
-              part_id: i.part_id,
-              part_number: i.part_number,
-              part_name: i.part_name,
-              satuan: i.satuan,
-              remaining: sisaPo,
-              selected: false,
-              qty: sisaPo,
-              harga: 0,
-              vendor_id: vendor?.id ?? null,
-            };
-            const e = bySoItem.get(i.id);
-            return e ? mergeExistingItem(base, e) : base;
-          });
         }
         const covered = new Set(nextItems.map((i) => i.po_item_id));
         nextItems.push(
@@ -1021,7 +1094,10 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
   const handleSubmit = () => {
     const chosen = poItems.filter((i) => i.selected && i.qty > 0);
     if (!poKode.trim()) return toast.error("Kode PO wajib diisi");
-    if (isSo && !selectedSo) return toast.error("Pilih SO terlebih dahulu");
+    if (isSo && selectedSos.length === 0)
+      return toast.error("Pilih minimal satu SO terlebih dahulu");
+    if (isSo && loadingSoIds.length > 0)
+      return toast.error("Tunggu, item SO sedang dimuat...");
     if (isSo && !isEdit && !soCabangId)
       return toast.error("Pilih gudang penerima PO");
     if (poJenis === "reguler" && !isOutstanding && selectedPrs.length === 0)
@@ -1219,7 +1295,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
         po_pph_amount: pphType ? pphAmountManual : 0,
         po_jenis: poJenis,
         po_pr_referensi: isNonPr ? prReferensi.trim() || undefined : undefined,
-        so_id: isSo ? selectedSo?.id : undefined,
+        // SO utama + semua SO yang dipilih (server memvalidasi per item).
+        so_id: isSo ? selectedSos[0]?.id : undefined,
+        so_ids: isSo ? selectedSos.map((so) => so.id) : undefined,
         so_cabang_id: isSo ? Number(soCabangId) : undefined,
         approvals: approvalData,
         items: poItems
@@ -1457,10 +1535,11 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
               )}
               {isSo && (
                 <p className="text-[10px] text-muted-foreground font-medium leading-relaxed">
-                  Untuk item SO Reguler yang stoknya belum ada. Barang diterima
-                  (Receive Item) di gudang penerima yang dipilih, lalu dikirim
-                  ke customer lewat DO Reguler dari SO yang sama. Qty dibatasi
-                  sisa SO yang belum di-PO / dikirim.
+                  Untuk item SO Reguler yang stoknya belum ada. Bisa gabung
+                  beberapa SO dalam satu PO. Barang diterima (Receive Item) di
+                  gudang penerima yang dipilih, lalu dikirim ke customer lewat
+                  DO Reguler dari SO masing-masing. Qty per item dibatasi sisa
+                  SO-nya yang belum di-PO / dikirim.
                 </p>
               )}
             </div>
@@ -1469,27 +1548,26 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
               <>
                 <div className="space-y-1.5">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground">
-                    SO Reguler
+                    SO Reguler (bisa lebih dari 1)
                   </Label>
                   <Popover open={soPopoverOpen} onOpenChange={setSoPopoverOpen}>
                     <PopoverTrigger asChild>
                       <Button
                         variant="outline"
                         className="w-full justify-start gap-2 h-10 font-bold text-xs"
-                        disabled={soLoading || isEdit}
+                        disabled={isApproverEdit && priceLocked}
                       >
-                        {soLoading ? (
+                        {loadingSoIds.length > 0 ? (
                           <Loader2 className="h-4 w-4 animate-spin" />
                         ) : (
                           <ReceiptText className="h-4 w-4 text-muted-foreground" />
                         )}
-                        {selectedSo ? (
-                          <span className="text-foreground uppercase truncate">
-                            {selectedSo.customer_po_no
-                              ? `PO ${selectedSo.customer_po_no} · `
-                              : ""}
-                            {selectedSo.so_kode} —{" "}
-                            {selectedSo.customer?.customer_name}
+                        {selectedSos.length > 0 ? (
+                          <span className="text-foreground">
+                            {selectedSos.length} SO dipilih{" "}
+                            <span className="text-muted-foreground font-medium">
+                              — klik untuk tambah / lepas SO
+                            </span>
                           </span>
                         ) : (
                           <span className="text-muted-foreground">
@@ -1498,7 +1576,10 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                         )}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-105 p-0" align="start">
+                    <PopoverContent
+                      className="w-(--radix-popover-trigger-width) min-w-80 max-w-xl p-0"
+                      align="start"
+                    >
                       <Command shouldFilter={false}>
                         <CommandInput
                           placeholder="Cari nomor PO customer / kode SO..."
@@ -1513,48 +1594,208 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                                 : "Tidak ada SO open/partial."}
                             </CommandEmpty>
                           ) : (
-                            soResults.map((so) => (
-                              <CommandItem
-                                key={so.id}
-                                value={String(so.id)}
-                                onSelect={() => handleSelectSo(so.id)}
-                                className="gap-3 py-3"
-                              >
-                                <ReceiptText className="h-4 w-4 text-muted-foreground shrink-0" />
-                                <div className="flex-1 min-w-0">
-                                  <p className="font-bold text-xs uppercase truncate">
-                                    {so.customer_po_no ? (
-                                      <>PO {so.customer_po_no}</>
-                                    ) : (
-                                      <span className="text-muted-foreground italic normal-case font-medium">
-                                        Tanpa No. PO customer
-                                      </span>
-                                    )}
-                                  </p>
-                                  <p className="text-[9px] text-muted-foreground font-medium uppercase truncate">
-                                    {so.so_kode} · {so.customer?.customer_name}
-                                  </p>
-                                </div>
-                                <Badge
-                                  variant="outline"
-                                  className="text-[9px] font-bold uppercase shrink-0"
+                            soResults.map((so) => {
+                              const isChecked = selectedSos.some(
+                                (s) => s.id === so.id,
+                              );
+                              return (
+                                <CommandItem
+                                  key={so.id}
+                                  value={String(so.id)}
+                                  onSelect={() => handleToggleSo(so)}
+                                  className={cn(
+                                    "gap-3 py-3",
+                                    isChecked && "bg-primary/5",
+                                  )}
                                 >
-                                  {formatDate(so.so_tanggal)}
-                                </Badge>
-                              </CommandItem>
-                            ))
+                                  {loadingSoIds.includes(so.id) ? (
+                                    <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+                                  ) : isChecked ? (
+                                    <CheckCircle2 className="h-4 w-4 text-primary shrink-0" />
+                                  ) : (
+                                    <ReceiptText className="h-4 w-4 text-muted-foreground shrink-0" />
+                                  )}
+                                  <div className="flex-1 min-w-0">
+                                    <p className="font-bold text-xs uppercase truncate">
+                                      {so.customer_po_no ? (
+                                        <>PO {so.customer_po_no}</>
+                                      ) : (
+                                        <span className="text-muted-foreground italic normal-case font-medium">
+                                          Tanpa No. PO customer
+                                        </span>
+                                      )}
+                                    </p>
+                                    <p className="text-[9px] text-muted-foreground font-medium uppercase truncate">
+                                      {so.so_kode} · {so.customer?.customer_name}
+                                    </p>
+                                  </div>
+                                  <Badge
+                                    variant="outline"
+                                    className="text-[9px] font-bold uppercase shrink-0"
+                                  >
+                                    {formatDate(so.so_tanggal)}
+                                  </Badge>
+                                </CommandItem>
+                              );
+                            })
                           )}
                         </CommandList>
                       </Command>
                     </PopoverContent>
                   </Popover>
-                  {selectedSo && (
-                    <p className="text-[10px] text-muted-foreground font-medium uppercase">
-                      {poItems.filter((i) => i.remaining > 0).length} item bisa
-                      di-PO
-                    </p>
-                  )}
                 </div>
+
+                {selectedSos.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-border px-4 py-8 text-center">
+                    <ReceiptText className="h-6 w-6 text-muted-foreground/60 mx-auto mb-2" />
+                    <p className="text-xs font-bold text-muted-foreground">
+                      {loadingSoIds.length > 0
+                        ? "Memuat item SO..."
+                        : "Belum ada SO dipilih"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground font-medium mt-0.5">
+                      Bisa pilih lebih dari satu SO (boleh beda customer) untuk
+                      digabung dalam satu PO ke vendor.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground">
+                        SO Terpilih ({selectedSos.length})
+                      </p>
+                      <p className="text-[10px] uppercase font-bold text-muted-foreground">
+                        Total {selectableItemCount} item bisa di-PO
+                      </p>
+                    </div>
+                    <div className="rounded-lg border border-border divide-y divide-border overflow-hidden">
+                      {selectedSos.map((so) => {
+                        const soRows = poItems.filter((i) => i.so_id === so.id);
+                        const readyCount = soRows.filter(
+                          (i) => i.remaining > 0,
+                        ).length;
+                        const doneCount = soRows.length - readyCount;
+                        const expanded = expandedSoIds.includes(so.id);
+                        return (
+                          <div key={so.id}>
+                            <div className="flex items-center gap-3 px-3 py-2.5 bg-muted/20">
+                              <button
+                                type="button"
+                                onClick={() => toggleSoExpanded(so.id)}
+                                disabled={soRows.length === 0}
+                                className="flex flex-1 min-w-0 items-center gap-2.5 text-left disabled:cursor-default"
+                                title={expanded ? "Sembunyikan item" : "Lihat item SO"}
+                              >
+                                <ChevronRight
+                                  className={cn(
+                                    "h-4 w-4 shrink-0 text-muted-foreground transition-transform",
+                                    expanded && "rotate-90",
+                                  )}
+                                />
+                                <div className="min-w-0 flex-1">
+                                  <span className="font-black text-xs uppercase">
+                                    {so.so_kode}
+                                    {so.customer_po_no
+                                      ? ` · PO ${so.customer_po_no}`
+                                      : ""}
+                                  </span>
+                                  <p className="text-[10px] text-muted-foreground font-medium uppercase truncate">
+                                    {[
+                                      so.customer?.customer_name,
+                                      so.so_tanggal
+                                        ? formatDate(so.so_tanggal)
+                                        : null,
+                                    ]
+                                      .filter(Boolean)
+                                      .join(" • ")}
+                                  </p>
+                                </div>
+                              </button>
+                              <div className="text-right shrink-0">
+                                <p className="text-[11px] font-black text-foreground">
+                                  {readyCount} item bisa di-PO
+                                </p>
+                                {doneCount > 0 && (
+                                  <p className="text-[9px] font-medium text-muted-foreground">
+                                    {doneCount} item sudah di-PO / dikirim
+                                  </p>
+                                )}
+                              </div>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="icon"
+                                className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                                onClick={() => handleToggleSo(so)}
+                                title={`Lepas ${so.so_kode}`}
+                              >
+                                <X className="h-4 w-4" />
+                              </Button>
+                            </div>
+                            {expanded && soRows.length > 0 && (
+                              <Table containerClassName="max-h-64 overflow-y-auto">
+                                <TableHeader className="[&_th]:sticky [&_th]:top-0 [&_th]:z-10 [&_th]:bg-muted">
+                                  <TableRow className="h-8 hover:bg-transparent">
+                                    <TableHead className="pl-10 text-[9px] font-black uppercase text-muted-foreground w-32">
+                                      Part No.
+                                    </TableHead>
+                                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground">
+                                      Nama Barang
+                                    </TableHead>
+                                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-right w-20">
+                                      Qty SO
+                                    </TableHead>
+                                    <TableHead className="text-[9px] font-black uppercase text-muted-foreground text-right w-28 pr-4">
+                                      Sisa di-PO
+                                    </TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
+                                  {soRows.map((item) => (
+                                    <TableRow
+                                      key={item.so_item_id}
+                                      className={cn(
+                                        "border-b border-border/50",
+                                        item.remaining <= 0 && "opacity-50",
+                                      )}
+                                    >
+                                      <TableCell className="pl-10 py-2 text-[11px] font-black font-mono uppercase">
+                                        {item.part_number}
+                                      </TableCell>
+                                      <TableCell className="py-2 text-[10px] font-medium text-muted-foreground uppercase whitespace-normal">
+                                        {item.part_name}
+                                      </TableCell>
+                                      <TableCell className="py-2 text-right text-[11px] font-bold">
+                                        {item.qty_so ?? "—"}{" "}
+                                        <span className="text-[9px] font-medium text-muted-foreground">
+                                          {item.satuan}
+                                        </span>
+                                      </TableCell>
+                                      <TableCell className="py-2 pr-4 text-right">
+                                        {item.remaining > 0 ? (
+                                          <span className="text-[11px] font-black text-foreground">
+                                            {item.remaining}
+                                          </span>
+                                        ) : (
+                                          <Badge
+                                            variant="outline"
+                                            className="text-[9px] font-bold uppercase"
+                                          >
+                                            Sudah PO/DO
+                                          </Badge>
+                                        )}
+                                      </TableCell>
+                                    </TableRow>
+                                  ))}
+                                </TableBody>
+                              </Table>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="space-y-1.5">
                   <Label className="text-[10px] uppercase font-bold text-muted-foreground flex items-center gap-1.5">
@@ -1587,8 +1828,9 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   <Button
                     className="gap-2 font-bold text-xs uppercase"
                     disabled={
-                      !selectedSo ||
-                      poItems.length === 0 ||
+                      selectedSos.length === 0 ||
+                      loadingSoIds.length > 0 ||
+                      !poItems.some((i) => i.selected) ||
                       (!isEdit && !soCabangId)
                     }
                     onClick={() => setStep(2)}
@@ -2064,7 +2306,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                   : isNonPr
                   ? `Non-PR${prReferensi.trim() ? ` — ${prReferensi.trim()}` : ""}`
                   : isSo
-                    ? `SO ${selectedSo?.so_kode || ""}`
+                    ? `SO ${selectedSos.map((so) => so.so_kode).join(", ")}`
                     : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
               </div>
             </div>
@@ -2244,7 +2486,7 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                           className="text-[9px] font-bold uppercase"
                         >
                           {item.so_item_id
-                            ? selectedSo?.so_kode || "SO"
+                            ? item.so_kode || "SO"
                             : item.pr_kode || (isOutstanding ? "Belum PR" : "Non-PR")}
                         </Badge>
                       </TableCell>
@@ -2966,7 +3208,12 @@ export function PoForm({ editPoId }: { editPoId?: number } = {}) {
                     : isNonPr
                     ? `Non-PR${prReferensi.trim() ? ` — Ref: ${prReferensi.trim()}` : ""}`
                     : isSo
-                      ? `${selectedSo?.so_kode || "-"} — ${selectedSo?.customer?.customer_name || ""}`
+                      ? selectedSos
+                          .map(
+                            (so) =>
+                              `${so.so_kode} — ${so.customer?.customer_name || ""}`,
+                          )
+                          .join(" · ") || "-"
                       : selectedPrs.map((pr) => pr.pr_kode).join(", ")}
                 </span>
               </div>
