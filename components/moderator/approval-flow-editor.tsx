@@ -55,6 +55,9 @@ interface ApprovalFlowEditorProps {
   templateCabangId?: number | null;
   // Pembuat dokumen, mengisi tahap template bertipe "requester".
   requesterId?: string | null;
+  // Sembunyikan pemilih status per tahap (mis. edit massal: semua tahap
+  // selalu pending, status ditentukan server).
+  hideStatus?: boolean;
 }
 
 type TemplateOption = {
@@ -79,6 +82,7 @@ export function ApprovalFlowEditor({
   templateType,
   templateCabangId,
   requesterId,
+  hideStatus,
 }: ApprovalFlowEditorProps) {
   const supabase = createClient();
   const [activeIndex, setActiveIndex] = useState<number | null>(null);
@@ -431,19 +435,21 @@ export function ApprovalFlowEditor({
               </SelectContent>
             </Select>
 
-            <Select
-              value={step.status}
-              onValueChange={(val: any) => updateStep(index, { status: val })}
-            >
-              <SelectTrigger className={`h-8 w-32 text-[11px] font-bold ${getStatusBadgeClass(step.status)}`}>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="pending">Pending</SelectItem>
-                <SelectItem value="approved">Approved</SelectItem>
-                <SelectItem value="rejected">Rejected</SelectItem>
-              </SelectContent>
-            </Select>
+            {!hideStatus && (
+              <Select
+                value={step.status}
+                onValueChange={(val: any) => updateStep(index, { status: val })}
+              >
+                <SelectTrigger className={`h-8 w-32 text-[11px] font-bold ${getStatusBadgeClass(step.status)}`}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="approved">Approved</SelectItem>
+                  <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
 
             {step.signature_url && (
               <Badge variant="outline" className="h-6 px-2 text-[9px] text-success border-success/30 bg-success/10 font-black uppercase">
@@ -452,7 +458,7 @@ export function ApprovalFlowEditor({
             )}
           </div>
 
-          {step.status === "rejected" && (
+          {!hideStatus && step.status === "rejected" && (
             <div className="pl-9 space-y-1">
               <span className="text-[9px] font-bold uppercase text-muted-foreground">
                 Catatan / Alasan Penolakan

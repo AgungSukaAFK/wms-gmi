@@ -1751,7 +1751,7 @@ export async function moderatorEditItemTransfer(
 }
 
 // ============================================================
-// EDIT MASSAL PIC & PENERIMA (moderator, dari list Item Transfer)
+// EDIT MASSAL PIC, PENERIMA & JALUR APPROVAL (moderator, dari list IT)
 // ============================================================
 
 export type BulkItemTransferPeopleResult = {
@@ -1762,16 +1762,44 @@ export type BulkItemTransferPeopleResult = {
   message: string;
 };
 
+/** Tahap approval baru untuk edit massal (setelah tahap pembuat). */
+export type BulkItemTransferApprovalStep = {
+  userid: string;
+  approval_role: "menyetujui" | "mengetahui";
+};
+
+// Tahap pembuat (requester) di awal jalur dipertahankan apa adanya (TTD &
+// waktu tanda tangannya tetap) -- sama seperti reset approval di Edit Isi IT.
+function splitItRequesterStep(approvals: any[], uidRequester: string | null) {
+  const first = approvals[0];
+  const isRequester =
+    !!first &&
+    (first.role === "Requester" ||
+      (!!uidRequester && (first.user_id ?? first.userid) === uidRequester));
+  return { head: isRequester ? [first] : [], rest: isRequester ? approvals.slice(1) : approvals };
+}
+
 /**
- * Ganti PIC dan/atau Penerima banyak Item Transfer sekaligus. Hanya kolom
- * orang (pic, uid_pic, uid_receiver) yang disentuh: stok, item, dan jalur
- * approval tidak berubah, jadi approval TIDAK diulang. Penerima IT yang sudah
- * selesai (barang dikonfirmasi diterima) dilewati -- sama dengan aturan
- * Moderator Edit. Setiap IT yang berubah dicatat di moderator_edit_logs.
+ * Edit massal Item Transfer dari list (moderator):
+ *  - PIC / Penerima: hanya kolom orang yang disentuh, approval TIDAK diulang.
+ *    Penerima IT yang sudah selesai (barang diterima) dilewati -- sama dengan
+ *    aturan Moderator Edit.
+ *  - Jalur approval: tahap setelah pembuat diganti jalur baru dan SEMUA
+ *    kembali pending (approval diulang), approver pertama dinotifikasi. Hanya
+ *    untuk IT yang masih menunggu approval (status open & stok belum keluar);
+ *    IT approved/completed/rejected dilewati karena mengubah approval-nya
+ *    berarti mengoreksi stok / menghidupkan lagi IT -- pakai Moderator Edit
+ *    per dokumen untuk itu.
+ * Setiap IT yang berubah dicatat di moderator_edit_logs.
  */
 export async function bulkUpdateItemTransferPeople(
   itIds: number[],
-  payload: { uid_pic?: string | null; uid_receiver?: string | null; reason?: string },
+  payload: {
+    uid_pic?: string | null;
+    uid_receiver?: string | null;
+    approvals?: BulkItemTransferApprovalStep[];
+    reason?: string;
+  },
 ): Promise<{ error: string } | { success: true; results: BulkItemTransferPeopleResult[] }> {
   const supabase = await createClient();
   const {
@@ -1792,15 +1820,34 @@ export async function bulkUpdateItemTransferPeople(
 
   const setPic = payload.uid_pic !== undefined;
   const setReceiver = payload.uid_receiver !== undefined;
-  if (!setPic && !setReceiver) return { error: "Pilih PIC dan/atau Penerima yang ingin diubah." };
+  const setApprovals = payload.approvals !== undefined;
+  if (!setPic && !setReceiver && !setApprovals)
+    return { error: "Pilih PIC, Penerima, dan/atau Jalur Approval yang ingin diubah." };
+
+  const approvalSteps = payload.approvals || [];
+  if (setApprovals) {
+    if (approvalSteps.length === 0)
+      return { error: "Jalur approval minimal 1 tahap (selain pembuat)." };
+    for (const step of approvalSteps) {
+      if (!step?.userid) return { error: "Setiap tahap approval harus punya approver yang dipilih." };
+      if (!["menyetujui", "mengetahui"].includes(step.approval_role))
+        return { error: "Role approval tidak valid." };
+    }
+  }
 
   // Validasi user tujuan: harus ada & aktif.
-  const targetUids = [setPic ? payload.uid_pic : null, setReceiver ? payload.uid_receiver : null].filter(
-    Boolean,
-  ) as string[];
+  const targetUids = Array.from(
+    new Set(
+      [
+        setPic ? payload.uid_pic : null,
+        setReceiver ? payload.uid_receiver : null,
+        ...approvalSteps.map((s) => s.userid),
+      ].filter(Boolean) as string[],
+    ),
+  );
   const { data: targetProfiles } =
     targetUids.length > 0
-      ? await supabase.from("profiles").select("id, nama, is_active").in("id", targetUids)
+      ? await supabase.from("profiles").select("id, nama, email, is_active").in("id", targetUids)
       : { data: [] as any[] };
   const profileById = new Map((targetProfiles || []).map((p: any) => [p.id, p]));
   for (const uid of targetUids) {
@@ -1812,7 +1859,7 @@ export async function bulkUpdateItemTransferPeople(
 
   const { data: rows, error: fetchErr } = await supabase
     .from("item_transfers")
-    .select("id, it_kode, status, pic, uid_pic, uid_receiver")
+    .select("id, it_kode, status, stock_released, pic, uid_pic, uid_receiver, uid_requester, approvals")
     .in("id", ids);
   if (fetchErr) return { error: fetchErr.message };
 
@@ -1823,9 +1870,14 @@ export async function bulkUpdateItemTransferPeople(
     .single();
   const reason = payload.reason?.trim() || "";
 
+  // Signature jalur baru (userid + role) untuk mendeteksi "tidak berubah".
+  const newPathKey = approvalSteps.map((s) => `${s.userid}:${s.approval_role}`).join("|");
+  const newPathNames = approvalSteps.map((s) => profileById.get(s.userid)?.nama || "?").join(" → ");
+
   const byId = new Map((rows || []).map((r: any) => [r.id, r]));
   const results: BulkItemTransferPeopleResult[] = [];
   const logs: any[] = [];
+  const toNotify: { id: number; it_kode: string; approvals: any[] }[] = [];
 
   for (const id of ids) {
     const it = byId.get(id);
@@ -1844,6 +1896,47 @@ export async function bulkUpdateItemTransferPeople(
       else patch.uid_receiver = payload.uid_receiver ?? null;
     }
 
+    let approvalsChanged = false;
+    if (setApprovals) {
+      if (it.status !== "open" || it.stock_released) {
+        notes.push(
+          `Jalur approval dilewati: status ${it.status}` +
+            (it.status === "open" ? " (stok sudah keluar)" : "") +
+            ", hanya IT yang menunggu approval",
+        );
+      } else {
+        const current: any[] = Array.isArray(it.approvals) ? it.approvals : [];
+        const { head, rest } = splitItRequesterStep(current, it.uid_requester ?? null);
+        const currentKey = rest
+          .map((a: any) => {
+            const role = (a.level ?? a.approval_role) === "mengetahui" ? "mengetahui" : "menyetujui";
+            return `${a.user_id ?? a.userid}:${role}`;
+          })
+          .join("|");
+        const allPending = rest.every((a: any) => a.status === "pending");
+        if (currentKey !== newPathKey || !allPending) {
+          const newRest = approvalSteps.map((s, idx) => {
+            const p = profileById.get(s.userid);
+            return {
+              step_id: null,
+              step_order: head.length + idx + 1,
+              level: s.approval_role,
+              status: "pending",
+              user_id: s.userid,
+              nama: p?.nama ?? "",
+              email: p?.email ?? null,
+              role: s.approval_role === "menyetujui" ? "Approver" : "Reviewer",
+              processed_at: null,
+              signature_url: null,
+              notes: null,
+            };
+          });
+          patch.approvals = [...head, ...newRest];
+          approvalsChanged = true;
+        }
+      }
+    }
+
     if (Object.keys(patch).length === 0) {
       results.push({
         id,
@@ -1854,24 +1947,41 @@ export async function bulkUpdateItemTransferPeople(
       continue;
     }
 
-    const { error: updErr } = await supabase
+    let updQuery = supabase
       .from("item_transfers")
       .update({ ...patch, updated_at: new Date().toISOString() })
       .eq("id", id);
+    // Jalur approval: claim kondisional supaya tidak bentrok dengan approve
+    // yang berjalan bersamaan (stok keluar di langkah terakhir).
+    if (approvalsChanged) updQuery = updQuery.eq("status", "open").eq("stock_released", false);
+    const { data: updated, error: updErr } = await updQuery.select("id");
     if (updErr) {
       results.push({ id, it_kode: it.it_kode, ok: false, message: updErr.message });
+      continue;
+    }
+    if (!updated || updated.length === 0) {
+      results.push({
+        id,
+        it_kode: it.it_kode,
+        ok: false,
+        message: "Baru saja diproses oleh request lain. Muat ulang lalu coba lagi.",
+      });
       continue;
     }
 
     const changed = [
       "uid_pic" in patch ? "PIC" : null,
       "uid_receiver" in patch ? "penerima" : null,
+      approvalsChanged ? "jalur approval" : null,
     ].filter(Boolean) as string[];
     results.push({
       id,
       it_kode: it.it_kode,
       ok: true,
-      message: [`${changed.join(" & ")} diubah`, ...notes].join("; "),
+      message: [
+        `${changed.join(" & ")} diubah` + (approvalsChanged ? " (approval diulang, status pending)" : ""),
+        ...notes,
+      ].join("; "),
     });
     const before = Object.fromEntries(Object.keys(patch).map((k) => [k, it[k] ?? null]));
     logs.push({
@@ -1879,9 +1989,13 @@ export async function bulkUpdateItemTransferPeople(
       doc_id: id,
       user_id: user.id,
       user_nama: myProfile?.nama || user.email,
-      summary: `Edit massal: ${changed.join("/")}` + (reason ? `. Alasan: ${reason}` : ""),
+      summary:
+        `Edit massal: ${changed.join("/")}` +
+        (approvalsChanged ? ` (${newPathNames}), approval diulang` : "") +
+        (reason ? `. Alasan: ${reason}` : ""),
       changes: { reason: reason || null, bulk: true, before, after: patch },
     });
+    if (approvalsChanged) toNotify.push({ id, it_kode: it.it_kode, approvals: patch.approvals });
   }
 
   if (logs.length > 0) {
@@ -1889,6 +2003,17 @@ export async function bulkUpdateItemTransferPeople(
     if (logErr) console.error("bulkUpdateItemTransferPeople log:", logErr.message);
   }
 
+  // Kabari approver pertama jalur baru (notifyApprovers hanya mengirim ke
+  // pemilik tahap pending pertama).
+  await Promise.all(
+    toNotify.map((n) =>
+      notifyApprovers(n.approvals, "Item Transfer", n.id, n.it_kode, `/item-transfer/${n.id}`).catch(
+        console.error,
+      ),
+    ),
+  );
+
   revalidatePath("/item-transfer");
+  for (const n of toNotify) revalidatePath(`/item-transfer/${n.id}`);
   return { success: true, results };
 }

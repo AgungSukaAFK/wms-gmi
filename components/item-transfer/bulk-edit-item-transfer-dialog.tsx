@@ -1,9 +1,11 @@
 "use client";
 
-// Edit massal PIC & Penerima Item Transfer dari list (moderator). Hanya kolom
-// orang yang diubah -- stok, item, dan approval tidak disentuh, jadi approval
-// tidak diulang. Penerima IT yang sudah selesai dilewati (sama dengan aturan
-// Moderator Edit). Tiap IT yang berubah tercatat di riwayat moderator.
+// Edit massal PIC, Penerima & Jalur Approval Item Transfer dari list
+// (moderator). PIC/Penerima: hanya kolom orang, approval tidak diulang;
+// penerima IT yang sudah selesai dilewati (sama dengan aturan Moderator
+// Edit). Jalur approval: tahap setelah pembuat diganti & semua kembali
+// pending + notifikasi ke approver pertama, hanya untuk IT yang masih
+// menunggu approval. Tiap IT yang berubah tercatat di riwayat moderator.
 
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
@@ -38,6 +40,8 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
+import { ApprovalFlowEditor } from "@/components/moderator/approval-flow-editor";
+import type { ModeratorApprovalStep } from "@/services/moderator-edit-actions";
 import { cn } from "@/lib/utils";
 import {
   bulkUpdateItemTransferPeople,
@@ -133,6 +137,8 @@ export function BulkEditItemTransferDialog({
   const [editReceiver, setEditReceiver] = useState(false);
   const [picUid, setPicUid] = useState("");
   const [receiverUid, setReceiverUid] = useState("");
+  const [editApprovals, setEditApprovals] = useState(false);
+  const [approvalSteps, setApprovalSteps] = useState<ModeratorApprovalStep[]>([]);
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   // State tidak di-reset di sini: parent me-mount dialog ini hanya saat dibuka.
@@ -151,12 +157,24 @@ export function BulkEditItemTransferDialog({
   }, []);
 
   const completedCount = rows.filter((r) => r.status === "completed").length;
+  const notOpenCount = rows.filter((r) => r.status !== "open").length;
+  // Tahap pembuat tiap IT dipertahankan server; tahap "requester" dari
+  // template dibuang supaya editor hanya berisi approver setelah pembuat.
+  const handleApprovalStepsChange = (steps: ModeratorApprovalStep[]) =>
+    setApprovalSteps(
+      steps
+        .filter((s) => s.role !== "Requester")
+        .map((s) => ({ ...s, status: "pending", processed_at: null, signature_url: null, notes: null })),
+    );
+  const approvalsValid =
+    approvalSteps.length > 0 && approvalSteps.every((s) => !!s.userid && !!s.nama);
   const done = Object.keys(results).length > 0;
   const canSave =
     !saving &&
-    (editPic || editReceiver) &&
+    (editPic || editReceiver || editApprovals) &&
     (!editPic || !!picUid) &&
-    (!editReceiver || !!receiverUid);
+    (!editReceiver || !!receiverUid) &&
+    (!editApprovals || approvalsValid);
 
   const handleSave = async () => {
     if (!canSave) return;
@@ -167,6 +185,14 @@ export function BulkEditItemTransferDialog({
         {
           ...(editPic ? { uid_pic: picUid } : {}),
           ...(editReceiver ? { uid_receiver: receiverUid } : {}),
+          ...(editApprovals
+            ? {
+                approvals: approvalSteps.map((s) => ({
+                  userid: s.userid,
+                  approval_role: s.approval_role,
+                })),
+              }
+            : {}),
           reason: reason.trim() || undefined,
         },
       );
@@ -194,7 +220,7 @@ export function BulkEditItemTransferDialog({
 
   return (
     <Dialog open={open} onOpenChange={(o) => !saving && onOpenChange(o)}>
-      <DialogContent className="sm:max-w-xl p-0 rounded-xl border-border shadow-2xl overflow-hidden">
+      <DialogContent className="sm:max-w-2xl p-0 rounded-xl border-border shadow-2xl overflow-hidden">
         <DialogHeader className="p-5 bg-primary/5 border-b border-primary/20">
           <div className="flex items-center gap-3">
             <div className="h-10 w-10 bg-primary rounded-xl flex items-center justify-center shadow-sm shrink-0">
@@ -205,7 +231,7 @@ export function BulkEditItemTransferDialog({
                 Edit {rows.length} Item Transfer
               </DialogTitle>
               <DialogDescription className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mt-0.5">
-                Ubah PIC & Penerima sekaligus
+                Ubah PIC, Penerima & Jalur Approval sekaligus
               </DialogDescription>
             </div>
           </div>
@@ -216,7 +242,9 @@ export function BulkEditItemTransferDialog({
             <Info className="h-3.5 w-3.5 shrink-0 mt-0.5" />
             <span>
               Centang field yang ingin diubah. Field yang tidak dicentang tetap seperti semula.
-              Approval tidak diulang dan setiap perubahan tercatat di riwayat moderator.
+              Mengubah PIC/Penerima tidak mengulang approval; mengubah jalur approval membuat
+              approval diulang (pending) dan approver pertama dinotifikasi. Setiap perubahan
+              tercatat di riwayat moderator.
               {completedCount > 0 &&
                 ` Penerima pada ${completedCount} IT yang sudah selesai tidak akan diubah.`}
             </span>
@@ -259,6 +287,33 @@ export function BulkEditItemTransferDialog({
                 />
               </div>
               <div className="space-y-1.5">
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest cursor-pointer">
+                  <Checkbox
+                    checked={editApprovals}
+                    onCheckedChange={(v) => setEditApprovals(v === true)}
+                    disabled={saving}
+                  />
+                  Ubah Jalur Approval
+                </label>
+                {editApprovals && (
+                  <div className="space-y-2 rounded-lg border border-border p-3">
+                    <p className="text-[10px] text-muted-foreground leading-relaxed">
+                      Tahap 1 (pembuat IT) tetap. Tahap di bawah ini menggantikan seluruh approver
+                      setelahnya dan semuanya kembali <b>pending</b>. Hanya berlaku untuk IT yang
+                      masih menunggu approval
+                      {notOpenCount > 0 && ` — ${notOpenCount} IT terpilih bukan status open dan akan dilewati`}
+                      .
+                    </p>
+                    <ApprovalFlowEditor
+                      steps={approvalSteps}
+                      onChange={handleApprovalStepsChange}
+                      templateType="Item Transfer"
+                      hideStatus
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1.5">
                 <Label className="text-[10px] font-bold uppercase tracking-widest">
                   Alasan (opsional)
                 </Label>
@@ -290,8 +345,10 @@ export function BulkEditItemTransferDialog({
                       {result
                         ? result.message
                         : r.status === "completed"
-                          ? "Selesai — penerima terkunci"
-                          : "Siap diubah"}
+                          ? "Selesai — penerima & approval terkunci"
+                          : r.status !== "open"
+                            ? `Status ${r.status} — jalur approval terkunci`
+                            : "Siap diubah"}
                     </p>
                   </div>
                   {result?.ok && <CheckCircle2 className="h-4 w-4 text-success shrink-0" />}
