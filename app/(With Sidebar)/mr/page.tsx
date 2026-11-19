@@ -26,7 +26,16 @@ import {
   Clock,
   AlertTriangle,
   Trash2,
+  Ban,
+  Pencil,
+  X,
 } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  BulkCancelMrDialog,
+  type BulkMrRow,
+} from "@/components/mr/bulk-cancel-mr-dialog";
+import { BulkEditMrApprovalDialog } from "@/components/mr/bulk-edit-mr-approval-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -95,6 +104,7 @@ const MR_STATUS_OPTIONS = [
   { label: "Approved", value: "approved" },
   { label: "Rejected", value: "rejected" },
   { label: "Completed", value: "completed" },
+  { label: "Dibatalkan", value: "cancelled" },
 ];
 
 const KATEGORI_KOSONG = "kosong";
@@ -226,6 +236,63 @@ export default function MaterialRequestPage() {
   // Selected MR for Detail
   const [selectedMrId, setSelectedMrId] = useState<number | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+
+  // Batal & edit approval massal (moderator). Pilihan bertahan saat ganti
+  // halaman, direset saat filter/pencarian berubah supaya tidak ada MR
+  // tersembunyi ikut terproses. Direset di sini (bukan di setter) supaya ikut
+  // berlaku saat filter berubah lewat tombol Back atau chip.
+  const isModerator = !!userProfile?.isModerator;
+  const [selectedRows, setSelectedRows] = useState<Record<number, BulkMrRow>>({});
+  const selectionKey = JSON.stringify([
+    debouncedSearch,
+    statusFilters,
+    priorityFilters,
+    accurateFilter,
+    locationFilters,
+    dateFrom,
+    dateTo,
+    dueFrom,
+    dueTo,
+    kategoriFilters,
+    konversiFilters,
+    jenisFilters,
+    asalFilters,
+    kondisiFilters,
+    barangFilter,
+  ]);
+  const [prevSelectionKey, setPrevSelectionKey] = useState(selectionKey);
+  if (selectionKey !== prevSelectionKey) {
+    setPrevSelectionKey(selectionKey);
+    setSelectedRows({});
+  }
+  const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
+  const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const selectedList = Object.values(selectedRows);
+  const pageAllSelected = mrs.length > 0 && mrs.every((r) => selectedRows[r.id]);
+
+  const toSelectionRow = (r: any): BulkMrRow => ({
+    id: r.id,
+    mr_kode: r.mr_kode,
+    mr_status: r.mr_status,
+  });
+
+  const toggleRow = (r: any, checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      if (checked) next[r.id] = toSelectionRow(r);
+      else delete next[r.id];
+      return next;
+    });
+
+  const togglePage = (checked: boolean) =>
+    setSelectedRows((prev) => {
+      const next = { ...prev };
+      for (const r of mrs) {
+        if (checked) next[r.id] = toSelectionRow(r);
+        else delete next[r.id];
+      }
+      return next;
+    });
 
   const fetchUser = async () => {
     const {
@@ -1206,6 +1273,38 @@ export default function MaterialRequestPage() {
       </Content>
 
       <Content>
+        {isModerator && selectedList.length > 0 && (
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
+            <span className="text-xs font-bold text-foreground">
+              {selectedList.length} MR dipilih
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-semibold"
+                onClick={() => setSelectedRows({})}
+              >
+                <X className="h-3.5 w-3.5" /> Batal Pilih
+              </Button>
+              <Button
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-bold"
+                onClick={() => setBulkEditOpen(true)}
+              >
+                <Pencil className="h-3.5 w-3.5" /> Edit Approval Terpilih
+              </Button>
+              <Button
+                variant="destructive"
+                size="sm"
+                className="h-8 gap-1.5 text-xs font-bold"
+                onClick={() => setBulkCancelOpen(true)}
+              >
+                <Ban className="h-3.5 w-3.5" /> Batalkan Terpilih
+              </Button>
+            </div>
+          </div>
+        )}
         {columnOrder.isCustomOrder && (
           <ColumnOrderReset onReset={columnOrder.resetOrder} />
         )}
@@ -1218,6 +1317,16 @@ export default function MaterialRequestPage() {
               onMove={columnOrder.moveColumn}
               className="hover:bg-transparent h-10 text-foreground"
             >
+              {isModerator && (
+                <TableHead className="w-10 pl-4">
+                  <Checkbox
+                    checked={pageAllSelected}
+                    onCheckedChange={(v) => togglePage(v === true)}
+                    disabled={loading || mrs.length === 0}
+                    aria-label="Pilih semua di halaman ini"
+                  />
+                </TableHead>
+              )}
               <TableHead className="w-12.5 text-center font-bold text-[10px] uppercase text-muted-foreground">
                 No
               </TableHead>
@@ -1238,7 +1347,7 @@ export default function MaterialRequestPage() {
             {loading ? (
               Array.from({ length: limit }, (_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={7}>
+                  <TableCell colSpan={isModerator ? 8 : 7}>
                     <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
@@ -1246,7 +1355,7 @@ export default function MaterialRequestPage() {
             ) : mrs.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={isModerator ? 8 : 7}
                   className="h-40 text-center text-muted-foreground italic text-sm"
                 >
                   {activeFilters.length > 0 || accurateFilter !== "all"
@@ -1262,6 +1371,15 @@ export default function MaterialRequestPage() {
                     className="hover:bg-muted/40 transition-colors group border-b border-border/40 last:border-0 h-16 cursor-pointer"
                     onClick={() => handleRowClick(mr.id)}
                   >
+                    {isModerator && (
+                      <TableCell className="pl-4" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={!!selectedRows[mr.id]}
+                          onCheckedChange={(v) => toggleRow(mr, v === true)}
+                          aria-label={`Pilih ${mr.mr_kode}`}
+                        />
+                      </TableCell>
+                    )}
                     <TableCell className="text-center text-muted-foreground text-[10px] font-semibold font-mono">
                       {(page - 1) * limit + index + 1}
                     </TableCell>
@@ -1330,6 +1448,34 @@ export default function MaterialRequestPage() {
         confirmText="Ya, Hapus"
         onConfirm={handleDeleteConfirm}
       />
+
+      {isModerator && bulkEditOpen && (
+        <BulkEditMrApprovalDialog
+          open={bulkEditOpen}
+          onOpenChange={setBulkEditOpen}
+          rows={selectedList}
+          onFinished={fetchData}
+        />
+      )}
+
+      {isModerator && bulkCancelOpen && (
+        <BulkCancelMrDialog
+          open={bulkCancelOpen}
+          onOpenChange={setBulkCancelOpen}
+          rows={selectedList}
+          onFinished={(cancelledIds) => {
+            // MR batal tetap tampil di list (soft cancel); status di pilihan
+            // diperbarui supaya dialog berikutnya tahu MR ini sudah batal.
+            setSelectedRows((prev) => {
+              const next = { ...prev };
+              for (const id of cancelledIds)
+                if (next[id]) next[id] = { ...next[id], mr_status: "cancelled" };
+              return next;
+            });
+            fetchData();
+          }}
+        />
+      )}
     </>
   );
 }
