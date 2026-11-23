@@ -1292,7 +1292,7 @@ export default function MaterialRequestPage() {
                 className="h-8 gap-1.5 text-xs font-bold"
                 onClick={() => setBulkEditOpen(true)}
               >
-                <Pencil className="h-3.5 w-3.5" /> Edit Approval Terpilih
+                <Pencil className="h-3.5 w-3.5" /> Edit Massal
               </Button>
               <Button
                 variant="destructive"
