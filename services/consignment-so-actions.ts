@@ -309,6 +309,57 @@ export async function updateConsignmentSo(
 }
 
 /**
+ * EDIT ITEM SO CONSIGNMENT (moderator/admin/marketing).
+ *
+ * Seluruh validasi (item sudah dikirim via IK tidak boleh dihapus, qty tidak
+ * boleh di bawah qty terkirim, optimistic lock, log) ada di fungsi DB atomik
+ * `update_consignment_so_items` -- jangan duplikasi aturannya di sini.
+ * `items` = daftar LENGKAP item SO setelah diedit: item lama membawa `id`,
+ * item baru tanpa `id`, item yang tidak ada di daftar dianggap dihapus.
+ */
+export async function updateConsignmentSoItems(
+  soId: number,
+  items: {
+    id?: number;
+    part_id: number;
+    qty: number;
+    part_number_customer: string;
+  }[],
+  reason: string,
+  expectedUpdatedAt?: string | null,
+) {
+  const auth = await requireSoEditor();
+  if ("error" in auth) return { error: auth.error };
+
+  if (!reason?.trim()) return { error: "Alasan perubahan wajib diisi." };
+  if (!items || items.length === 0)
+    return { error: "SO Consignment minimal punya satu item." };
+
+  const { error } = await auth.supabase.rpc("update_consignment_so_items", {
+    p_so_id: soId,
+    p_items: items.map((i) => ({
+      id: i.id ?? null,
+      part_id: i.part_id,
+      qty: i.qty,
+      part_number_customer: i.part_number_customer,
+    })),
+    p_reason: reason.trim(),
+    p_expected_updated_at: expectedUpdatedAt ?? null,
+  });
+  if (error) {
+    if (error.code === "PGRST202")
+      return {
+        error:
+          "Fungsi edit item belum terpasang di database. Jalankan migration 20261124110000.",
+      };
+    return { error: error.message };
+  }
+
+  revalidatePath("/so-reguler/consignment/so");
+  return { success: true };
+}
+
+/**
  * HAPUS SO CONSIGNMENT (moderator/admin). Item ikut terhapus lewat cascade.
  */
 export async function deleteConsignmentSo(soId: number) {

@@ -52,6 +52,7 @@ import {
 import { getCustomerSites } from "@/services/master-actions";
 import { useConfirmDialog } from "@/components/confirm-dialog";
 import { ConsignmentSoHistory } from "@/components/consignment/consignment-so-history";
+import { ConsignmentSoItemsDialog } from "@/components/consignment/consignment-so-items-dialog";
 import { Textarea } from "@/components/ui/textarea";
 
 const NO_SITE = "none";
@@ -88,6 +89,7 @@ export function ConsignmentSoDetailSheet({
     reason: "",
   });
   const [historyKey, setHistoryKey] = useState(0);
+  const [itemsOpen, setItemsOpen] = useState(false);
   const [siteOptions, setSiteOptions] = useState<{ id: number; site_name: string }[]>([]);
 
   const fetchData = async () => {
@@ -334,6 +336,14 @@ export function ConsignmentSoDetailSheet({
                   >
                     Edit Data
                   </Button>
+                  <Button
+                    variant="outline"
+                    className="flex-1 gap-2"
+                    disabled={busy}
+                    onClick={() => setItemsOpen(true)}
+                  >
+                    Edit Item
+                  </Button>
                   {isModeratorOrAdmin && (
                     <Button
                       variant="outline"
@@ -351,12 +361,27 @@ export function ConsignmentSoDetailSheet({
         )}
       </SheetContent>
 
+      {soRow && (
+        <ConsignmentSoItemsDialog
+          open={itemsOpen}
+          onOpenChange={setItemsOpen}
+          soId={soRow.id}
+          soNo={soRow.so_no}
+          soUpdatedAt={soRow.updated_at ?? null}
+          items={items}
+          onSaved={() => {
+            setHistoryKey((k) => k + 1);
+            refresh();
+          }}
+        />
+      )}
+
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Edit SO Consignment</DialogTitle>
             <DialogDescription>
-              Moderator/admin/marketing dapat memperbarui data header tanpa mengubah item.
+              Memperbarui data header SO. Untuk mengubah item gunakan tombol Edit Item.
             </DialogDescription>
           </DialogHeader>
 

@@ -11,6 +11,8 @@ type LogChange = {
   label: string;
   before: string | null;
   after: string | null;
+  /** nama barang, hanya untuk perubahan item */
+  name?: string;
 };
 
 type SoLog = {
@@ -40,6 +42,15 @@ const ROLE_LABEL: Record<string, string> = {
 function showValue(field: string, v: string | null) {
   if (!v) return "—";
   return DATE_FIELDS.has(field) ? formatDate(v) : v;
+}
+
+function ItemRef({ c }: { c: LogChange }) {
+  return (
+    <span title={c.name}>
+      <code className="font-bold">{c.label}</code>
+      {c.name && <span className="text-muted-foreground"> {c.name}</span>}
+    </span>
+  );
 }
 
 /** Riwayat Aktivitas SO Consignment (consignment_so_logs), terbaru dulu. */
@@ -118,16 +129,41 @@ export function ConsignmentSoHistory({
                 )}
                 {log.changes && log.changes.length > 0 ? (
                   <ul className="mt-2 space-y-1">
-                    {log.changes.map((c) => (
-                      <li key={c.field} className="break-words">
-                        <span className="text-muted-foreground">{c.label}: </span>
-                        <span className="text-destructive line-through">
-                          {showValue(c.field, c.before)}
-                        </span>{" "}
-                        →{" "}
-                        <span className="font-semibold">
-                          {showValue(c.field, c.after)}
-                        </span>
+                    {log.changes.map((c, idx) => (
+                      <li key={`${c.field}-${c.label}-${idx}`} className="break-words">
+                        {c.field === "item_added" ? (
+                          <>
+                            <span className="font-semibold text-success">+ Tambah</span>{" "}
+                            <ItemRef c={c} /> · {c.after}
+                          </>
+                        ) : c.field === "item_removed" ? (
+                          <>
+                            <span className="font-semibold text-destructive">− Hapus</span>{" "}
+                            <ItemRef c={c} /> · {c.before}
+                          </>
+                        ) : c.field === "item_qty" || c.field === "item_pnc" ? (
+                          <>
+                            <ItemRef c={c} />{" "}
+                            <span className="text-muted-foreground">
+                              {c.field === "item_qty" ? "Qty" : "PN Customer"}:{" "}
+                            </span>
+                            <span className="text-destructive line-through">
+                              {c.before || "—"}
+                            </span>{" "}
+                            → <span className="font-semibold">{c.after || "—"}</span>
+                          </>
+                        ) : (
+                          <>
+                            <span className="text-muted-foreground">{c.label}: </span>
+                            <span className="text-destructive line-through">
+                              {showValue(c.field, c.before)}
+                            </span>{" "}
+                            →{" "}
+                            <span className="font-semibold">
+                              {showValue(c.field, c.after)}
+                            </span>
+                          </>
+                        )}
                       </li>
                     ))}
                   </ul>
