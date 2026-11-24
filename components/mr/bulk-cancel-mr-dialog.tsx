@@ -25,6 +25,8 @@ export type BulkMrRow = {
   id: number;
   mr_kode: string;
   mr_status: string;
+  is_frozen?: boolean;
+  mr_type?: string | null;
 };
 
 const FINAL_STATUSES = ["cancelled", "completed", "done", "closed"];

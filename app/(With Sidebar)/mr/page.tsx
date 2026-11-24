@@ -35,6 +35,16 @@ import {
   BulkCancelMrDialog,
   type BulkMrRow,
 } from "@/components/mr/bulk-cancel-mr-dialog";
+import {
+  BulkEditMrFieldsDialog,
+  type BulkFieldMode,
+} from "@/components/mr/bulk-edit-mr-fields-dialog";
+import { BulkMrHistoryDialog } from "@/components/mr/bulk-mr-history-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { BulkEditMrApprovalDialog } from "@/components/mr/bulk-edit-mr-approval-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Content } from "@/components/content";
@@ -267,6 +277,11 @@ export default function MaterialRequestPage() {
   }
   const [bulkCancelOpen, setBulkCancelOpen] = useState(false);
   const [bulkEditOpen, setBulkEditOpen] = useState(false);
+  const [bulkFieldMode, setBulkFieldMode] = useState<BulkFieldMode | null>(null);
+  const [bulkHistoryOpen, setBulkHistoryOpen] = useState(false);
+  // Setelah edit field massal, status (freeze dll) di pilihan jadi basi:
+  // pilihan dikosongkan saat dialog ditutup.
+  const [bulkFieldDirty, setBulkFieldDirty] = useState(false);
   const selectedList = Object.values(selectedRows);
   const pageAllSelected = mrs.length > 0 && mrs.every((r) => selectedRows[r.id]);
 
@@ -274,6 +289,8 @@ export default function MaterialRequestPage() {
     id: r.id,
     mr_kode: r.mr_kode,
     mr_status: r.mr_status,
+    is_frozen: !!r.is_frozen,
+    mr_type: r.mr_type ?? null,
   });
 
   const toggleRow = (r: any, checked: boolean) =>
@@ -1273,6 +1290,18 @@ export default function MaterialRequestPage() {
       </Content>
 
       <Content>
+        {isModerator && selectedList.length === 0 && (
+          <div className="mb-2 flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1.5 text-[11px] font-semibold text-muted-foreground"
+              onClick={() => setBulkHistoryOpen(true)}
+            >
+              <Clock className="h-3.5 w-3.5" /> Riwayat Aksi Massal
+            </Button>
+          </div>
+        )}
         {isModerator && selectedList.length > 0 && (
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary/5 px-3 py-2">
             <span className="text-xs font-bold text-foreground">
@@ -1288,12 +1317,34 @@ export default function MaterialRequestPage() {
                 <X className="h-3.5 w-3.5" /> Batal Pilih
               </Button>
               <Button
+                variant="ghost"
                 size="sm"
-                className="h-8 gap-1.5 text-xs font-bold"
-                onClick={() => setBulkEditOpen(true)}
+                className="h-8 gap-1.5 text-xs font-semibold"
+                onClick={() => setBulkHistoryOpen(true)}
               >
-                <Pencil className="h-3.5 w-3.5" /> Edit Massal
+                <Clock className="h-3.5 w-3.5" /> Riwayat
               </Button>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" className="h-8 gap-1.5 text-xs font-bold">
+                    <Pencil className="h-3.5 w-3.5" /> Edit Massal
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => setBulkEditOpen(true)}>
+                    Jalur Approval
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setBulkFieldMode("due_date")}>
+                    Due Date
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setBulkFieldMode("unfreeze")}>
+                    Unfreeze / Reset
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => setBulkFieldMode("kategori")}>
+                    Kategori
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <Button
                 variant="destructive"
                 size="sm"
@@ -1456,6 +1507,30 @@ export default function MaterialRequestPage() {
           rows={selectedList}
           onFinished={fetchData}
         />
+      )}
+
+      {isModerator && bulkFieldMode && (
+        <BulkEditMrFieldsDialog
+          open
+          onOpenChange={(o) => {
+            if (o) return;
+            setBulkFieldMode(null);
+            if (bulkFieldDirty) {
+              setSelectedRows({});
+              setBulkFieldDirty(false);
+            }
+          }}
+          mode={bulkFieldMode}
+          rows={selectedList}
+          onFinished={() => {
+            setBulkFieldDirty(true);
+            fetchData();
+          }}
+        />
+      )}
+
+      {isModerator && bulkHistoryOpen && (
+        <BulkMrHistoryDialog open onOpenChange={setBulkHistoryOpen} />
       )}
 
       {isModerator && bulkCancelOpen && (

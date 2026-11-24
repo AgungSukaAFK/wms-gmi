@@ -3,11 +3,15 @@
 // Aksi massal Material Request dari list MR (khusus moderator):
 //  - Batalkan massal: MR -> status 'cancelled' (soft, bukan hard delete).
 //  - Edit jalur approval massal: tahap setelah pembuat diganti, approval diulang.
+//  - Due date massal (set tanggal / geser +/- hari), Unfreeze/Reset massal,
+//    dan ubah Kategori massal.
 // Setiap MR yang berubah tercatat di moderator_edit_logs (doc_type 'mr').
 
 import { createClient } from "@/lib/supabase/server";
 import { revalidatePath } from "next/cache";
-import { notifyApprovers } from "@/services/notification-actions";
+import { notifyApprovers, createNotification } from "@/services/notification-actions";
+import { businessToday } from "@/lib/business-date";
+import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 
 type Supabase = Awaited<ReturnType<typeof createClient>>;
 
@@ -159,6 +163,7 @@ export async function bulkCancelMR(
   const results: BulkMrResult[] = [];
   const logs: any[] = [];
   const now = new Date().toISOString();
+  const batchId = crypto.randomUUID();
 
   for (const id of ids) {
     const mr = byId.get(id);
@@ -219,6 +224,8 @@ export async function bulkCancelMR(
       changes: {
         reason: trimmedReason,
         bulk: true,
+        bulk_action: "cancel",
+        batch_id: batchId,
         before: { mr_status: mr.mr_status },
         after: { mr_status: "cancelled" },
       },
@@ -299,6 +306,7 @@ export async function bulkUpdateMRApprovals(
   const newPathNames = steps.map((s) => profileById.get(s.userid)?.nama || "?").join(" → ");
 
   const byId = new Map((mrs || []).map((m: any) => [Number(m.id), m]));
+  const batchId = crypto.randomUUID();
   const results: BulkMrResult[] = [];
   const logs: any[] = [];
   const toNotify: { id: number; mr_kode: string; approvals: any[] }[] = [];
@@ -390,6 +398,8 @@ export async function bulkUpdateMRApprovals(
       changes: {
         reason: reason || null,
         bulk: true,
+        bulk_action: "approval",
+        batch_id: batchId,
         before: { approvals: mr.approvals },
         after: { approvals: newApprovals },
       },
@@ -412,4 +422,449 @@ export async function bulkUpdateMRApprovals(
   revalidatePath("/mr");
   for (const n of toNotify) revalidatePath(`/mr/${n.id}`);
   return { success: true, results };
+}
+
+// ============================================================
+// FIELD MASSAL: DUE DATE, UNFREEZE/RESET, KATEGORI
+// ============================================================
+
+// Hanya MR yang masih berjalan yang boleh diubah field-nya.
+const EDITABLE_STATUSES = ["open", "approved"];
+const YMD = /^\d{4}-\d{2}-\d{2}$/;
+
+function addDays(ymd: string, days: number): string {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+async function insertBulkLogs(logs: any[], tag: string) {
+  if (logs.length === 0) return;
+  const supabase = await createClient();
+  const { error } = await supabase.from("moderator_edit_logs").insert(logs);
+  if (error) console.error(`${tag} log:`, error.message);
+}
+
+export type BulkDueDateMode =
+  | { mode: "set"; date: string }
+  | { mode: "shift"; days: number };
+
+/**
+ * Ubah due date banyak MR (moderator): set ke tanggal tertentu, atau geser
+ * +/- N hari dari due date masing-masing. Hanya MR open/approved & bukan
+ * Scheduled MR (due date-nya per item). Tanggal hasil tidak boleh lampau.
+ * Tidak membuka freeze -- pakai Unfreeze/Reset untuk itu.
+ */
+export async function bulkUpdateMRDueDate(
+  mrIds: number[],
+  payload: BulkDueDateMode & { reason: string },
+): Promise<{ error: string } | { success: true; results: BulkMrResult[] }> {
+  const supabase = await createClient();
+  const auth = await requireModerator(supabase);
+  if ("error" in auth) return { error: auth.error as string };
+
+  const ids = normalizeIds(mrIds);
+  if (ids.length === 0) return { error: "Pilih minimal satu MR." };
+  if (ids.length > MAX_BULK) return { error: `Maksimal ${MAX_BULK} MR per aksi massal.` };
+  const reason = (payload.reason || "").trim();
+  if (!reason) return { error: "Alasan wajib diisi." };
+
+  const today = businessToday();
+  if (payload.mode === "set") {
+    if (!YMD.test(payload.date || "")) return { error: "Tanggal due date tidak valid." };
+    if (payload.date < today) return { error: "Due date baru tidak boleh tanggal lampau." };
+  } else {
+    if (!Number.isInteger(payload.days) || payload.days === 0 || Math.abs(payload.days) > 3650)
+      return { error: "Jumlah hari harus bilangan bulat bukan nol." };
+  }
+
+  const { data: mrs, error } = await supabase
+    .from("mrs")
+    .select("id, mr_kode, mr_status, mr_type, mr_due_date")
+    .in("id", ids);
+  if (error) return { error: error.message };
+  const byId = new Map((mrs || []).map((m: any) => [Number(m.id), m]));
+
+  const batchId = crypto.randomUUID();
+  const results: BulkMrResult[] = [];
+  const logs: any[] = [];
+  const touched: number[] = [];
+
+  for (const id of ids) {
+    const mr: any = byId.get(id);
+    if (!mr) {
+      results.push({ id, mr_kode: `#${id}`, ok: false, message: "MR tidak ditemukan." });
+      continue;
+    }
+    const fail = (message: string) =>
+      results.push({ id, mr_kode: mr.mr_kode, ok: false, message });
+    if (mr.mr_type === "scheduled") {
+      fail("Dilewati: Scheduled MR memakai due date per item");
+      continue;
+    }
+    if (!EDITABLE_STATUSES.includes(mr.mr_status)) {
+      fail(`Dilewati: status ${mr.mr_status}`);
+      continue;
+    }
+    let newDate: string;
+    if (payload.mode === "set") {
+      newDate = payload.date;
+    } else {
+      if (!mr.mr_due_date) {
+        fail("Dilewati: MR belum punya due date untuk digeser");
+        continue;
+      }
+      newDate = addDays(mr.mr_due_date, payload.days);
+      if (newDate < today) {
+        fail(`Dilewati: hasil ${newDate} sudah lampau`);
+        continue;
+      }
+    }
+    if (newDate === mr.mr_due_date) {
+      results.push({ id, mr_kode: mr.mr_kode, ok: true, message: "Tidak ada perubahan (sudah sama)" });
+      continue;
+    }
+
+    // Claim kondisional: status & due date tidak boleh berubah sejak dibaca.
+    let q = supabase
+      .from("mrs")
+      .update({ mr_due_date: newDate, updated_at: new Date().toISOString() } as any)
+      .eq("id", id)
+      .eq("mr_status", mr.mr_status);
+    q = mr.mr_due_date ? q.eq("mr_due_date", mr.mr_due_date) : q.is("mr_due_date", null);
+    const { data: updated, error: updErr } = await q.select("id");
+    if (updErr) {
+      fail(updErr.message);
+      continue;
+    }
+    if (!updated || updated.length === 0) {
+      fail("Baru saja diproses oleh request lain. Muat ulang lalu coba lagi.");
+      continue;
+    }
+
+    results.push({
+      id,
+      mr_kode: mr.mr_kode,
+      ok: true,
+      message: `Due date ${mr.mr_due_date || "-"} → ${newDate}`,
+    });
+    touched.push(id);
+    logs.push({
+      doc_type: "mr",
+      doc_id: id,
+      user_id: auth.user.id,
+      user_nama: auth.userNama,
+      summary: `Edit massal: due date ${mr.mr_due_date || "-"} → ${newDate}. Alasan: ${reason}`,
+      changes: {
+        reason,
+        bulk: true,
+        bulk_action: "due_date",
+        batch_id: batchId,
+        before: { mr_due_date: mr.mr_due_date },
+        after: { mr_due_date: newDate },
+      },
+    });
+  }
+
+  await insertBulkLogs(logs, "bulkUpdateMRDueDate");
+  revalidatePath("/mr");
+  for (const id of touched) revalidatePath(`/mr/${id}`);
+  return { success: true, results };
+}
+
+/**
+ * Unfreeze / Reset banyak MR sekaligus (moderator). Tanpa `newDueDate` =
+ * unfreeze (lanjut dari posisi terakhir). Dengan `newDueDate` = reset
+ * (perpanjang due date lalu unfreeze). Laporan kendala yang terbuka ikut
+ * ditandai selesai dan pembuat MR dinotifikasi -- sama dengan Unfreeze per MR.
+ */
+export async function bulkUnfreezeMR(
+  mrIds: number[],
+  payload: { newDueDate?: string; reason: string },
+): Promise<{ error: string } | { success: true; results: BulkMrResult[] }> {
+  const supabase = await createClient();
+  const auth = await requireModerator(supabase);
+  if ("error" in auth) return { error: auth.error as string };
+
+  const ids = normalizeIds(mrIds);
+  if (ids.length === 0) return { error: "Pilih minimal satu MR." };
+  if (ids.length > MAX_BULK) return { error: `Maksimal ${MAX_BULK} MR per aksi massal.` };
+  const reason = (payload.reason || "").trim();
+  if (!reason) return { error: "Alasan wajib diisi." };
+
+  const newDueDate = payload.newDueDate?.trim() || "";
+  const action: "unfreeze" | "reset" = newDueDate ? "reset" : "unfreeze";
+  if (newDueDate) {
+    if (!YMD.test(newDueDate)) return { error: "Tanggal due date tidak valid." };
+    if (newDueDate < businessToday())
+      return { error: "Due date baru tidak boleh tanggal lampau." };
+  }
+
+  const { data: mrs, error } = await supabase
+    .from("mrs")
+    .select("id, mr_kode, mr_status, mr_type, is_frozen, mr_due_date, mr_pic_id")
+    .in("id", ids);
+  if (error) return { error: error.message };
+  const byId = new Map((mrs || []).map((m: any) => [Number(m.id), m]));
+
+  const batchId = crypto.randomUUID();
+  const results: BulkMrResult[] = [];
+  const logs: any[] = [];
+  const touched: any[] = [];
+  const nowIso = new Date().toISOString();
+
+  for (const id of ids) {
+    const mr: any = byId.get(id);
+    if (!mr) {
+      results.push({ id, mr_kode: `#${id}`, ok: false, message: "MR tidak ditemukan." });
+      continue;
+    }
+    const fail = (message: string) =>
+      results.push({ id, mr_kode: mr.mr_kode, ok: false, message });
+    if (!mr.is_frozen) {
+      fail("Dilewati: MR tidak dalam status freeze");
+      continue;
+    }
+
+    const patch: any = { is_frozen: false, frozen_at: null, frozen_reason: null };
+    if (newDueDate) patch.mr_due_date = newDueDate;
+    const { data: updated, error: updErr } = await supabase
+      .from("mrs")
+      .update(patch)
+      .eq("id", id)
+      .eq("is_frozen", true)
+      .select("id");
+    if (updErr) {
+      fail(updErr.message);
+      continue;
+    }
+    if (!updated || updated.length === 0) {
+      fail("Baru saja diproses oleh request lain. Muat ulang lalu coba lagi.");
+      continue;
+    }
+
+    await supabase
+      .from("mr_freeze_reports")
+      .update({
+        status: "resolved",
+        resolution_action: action,
+        resolution: reason,
+        resolved_by: auth.user.id,
+        resolved_at: nowIso,
+      })
+      .eq("mr_id", id)
+      .eq("status", "open");
+
+    results.push({
+      id,
+      mr_kode: mr.mr_kode,
+      ok: true,
+      message: newDueDate
+        ? `Di-reset: unfreeze, due date ${mr.mr_due_date || "-"} → ${newDueDate}`
+        : "Di-unfreeze",
+    });
+    touched.push(mr);
+    logs.push({
+      doc_type: "mr",
+      doc_id: id,
+      user_id: auth.user.id,
+      user_nama: auth.userNama,
+      summary:
+        (newDueDate
+          ? `Reset massal: unfreeze + due date ${mr.mr_due_date || "-"} → ${newDueDate}`
+          : "Unfreeze massal") + `. Alasan: ${reason}`,
+      changes: {
+        reason,
+        bulk: true,
+        bulk_action: action,
+        batch_id: batchId,
+        before: { is_frozen: true, mr_due_date: mr.mr_due_date },
+        after: { is_frozen: false, mr_due_date: newDueDate || mr.mr_due_date },
+      },
+    });
+  }
+
+  await insertBulkLogs(logs, "bulkUnfreezeMR");
+
+  await Promise.all(
+    touched
+      .filter((m) => m.mr_pic_id)
+      .map((m) =>
+        createNotification({
+          userId: m.mr_pic_id,
+          type: "general",
+          title: `MR ${m.mr_kode} di-${action === "reset" ? "reset" : "unfreeze"}`,
+          message:
+            action === "reset"
+              ? `Moderator memperpanjang due date MR ${m.mr_kode}. Alur dapat dilanjutkan.`
+              : `Moderator membuka freeze MR ${m.mr_kode}. Alur dapat dilanjutkan.`,
+          documentType: "MR",
+          documentId: m.id,
+          documentUrl: `/mr/${m.id}`,
+        }).catch(console.error),
+      ),
+  );
+
+  revalidatePath("/mr");
+  for (const m of touched) revalidatePath(`/mr/${m.id}`);
+  return { success: true, results };
+}
+
+/** Ubah kategori (jenis pengajuan) banyak MR sekaligus (moderator). */
+export async function bulkUpdateMRKategori(
+  mrIds: number[],
+  payload: { kategori: string; reason?: string },
+): Promise<{ error: string } | { success: true; results: BulkMrResult[] }> {
+  const supabase = await createClient();
+  const auth = await requireModerator(supabase);
+  if ("error" in auth) return { error: auth.error as string };
+
+  const ids = normalizeIds(mrIds);
+  if (ids.length === 0) return { error: "Pilih minimal satu MR." };
+  if (ids.length > MAX_BULK) return { error: `Maksimal ${MAX_BULK} MR per aksi massal.` };
+  if (!(MR_KATEGORI_OPTIONS as readonly string[]).includes(payload.kategori))
+    return { error: "Kategori tidak valid." };
+  const reason = payload.reason?.trim() || "";
+
+  const { data: mrs, error } = await supabase
+    .from("mrs")
+    .select("id, mr_kode, mr_status, kategori")
+    .in("id", ids);
+  if (error) return { error: error.message };
+  const byId = new Map((mrs || []).map((m: any) => [Number(m.id), m]));
+
+  const batchId = crypto.randomUUID();
+  const results: BulkMrResult[] = [];
+  const logs: any[] = [];
+  const touched: number[] = [];
+
+  for (const id of ids) {
+    const mr: any = byId.get(id);
+    if (!mr) {
+      results.push({ id, mr_kode: `#${id}`, ok: false, message: "MR tidak ditemukan." });
+      continue;
+    }
+    if (mr.mr_status === "cancelled") {
+      results.push({ id, mr_kode: mr.mr_kode, ok: false, message: "Dilewati: MR dibatalkan" });
+      continue;
+    }
+    if ((mr.kategori || null) === payload.kategori) {
+      results.push({ id, mr_kode: mr.mr_kode, ok: true, message: "Tidak ada perubahan (sudah sama)" });
+      continue;
+    }
+    const { data: updated, error: updErr } = await supabase
+      .from("mrs")
+      .update({ kategori: payload.kategori, updated_at: new Date().toISOString() } as any)
+      .eq("id", id)
+      .neq("mr_status", "cancelled")
+      .select("id");
+    if (updErr || !updated || updated.length === 0) {
+      results.push({
+        id,
+        mr_kode: mr.mr_kode,
+        ok: false,
+        message: updErr?.message || "Baru saja diproses oleh request lain. Muat ulang lalu coba lagi.",
+      });
+      continue;
+    }
+    results.push({
+      id,
+      mr_kode: mr.mr_kode,
+      ok: true,
+      message: `Kategori ${mr.kategori || "-"} → ${payload.kategori}`,
+    });
+    touched.push(id);
+    logs.push({
+      doc_type: "mr",
+      doc_id: id,
+      user_id: auth.user.id,
+      user_nama: auth.userNama,
+      summary:
+        `Edit massal: kategori ${mr.kategori || "-"} → ${payload.kategori}` +
+        (reason ? `. Alasan: ${reason}` : ""),
+      changes: {
+        reason: reason || null,
+        bulk: true,
+        bulk_action: "kategori",
+        batch_id: batchId,
+        before: { kategori: mr.kategori ?? null },
+        after: { kategori: payload.kategori },
+      },
+    });
+  }
+
+  await insertBulkLogs(logs, "bulkUpdateMRKategori");
+  revalidatePath("/mr");
+  for (const id of touched) revalidatePath(`/mr/${id}`);
+  return { success: true, results };
+}
+
+// ============================================================
+// RIWAYAT AKSI MASSAL
+// ============================================================
+
+export type BulkMrHistoryBatch = {
+  key: string;
+  action: string;
+  user_nama: string;
+  created_at: string;
+  reason: string | null;
+  summary: string;
+  items: { id: number; mr_kode: string; summary: string }[];
+};
+
+/** Riwayat aksi massal MR terbaru, dikelompokkan per batch (moderator). */
+export async function getBulkMrHistory(
+  limit = 30,
+): Promise<{ error: string } | { success: true; batches: BulkMrHistoryBatch[] }> {
+  const supabase = await createClient();
+  const auth = await requireModerator(supabase);
+  if ("error" in auth) return { error: auth.error as string };
+
+  const { data, error } = await supabase
+    .from("moderator_edit_logs")
+    .select("id, doc_id, user_id, user_nama, summary, changes, created_at")
+    .eq("doc_type", "mr")
+    .eq("changes->>bulk", "true")
+    .order("created_at", { ascending: false })
+    .limit(1500);
+  if (error) return { error: error.message };
+
+  const rows = data || [];
+  const mrIds = Array.from(new Set(rows.map((r: any) => Number(r.doc_id))));
+  const kodeById = new Map<number, string>();
+  for (let i = 0; i < mrIds.length; i += IN_CHUNK) {
+    const { data: m } = await supabase
+      .from("mrs")
+      .select("id, mr_kode")
+      .in("id", mrIds.slice(i, i + IN_CHUNK));
+    for (const r of m || []) kodeById.set(Number(r.id), r.mr_kode);
+  }
+
+  const batches = new Map<string, BulkMrHistoryBatch>();
+  for (const r of rows as any[]) {
+    const ch = r.changes || {};
+    // Log lama (sebelum ada batch_id) dikelompokkan per user + menit.
+    const key = ch.batch_id || `${r.user_id}|${String(r.created_at).slice(0, 16)}`;
+    let b = batches.get(key);
+    if (!b) {
+      if (batches.size >= limit) continue;
+      b = {
+        key,
+        action: ch.bulk_action || (ch.after?.mr_status === "cancelled" ? "cancel" : "approval"),
+        user_nama: r.user_nama || "-",
+        created_at: r.created_at,
+        reason: ch.reason ?? null,
+        summary: r.summary,
+        items: [],
+      };
+      batches.set(key, b);
+    }
+    b.items.push({
+      id: Number(r.doc_id),
+      mr_kode: kodeById.get(Number(r.doc_id)) || `#${r.doc_id}`,
+      summary: r.summary,
+    });
+  }
+  return { success: true, batches: Array.from(batches.values()) };
 }
