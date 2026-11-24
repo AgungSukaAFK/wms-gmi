@@ -44,7 +44,10 @@ async function resolveCustomerSite(
   return { site_id: data.id as number, site: data.site_name as string } as const;
 }
 
-async function requireModeratorOrAdmin() {
+const SO_EDIT_ROLES = ["moderator", "admin", "marketing"];
+const SO_DELETE_ROLES = ["moderator", "admin"];
+
+async function requireSoRole(allowedRoles: string[], deniedMessage: string) {
   const supabase = await createClient();
   const {
     data: { user },
@@ -52,16 +55,88 @@ async function requireModeratorOrAdmin() {
   if (!user) return { error: "Session expired" } as const;
 
   const roleNames = await getRoleNames(supabase, user.id);
-  const allowed = roleNames.some(
-    (role) => role === "moderator" || role === "admin",
-  );
-  if (!allowed)
-    return {
-      error:
-        "Akses ditolak. Hanya moderator/admin yang dapat mengubah atau menghapus SO Consignment.",
-    } as const;
+  const role = allowedRoles.find((r) => roleNames.includes(r));
+  if (!role) return { error: deniedMessage } as const;
 
-  return { supabase, user } as const;
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("nama")
+    .eq("id", user.id)
+    .maybeSingle();
+
+  return {
+    supabase,
+    user,
+    role,
+    userNama: (profile?.nama as string | null) || user.email || "-",
+  } as const;
+}
+
+const requireSoEditor = () =>
+  requireSoRole(
+    SO_EDIT_ROLES,
+    "Akses ditolak. Hanya moderator, admin, atau marketing yang dapat mengubah SO Consignment.",
+  );
+
+const requireSoDeleter = () =>
+  requireSoRole(
+    SO_DELETE_ROLES,
+    "Akses ditolak. Hanya moderator/admin yang dapat menghapus SO Consignment.",
+  );
+
+type SoLogChange = {
+  field: string;
+  label: string;
+  before: string | null;
+  after: string | null;
+};
+
+const SO_LOG_FIELDS: { field: string; label: string }[] = [
+  { field: "so_tanggal_input", label: "Tgl Input SO" },
+  { field: "tgl_po_email_marketing", label: "Tgl Email PO Marketing" },
+  { field: "tgl_po_customer", label: "Tgl PO Customer" },
+  { field: "due_date", label: "Due Date" },
+  { field: "no_po", label: "No. PO" },
+  { field: "site", label: "Site" },
+];
+
+/** Normalisasi nilai supaya "2026-11-01T00:00:00" == "2026-11-01" dan ""/null sama. */
+function normLogValue(field: string, v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  let str = String(v).trim();
+  if (field !== "no_po" && field !== "site" && str.length >= 10) {
+    str = str.slice(0, 10);
+  }
+  return str === "" ? null : str;
+}
+
+async function writeSoLog(
+  supabase: any,
+  entry: {
+    soId: number;
+    soNo: string | null;
+    action: "edit" | "delete";
+    userId: string;
+    userNama: string;
+    userRole: string;
+    reason?: string | null;
+    summary: string;
+    changes?: SoLogChange[];
+  },
+) {
+  const { error } = await supabase.from("consignment_so_logs").insert({
+    so_id: entry.soId,
+    so_no: entry.soNo,
+    action: entry.action,
+    user_id: entry.userId,
+    user_nama: entry.userNama,
+    user_role: entry.userRole,
+    reason: entry.reason || null,
+    summary: entry.summary,
+    changes: entry.changes ?? null,
+  });
+  // Log gagal tidak boleh membatalkan aksi yang sudah berhasil.
+  if (error) console.error("writeSoLog consignment_so:", error.message);
 }
 
 /**
@@ -164,22 +239,29 @@ export async function updateConsignmentSo(
     no_po: string;
     site_id: number | null;
   }>,
+  reason?: string,
 ) {
-  const auth = await requireModeratorOrAdmin();
+  const auth = await requireSoEditor();
   if ("error" in auth) return { error: auth.error };
 
-  const { supabase } = auth;
+  const { supabase, user, role, userNama } = auth;
+  const alasan = reason?.trim() || "";
+  if (!alasan) return { error: "Alasan perubahan wajib diisi." };
+
+  const { data: before } = await supabase
+    .from("consignment_so")
+    .select(
+      "customer_id, so_no, so_tanggal_input, tgl_po_email_marketing, tgl_po_customer, due_date, no_po, site",
+    )
+    .eq("id", soId)
+    .maybeSingle();
+  if (!before) return { error: "SO Consignment tidak ditemukan." };
+
   const { site_id: siteId, ...rest } = payload;
   // site_id tidak dikirim = site tidak diubah (null = kosongkan site).
   let siteFields = {};
   if (siteId !== undefined) {
-    const { data: soRow } = await supabase
-      .from("consignment_so")
-      .select("customer_id")
-      .eq("id", soId)
-      .maybeSingle();
-    if (!soRow) return { error: "SO Consignment tidak ditemukan." };
-    const siteRes = await resolveCustomerSite(supabase, soRow.customer_id, siteId);
+    const siteRes = await resolveCustomerSite(supabase, before.customer_id, siteId);
     if ("error" in siteRes) return { error: siteRes.error };
     siteFields = { site_id: siteRes.site_id, site: siteRes.site };
   }
@@ -194,11 +276,33 @@ export async function updateConsignmentSo(
     updated_at: new Date().toISOString(),
   };
 
+  // Diff sebelum -> sesudah untuk riwayat aktivitas.
+  const afterValues: Record<string, unknown> = { ...before, ...safePayload };
+  const changes: SoLogChange[] = [];
+  for (const { field, label } of SO_LOG_FIELDS) {
+    const b = normLogValue(field, (before as any)[field]);
+    const a = normLogValue(field, afterValues[field]);
+    if (b !== a) changes.push({ field, label, before: b, after: a });
+  }
+  if (changes.length === 0) return { error: "Tidak ada perubahan data." };
+
   const { error } = await supabase
     .from("consignment_so")
     .update(safePayload)
     .eq("id", soId);
   if (error) return { error: error.message };
+
+  await writeSoLog(supabase, {
+    soId,
+    soNo: before.so_no ?? null,
+    action: "edit",
+    userId: user.id,
+    userNama,
+    userRole: role,
+    reason: alasan,
+    summary: `Edit data: ${changes.map((c) => c.label).join(", ")}`,
+    changes,
+  });
 
   revalidatePath("/so-reguler/consignment/so");
   return { success: true };
@@ -208,15 +312,31 @@ export async function updateConsignmentSo(
  * HAPUS SO CONSIGNMENT (moderator/admin). Item ikut terhapus lewat cascade.
  */
 export async function deleteConsignmentSo(soId: number) {
-  const auth = await requireModeratorOrAdmin();
+  const auth = await requireSoDeleter();
   if ("error" in auth) return { error: auth.error };
 
-  const { supabase } = auth;
+  const { supabase, user, role, userNama } = auth;
+  const { data: soRow } = await supabase
+    .from("consignment_so")
+    .select("so_no")
+    .eq("id", soId)
+    .maybeSingle();
+
   const { error } = await supabase
     .from("consignment_so")
     .delete()
     .eq("id", soId);
   if (error) return { error: error.message };
+
+  await writeSoLog(supabase, {
+    soId,
+    soNo: soRow?.so_no ?? null,
+    action: "delete",
+    userId: user.id,
+    userNama,
+    userRole: role,
+    summary: `SO Consignment ${soRow?.so_no ?? soId} dihapus beserta seluruh item`,
+  });
 
   revalidatePath("/so-reguler/consignment/so");
   return { success: true };

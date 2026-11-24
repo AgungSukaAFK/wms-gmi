@@ -51,6 +51,8 @@ import {
 } from "@/services/consignment-so-actions";
 import { getCustomerSites } from "@/services/master-actions";
 import { useConfirmDialog } from "@/components/confirm-dialog";
+import { ConsignmentSoHistory } from "@/components/consignment/consignment-so-history";
+import { Textarea } from "@/components/ui/textarea";
 
 const NO_SITE = "none";
 
@@ -83,7 +85,9 @@ export function ConsignmentSoDetailSheet({
     due_date: "",
     no_po: "",
     site_id: NO_SITE,
+    reason: "",
   });
+  const [historyKey, setHistoryKey] = useState(0);
   const [siteOptions, setSiteOptions] = useState<{ id: number; site_name: string }[]>([]);
 
   const fetchData = async () => {
@@ -126,6 +130,8 @@ export function ConsignmentSoDetailSheet({
     (r) => r === "moderator" || r === "admin",
   );
 
+  const canEdit = isModeratorOrAdmin || roleNames.includes("marketing");
+
   const refresh = async () => {
     await fetchData();
     onUpdate?.();
@@ -146,6 +152,7 @@ export function ConsignmentSoDetailSheet({
       due_date: soRow.due_date ? String(soRow.due_date).slice(0, 10) : "",
       no_po: soRow.no_po || "",
       site_id: soRow.site_id ? String(soRow.site_id) : NO_SITE,
+      reason: "",
     });
     setSiteOptions([]);
     getCustomerSites(soRow.customer_id, { activeOnly: true }).then((res) =>
@@ -156,6 +163,8 @@ export function ConsignmentSoDetailSheet({
 
   const handleEditSave = async () => {
     if (!soId) return;
+    if (!editForm.reason.trim())
+      return toast.error("Alasan perubahan wajib diisi.");
     const initialSiteId = soRow?.site_id ? String(soRow.site_id) : NO_SITE;
     setEditSaving(true);
     const res = await updateConsignmentSo(soId, {
@@ -169,11 +178,12 @@ export function ConsignmentSoDetailSheet({
       ...(editForm.site_id !== initialSiteId && {
         site_id: editForm.site_id === NO_SITE ? null : Number(editForm.site_id),
       }),
-    });
+    }, editForm.reason);
     setEditSaving(false);
     if ((res as any).error) return toast.error((res as any).error);
     toast.success("SO Consignment berhasil diperbarui");
     setEditOpen(false);
+    setHistoryKey((k) => k + 1);
     await refresh();
   };
 
@@ -308,10 +318,12 @@ export function ConsignmentSoDetailSheet({
                   </Table>
                 </div>
               </div>
+
+              <ConsignmentSoHistory soId={soId!} refreshKey={historyKey} />
             </div>
 
             {/* Actions */}
-            {isModeratorOrAdmin && (
+            {canEdit && (
               <div className="border-t p-4 bg-background">
                 <div className="flex gap-2">
                   <Button
@@ -322,14 +334,16 @@ export function ConsignmentSoDetailSheet({
                   >
                     Edit Data
                   </Button>
-                  <Button
-                    variant="outline"
-                    className="flex-1 gap-2 text-destructive hover:text-destructive"
-                    disabled={busy}
-                    onClick={handleDelete}
-                  >
-                    <XCircle className="h-4 w-4" /> Hapus
-                  </Button>
+                  {isModeratorOrAdmin && (
+                    <Button
+                      variant="outline"
+                      className="flex-1 gap-2 text-destructive hover:text-destructive"
+                      disabled={busy}
+                      onClick={handleDelete}
+                    >
+                      <XCircle className="h-4 w-4" /> Hapus
+                    </Button>
+                  )}
                 </div>
               </div>
             )}
@@ -342,7 +356,7 @@ export function ConsignmentSoDetailSheet({
           <DialogHeader>
             <DialogTitle>Edit SO Consignment</DialogTitle>
             <DialogDescription>
-              Moderator/admin dapat memperbarui data header tanpa mengubah item.
+              Moderator/admin/marketing dapat memperbarui data header tanpa mengubah item.
             </DialogDescription>
           </DialogHeader>
 
@@ -441,6 +455,18 @@ export function ConsignmentSoDetailSheet({
                     )}
                 </SelectContent>
               </Select>
+            </div>
+            <div className="space-y-2 md:col-span-2">
+              <Label htmlFor="edit_reason">Alasan Perubahan *</Label>
+              <Textarea
+                id="edit_reason"
+                rows={2}
+                placeholder="Mis. koreksi tanggal PO sesuai dokumen customer"
+                value={editForm.reason}
+                onChange={(e) =>
+                  setEditForm((prev) => ({ ...prev, reason: e.target.value }))
+                }
+              />
             </div>
           </div>
 
