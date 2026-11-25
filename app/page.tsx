@@ -2,10 +2,41 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import {
+  COMPANY_NAME,
+  SITE_DESCRIPTION,
+  SITE_NAME,
+  SITE_TITLE,
+  SITE_URL,
+  publicPageMetadata,
+} from "@/lib/site";
 import { createClient } from "@/lib/supabase/server";
 
-export const metadata: Metadata = {
-  alternates: { canonical: "/" },
+export const metadata: Metadata = publicPageMetadata({
+  path: "/",
+  description: SITE_DESCRIPTION,
+});
+
+const jsonLd = {
+  "@context": "https://schema.org",
+  "@graph": [
+    {
+      "@type": "Organization",
+      "@id": `${SITE_URL}/#organization`,
+      name: COMPANY_NAME,
+      logo: `${SITE_URL}/icon-512.png`,
+    },
+    {
+      "@type": "WebSite",
+      "@id": `${SITE_URL}/#website`,
+      url: `${SITE_URL}/`,
+      name: SITE_NAME,
+      alternateName: SITE_TITLE,
+      description: SITE_DESCRIPTION,
+      inLanguage: "id-ID",
+      publisher: { "@id": `${SITE_URL}/#organization` },
+    },
+  ],
 };
 
 export default async function Home() {
@@ -19,6 +50,12 @@ export default async function Home() {
 
   return (
     <main className="relative min-h-screen overflow-hidden bg-slate-950 text-white">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{
+          __html: JSON.stringify(jsonLd).replace(/</g, "\\u003c"),
+        }}
+      />
       <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_20%_20%,rgba(56,189,248,0.2),transparent_40%),radial-gradient(circle_at_80%_10%,rgba(14,165,233,0.2),transparent_35%),radial-gradient(circle_at_50%_100%,rgba(34,197,94,0.15),transparent_45%)]" />
 
       <section className="relative mx-auto flex min-h-screen w-full max-w-6xl items-center px-6 py-16">
@@ -31,7 +68,7 @@ export default async function Home() {
               Warehouse Management System
             </h1>
             <p className="max-w-xl text-sm text-slate-200 sm:text-base">
-              Kelola material request, purchase request, purchase order,
+              Sistem manajemen gudang {COMPANY_NAME}. Kelola material request, purchase request, purchase order,
               delivery, dan stok gudang dalam satu alur kerja yang terintegrasi.
             </p>
             <div className="flex flex-wrap gap-3">

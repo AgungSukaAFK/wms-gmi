@@ -3,7 +3,7 @@ import { FONT_SIZE_BOOT_SCRIPT } from "@/lib/font-size";
 import { APPEARANCE_BOOT_SCRIPT, THEME_STORAGE_KEY, THEME_VALUES } from "@/lib/appearance";
 import { fontVariables } from "@/lib/fonts";
 import { CustomThemeProvider } from "@/lib/theme-provider";
-import { SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from "@/lib/site";
+import { COMPANY_NAME, SITE_DESCRIPTION, SITE_NAME, SITE_TITLE, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -24,22 +24,12 @@ export const metadata: Metadata = {
     "purchase order",
     "stok gudang",
   ],
-  authors: [{ name: "PT. Garuda Mart Indonesia" }],
-  creator: "PT. Garuda Mart Indonesia",
-  publisher: "PT. Garuda Mart Indonesia",
-  openGraph: {
-    type: "website",
-    locale: "id_ID",
-    siteName: SITE_NAME,
-    title: SITE_TITLE,
-    description: SITE_DESCRIPTION,
-  },
-  twitter: {
-    card: "summary_large_image",
-    title: SITE_TITLE,
-    description: SITE_DESCRIPTION,
-  },
-  robots: { index: true, follow: true },
+  authors: [{ name: COMPANY_NAME }],
+  creator: COMPANY_NAME,
+  publisher: COMPANY_NAME,
+  // Default noindex: ini aplikasi internal. Halaman publik (landing & login)
+  // membuka indeks sendiri lewat publicPageMetadata().
+  robots: { index: false, follow: false },
   formatDetection: { telephone: false },
 };
 

@@ -1,17 +1,11 @@
-import { redirect } from "next/navigation";
+import type { Metadata } from "next";
 import { SearchX } from "lucide-react";
-import { createClient } from "@/lib/supabase/server";
 import { NotFoundActions } from "@/components/not-found-actions";
 
-export default async function NotFound() {
-  const supabase = await createClient();
-  const { data } = await supabase.auth.getClaims();
-  const claims = data?.claims;
+export const metadata: Metadata = { title: "Halaman Tidak Ditemukan" };
 
-  if (!claims) {
-    redirect("/");
-  }
-
+// Jangan redirect dari sini: URL yang tidak ada harus membalas status 404.
+export default function NotFound() {
   return (
     <main className="min-h-screen bg-muted/50 px-4 py-10 sm:px-6 lg:px-8">
       <section className="mx-auto flex min-h-[80vh] w-full max-w-3xl items-center justify-center">
