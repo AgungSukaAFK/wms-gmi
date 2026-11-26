@@ -40,6 +40,8 @@ export type ConsignmentIkItemInput = {
   part_number_customer?: string;
   satuan: string;
   qty: number;
+  // Baris Planning IK yang direalisasikan (wajib kalau IK dibuat dari planning).
+  plan_item_id?: number;
 };
 
 /**
@@ -105,6 +107,8 @@ export async function createConsignmentIk(data: {
   no_awb?: string;
   no_po?: string;
   remarks?: string;
+  // Diisi kalau IK dibuat dari Planning IK; kosong = langsung dari SO.
+  plan_id?: number;
   items: ConsignmentIkItemInput[];
 }) {
   const supabase = await createClient();
@@ -137,6 +141,12 @@ export async function createConsignmentIk(data: {
     .maybeSingle();
   if (!site || site.customer_id !== soHeader.customer_id || !site.is_active)
     return { error: "Site tujuan bukan site aktif milik customer SO ini." };
+
+  // IK dari Planning IK: planning harus open & milik customer SO, tiap item
+  // wajib merujuk baris planning ini dgn item SO + site yang sama, dan qty
+  // tidak melebihi sisa plan (realisasi diambil ulang dari DB).
+  const planValidation = await validatePlanItems(supabase, data, soHeader.customer_id);
+  if (planValidation) return { error: planValidation };
 
   // Guard sisa qty (race-safe — ambil ulang dari DB, bukan percaya payload client).
   const soItemIds = data.items.map((i) => i.so_item_id);
@@ -230,6 +240,7 @@ export async function createConsignmentIk(data: {
         no_awb: data.no_awb?.trim() || null,
         no_po: data.no_po?.trim() || null,
         remarks: data.remarks?.trim() || null,
+        plan_id: data.plan_id || null,
         created_by: user.id,
       },
     ])
@@ -246,6 +257,7 @@ export async function createConsignmentIk(data: {
     part_number_customer: item.part_number_customer?.trim() || null,
     satuan: item.satuan,
     qty: item.qty,
+    plan_item_id: data.plan_id ? item.plan_item_id : null,
   }));
   const removeIk = async () => {
     await supabase.from("consignment_ik_items").delete().eq("ik_id", ik.id);
@@ -275,6 +287,21 @@ export async function createConsignmentIk(data: {
       if ((shippedNow.get(soItemId) || 0) > Number(soItem.qty)) {
         await removeIk();
         return { error: `${soItem.part_number}: qty kirim melebihi sisa SO (bentrok dengan IK lain yang baru dibuat). Coba lagi.` };
+      }
+    }
+    if (data.plan_id) {
+      const planItemIds = itemsToInsert.map((i) => i.plan_item_id as number);
+      const [{ data: planRows }, { data: realizedRows }] = await Promise.all([
+        supabase.from("consignment_ik_plan_items").select("id, plan_qty, part_number").in("id", planItemIds),
+        supabase.from("consignment_ik_items").select("plan_item_id, qty").in("plan_item_id", planItemIds),
+      ]);
+      const realizedNow = new Map<number, number>();
+      for (const r of realizedRows || [])
+        realizedNow.set(r.plan_item_id, (realizedNow.get(r.plan_item_id) || 0) + Number(r.qty));
+      const over = (planRows || []).find((p: any) => (realizedNow.get(p.id) || 0) > p.plan_qty);
+      if (over) {
+        await removeIk();
+        return { error: `${over.part_number}: qty kirim melebihi sisa planning (bentrok dengan IK lain yang baru dibuat). Coba lagi.` };
       }
     }
   }
@@ -313,9 +340,67 @@ export async function createConsignmentIk(data: {
   );
 
   revalidatePath("/so-reguler/consignment/ik");
+  revalidatePath("/so-reguler/consignment/planning");
   revalidatePath("/so-reguler/consignment/dashboard");
   revalidatePath("/stock");
   return { success: true, data: ik };
+}
+
+/** Validasi IK dari Planning IK. Kembalikan pesan error, atau null kalau lolos. */
+async function validatePlanItems(
+  supabase: any,
+  data: { so_id: number; ke_site_id: number; plan_id?: number; items: ConsignmentIkItemInput[] },
+  customerId: number,
+): Promise<string | null> {
+  if (!data.plan_id) {
+    if (data.items.some((i) => i.plan_item_id))
+      return "Item planning dikirim tanpa Planning IK.";
+    return null;
+  }
+
+  const { data: plan } = await supabase
+    .from("consignment_ik_plans")
+    .select("id, plan_kode, status, customer_id")
+    .eq("id", data.plan_id)
+    .maybeSingle();
+  if (!plan) return "Planning IK tidak ditemukan.";
+  if (plan.status !== "open") return `Planning ${plan.plan_kode} sudah ditutup.`;
+  if (plan.customer_id !== customerId) return "Planning IK bukan untuk customer SO ini.";
+
+  const planItemIds = data.items.map((i) => i.plan_item_id).filter((id): id is number => Boolean(id));
+  if (planItemIds.length !== data.items.length)
+    return "Setiap item IK dari planning wajib merujuk baris planning.";
+
+  const { data: planItems } = await supabase
+    .from("consignment_ik_plan_items")
+    .select("id, plan_id, so_id, so_item_id, site_id, plan_qty, part_number")
+    .in("id", planItemIds);
+  const planItemById = new Map((planItems || []).map((r: any) => [r.id, r]));
+  for (const item of data.items) {
+    const pi: any = planItemById.get(item.plan_item_id!);
+    if (!pi || pi.plan_id !== plan.id || pi.so_item_id !== item.so_item_id || pi.so_id !== data.so_id)
+      return `${item.part_number}: bukan baris planning ${plan.plan_kode} untuk SO ini.`;
+    if (pi.site_id !== data.ke_site_id)
+      return `${item.part_number}: site tujuan beda dengan site di planning.`;
+  }
+
+  const { data: realizedRows } = await supabase
+    .from("consignment_ik_items")
+    .select("plan_item_id, qty")
+    .in("plan_item_id", planItemIds);
+  const realized = new Map<number, number>();
+  for (const r of realizedRows || [])
+    realized.set(r.plan_item_id, (realized.get(r.plan_item_id) || 0) + Number(r.qty));
+  const requested = new Map<number, number>();
+  for (const item of data.items)
+    requested.set(item.plan_item_id!, (requested.get(item.plan_item_id!) || 0) + item.qty);
+  const violations: string[] = [];
+  for (const [id, qty] of requested) {
+    const pi: any = planItemById.get(id);
+    const sisa = pi.plan_qty - (realized.get(id) || 0);
+    if (qty > sisa) violations.push(`${pi.part_number}: sisa plan ${Math.max(0, sisa)}, diminta ${qty}.`);
+  }
+  return violations.length ? "Qty melebihi sisa planning:\n" + violations.join("\n") : null;
 }
 
 export async function getConsignmentIkList() {
@@ -336,6 +421,18 @@ export async function getConsignmentIkList() {
     if (error) return { data: [], error: error.message };
     all.push(...(data || []));
     if (!data || data.length < PAGE) break;
+  }
+
+  // Kode Planning IK -- query terpisah & toleran gagal (mis. migration
+  // planning belum jalan) supaya list IK tetap tampil.
+  const planIds = [...new Set(all.map((ik) => ik.plan_id).filter(Boolean))];
+  if (planIds.length > 0) {
+    const { data: plans } = await supabase
+      .from("consignment_ik_plans")
+      .select("id, plan_kode")
+      .in("id", planIds);
+    const kodeById = new Map((plans || []).map((p: any) => [p.id, p.plan_kode]));
+    for (const ik of all) ik.plan_kode = kodeById.get(ik.plan_id) ?? null;
   }
   return { data: all, error: null as string | null };
 }

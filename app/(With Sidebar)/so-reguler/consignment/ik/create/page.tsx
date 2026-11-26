@@ -35,6 +35,7 @@ import {
   Package,
   ArrowRight,
   Truck,
+  CalendarRange,
 } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { useDebounce } from "use-debounce";
@@ -46,6 +47,9 @@ import {
   getStockByCabang,
 } from "@/services/consignment-ik-actions";
 import { getCustomerSites } from "@/services/master-actions";
+import { getIkPlanRows } from "@/services/consignment-ik-plan-actions";
+import type { IkPlanRow } from "@/lib/consignment-plan";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useGoBack } from "@/hooks/use-go-back";
 import { orIlikePattern } from "@/lib/supabase/search-filter";
 
@@ -63,7 +67,15 @@ interface ShipItemRow {
   qty_shipped: number;
   qty_remaining: number;
   qty_kirim: number;
+  // Mode planning: baris planning yang direalisasikan + sisa plan-nya.
+  plan_item_id?: number;
+  plan_sisa?: number;
+  plan_notes?: string | null;
 }
+
+type Mode = "plan" | "so";
+// Grup eksekusi planning: 1 IK = 1 SO + 1 site.
+const groupKey = (r: { so_id: number; site_id: number }) => `${r.so_id}:${r.site_id}`;
 
 export default function CreateConsignmentIkPage() {
   const supabase = createClient();
@@ -71,6 +83,11 @@ export default function CreateConsignmentIkPage() {
   const goBack = useGoBack("/so-reguler/consignment/ik");
 
   const [loading, setLoading] = useState(false);
+  const [mode, setMode] = useState<Mode>("plan");
+  const [planRows, setPlanRows] = useState<IkPlanRow[]>([]);
+  const [planRowsLoading, setPlanRowsLoading] = useState(true);
+  const [planId, setPlanId] = useState<string>("");
+  const [planGroup, setPlanGroup] = useState<string>("");
   const [cabangs, setCabangs] = useState<CabangOption[]>([]);
   // Site (gudang customer) aktif milik customer SO terpilih = tujuan IK.
   const [sites, setSites] = useState<SiteOption[]>([]);
@@ -101,8 +118,112 @@ export default function CreateConsignmentIkPage() {
       .eq("is_active", true)
       .order("nama_cabang")
       .then(({ data }) => setCabangs(data || []));
+    getIkPlanRows({ openOnly: true }).then((res) => {
+      if (res.error) toast.error(res.error);
+      const rows = res.data || [];
+      setPlanRows(rows);
+      setPlanRowsLoading(false);
+      // ?plan=<id> dari halaman Planning IK -> langsung pilih planning-nya.
+      const fromUrl = new URLSearchParams(window.location.search).get("plan");
+      if (fromUrl && rows.some((r) => String(r.plan_id) === fromUrl)) setPlanId(fromUrl);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Daftar planning open yang masih punya sisa.
+  const planOptions = [
+    ...new Map(
+      planRows.map((r) => [
+        r.plan_id,
+        { id: r.plan_id, kode: r.plan_kode, customer: r.customer_name, gudang: r.dari_cabang_name },
+      ]),
+    ).values(),
+  ];
+  const groupOptions = [
+    ...new Map(
+      planRows
+        .filter((r) => String(r.plan_id) === planId)
+        .map((r) => [
+          groupKey(r),
+          {
+            key: groupKey(r),
+            label: `${r.no_po || r.so_no} → ${r.site_name}`,
+            count: planRows.filter((x) => String(x.plan_id) === planId && groupKey(x) === groupKey(r)).length,
+          },
+        ]),
+    ).values(),
+  ];
+
+  const resetSelection = () => {
+    setSelectedSo(null);
+    setItems([]);
+    setSites([]);
+    setKeSiteId("");
+  };
+
+  const changeMode = (next: Mode) => {
+    setMode(next);
+    setPlanId("");
+    setPlanGroup("");
+    resetSelection();
+  };
+
+  const selectPlan = (id: string) => {
+    setPlanId(id);
+    setPlanGroup("");
+    resetSelection();
+    const first = planRows.find((r) => String(r.plan_id) === id);
+    if (first) setDariCabangId(String(first.dari_cabang_id));
+  };
+
+  const selectPlanGroup = async (key: string) => {
+    setPlanGroup(key);
+    const rows = planRows.filter((r) => String(r.plan_id) === planId && groupKey(r) === key);
+    if (rows.length === 0) return;
+    const head = rows[0];
+    setSelectedSo({
+      id: head.so_id,
+      so_no: head.so_no,
+      no_po: head.no_po,
+      customer_id: head.customer_id,
+      customer: { customer_name: head.customer_name },
+    });
+    // Site dikunci ke site di planning.
+    setSites([{ id: head.site_id, site_name: head.site_name }]);
+    setKeSiteId(String(head.site_id));
+    setItemsLoading(true);
+    const res = await getConsignmentSoRemainingToShip(head.so_id);
+    if (res.error) {
+      toast.error(res.error);
+      setItems([]);
+    } else {
+      const soItemById = new Map((res.data || []).map((i: any) => [i.id, i]));
+      setItems(
+        rows.flatMap((r) => {
+          const i: any = soItemById.get(r.so_item_id);
+          if (!i) return [];
+          return [
+            {
+              id: i.id,
+              part_id: i.part_id,
+              part_number: i.part_number,
+              part_name: i.part_name,
+              part_number_customer: i.part_number_customer,
+              satuan: i.satuan,
+              qty: i.qty,
+              qty_shipped: i.qty_shipped,
+              qty_remaining: i.qty_remaining,
+              qty_kirim: 0,
+              plan_item_id: r.plan_item_id,
+              plan_sisa: r.sisa_plan,
+              plan_notes: r.notes,
+            },
+          ];
+        }),
+      );
+    }
+    setItemsLoading(false);
+  };
 
   useEffect(() => {
     if (!soPopoverOpen) return;
@@ -186,18 +307,22 @@ export default function CreateConsignmentIkPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dariCabangId, partIdsKey]);
 
+  const maxKirim = (i: ShipItemRow) =>
+    Math.min(i.qty_remaining, stockAsalMap.get(i.part_id) ?? 0, i.plan_sisa ?? Infinity);
+
   const updateQtyKirim = (soItemId: number, qty: number) => {
     setItems((prev) =>
       prev.map((i) => {
         if (i.id !== soItemId) return i;
-        const stokAsal = stockAsalMap.get(i.part_id) ?? 0;
-        const maxQty = Math.min(i.qty_remaining, stokAsal);
+        const maxQty = maxKirim(i);
         return { ...i, qty_kirim: Math.max(0, Math.min(qty, maxQty)) };
       }),
     );
   };
 
   const handleSubmit = async () => {
+    if (mode === "plan" && (!planId || !planGroup))
+      return toast.error("Pilih Planning IK dan No PO / site yang mau dikirim.");
     if (!selectedSo) return toast.error("Pilih SO Consignment terlebih dahulu.");
     if (!dariCabangId || !keSiteId)
       return toast.error("Gudang asal dan site tujuan wajib dipilih.");
@@ -222,6 +347,7 @@ export default function CreateConsignmentIkPage() {
         no_awb: noAwb || undefined,
         no_po: selectedSo.no_po || undefined,
         remarks: remarks || undefined,
+        plan_id: mode === "plan" && planId ? Number(planId) : undefined,
         items: toShip.map((i) => ({
           so_item_id: i.id,
           part_id: i.part_id,
@@ -230,6 +356,7 @@ export default function CreateConsignmentIkPage() {
           part_number_customer: i.part_number_customer || undefined,
           satuan: i.satuan,
           qty: i.qty_kirim,
+          plan_item_id: mode === "plan" ? i.plan_item_id : undefined,
         })),
       });
 
@@ -272,6 +399,23 @@ export default function CreateConsignmentIkPage() {
       </Content>
 
       <Content>
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 mb-4">
+          <Tabs value={mode} onValueChange={(v) => changeMode(v as Mode)}>
+            <TabsList>
+              <TabsTrigger value="plan" className="text-xs font-bold gap-1.5">
+                <CalendarRange className="h-3.5 w-3.5" /> Dari Planning IK
+              </TabsTrigger>
+              <TabsTrigger value="so" className="text-xs font-bold">
+                Langsung dari SO
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <p className="text-[11px] text-muted-foreground">
+            {mode === "plan"
+              ? "Item & site mengikuti planning. Qty kirim maksimal sisa plan."
+              : "Tanpa planning: pilih SO lalu isi qty kirim per item."}
+          </p>
+        </div>
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
           <div className="space-y-1.5">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">No. IK</Label>
@@ -283,6 +427,48 @@ export default function CreateConsignmentIkPage() {
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">Tgl IK</Label>
             <DatePickerString value={ikTanggal} onChange={setIkTanggal} className="h-10" />
           </div>
+          {mode === "plan" ? (
+            <>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground">Planning IK</Label>
+                <Select value={planId} onValueChange={selectPlan} disabled={planRowsLoading}>
+                  <SelectTrigger className="h-10 w-full text-sm font-semibold">
+                    <SelectValue
+                      placeholder={
+                        planRowsLoading
+                          ? "Memuat planning..."
+                          : planOptions.length === 0
+                            ? "Tidak ada planning yang masih berjalan"
+                            : "Pilih planning..."
+                      }
+                    />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {planOptions.map((p) => (
+                      <SelectItem key={p.id} value={String(p.id)}>
+                        {p.kode} — {p.customer || "-"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-[10px] uppercase font-bold text-muted-foreground">No. PO → Site</Label>
+                <Select value={planGroup} onValueChange={selectPlanGroup} disabled={!planId}>
+                  <SelectTrigger className="h-10 w-full text-sm font-semibold">
+                    <SelectValue placeholder={planId ? "Pilih No. PO / site..." : "Pilih planning dulu..."} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {groupOptions.map((g) => (
+                      <SelectItem key={g.key} value={g.key}>
+                        {g.label} ({g.count} item)
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          ) : (
           <div className="space-y-1.5 xl:col-span-2">
             <Label className="text-[10px] uppercase font-bold text-muted-foreground">SO Consignment</Label>
             <Popover open={soPopoverOpen} onOpenChange={setSoPopoverOpen}>
@@ -330,6 +516,7 @@ export default function CreateConsignmentIkPage() {
               </PopoverContent>
             </Popover>
           </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mt-4">
@@ -357,13 +544,15 @@ export default function CreateConsignmentIkPage() {
             <Select
               value={keSiteId}
               onValueChange={setKeSiteId}
-              disabled={!selectedSo || sitesLoading || sites.length === 0}
+              disabled={mode === "plan" || !selectedSo || sitesLoading || sites.length === 0}
             >
               <SelectTrigger className="h-10 w-full text-sm font-semibold">
                 <SelectValue
                   placeholder={
                     !selectedSo
-                      ? "Pilih SO dulu..."
+                      ? mode === "plan"
+                        ? "Ikut planning..."
+                        : "Pilih SO dulu..."
                       : sitesLoading
                         ? "Memuat site customer..."
                         : "Pilih site tujuan..."
@@ -422,6 +611,9 @@ export default function CreateConsignmentIkPage() {
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Qty SO</TableHead>
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Sudah Dikirim</TableHead>
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Sisa</TableHead>
+                  {mode === "plan" && (
+                    <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Sisa Plan</TableHead>
+                  )}
                   <TableHead className="text-center text-[10px] font-black uppercase text-muted-foreground">Stok Gudang Asal</TableHead>
                   <TableHead className="w-32 text-center text-[10px] font-black uppercase text-muted-foreground">Qty Kirim</TableHead>
                 </TableRow>
@@ -430,7 +622,7 @@ export default function CreateConsignmentIkPage() {
                 {items.length > 0 ? (
                   items.map((item) => {
                     const stokAsal = stockAsalMap.get(item.part_id) ?? 0;
-                    const maxQty = Math.min(item.qty_remaining, stokAsal);
+                    const maxQty = maxKirim(item);
                     return (
                     <TableRow key={item.id} className="h-14">
                       <TableCell>
@@ -438,6 +630,11 @@ export default function CreateConsignmentIkPage() {
                         <span className="block text-[10px] text-muted-foreground truncate max-w-50">
                           {item.part_name}
                         </span>
+                        {item.plan_notes && (
+                          <span className="block text-[10px] text-primary truncate max-w-50">
+                            Catatan plan: {item.plan_notes}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="text-xs">{item.part_number_customer || "-"}</TableCell>
                       <TableCell className="text-center text-xs font-semibold">
@@ -449,6 +646,11 @@ export default function CreateConsignmentIkPage() {
                       <TableCell className="text-center text-xs font-bold">
                         {item.qty_remaining}
                       </TableCell>
+                      {mode === "plan" && (
+                        <TableCell className="text-center text-xs font-bold text-primary">
+                          {item.plan_sisa ?? "-"}
+                        </TableCell>
+                      )}
                       <TableCell
                         className={`text-center text-xs font-bold ${
                           dariCabangId && stokAsal === 0 ? "text-destructive" : ""
@@ -474,8 +676,12 @@ export default function CreateConsignmentIkPage() {
                   })
                 ) : (
                   <TableRow className="h-24 hover:bg-transparent">
-                    <TableCell colSpan={7} className="text-center text-xs italic text-muted-foreground">
-                      {selectedSo ? "SO ini tidak punya item." : "Pilih SO Consignment untuk melihat itemnya."}
+                    <TableCell colSpan={8} className="text-center text-xs italic text-muted-foreground">
+                      {selectedSo
+                        ? "Tidak ada item yang bisa dikirim."
+                        : mode === "plan"
+                          ? "Pilih Planning IK dan No. PO / site untuk melihat itemnya."
+                          : "Pilih SO Consignment untuk melihat itemnya."}
                     </TableCell>
                   </TableRow>
                 )}

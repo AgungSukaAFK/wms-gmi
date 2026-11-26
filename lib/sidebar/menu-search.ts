@@ -54,6 +54,7 @@ const MENU_KEYWORDS: Record<string, string[]> = {
   "/so-reguler/so": ["so", "sales order", "penjualan", "reguler"],
   "/so-reguler/consignment/dashboard": ["konsinyasi", "consignment", "performance"],
   "/so-reguler/consignment/so": ["so", "konsinyasi", "consignment", "sales order"],
+  "/so-reguler/consignment/planning": ["planning", "plan ik", "rencana kirim", "konsinyasi", "consignment"],
   "/so-reguler/consignment/ik": ["ik", "konsinyasi", "invoice konsinyasi", "instruksi kerja"],
   "/so-reguler/consignment/penerimaan": ["konsinyasi", "penerimaan", "konfirmasi", "komplain"],
   "/so-reguler/consignment/customer-stock": ["konsinyasi", "stok customer", "customer stock"],

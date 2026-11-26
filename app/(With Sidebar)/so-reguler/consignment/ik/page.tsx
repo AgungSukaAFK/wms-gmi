@@ -71,7 +71,7 @@ import {
 const tujuanIk = (ik: any) => ik?.ke_site_name || ik?.cabang_tujuan?.nama_cabang || "-";
 
 // Harus sama dengan kolom yang dicari di `filtered`.
-const IK_SEARCH_FIELDS = ["No. IK", "No. AWB", "No. SO"];
+const IK_SEARCH_FIELDS = ["No. IK", "No. AWB", "No. SO", "Kode Planning"];
 
 const ASAL_OPTIONS = [
   { label: "Input Web", value: "web" },
@@ -85,6 +85,7 @@ const IK_COLUMNS = [
   { id: "ik_kode", label: "Kode IK", sortDirection: "asc", className: IK_HEAD_CLASS },
   { id: "ik_tanggal", label: "Tgl IK", sortDirection: "desc", className: IK_HEAD_CLASS },
   { id: "so_no", label: "No. SO", sortDirection: "asc", className: IK_HEAD_CLASS },
+  { id: "plan_kode", label: "Kode Planning", sortDirection: "asc", className: IK_HEAD_CLASS },
   { id: "rute", label: "Asal → Tujuan", className: IK_HEAD_CLASS },
   { id: "no_awb", label: "No. AWB", sortDirection: "asc", className: IK_HEAD_CLASS },
   { id: "item", label: "Item", className: `text-center ${IK_HEAD_CLASS}` },
@@ -176,7 +177,8 @@ export default function ConsignmentIkPage() {
       !q ||
       ik.ik_kode?.toLowerCase().includes(q) ||
       ik.no_awb?.toLowerCase().includes(q) ||
-      ik.so?.so_no?.toLowerCase().includes(q);
+      ik.so?.so_no?.toLowerCase().includes(q) ||
+      ik.plan_kode?.toLowerCase().includes(q);
     const matchAsal =
       asalFilters.length !== 1 ||
       Boolean(ik.ik_is_import) === (asalFilters[0] === "import");
@@ -317,6 +319,21 @@ export default function ConsignmentIkPage() {
         return (
           <TableCell className="text-xs">{ik.so?.so_no || "-"}</TableCell>
         );
+      case "plan_kode":
+        return (
+          <TableCell className="text-xs whitespace-nowrap">
+            {ik.plan_kode ? (
+              <Link
+                href={`/so-reguler/consignment/planning?search=${encodeURIComponent(ik.plan_kode)}`}
+                className="font-semibold text-primary hover:underline"
+              >
+                {ik.plan_kode}
+              </Link>
+            ) : (
+              <span className="text-muted-foreground">-</span>
+            )}
+          </TableCell>
+        );
       case "rute":
         return (
           <TableCell className="text-xs whitespace-nowrap">
@@ -370,7 +387,7 @@ export default function ConsignmentIkPage() {
       <Content>
         <div className="space-y-3">
           <ListSearchInput
-            placeholder="Cari No. IK, No. AWB, atau No. SO..."
+            placeholder="Cari No. IK, No. AWB, No. SO, atau Kode Planning..."
             value={searchQuery}
             onChange={setSearchQuery}
             searchableFields={IK_SEARCH_FIELDS}
@@ -471,7 +488,7 @@ export default function ConsignmentIkPage() {
             {loading ? (
               Array.from({ length: Math.min(limit, 25) }, (_, i) => (
                 <TableRow key={i}>
-                  <TableCell colSpan={7}>
+                  <TableCell colSpan={8}>
                     <Skeleton className="h-8 w-full" />
                   </TableCell>
                 </TableRow>
@@ -479,7 +496,7 @@ export default function ConsignmentIkPage() {
             ) : pageRows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={7}
+                  colSpan={8}
                   className="h-40 text-center text-muted-foreground/40 font-bold uppercase tracking-widest text-[11px]"
                 >
                   {activeFilters.length > 0 || debouncedSearch

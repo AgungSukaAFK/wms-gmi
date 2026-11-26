@@ -194,6 +194,7 @@ export function buildNavGroups(profile: NavProfile): NavGroup[] {
           icon: LayoutDashboard,
         },
         { title: "Sales Order", url: "/so-reguler/consignment/so", icon: Handshake },
+        { title: "Planning IK", url: "/so-reguler/consignment/planning", icon: CalendarRange },
         { title: "Item Konsinyasi", url: "/so-reguler/consignment/ik", icon: ClipboardList },
         {
           title: "Penerimaan Konsinyasi",
