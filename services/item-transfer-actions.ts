@@ -658,7 +658,7 @@ export async function updateItemTransferTrackingModerator(
   if (safeTrackingNote && safeTrackingNote.length > 1000)
     return { error: "Catatan tracking maksimal 1000 karakter." };
 
-  const { error } = await supabase
+  const { data: overridden, error } = await supabase
     .from("item_transfers")
     .update({
       tracking_status: trackingStatus,
@@ -667,8 +667,15 @@ export async function updateItemTransferTrackingModerator(
       tracking_note_updated_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
-    .eq("id", itId);
+    .eq("id", itId)
+    // Kondisional: kalau penerima baru saja konfirmasi terima (status &
+    // tracking jadi completed), jangan timpa balik tracking-nya.
+    .eq("status", "approved")
+    .is("signature_receiver_id", null)
+    .select("id");
   if (error) return { error: error.message };
+  if (!overridden || overridden.length === 0)
+    return { error: "Item Transfer ini baru saja diselesaikan/diubah. Muat ulang halaman." };
 
   revalidatePath("/item-transfer");
   return { success: true };
@@ -1790,6 +1797,12 @@ function splitItRequesterStep(approvals: any[], uidRequester: string | null) {
  *    IT approved/completed/rejected dilewati karena mengubah approval-nya
  *    berarti mengoreksi stok / menghidupkan lagi IT -- pakai Moderator Edit
  *    per dokumen untuk itu.
+ *  - Status pengiriman (tracking): boleh maju/mundur ke tahap mana saja
+ *    (created..delivered), sama dengan override moderator per dokumen. Hanya
+ *    IT approved yang belum dikonfirmasi terima; "completed" TIDAK bisa diset
+ *    karena hanya lewat Konfirmasi Barang Diterima (stok masuk gudang tujuan
+ *    + pemenuhan MR). Catatan tracking opsional: diisi = menimpa, kosong =
+ *    catatan lama tetap.
  * Setiap IT yang berubah dicatat di moderator_edit_logs.
  */
 export async function bulkUpdateItemTransferPeople(
@@ -1798,6 +1811,8 @@ export async function bulkUpdateItemTransferPeople(
     uid_pic?: string | null;
     uid_receiver?: string | null;
     approvals?: BulkItemTransferApprovalStep[];
+    tracking_status?: string;
+    tracking_note?: string;
     reason?: string;
   },
 ): Promise<{ error: string } | { success: true; results: BulkItemTransferPeopleResult[] }> {
@@ -1821,8 +1836,14 @@ export async function bulkUpdateItemTransferPeople(
   const setPic = payload.uid_pic !== undefined;
   const setReceiver = payload.uid_receiver !== undefined;
   const setApprovals = payload.approvals !== undefined;
-  if (!setPic && !setReceiver && !setApprovals)
-    return { error: "Pilih PIC, Penerima, dan/atau Jalur Approval yang ingin diubah." };
+  const setTracking = payload.tracking_status !== undefined;
+  if (!setPic && !setReceiver && !setApprovals && !setTracking)
+    return { error: "Pilih PIC, Penerima, Jalur Approval, dan/atau Status Pengiriman yang ingin diubah." };
+  if (setTracking && !TRACKING_ORDER.includes(payload.tracking_status as string))
+    return { error: "Status pengiriman tidak valid (Selesai Final hanya lewat konfirmasi terima)." };
+  const trackingNote = setTracking ? payload.tracking_note?.trim() || null : null;
+  if (trackingNote && trackingNote.length > 1000)
+    return { error: "Catatan tracking maksimal 1000 karakter." };
 
   const approvalSteps = payload.approvals || [];
   if (setApprovals) {
@@ -1859,7 +1880,9 @@ export async function bulkUpdateItemTransferPeople(
 
   const { data: rows, error: fetchErr } = await supabase
     .from("item_transfers")
-    .select("id, it_kode, status, stock_released, pic, uid_pic, uid_receiver, uid_requester, approvals")
+    .select(
+      "id, it_kode, status, stock_released, pic, uid_pic, uid_receiver, uid_requester, approvals, tracking_status, tracking_note, signature_receiver_id",
+    )
     .in("id", ids);
   if (fetchErr) return { error: fetchErr.message };
 
@@ -1937,6 +1960,28 @@ export async function bulkUpdateItemTransferPeople(
       }
     }
 
+    let trackingChanged = false;
+    if (setTracking) {
+      if (it.status !== "approved" || it.signature_receiver_id) {
+        notes.push(
+          it.status === "completed" || it.signature_receiver_id
+            ? "Status pengiriman dilewati: barang sudah dikonfirmasi diterima"
+            : `Status pengiriman dilewati: status ${it.status}, hanya IT yang sudah disetujui`,
+        );
+      } else {
+        if ((it.tracking_status ?? null) !== payload.tracking_status) {
+          patch.tracking_status = payload.tracking_status;
+          trackingChanged = true;
+        }
+        if (trackingNote && trackingNote !== (it.tracking_note ?? "").trim()) {
+          patch.tracking_note = trackingNote;
+          patch.tracking_note_updated_by = user.id;
+          patch.tracking_note_updated_at = new Date().toISOString();
+          trackingChanged = true;
+        }
+      }
+    }
+
     if (Object.keys(patch).length === 0) {
       results.push({
         id,
@@ -1954,6 +1999,10 @@ export async function bulkUpdateItemTransferPeople(
     // Jalur approval: claim kondisional supaya tidak bentrok dengan approve
     // yang berjalan bersamaan (stok keluar di langkah terakhir).
     if (approvalsChanged) updQuery = updQuery.eq("status", "open").eq("stock_released", false);
+    // Status pengiriman: claim kondisional supaya tidak menimpa balik IT yang
+    // baru saja dikonfirmasi terima (status & tracking jadi completed).
+    if (trackingChanged)
+      updQuery = updQuery.eq("status", "approved").is("signature_receiver_id", null);
     const { data: updated, error: updErr } = await updQuery.select("id");
     if (updErr) {
       results.push({ id, it_kode: it.it_kode, ok: false, message: updErr.message });
@@ -1973,6 +2022,8 @@ export async function bulkUpdateItemTransferPeople(
       "uid_pic" in patch ? "PIC" : null,
       "uid_receiver" in patch ? "penerima" : null,
       approvalsChanged ? "jalur approval" : null,
+      "tracking_status" in patch ? "status pengiriman" : null,
+      "tracking_note" in patch ? "catatan tracking" : null,
     ].filter(Boolean) as string[];
     results.push({
       id,
@@ -1992,6 +2043,9 @@ export async function bulkUpdateItemTransferPeople(
       summary:
         `Edit massal: ${changed.join("/")}` +
         (approvalsChanged ? ` (${newPathNames}), approval diulang` : "") +
+        ("tracking_status" in patch
+          ? ` (pengiriman: ${it.tracking_status ?? "-"} → ${patch.tracking_status})`
+          : "") +
         (reason ? `. Alasan: ${reason}` : ""),
       changes: { reason: reason || null, bulk: true, before, after: patch },
     });
@@ -2014,6 +2068,6 @@ export async function bulkUpdateItemTransferPeople(
   );
 
   revalidatePath("/item-transfer");
-  for (const n of toNotify) revalidatePath(`/item-transfer/${n.id}`);
+  for (const r of results) if (r.ok) revalidatePath(`/item-transfer/${r.id}`);
   return { success: true, results };
 }

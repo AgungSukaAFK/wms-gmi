@@ -1,7 +1,9 @@
 "use client";
 
-// Edit massal PIC, Penerima & Jalur Approval Item Transfer dari list
-// (moderator). PIC/Penerima: hanya kolom orang, approval tidak diulang;
+// Edit massal PIC, Penerima, Jalur Approval & Status Pengiriman Item
+// Transfer dari list (moderator). Status pengiriman: hanya IT approved yang
+// belum dikonfirmasi terima, boleh maju/mundur, "Selesai Final" tetap hanya
+// lewat Konfirmasi Barang Diterima. PIC/Penerima: hanya kolom orang, approval tidak diulang;
 // penerima IT yang sudah selesai dilewati (sama dengan aturan Moderator
 // Edit). Jalur approval: tahap setelah pembuat diganti & semua kembali
 // pending + notifikasi ke approver pertama, hanya untuk IT yang masih
@@ -30,6 +32,14 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { TRACKING_LABEL, TRACKING_ORDER } from "@/components/item-transfer/item-transfer-tracking-control";
 import {
   Check,
   CheckCircle2,
@@ -139,6 +149,9 @@ export function BulkEditItemTransferDialog({
   const [receiverUid, setReceiverUid] = useState("");
   const [editApprovals, setEditApprovals] = useState(false);
   const [approvalSteps, setApprovalSteps] = useState<ModeratorApprovalStep[]>([]);
+  const [editTracking, setEditTracking] = useState(false);
+  const [trackingStatus, setTrackingStatus] = useState("");
+  const [trackingNote, setTrackingNote] = useState("");
   const [reason, setReason] = useState("");
   const [saving, setSaving] = useState(false);
   // State tidak di-reset di sini: parent me-mount dialog ini hanya saat dibuka.
@@ -158,6 +171,7 @@ export function BulkEditItemTransferDialog({
 
   const completedCount = rows.filter((r) => r.status === "completed").length;
   const notOpenCount = rows.filter((r) => r.status !== "open").length;
+  const notApprovedCount = rows.filter((r) => r.status !== "approved").length;
   // Tahap pembuat tiap IT dipertahankan server; tahap "requester" dari
   // template dibuang supaya editor hanya berisi approver setelah pembuat.
   const handleApprovalStepsChange = (steps: ModeratorApprovalStep[]) =>
@@ -171,10 +185,12 @@ export function BulkEditItemTransferDialog({
   const done = Object.keys(results).length > 0;
   const canSave =
     !saving &&
-    (editPic || editReceiver || editApprovals) &&
+    (editPic || editReceiver || editApprovals || editTracking) &&
     (!editPic || !!picUid) &&
     (!editReceiver || !!receiverUid) &&
-    (!editApprovals || approvalsValid);
+    (!editApprovals || approvalsValid) &&
+    (!editTracking || !!trackingStatus) &&
+    trackingNote.trim().length <= 1000;
 
   const handleSave = async () => {
     if (!canSave) return;
@@ -192,6 +208,9 @@ export function BulkEditItemTransferDialog({
                   approval_role: s.approval_role,
                 })),
               }
+            : {}),
+          ...(editTracking
+            ? { tracking_status: trackingStatus, tracking_note: trackingNote.trim() || undefined }
             : {}),
           reason: reason.trim() || undefined,
         },
@@ -231,7 +250,7 @@ export function BulkEditItemTransferDialog({
                 Edit {rows.length} Item Transfer
               </DialogTitle>
               <DialogDescription className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider mt-0.5">
-                Ubah PIC, Penerima & Jalur Approval sekaligus
+                Ubah PIC, Penerima, Jalur Approval & Status Pengiriman sekaligus
               </DialogDescription>
             </div>
           </div>
@@ -314,6 +333,50 @@ export function BulkEditItemTransferDialog({
                 )}
               </div>
               <div className="space-y-1.5">
+                <label className="flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest cursor-pointer">
+                  <Checkbox
+                    checked={editTracking}
+                    onCheckedChange={(v) => setEditTracking(v === true)}
+                    disabled={saving}
+                  />
+                  Ubah Status Pengiriman
+                </label>
+                {editTracking && (
+                  <div className="space-y-2 rounded-lg border border-border p-3">
+                    <p className="text-[10px] text-muted-foreground leading-relaxed">
+                      Boleh maju atau mundur ke tahap mana saja. Hanya berlaku untuk IT yang sudah
+                      disetujui dan belum dikonfirmasi terima
+                      {notApprovedCount > 0 &&
+                        ` — ${notApprovedCount} IT terpilih bukan status approved dan akan dilewati`}
+                      . <b>Selesai Final</b> tidak bisa dipilih: hanya lewat Konfirmasi Barang
+                      Diterima (TTD penerima) supaya stok masuk gudang tujuan & MR terpenuhi.
+                      Konfirmasi terima hanya bisa dilakukan saat status Dalam Pengiriman / Barang
+                      Diterima.
+                    </p>
+                    <Select value={trackingStatus} onValueChange={setTrackingStatus} disabled={saving}>
+                      <SelectTrigger className="h-9 w-full text-xs font-bold">
+                        <SelectValue placeholder="Pilih status pengiriman..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TRACKING_ORDER.map((s, i) => (
+                          <SelectItem key={s} value={s} className="text-xs font-bold">
+                            {i + 1}. {TRACKING_LABEL[s]}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Textarea
+                      value={trackingNote}
+                      onChange={(e) => setTrackingNote(e.target.value)}
+                      placeholder="Catatan tracking (opsional). Diisi = menimpa catatan semua IT terpilih; kosong = catatan lama tetap."
+                      className="min-h-14 text-xs"
+                      maxLength={1000}
+                      disabled={saving}
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="space-y-1.5">
                 <Label className="text-[10px] font-bold uppercase tracking-widest">
                   Alasan (opsional)
                 </Label>
@@ -345,10 +408,12 @@ export function BulkEditItemTransferDialog({
                       {result
                         ? result.message
                         : r.status === "completed"
-                          ? "Selesai — penerima & approval terkunci"
-                          : r.status !== "open"
-                            ? `Status ${r.status} — jalur approval terkunci`
-                            : "Siap diubah"}
+                          ? "Selesai — penerima, approval & status pengiriman terkunci"
+                          : r.status === "approved"
+                            ? "Disetujui — jalur approval terkunci"
+                            : r.status !== "open"
+                              ? `Status ${r.status} — jalur approval & status pengiriman terkunci`
+                              : "Menunggu approval — status pengiriman terkunci"}
                     </p>
                   </div>
                   {result?.ok && <CheckCircle2 className="h-4 w-4 text-success shrink-0" />}
