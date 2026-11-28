@@ -4,6 +4,7 @@
 // Pengecekan admin di client (hm_is_admin) cuma untuk UX (sembunyikan tombol).
 
 import { createClient } from "@/lib/supabase/client";
+import { fetchAllPages, fetchInPaged } from "@/lib/supabase/fetch-paged";
 import type {
   HmHistoryRow,
   HmPartView,
@@ -118,25 +119,41 @@ export async function fetchHmServices(unitId: number): Promise<HmServiceRecord[]
   return (data ?? []) as HmServiceRecord[];
 }
 
-/** siteId null = semua site. */
+/**
+ * siteId null = semua site. Dipaginasi (batas response PostgREST 1000 baris),
+ * urut tanggal terbaru dulu.
+ */
 export async function fetchHmHistory(siteId: number | null = null): Promise<HmHistoryRow[]> {
   const supabase = createClient();
-  let q = supabase.from("hm_history").select("*");
-  if (siteId !== null) {
-    // hm_history cuma bawa kode unit -> saring lewat kode unit di site tsb.
-    const { data: units, error: unitError } = await supabase
-      .from("hm_units")
-      .select("code")
-      .eq("cabang_id", siteId);
-    if (unitError) throw unitError;
-    q = q.in("unit_code", (units ?? []).map((u) => u.code));
+  if (siteId === null) {
+    return fetchAllPages<HmHistoryRow>(() =>
+      supabase
+        .from("hm_history")
+        .select("*")
+        .order("date", { ascending: false })
+        .order("kind_order")
+        .order("id"),
+    );
   }
-  const { data, error } = await q
-    .order("date", { ascending: false })
-    .order("kind_order")
-    .order("id");
-  if (error) throw error;
-  return (data ?? []) as HmHistoryRow[];
+  // hm_history cuma bawa kode unit -> saring lewat kode unit di site tsb.
+  const { data: units, error: unitError } = await supabase
+    .from("hm_units")
+    .select("code")
+    .eq("cabang_id", siteId);
+  if (unitError) throw unitError;
+  const rows = await fetchInPaged<HmHistoryRow & { id: number; kind_order: number }>(
+    supabase,
+    "hm_history",
+    "*",
+    "unit_code",
+    (units ?? []).map((u) => u.code),
+  );
+  return rows.sort(
+    (a, b) =>
+      String(b.date).localeCompare(String(a.date)) ||
+      (a.kind_order ?? 0) - (b.kind_order ?? 0) ||
+      a.id - b.id,
+  );
 }
 
 export async function fetchHmCabangOptions(): Promise<HmCabangOption[]> {

@@ -26,7 +26,11 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import * as XLSX from "xlsx";
+import {
+  CELL_COLORS,
+  downloadStyledExcel,
+  exportSubtitle,
+} from "@/lib/excel-styled";
 import { Content } from "@/components/content";
 import { DatePickerString } from "@/components/date-picker-string";
 import { Badge } from "@/components/ui/badge";
@@ -476,11 +480,11 @@ export default function SpbDashboardPage() {
   );
   const woSpbCount = useMemo(() => new Set(woItems.map((r) => r.spb_id)).size, [woItems]);
 
-  const exportWoItems = () => {
+  const exportWoItems = async () => {
     const rows = woItems.map((r) => ({
       "No WO": r.spb_no_wo,
       "No SPB": r.spb_no,
-      "Tanggal SPB": r.spb_tanggal ? formatDate(r.spb_tanggal) : "",
+      "Tanggal SPB": r.spb_tanggal || null,
       "Status SPB": r.spb_status,
       Lokasi: r.nama_cabang,
       "Kode Unit": r.spb_kode_unit,
@@ -495,10 +499,53 @@ export default function SpbDashboardPage() {
       "No DO": r.do_nos || "",
       "No Invoice": r.invoice_nos || "",
     }));
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Item WO");
     const safeWo = noWo.replace(/[^\w-]+/g, "_");
-    XLSX.writeFile(wb, `Item_SPB_WO_${safeWo}.xlsx`);
+    const { amber, green, red, blue, indigo } = CELL_COLORS;
+    try {
+      await downloadStyledExcel(`Item_SPB_WO_${safeWo}.xlsx`, [
+        {
+          name: "Item WO",
+          title: `ITEM SPB — WO ${noWo}`,
+          subtitle: exportSubtitle({
+            count: rows.length,
+            unit: "item",
+            extra: `${woSpbCount.toLocaleString("id-ID")} SPB`,
+          }),
+          freezeCols: 2,
+          columns: [
+            { header: "No WO", width: 16 },
+            { header: "No SPB", width: 20 },
+            { header: "Tanggal SPB", width: 13, type: "date" },
+            {
+              header: "Status SPB",
+              width: 13,
+              colors: {
+                QUOT: amber,
+                PO_ATTACH: blue,
+                DO_ATTACH: indigo,
+                DONE: green,
+                CANCELLED: red,
+              },
+            },
+            { header: "Lokasi", width: 20, wrap: true },
+            { header: "Kode Unit", width: 14 },
+            { header: "Part Number", width: 22 },
+            { header: "Part Name", width: 36, wrap: true },
+            { header: "Satuan", width: 9, align: "center" },
+            { header: "Qty", width: 8, type: "number" },
+            { header: "Qty Sudah PO", width: 10, type: "number" },
+            { header: "Qty Belum PO", width: 10, type: "number" },
+            { header: "Qty Retur", width: 9, type: "number" },
+            { header: "No PO", width: 20, wrap: true },
+            { header: "No DO", width: 20, wrap: true },
+            { header: "No Invoice", width: 20, wrap: true },
+          ],
+          rows,
+        },
+      ]);
+    } catch (err: any) {
+      toast.error(`Gagal export Excel: ${err?.message || err}`);
+    }
   };
 
   const progress = summary?.progress;

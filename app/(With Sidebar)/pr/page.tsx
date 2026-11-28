@@ -2,9 +2,14 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { formatDate } from "@/lib/utils";
-import * as XLSX from "xlsx";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import { formatDate, toYmdLocal } from "@/lib/utils";
+import {
+  CELL_COLORS,
+  DOC_STATUS_COLORS,
+  downloadStyledExcel,
+  exportSubtitle,
+} from "@/lib/excel-styled";
+import { fetchInPaged } from "@/lib/supabase/fetch-paged";
 import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
 import {
@@ -346,21 +351,22 @@ export default function PRListPage() {
       // Ambil MR asal untuk tiap PR (bisa lebih dari satu).
       const prIds = allRows.map((pr) => pr.id);
       const mrCodesByPr = new Map<number, string[]>();
-      for (let i = 0; i < prIds.length; i += 1000) {
-        const chunk = prIds.slice(i, i + 1000);
-        const { data } = await supabase
-          .from("pr_items")
-          .select("pr_id, mrs(mr_kode)")
-          .in("pr_id", chunk);
-        for (const row of data || []) {
-          const kode = Array.isArray(row.mrs)
-            ? row.mrs[0]?.mr_kode
-            : (row.mrs as any)?.mr_kode;
-          if (!kode) continue;
-          const list = mrCodesByPr.get(row.pr_id) || [];
-          list.push(kode);
-          mrCodesByPr.set(row.pr_id, list);
-        }
+      // Dipaginasi: 1 PR bisa banyak item, response PostgREST maks 1000 baris.
+      const prItemRows = await fetchInPaged(
+        supabase,
+        "pr_items",
+        "id, pr_id, mrs(mr_kode)",
+        "pr_id",
+        prIds,
+      );
+      for (const row of prItemRows) {
+        const kode = Array.isArray(row.mrs)
+          ? row.mrs[0]?.mr_kode
+          : (row.mrs as any)?.mr_kode;
+        if (!kode) continue;
+        const list = mrCodesByPr.get(row.pr_id) || [];
+        list.push(kode);
+        mrCodesByPr.set(row.pr_id, list);
       }
 
       const sheetData = allRows.map((pr, index) => {
@@ -372,7 +378,7 @@ export default function PRListPage() {
             Array.from(new Set(mrCodesByPr.get(pr.id) || [])).join(", ") || "-",
           PIC: pr.profiles?.nama || "-",
           LOKASI: pr.cabang?.nama_cabang || "-",
-          TANGGAL: toExcelDate(pr.pr_tanggal),
+          TANGGAL: pr.pr_tanggal || null,
           STATUS: pr.pr_status || "-",
           "PROGRES APPROVAL": `${summary.approvedCount}/${summary.totalCount}`,
           "CONVERT STATUS": pr.pr_convert_status || "-",
@@ -380,12 +386,45 @@ export default function PRListPage() {
         };
       });
 
-      const ws = jsonToSheetWithDates(sheetData, ["TANGGAL"]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Purchase Request");
-      XLSX.writeFile(
-        wb,
-        `PURCHASE_REQUEST_${new Date().toISOString().slice(0, 10)}.xlsx`,
+      await downloadStyledExcel(
+        `PURCHASE_REQUEST_${toYmdLocal(new Date())}.xlsx`,
+        [
+          {
+            name: "Purchase Request",
+            title: "LAPORAN PURCHASE REQUEST",
+            subtitle: exportSubtitle({
+              scope: mode,
+              count: sheetData.length,
+              unit: "PR",
+            }),
+            freezeCols: 2,
+            columns: [
+              { header: "NO", width: 7, type: "int", align: "center" },
+              { header: "KODE PR", width: 20 },
+              { header: "MR ASAL", width: 28, wrap: true },
+              { header: "PIC", width: 22, wrap: true },
+              { header: "LOKASI", width: 22, wrap: true },
+              { header: "TANGGAL", width: 13, type: "date" },
+              { header: "STATUS", width: 13, colors: DOC_STATUS_COLORS },
+              { header: "PROGRES APPROVAL", width: 12, align: "center" },
+              {
+                header: "CONVERT STATUS",
+                width: 14,
+                colors: {
+                  pending: CELL_COLORS.amber,
+                  partial: CELL_COLORS.blue,
+                  complete: CELL_COLORS.green,
+                },
+              },
+              {
+                header: "ACCURATE",
+                width: 11,
+                colors: { Sudah: CELL_COLORS.green, Belum: CELL_COLORS.amber },
+              },
+            ],
+            rows: sheetData,
+          },
+        ],
       );
       toast.success(`Export Excel berhasil (${allRows.length} baris).`, {
         id: toastId,

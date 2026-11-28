@@ -2,8 +2,16 @@
 // Alur Approval). Pakai exceljs (bukan xlsx/SheetJS community) karena butuh
 // styling: header berwarna, border, freeze pane, autofilter, format angka.
 // exceljs di-import dinamis supaya tidak ikut bundle halaman list.
+// Inti styling (writeTableSheet dkk) ada di lib/excel-styled.ts; di-export
+// ulang di sini supaya import lama tetap jalan.
 
-import type { Workbook, Worksheet, Cell } from "exceljs";
+import type { Workbook } from "exceljs";
+import {
+  type ColumnDef,
+  formatExportedAt,
+  toCellDate,
+  writeTableSheet,
+} from "@/lib/excel-styled";
 import { summarizeApprovals } from "@/lib/approval-progress";
 import {
   SHIPMENT_LABEL,
@@ -11,6 +19,14 @@ import {
   parseKoliDetail,
   summarizeKoli,
 } from "@/lib/shipment";
+
+export {
+  type ColumnDef,
+  downloadWorkbook,
+  formatExportedAt,
+  toCellDate,
+  writeTableSheet,
+} from "@/lib/excel-styled";
 
 export const IT_STATUS_LABEL: Record<string, string> = {
   open: "Menunggu Approval",
@@ -35,19 +51,6 @@ const APPROVAL_STATUS_LABEL: Record<string, string> = {
   rejected: "Ditolak",
 };
 
-// Warna status (ARGB) untuk sel status: [background, font].
-const STATUS_COLOR: Record<string, [string, string]> = {
-  open: ["FFFEF3C7", "FF92400E"],
-  pending: ["FFFEF3C7", "FF92400E"],
-  approved: ["FFD1FAE5", "FF065F46"],
-  rejected: ["FFFEE2E2", "FF991B1B"],
-  completed: ["FFE5E7EB", "FF111827"],
-  done: ["FFE5E7EB", "FF111827"],
-};
-
-const HEADER_FILL = "FF1F2937";
-const ZEBRA_FILL = "FFF9FAFB";
-const BORDER_COLOR = "FFD1D5DB";
 
 const DATE_FMT = "dd/mm/yyyy";
 const DATETIME_FMT = "dd/mm/yyyy hh:mm";
@@ -73,173 +76,8 @@ export interface ItExportInput {
   filterDescription: string;
 }
 
-const YMD_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
-
-/**
- * exceljs menulis Date sebagai UTC. Kolom `date` ("YYYY-MM-DD") dijadikan
- * tengah malam UTC; timestamptz diambil jam lokalnya lalu "dipalsukan" jadi
- * UTC supaya di Excel tampil sama dengan jam di aplikasi (WIB/WITA/WIT).
- */
-export function toCellDate(value?: string | null): Date | null {
-  if (!value) return null;
-  const ymd = YMD_RE.exec(value);
-  if (ymd) {
-    return new Date(
-      Date.UTC(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3])),
-    );
-  }
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return null;
-  return new Date(
-    Date.UTC(
-      d.getFullYear(),
-      d.getMonth(),
-      d.getDate(),
-      d.getHours(),
-      d.getMinutes(),
-    ),
-  );
-}
-
 const orNull = (v: unknown) =>
   v === null || v === undefined || v === "" ? null : v;
-
-export interface ColumnDef {
-  header: string;
-  width: number;
-  numFmt?: string;
-  align?: "left" | "center" | "right";
-  wrap?: boolean;
-  /** Kolom status → sel diberi warna sesuai kunci status mentah. */
-  statusKey?: boolean;
-}
-
-/**
- * Tulis 1 sheet tabel: judul + info export di atas, header gelap, border,
- * zebra, freeze pane di header (+ `freezeCols` kolom kiri), dan autofilter.
- * `rows` berisi nilai sel; `statusKeys[i]` (opsional) = status mentah baris i
- * untuk pewarnaan kolom bertanda `statusKey`.
- */
-export function writeTableSheet(
-  ws: Worksheet,
-  title: string,
-  subtitle: string,
-  columns: ColumnDef[],
-  rows: unknown[][],
-  opts: {
-    freezeCols?: number;
-    statusKeys?: (string | undefined)[][];
-    /** Tambahan/override warna status ([background, font] ARGB). */
-    statusColors?: Record<string, [string, string]>;
-  } = {},
-) {
-  const HEADER_ROW = 4;
-  const lastCol = columns.length;
-
-  ws.mergeCells(1, 1, 1, lastCol);
-  const titleCell = ws.getCell(1, 1);
-  titleCell.value = title;
-  titleCell.font = { bold: true, size: 14 };
-  ws.getRow(1).height = 22;
-
-  ws.mergeCells(2, 1, 2, lastCol);
-  const subCell = ws.getCell(2, 1);
-  subCell.value = subtitle;
-  subCell.font = { italic: true, size: 9, color: { argb: "FF6B7280" } };
-
-  columns.forEach((c, i) => {
-    ws.getColumn(i + 1).width = c.width;
-  });
-
-  const border = {
-    top: { style: "thin" as const, color: { argb: BORDER_COLOR } },
-    left: { style: "thin" as const, color: { argb: BORDER_COLOR } },
-    bottom: { style: "thin" as const, color: { argb: BORDER_COLOR } },
-    right: { style: "thin" as const, color: { argb: BORDER_COLOR } },
-  };
-
-  const headerRow = ws.getRow(HEADER_ROW);
-  headerRow.values = columns.map((c) => c.header);
-  headerRow.height = 30;
-  headerRow.eachCell((cell) => {
-    cell.font = { bold: true, color: { argb: "FFFFFFFF" }, size: 10 };
-    cell.fill = {
-      type: "pattern",
-      pattern: "solid",
-      fgColor: { argb: HEADER_FILL },
-    };
-    cell.alignment = {
-      vertical: "middle",
-      horizontal: "center",
-      wrapText: true,
-    };
-    cell.border = border;
-  });
-
-  rows.forEach((values, r) => {
-    const row = ws.getRow(HEADER_ROW + 1 + r);
-    row.values = values.map((v) => (v === undefined ? null : v)) as any[];
-    for (let c = 1; c <= lastCol; c++) {
-      const def = columns[c - 1];
-      const cell: Cell = row.getCell(c);
-      cell.border = border;
-      cell.font = { size: 10 };
-      cell.alignment = {
-        vertical: "top",
-        horizontal: def.align,
-        wrapText: def.wrap,
-      };
-      if (def.numFmt) cell.numFmt = def.numFmt;
-
-      const statusKey = def.statusKey
-        ? opts.statusKeys?.[r]?.[c - 1]
-        : undefined;
-      const statusColor = statusKey
-        ? (opts.statusColors?.[statusKey] ?? STATUS_COLOR[statusKey])
-        : undefined;
-      if (statusColor) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: statusColor[0] },
-        };
-        cell.font = { size: 10, bold: true, color: { argb: statusColor[1] } };
-        cell.alignment = { vertical: "top", horizontal: "center" };
-      } else if (r % 2 === 1) {
-        cell.fill = {
-          type: "pattern",
-          pattern: "solid",
-          fgColor: { argb: ZEBRA_FILL },
-        };
-      }
-    }
-  });
-
-  ws.views = [
-    {
-      state: "frozen",
-      xSplit: opts.freezeCols ?? 0,
-      ySplit: HEADER_ROW,
-      activeCell: `A${HEADER_ROW + 1}`,
-    },
-  ];
-  ws.autoFilter = {
-    from: { row: HEADER_ROW, column: 1 },
-    to: { row: HEADER_ROW + Math.max(rows.length, 1), column: lastCol },
-  };
-  ws.pageSetup = {
-    orientation: "landscape",
-    fitToPage: true,
-    fitToWidth: 1,
-    fitToHeight: 0,
-    printTitlesRow: `${HEADER_ROW}:${HEADER_ROW}`,
-  };
-}
-
-export function formatExportedAt(d: Date) {
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
 
 export async function buildItemTransferWorkbook({
   transfers,
@@ -459,20 +297,4 @@ export async function buildItemTransferWorkbook({
   );
 
   return wb;
-}
-
-/** Trigger download workbook di browser. */
-export async function downloadWorkbook(wb: Workbook, fileName: string) {
-  const buffer = await wb.xlsx.writeBuffer();
-  const blob = new Blob([buffer], {
-    type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

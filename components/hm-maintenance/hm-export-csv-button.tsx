@@ -1,6 +1,6 @@
-// Tombol "Ekspor CSV" (hm.md §8): mengekspor riwayat seluruh unit di site
-// terpilih (atau semua site), di halaman mana pun tombolnya berada. Hanya
-// dirender untuk admin.
+// Tombol "Ekspor Excel" (hm.md §8, dulu CSV): mengekspor riwayat seluruh unit
+// di site terpilih (atau semua site), di halaman mana pun tombolnya berada.
+// Hanya dirender untuk admin. Style Excel seragam (lib/excel-styled.ts).
 
 "use client";
 
@@ -8,7 +8,7 @@ import { useState } from "react";
 import { Download } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
-import { buildCsvFilename, buildHistoryCsv } from "@/lib/hm";
+import { downloadHistoryExcel } from "@/lib/hm-history-export";
 import { fetchHmHistory } from "@/services/hm-maintenance-client";
 import { useHmSite } from "./hm-site-context";
 
@@ -24,16 +24,8 @@ export function HmExportCsvButton() {
         toast.info("Tidak ada riwayat untuk diekspor");
         return;
       }
-      const blob = new Blob([buildHistoryCsv(rows)], { type: "text/csv;charset=utf-8" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = buildCsvFilename();
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-      toast.success("Riwayat diekspor ke CSV");
+      await downloadHistoryExcel(rows);
+      toast.success(`Riwayat diekspor ke Excel (${rows.length.toLocaleString("id-ID")} baris)`);
     } catch {
       toast.error("Gagal mengekspor riwayat. Coba lagi.");
     } finally {
@@ -44,7 +36,7 @@ export function HmExportCsvButton() {
   return (
     <Button variant="outline" size="sm" onClick={handleExport} disabled={busy}>
       <Download className="h-4 w-4" />
-      {busy ? "Menyiapkan…" : "Ekspor CSV"}
+      {busy ? "Menyiapkan…" : "Ekspor Excel"}
     </Button>
   );
 }

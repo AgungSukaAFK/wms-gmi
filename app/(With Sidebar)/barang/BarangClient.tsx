@@ -39,7 +39,6 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Plus,
-  FileSpreadsheet,
   Pencil,
   Trash2,
   Loader2,
@@ -55,8 +54,14 @@ import {
 import { toast } from "@/lib/toast";
 import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { useRouter, useSearchParams } from "next/navigation";
-import * as XLSX from "xlsx";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import { downloadStyledExcel, exportSubtitle } from "@/lib/excel-styled";
+import { createClient } from "@/lib/supabase/client";
+import { fetchAllPages } from "@/lib/supabase/fetch-paged";
+import { orIlikePattern } from "@/lib/supabase/search-filter";
+import {
+  ExcelDownloadMenu,
+  type ExcelDownloadMode,
+} from "@/components/excel-download-menu";
 import {
   createBarang,
   updateBarang,
@@ -447,21 +452,110 @@ export default function BarangClient({
     setSelectedRows({});
   };
 
-  const handleExport = () => {
-    toast.info("Mengekspor halaman saat ini...");
-    const ws = jsonToSheetWithDates(
-      initialData.map((b, i) => ({
-        No: (currentPage - 1) * pageSize + i + 1,
-        "Part Number": b.part_number,
-        "Nama Part": b.part_name,
-        Satuan: b.part_satuan,
-        "Tanggal Input": toExcelDate(b.created_at),
-      })),
-      ["Tanggal Input"],
-    );
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Master Barang");
-    XLSX.writeFile(wb, `MASTER_BARANG_${toYmdLocal()}.xlsx`);
+  // Export: "Semua data" = semua barang aktif; "Sesuai filter" = filter &
+  // urutan yang sama dengan query list di page.tsx (bukan cuma halaman ini).
+  const [exporting, setExporting] = useState(false);
+
+  const buildExportQuery = (mode: ExcelDownloadMode) => {
+    const supabase = createClient();
+    let query = supabase
+      .from("barang")
+      .select("id, part_number, part_name, part_satuan, created_at, updated_at");
+    if (mode === "all") {
+      return query
+        .is("deleted_at", null)
+        .order("part_name", { ascending: true })
+        .order("id", { ascending: true });
+    }
+    query =
+      initialStatus === "deleted"
+        ? query.not("deleted_at", "is", null)
+        : query.is("deleted_at", null);
+    if (initialQuery) {
+      query = query.or(
+        `part_number.ilike.${orIlikePattern(initialQuery)},part_name.ilike.${orIlikePattern(initialQuery)}`,
+      );
+    }
+    if (initialUpdatedFrom) {
+      query = query.gte("updated_at", `${initialUpdatedFrom}T00:00:00`);
+    }
+    if (initialUpdatedTo) {
+      const nextDay = new Date(`${initialUpdatedTo}T00:00:00`);
+      nextDay.setDate(nextDay.getDate() + 1);
+      query = query.lt("updated_at", nextDay.toISOString().slice(0, 10));
+    }
+    const [sortKeyRaw, sortDirRaw] = initialSort.split(/_(asc|desc)$/);
+    if (initialSort === "latest") {
+      query = query.order("created_at", { ascending: false });
+    } else if (initialSort === "name_desc") {
+      query = query.order("part_name", { ascending: false });
+    } else if (sortKeyRaw === "part_number" || sortKeyRaw === "part_satuan") {
+      query = query.order(sortKeyRaw, { ascending: sortDirRaw === "asc" });
+    } else {
+      query = query.order("part_name", { ascending: true });
+    }
+    return query.order("id", { ascending: true });
+  };
+
+  const fetchAllBarangCount = async () => {
+    const { count, error } = await createClient()
+      .from("barang")
+      .select("id", { count: "exact", head: true })
+      .is("deleted_at", null);
+    if (error) throw error;
+    return count || 0;
+  };
+
+  const handleExport = async (mode: ExcelDownloadMode) => {
+    setExporting(true);
+    const toastId = toast.loading("Menyiapkan data barang...");
+    try {
+      const data = await fetchAllPages<Barang & { updated_at?: string }>(() =>
+        buildExportQuery(mode),
+      );
+      if (data.length === 0) {
+        toast.warning("Tidak ada data untuk diekspor.", { id: toastId });
+        return;
+      }
+      toast.loading("Menyusun file Excel...", { id: toastId });
+      const deletedView = mode === "filtered" && initialStatus === "deleted";
+      await downloadStyledExcel(`MASTER_BARANG_${toYmdLocal()}.xlsx`, [
+        {
+          name: "Master Barang",
+          title: deletedView
+            ? "MASTER BARANG — TERHAPUS"
+            : "MASTER BARANG",
+          subtitle: exportSubtitle({
+            scope: mode,
+            count: data.length,
+            unit: "barang",
+          }),
+          freezeCols: 2,
+          columns: [
+            { header: "No", width: 8, type: "int", align: "center" },
+            { header: "Part Number", width: 26 },
+            { header: "Nama Part", width: 48, wrap: true },
+            { header: "Satuan", width: 10, align: "center" },
+            { header: "Tanggal Input", width: 14, type: "date" },
+          ],
+          rows: data.map((b, i) => ({
+            No: i + 1,
+            "Part Number": b.part_number,
+            "Nama Part": b.part_name,
+            Satuan: b.part_satuan,
+            "Tanggal Input": b.created_at,
+          })),
+        },
+      ]);
+      toast.success(
+        `Export Excel berhasil (${data.length.toLocaleString("id-ID")} barang).`,
+        { id: toastId },
+      );
+    } catch (err: any) {
+      toast.error(`Gagal export Excel: ${err?.message || err}`, { id: toastId });
+    } finally {
+      setExporting(false);
+    }
   };
 
   // Chip filter aktif di FilterPanel (tetap tampil walau panel tertutup).
@@ -541,15 +635,15 @@ export default function BarangClient({
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
+            <ExcelDownloadMenu
+              itemLabel="barang"
+              filteredCount={totalCount}
+              fetchAllCount={fetchAllBarangCount}
+              onDownload={handleExport}
+              isExporting={exporting}
               size="sm"
-              onClick={handleExport}
-              className="gap-2 font-bold text-xs border-input hover:bg-muted/40"
-            >
-              <FileSpreadsheet className="h-3.5 w-3.5 text-success" />
-              Export
-            </Button>
+              className="gap-1 font-bold text-xs border-input hover:bg-muted/40"
+            />
             <Button
               size="sm"
               onClick={() => setIsAddModalOpen(true)}

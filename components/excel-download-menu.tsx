@@ -30,12 +30,17 @@ export function ExcelDownloadMenu({
   fetchAllCount,
   onDownload,
   isExporting,
+  size,
+  className,
 }: {
   itemLabel: string; // Contoh: "PO", "MR"
   filteredCount: number;
   fetchAllCount: () => Promise<number>;
   onDownload: (mode: ExcelDownloadMode) => void;
   isExporting: boolean;
+  /** Ukuran & kelas tombol pemicu (default: tombol outline standar). */
+  size?: "sm" | "default";
+  className?: string;
 }) {
   const [allCount, setAllCount] = useState<number | "loading" | null>(null);
 
@@ -55,8 +60,9 @@ export function ExcelDownloadMenu({
       <DropdownMenuTrigger asChild>
         <Button
           variant="outline"
+          size={size}
           disabled={isExporting}
-          className="w-full md:w-auto"
+          className={className ?? "w-full md:w-auto"}
         >
           {isExporting ? (
             <Loader2 className="mr-2 h-4 w-4 animate-spin" />

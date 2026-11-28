@@ -19,9 +19,10 @@ import {
   formatExportedAt,
   toCellDate,
   writeTableSheet,
-} from "@/lib/item-transfer-export";
+} from "@/lib/excel-styled";
 import { computePoTotalsFromRecord, formatItemTax, itemTaxFromRow } from "@/lib/po-tax";
 import { normalizePoCurrency } from "@/lib/po-currency";
+import { fetchInPaged } from "@/lib/supabase/fetch-paged";
 
 const CHUNK = 200;
 const DATE_FMT = "dd/mm/yyyy";
@@ -97,38 +98,34 @@ export async function buildPoExportWorkbook(
     for (const row of data || []) headerById.set(row.id, row);
   }
 
-  // 2. Item PO.
-  const items: any[] = [];
-  for (const ids of chunks(poIds)) {
-    const { data, error } = await supabase
-      .from("po_items")
-      .select(
-        `id, po_id, part_number, part_name, satuan, qty, qty_received, harga,
-         qty_cancelled, item_detail_status, item_estimasi,
-         mr_id, pr_item_id, ost_pr_ref, ost_proyek_ref,
-         item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)`,
-      )
-      .in("po_id", ids)
-      .order("id", { ascending: true });
-    if (error) throw error;
-    items.push(...(data || []));
-  }
+  // 2. Item PO. Dipaginasi: 200 PO bisa > 1000 baris item (batas response
+  // PostgREST); query lookup .in("id", ...) lainnya aman (1 baris per id).
+  const items: any[] = await fetchInPaged(
+    supabase,
+    "po_items",
+    `id, po_id, part_number, part_name, satuan, qty, qty_received, harga,
+     qty_cancelled, item_detail_status, item_estimasi,
+     mr_id, pr_item_id, ost_pr_ref, ost_proyek_ref,
+     item_ppn_rate, item_pph_type, item_pph_rate, vendors(vendor_name)`,
+    "po_id",
+    poIds,
+  );
 
   // 3. Qty di RI yang masih menunggu approval (belum masuk qty_received).
   const pendingByPoItem = new Map<number, number>();
-  for (const ids of chunks(uniqIds(items.map((i) => i.id)))) {
-    const { data, error } = await supabase
-      .from("receive_items")
-      .select("po_item_id, qty, receives!inner(ri_status)")
-      .in("po_item_id", ids)
-      .eq("receives.ri_status", "open");
-    if (error) throw error;
-    for (const row of data || []) {
-      pendingByPoItem.set(
-        row.po_item_id,
-        (pendingByPoItem.get(row.po_item_id) || 0) + (Number(row.qty) || 0),
-      );
-    }
+  const pendingRows = await fetchInPaged(
+    supabase,
+    "receive_items",
+    "id, po_item_id, qty, receives!inner(ri_status)",
+    "po_item_id",
+    items.map((i) => i.id),
+    { modify: (q) => q.eq("receives.ri_status", "open") },
+  );
+  for (const row of pendingRows) {
+    pendingByPoItem.set(
+      row.po_item_id,
+      (pendingByPoItem.get(row.po_item_id) || 0) + (Number(row.qty) || 0),
+    );
   }
 
   // 4. Item PR -> kode PR + MR asal.

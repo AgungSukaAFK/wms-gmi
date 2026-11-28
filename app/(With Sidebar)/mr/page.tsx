@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate, toYmdLocal } from "@/lib/utils";
-import { buildMrWorkbook, type MrExportRow } from "@/lib/mr-export";
-import { downloadWorkbook } from "@/lib/item-transfer-export";
+import { downloadMrExcel, type MrExportRow } from "@/lib/mr-export";
+import { fetchInPaged as fetchInPagedLib } from "@/lib/supabase/fetch-paged";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -602,34 +602,13 @@ export default function MaterialRequestPage() {
       const mrOrder = new Map(mrIds.map((id, idx) => [id, idx]));
 
       // PostgREST membatasi tiap response maks 1000 baris (max_rows), jadi
-      // query .in() WAJIB dipaginasi juga — 1000 MR bisa punya >1000 item.
-      // Dulu cuma di-chunk tanpa range → item terpotong di 1000 baris.
-      // ID dipecah per 200 supaya URL tetap pendek; urut by id agar paging stabil.
-      const fetchInPaged = async (
+      // query .in() ke tabel anak WAJIB dipaginasi (lib/supabase/fetch-paged).
+      const fetchInPaged = (
         table: string,
         columns: string,
         column: string,
         ids: number[],
-      ): Promise<any[]> => {
-        const out: any[] = [];
-        const idChunk = 200;
-        const rowPage = 1000;
-        for (let i = 0; i < ids.length; i += idChunk) {
-          const chunk = ids.slice(i, i + idChunk);
-          for (let from = 0; ; from += rowPage) {
-            const { data, error } = await supabase
-              .from(table)
-              .select(columns)
-              .in(column, chunk)
-              .order("id", { ascending: true })
-              .range(from, from + rowPage - 1);
-            if (error) throw new Error(error.message);
-            out.push(...(data || []));
-            if (!data || data.length < rowPage) break;
-          }
-        }
-        return out;
-      };
+      ) => fetchInPagedLib(supabase, table, columns, column, ids);
 
       // Ambil semua item per MR (urutan mengikuti urutan MR, lalu id item).
       const mrItems: any[] = (
@@ -784,14 +763,11 @@ export default function MaterialRequestPage() {
       });
 
       toast.loading("Menyusun file Excel...", { id: toastId });
-      const wb = await buildMrWorkbook(sheetData, {
-        modeLabel: mode === "all" ? "Semua data" : "Sesuai filter aktif",
+      await downloadMrExcel(sheetData, {
+        mode,
         mrCount: allRows.length,
+        fileName: `MATERIAL_REQUEST_${toYmdLocal(new Date())}.xlsx`,
       });
-      await downloadWorkbook(
-        wb,
-        `MATERIAL_REQUEST_${toYmdLocal(new Date())}.xlsx`,
-      );
       toast.success(`Export Excel berhasil (${sheetData.length} baris item).`, {
         id: toastId,
       });

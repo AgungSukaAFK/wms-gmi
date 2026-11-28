@@ -49,9 +49,12 @@ import {
   type SpbReportFilters,
 } from "@/services/spb-actions";
 import { getCabangList } from "@/services/master-actions";
-import * as XLSX from "xlsx";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
-import { formatDate, ymdToLocalStartIso } from "@/lib/utils";
+import {
+  CELL_COLORS,
+  downloadStyledExcel,
+  exportSubtitle,
+} from "@/lib/excel-styled";
+import { formatDate, toYmdLocal, ymdToLocalStartIso } from "@/lib/utils";
 import { createClient } from "@/lib/supabase/client";
 import {
   SPB_BASE_STATUSES,
@@ -542,7 +545,7 @@ export default function SpbReportPage() {
       }
 
       const data = allRows.map((row) => ({
-        "TGL SPB": toExcelDate(row.spb_tanggal),
+        "TGL SPB": row.spb_tanggal || null,
         "NO SPB": row.spb_no || "-",
         LOKASI: row.spb_gudang || "-",
         "PART NUMBER": row.dtl_spb_part_number || "-",
@@ -558,39 +561,98 @@ export default function SpbReportPage() {
         "PIC GMI": row.spb_pic_gmi || "-",
         "PIC PPA": row.spb_pic_ppa || "-",
         "NO WO": row.spb_no_wo || "-",
-        "DATE INPUT SPB": toExcelDate(row.spb_created_at),
+        "DATE INPUT SPB": row.spb_created_at || null,
         STATUS: row.spb_status || "-",
         "BASE STATUS": row.spb_base_status || "-",
         "DATA KOSONG": row.spb_base_missing || "-",
         "COMPLETING STATUS": row.spb_completing_status || "-",
         "NO PO": row.po_no || "-",
         "NO SO": row.so_no || "-",
-        "DATE INPUT PO": toExcelDate(row.po_created_at),
+        "DATE INPUT PO": row.po_created_at || null,
         "NO DO": row.do_no || "-",
-        "DATE INPUT DO": toExcelDate(row.do_created_at),
+        "DATE INPUT DO": row.do_created_at || null,
         "NO INVOICE": row.invoice_no || "-",
-        "TGL INVOICE": toExcelDate(row.invoice_date),
-        "TGL EMAIL KE SITE": toExcelDate(row.invoice_email_date),
+        "TGL INVOICE": row.invoice_date || null,
+        "TGL EMAIL KE SITE": row.invoice_email_date || null,
         "STATUS PAYMENT": row.invoice_no
           ? PAYMENT_STATUS_LABEL[row.invoice_payment_status || "unpaid"]
           : "-",
       }));
 
-      const ws = jsonToSheetWithDates(data, [
-        "TGL SPB",
-        "DATE INPUT SPB",
-        "DATE INPUT PO",
-        "DATE INPUT DO",
-        "TGL INVOICE",
-        "TGL EMAIL KE SITE",
+      const { amber, green, red, gray, blue, indigo } = CELL_COLORS;
+      await downloadStyledExcel(`REPORT_SPB_${toYmdLocal(new Date())}.xlsx`, [
+        {
+          name: "Report SPB",
+          title: "REPORT SPB",
+          subtitle: exportSubtitle({ scope: "filtered", count: data.length }),
+          freezeCols: 2,
+          columns: [
+            { header: "TGL SPB", width: 13, type: "date" },
+            { header: "NO SPB", width: 20 },
+            { header: "LOKASI", width: 20, wrap: true },
+            { header: "PART NUMBER", width: 22 },
+            { header: "PART NAME", width: 36, wrap: true },
+            { header: "QTY", width: 8, type: "number" },
+            { header: "UOM", width: 8, align: "center" },
+            { header: "KODE UNIT", width: 14 },
+            { header: "TYPE UNIT", width: 18, wrap: true },
+            { header: "BRAND", width: 14 },
+            { header: "HM", width: 10, type: "number" },
+            { header: "REMARK", width: 30, wrap: true },
+            { header: "SECTION", width: 14 },
+            { header: "PIC GMI", width: 18, wrap: true },
+            { header: "PIC PPA", width: 18, wrap: true },
+            { header: "NO WO", width: 16 },
+            { header: "DATE INPUT SPB", width: 13, type: "date" },
+            {
+              header: "STATUS",
+              width: 14,
+              colors: {
+                QUOT: amber,
+                PO_ATTACH: blue,
+                DO_ATTACH: indigo,
+                DONE: green,
+                CANCELLED: red,
+              },
+            },
+            {
+              header: "BASE STATUS",
+              width: 14,
+              colors: { Lengkap: green, "Belum Lengkap": amber },
+            },
+            { header: "DATA KOSONG", width: 24, wrap: true },
+            {
+              header: "COMPLETING STATUS",
+              width: 16,
+              colors: {
+                Quotation: amber,
+                "PO Customer": blue,
+                Delivered: indigo,
+                Invoiced: gray,
+                Paid: green,
+                Cancelled: red,
+              },
+            },
+            { header: "NO PO", width: 18, wrap: true },
+            { header: "NO SO", width: 18, wrap: true },
+            { header: "DATE INPUT PO", width: 13, type: "date" },
+            { header: "NO DO", width: 18, wrap: true },
+            { header: "DATE INPUT DO", width: 13, type: "date" },
+            { header: "NO INVOICE", width: 18, wrap: true },
+            { header: "TGL INVOICE", width: 13, type: "date" },
+            { header: "TGL EMAIL KE SITE", width: 13, type: "date" },
+            {
+              header: "STATUS PAYMENT",
+              width: 12,
+              colors: { Paid: green, Unpaid: red },
+            },
+          ],
+          rows: data,
+        },
       ]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Report SPB");
-      XLSX.writeFile(
-        wb,
-        `REPORT_SPB_${new Date().toISOString().slice(0, 10)}.xlsx`,
-      );
       toast.success(`Export Excel berhasil (${allRows.length} baris).`);
+    } catch (err: any) {
+      toast.error(`Gagal export Excel: ${err?.message || err}`);
     } finally {
       setExporting(false);
     }

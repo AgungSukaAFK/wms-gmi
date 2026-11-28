@@ -2,9 +2,14 @@
 
 import React, { useState, useEffect } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { formatDate } from "@/lib/utils";
-import * as XLSX from "xlsx";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import { formatDate, toYmdLocal } from "@/lib/utils";
+import {
+  CELL_COLORS,
+  DOC_STATUS_COLORS,
+  downloadStyledExcel,
+  exportSubtitle,
+} from "@/lib/excel-styled";
+import { fetchInPaged } from "@/lib/supabase/fetch-paged";
 import { toast } from "@/lib/toast";
 import { Content } from "@/components/content";
 import {
@@ -296,18 +301,15 @@ export default function ReceiveItemPage() {
       Array.from(new Set(arr.filter((v) => v !== null && v !== undefined)));
 
     // 1. Item RI
-    const items: any[] = [];
-    for (const ids of chunks(riRows.map((r) => r.id))) {
-      const { data, error } = await supabase
-        .from("receive_items")
-        .select(
-          "id, ri_id, part_number, part_name, satuan, qty, mr_id, po_item_id, cabang_penerima_id",
-        )
-        .in("ri_id", ids)
-        .order("id", { ascending: true });
-      if (error) throw error;
-      items.push(...(data || []));
-    }
+    // Dipaginasi: 200 RI bisa > 1000 baris item (batas response PostgREST).
+    // Query lookup .in("id", ...) di bawah aman (maks 1 baris per id).
+    const items: any[] = await fetchInPaged(
+      supabase,
+      "receive_items",
+      "id, ri_id, part_number, part_name, satuan, qty, mr_id, po_item_id, cabang_penerima_id",
+      "ri_id",
+      riRows.map((r) => r.id),
+    );
 
     // 2. Item PO (vendor, ref proyek/PR dari PO outstanding, link ke PR)
     const poItemById = new Map<number, any>();
@@ -370,13 +372,15 @@ export default function ReceiveItemPage() {
 
     // 6. Departemen dari Working Order (kalau MR punya WO)
     const woByMrId = new Map<number, { kode: string[]; dept: string[] }>();
-    for (const ids of chunks(Array.from(mrById.keys()))) {
-      const { data, error } = await supabase
-        .from("working_orders")
-        .select("mr_id, wo_kode, departemen")
-        .in("mr_id", ids);
-      if (error) throw error;
-      for (const row of data || []) {
+    {
+      const data = await fetchInPaged(
+        supabase,
+        "working_orders",
+        "id, mr_id, wo_kode, departemen",
+        "mr_id",
+        Array.from(mrById.keys()),
+      );
+      for (const row of data) {
         const entry = woByMrId.get(row.mr_id) || { kode: [], dept: [] };
         if (row.wo_kode) entry.kode.push(row.wo_kode);
         if (row.departemen) entry.dept.push(row.departemen);
@@ -431,7 +435,7 @@ export default function ReceiveItemPage() {
       return {
         NO: index + 1,
         "KODE RECEIVE": ri?.ri_kode || "-",
-        TANGGAL: toExcelDate(ri?.ri_tanggal),
+        TANGGAL: ri?.ri_tanggal || null,
         STATUS: ri?.ri_status || "-",
         PIC: ri?.ri_pic || "-",
         "LOKASI RI": ri?.cabang?.nama_cabang || "-",
@@ -502,13 +506,61 @@ export default function ReceiveItemPage() {
 
       const sheetData = await buildRiItemSheetRows(allRows);
 
-      const ws = jsonToSheetWithDates(sheetData, ["TANGGAL"]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Receive Item");
-      XLSX.writeFile(
-        wb,
-        `RECEIVE_ITEM_${new Date().toISOString().slice(0, 10)}.xlsx`,
-      );
+      const W = (header: string, width: number, wrap = false) => ({
+        header,
+        width,
+        wrap,
+      });
+      await downloadStyledExcel(`RECEIVE_ITEM_${toYmdLocal(new Date())}.xlsx`, [
+        {
+          name: "Receive Item",
+          title: "LAPORAN RECEIVE ITEM — DETAIL ITEM",
+          subtitle: exportSubtitle({
+            scope: mode,
+            count: sheetData.length,
+            unit: "item",
+            extra: `${allRows.length.toLocaleString("id-ID")} RI`,
+          }),
+          freezeCols: 2,
+          columns: [
+            { header: "NO", width: 7, type: "int", align: "center" },
+            W("KODE RECEIVE", 20),
+            { header: "TANGGAL", width: 13, type: "date" },
+            { header: "STATUS", width: 12, colors: DOC_STATUS_COLORS },
+            W("PIC", 20, true),
+            W("LOKASI RI", 22, true),
+            W("GUDANG PENERIMA", 22, true),
+            W("KODE PO", 20),
+            {
+              header: "JENIS PO",
+              width: 12,
+              align: "center",
+              colors: {
+                Outstanding: CELL_COLORS.orange,
+                "Non-PR": CELL_COLORS.indigo,
+                Reguler: CELL_COLORS.blue,
+              },
+            },
+            W("VENDOR", 28, true),
+            W("KODE PR", 20),
+            W("KODE MR", 20),
+            W("PEMINTA (PIC MR)", 20, true),
+            W("KATEGORI MR", 14),
+            W("DEPT", 12),
+            W("KODE WO", 18, true),
+            W("LOKASI / SITE PEMINTA", 22, true),
+            W("TUJUAN SITE", 22, true),
+            W("PROYEK", 20, true),
+            W("PART NUMBER", 22),
+            W("NAMA BARANG", 40, true),
+            { header: "SATUAN", width: 9, align: "center" },
+            { header: "QTY TERIMA", width: 11, type: "number" },
+            W("KETERANGAN PO", 28, true),
+            W("KETERANGAN RI", 28, true),
+          ],
+          rows: sheetData,
+        },
+      ]);
       toast.success(
         `Export Excel berhasil (${allRows.length} RI, ${sheetData.length} baris item).`,
         { id: toastId },

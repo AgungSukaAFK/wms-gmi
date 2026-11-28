@@ -77,6 +77,8 @@ type Column = {
   align?: "right";
   /** Nilai untuk export Excel (teks/angka polos). */
   value: (row: ListRow) => string | number;
+  /** Tipe sel Excel; default: kolom rata kanan = angka, lainnya teks. */
+  excel?: "date" | "number";
   render?: (row: ListRow) => React.ReactNode;
 };
 
@@ -104,6 +106,7 @@ function lateBadge(days: unknown) {
 
 const dateCol = (label: string, key: string): Column => ({
   label,
+  excel: "date",
   value: (r) => text(r[key]),
   render: (r) => (r[key] ? formatYmdShort(String(r[key])) : <Dash />),
 });
@@ -392,33 +395,84 @@ export function DrilldownDialog() {
   const isPeriod = PERIOD_KINDS.test(detail.kind);
   const pageLink = def.page?.(scope, detail.args) ?? null;
 
+  // Ambil SEMUA baris per batch 5.000 (batas p_limit RPC) sampai habis.
   const exportExcel = async () => {
     setExporting(true);
+    const toastId = toast.loading("Menyiapkan data...");
     try {
-      const res = await fetchDashboardList({
-        kind: detail.kind,
-        args: detail.args,
-        scope,
-        search: debouncedSearch,
-        limit: 5000,
-        offset: 0,
-      });
-      if (res.error || !res.data) {
-        toast.error(`Gagal menyiapkan Excel: ${res.error ?? "data kosong"}`);
+      const BATCH = 5000;
+      const allRows: ListRow[] = [];
+      for (let offset = 0; ; offset += BATCH) {
+        const res = await fetchDashboardList({
+          kind: detail.kind,
+          args: detail.args,
+          scope,
+          search: debouncedSearch,
+          limit: BATCH,
+          offset,
+        });
+        if (res.error || !res.data) {
+          toast.error(`Gagal menyiapkan Excel: ${res.error ?? "data kosong"}`, {
+            id: toastId,
+          });
+          return;
+        }
+        allRows.push(...res.data.rows);
+        if (res.data.rows.length < BATCH || allRows.length >= res.data.total) break;
+      }
+      if (allRows.length === 0) {
+        toast.warning("Tidak ada data untuk diekspor.", { id: toastId });
         return;
       }
-      const XLSX = await import("xlsx");
-      const sheetRows = res.data.rows.map((row) =>
+      const { downloadStyledExcel, exportSubtitle } = await import(
+        "@/lib/excel-styled"
+      );
+      const sheetRows = allRows.map((row) =>
         Object.fromEntries(columns.map((c) => [c.label, c.value(row)])),
       );
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sheetRows), "Data");
-      XLSX.writeFile(wb, `Dashboard_${detail.kind}_${scope.today}.xlsx`);
-      if (res.data.total > res.data.rows.length) {
-        toast.warning(
-          `Excel berisi ${res.data.rows.length.toLocaleString("id-ID")} baris pertama dari ${res.data.total.toLocaleString("id-ID")}.`,
-        );
-      }
+      const title = detail.title || def.title;
+      await downloadStyledExcel(`Dashboard_${detail.kind}_${scope.today}.xlsx`, [
+        {
+          name: "Data",
+          title: title.toUpperCase(),
+          subtitle: exportSubtitle({
+            scope: [
+              isPeriod ? `Periode ${formatRangeLabel(scope.from, scope.to)}` : "",
+              ...notes,
+              debouncedSearch ? `Cari "${debouncedSearch}"` : "",
+            ]
+              .filter(Boolean)
+              .join(" · "),
+            count: sheetRows.length,
+          }),
+          freezeCols: 1,
+          columns: columns.map((c) => {
+            const type =
+              c.excel ?? (c.align === "right" ? ("number" as const) : undefined);
+            return {
+              header: c.label,
+              type,
+              width:
+                c.key === "part_name"
+                  ? 36
+                  : type
+                    ? Math.max(12, c.label.length + 4)
+                    : Math.max(18, c.label.length + 4),
+              wrap: !type,
+            };
+          }),
+          rows: sheetRows,
+        },
+      ]);
+      toast.success(
+        `Export Excel berhasil (${sheetRows.length.toLocaleString("id-ID")} baris).`,
+        { id: toastId },
+      );
+    } catch (err) {
+      toast.error(
+        `Gagal export Excel: ${err instanceof Error ? err.message : String(err)}`,
+        { id: toastId },
+      );
     } finally {
       setExporting(false);
     }

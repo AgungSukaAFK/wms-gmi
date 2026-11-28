@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useState } from "react";
-import * as XLSX from "xlsx";
 import { createClient } from "@/lib/supabase/client";
 import {
   TableBody,
@@ -53,7 +52,13 @@ import { useColumnOrder } from "@/hooks/use-column-order";
 import { useUrlListState } from "@/hooks/use-url-list-state";
 import { useUrlSearchInput } from "@/hooks/use-url-search-input";
 import { completedFilterStatuses } from "@/lib/document-status";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import {
+  CELL_COLORS,
+  DOC_STATUS_COLORS,
+  PRIORITY_COLORS,
+  downloadStyledExcel,
+  exportSubtitle,
+} from "@/lib/excel-styled";
 import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 import { ShareStockDetailSheet } from "@/components/share-stock/share-stock-detail-sheet";
 import { DatePickerString } from "@/components/date-picker-string";
@@ -430,15 +435,15 @@ export default function ShareStockPage() {
       const sheetData = rows.map(({ mr, item, alloc }, index) => ({
         NO: index + 1,
         "NO MR": mr.mr_kode || "-",
-        "TANGGAL MR": toExcelDate(mr.mr_tanggal),
-        "DUE DATE": toExcelDate(item.item_due_date || mr.mr_due_date),
+        "TANGGAL MR": mr.mr_tanggal || null,
+        "DUE DATE": item.item_due_date || mr.mr_due_date || null,
         "PART NUMBER": item.part_number || "-",
         "NAMA BARANG": item.part_name || "-",
         QTY: alloc?.qty ?? item.qty_sharestock_total ?? 0,
         SATUAN: item.satuan || "-",
         "GUDANG PEMASOK": alloc?.source_cabang?.nama_cabang || "-",
         "GUDANG TUJUAN": mr.cabang?.nama_cabang || "-",
-        DEADLINE: toExcelDate(alloc?.deadline),
+        DEADLINE: alloc?.deadline || null,
         PRIORITAS: item.item_priority || "-",
         "STATUS ITEM": filterOptionLabel(
           SS_ITEM_STATUS_OPTIONS,
@@ -448,17 +453,45 @@ export default function ShareStockPage() {
         PIC: mr.mr_pic || "-",
       }));
 
-      const ws = jsonToSheetWithDates(sheetData, [
-        "TANGGAL MR",
-        "DUE DATE",
-        "DEADLINE",
+      await downloadStyledExcel(`SHARE_STOCK_${toYmdLocal(new Date())}.xlsx`, [
+        {
+          name: "Share Stock",
+          title: "LAPORAN SHARE STOCK",
+          subtitle: exportSubtitle({
+            scope: mode,
+            count: sheetData.length,
+            extra: `${allRows.length.toLocaleString("id-ID")} MR`,
+          }),
+          freezeCols: 2,
+          columns: [
+            { header: "NO", width: 7, type: "int", align: "center" },
+            { header: "NO MR", width: 20 },
+            { header: "TANGGAL MR", width: 13, type: "date" },
+            { header: "DUE DATE", width: 13, type: "date" },
+            { header: "PART NUMBER", width: 22 },
+            { header: "NAMA BARANG", width: 40, wrap: true },
+            { header: "QTY", width: 9, type: "number" },
+            { header: "SATUAN", width: 9, align: "center" },
+            { header: "GUDANG PEMASOK", width: 22, wrap: true },
+            { header: "GUDANG TUJUAN", width: 22, wrap: true },
+            { header: "DEADLINE", width: 13, type: "date" },
+            { header: "PRIORITAS", width: 11, colors: PRIORITY_COLORS },
+            {
+              header: "STATUS ITEM",
+              width: 13,
+              colors: {
+                Open: CELL_COLORS.amber,
+                Processed: CELL_COLORS.blue,
+                Rejected: CELL_COLORS.red,
+                Closed: CELL_COLORS.green,
+              },
+            },
+            { header: "STATUS MR", width: 13, colors: DOC_STATUS_COLORS },
+            { header: "PIC", width: 20, wrap: true },
+          ],
+          rows: sheetData,
+        },
       ]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Share Stock");
-      XLSX.writeFile(
-        wb,
-        `SHARE_STOCK_${new Date().toISOString().slice(0, 10)}.xlsx`,
-      );
       toast.success(`Export Excel berhasil (${sheetData.length} baris).`, {
         id: toastId,
       });
