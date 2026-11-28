@@ -3,8 +3,8 @@
 import React, { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase/client";
 import { formatDate, toYmdLocal } from "@/lib/utils";
-import * as XLSX from "xlsx";
-import { jsonToSheetWithDates, toExcelDate } from "@/lib/excel";
+import { buildMrWorkbook, type MrExportRow } from "@/lib/mr-export";
+import { downloadWorkbook } from "@/lib/item-transfer-export";
 import { canCreateMR } from "@/lib/mr-permissions";
 import { MR_KATEGORI_OPTIONS } from "@/lib/mr-options";
 import { MultiSelect } from "@/components/ui/multi-select";
@@ -578,6 +578,7 @@ export default function MaterialRequestPage() {
         const to = from + pageSize - 1;
         const { data, error } = await buildFilteredQuery(mode)
           .order("created_at", { ascending: false })
+          .order("id", { ascending: false })
           .range(from, to);
 
         if (error) {
@@ -598,30 +599,60 @@ export default function MaterialRequestPage() {
 
       const mrById = new Map(allRows.map((mr) => [mr.id, mr]));
       const mrIds = allRows.map((mr) => mr.id);
+      const mrOrder = new Map(mrIds.map((id, idx) => [id, idx]));
 
-      // Ambil semua item per MR, batch 1000.
-      const mrItems: any[] = [];
-      for (let i = 0; i < mrIds.length; i += 1000) {
-        const chunk = mrIds.slice(i, i + 1000);
-        const { data } = await supabase
-          .from("mr_items")
-          .select("*")
-          .in("mr_id", chunk);
-        mrItems.push(...(data || []));
-      }
+      // PostgREST membatasi tiap response maks 1000 baris (max_rows), jadi
+      // query .in() WAJIB dipaginasi juga — 1000 MR bisa punya >1000 item.
+      // Dulu cuma di-chunk tanpa range → item terpotong di 1000 baris.
+      // ID dipecah per 200 supaya URL tetap pendek; urut by id agar paging stabil.
+      const fetchInPaged = async (
+        table: string,
+        columns: string,
+        column: string,
+        ids: number[],
+      ): Promise<any[]> => {
+        const out: any[] = [];
+        const idChunk = 200;
+        const rowPage = 1000;
+        for (let i = 0; i < ids.length; i += idChunk) {
+          const chunk = ids.slice(i, i + idChunk);
+          for (let from = 0; ; from += rowPage) {
+            const { data, error } = await supabase
+              .from(table)
+              .select(columns)
+              .in(column, chunk)
+              .order("id", { ascending: true })
+              .range(from, from + rowPage - 1);
+            if (error) throw new Error(error.message);
+            out.push(...(data || []));
+            if (!data || data.length < rowPage) break;
+          }
+        }
+        return out;
+      };
+
+      // Ambil semua item per MR (urutan mengikuti urutan MR, lalu id item).
+      const mrItems: any[] = (
+        await fetchInPaged("mr_items", "*", "mr_id", mrIds)
+      ).sort(
+        (a, b) =>
+          (mrOrder.get(a.mr_id) ?? 0) - (mrOrder.get(b.mr_id) ?? 0) ||
+          a.id - b.id,
+      );
 
       const mrItemIds = mrItems.map((i) => i.id);
 
       // Trace: PR yang menarik item ini (via pr_items.mr_item_id).
       const prCodesByMrItem = new Map<number, string[]>();
       const prItemIdToMrItemId = new Map<number, number>();
-      for (let i = 0; i < mrItemIds.length; i += 1000) {
-        const chunk = mrItemIds.slice(i, i + 1000);
-        const { data } = await supabase
-          .from("pr_items")
-          .select("id, mr_item_id, prs(pr_kode)")
-          .in("mr_item_id", chunk);
-        for (const row of data || []) {
+      {
+        const data = await fetchInPaged(
+          "pr_items",
+          "id, mr_item_id, prs(pr_kode)",
+          "mr_item_id",
+          mrItemIds,
+        );
+        for (const row of data) {
           if (!row.mr_item_id) continue;
           prItemIdToMrItemId.set(row.id, row.mr_item_id);
           const kode = Array.isArray(row.prs)
@@ -637,13 +668,14 @@ export default function MaterialRequestPage() {
       // Trace: PO yang menarik item ini (via po_items.pr_item_id -> pr_items.mr_item_id).
       const poCodesByMrItem = new Map<number, string[]>();
       const prItemIds = Array.from(prItemIdToMrItemId.keys());
-      for (let i = 0; i < prItemIds.length; i += 1000) {
-        const chunk = prItemIds.slice(i, i + 1000);
-        const { data } = await supabase
-          .from("po_items")
-          .select("pr_item_id, pos(po_kode)")
-          .in("pr_item_id", chunk);
-        for (const row of data || []) {
+      {
+        const data = await fetchInPaged(
+          "po_items",
+          "id, pr_item_id, pos(po_kode)",
+          "pr_item_id",
+          prItemIds,
+        );
+        for (const row of data) {
           const mrItemId = prItemIdToMrItemId.get(row.pr_item_id);
           if (!mrItemId) continue;
           const kode = Array.isArray(row.pos)
@@ -660,13 +692,14 @@ export default function MaterialRequestPage() {
       // Ikut ambil status delivery-nya buat derive STATUS BARANG di bawah.
       const dlvCodesByMrItem = new Map<number, string[]>();
       const dlvStatusesByMrItem = new Map<number, string[]>();
-      for (let i = 0; i < mrItemIds.length; i += 1000) {
-        const chunk = mrItemIds.slice(i, i + 1000);
-        const { data } = await supabase
-          .from("delivery_items")
-          .select("mr_item_id, deliveries(dlv_kode, status)")
-          .in("mr_item_id", chunk);
-        for (const row of data || []) {
+      {
+        const data = await fetchInPaged(
+          "delivery_items",
+          "id, mr_item_id, deliveries(dlv_kode, status)",
+          "mr_item_id",
+          mrItemIds,
+        );
+        for (const row of data) {
           if (!row.mr_item_id) continue;
           const dlv = Array.isArray(row.deliveries)
             ? row.deliveries[0]
@@ -716,7 +749,7 @@ export default function MaterialRequestPage() {
 
       const uniq = (arr: string[]) => Array.from(new Set(arr));
 
-      const sheetData = mrItems.map((item, index) => {
+      const sheetData: MrExportRow[] = mrItems.map((item, index) => {
         const mr = mrById.get(item.mr_id);
         return {
           NO: index + 1,
@@ -730,8 +763,8 @@ export default function MaterialRequestPage() {
             cabangNameById.get(item.item_site_cabang_id) ||
             mr?.cabang?.nama_cabang ||
             "-",
-          "TANGGAL REQUEST": toExcelDate(mr?.mr_tanggal),
-          "DUE DATE": toExcelDate(mr?.mr_due_date),
+          "TANGGAL REQUEST": mr?.mr_tanggal ?? null,
+          "DUE DATE": mr?.mr_due_date ?? null,
           STATUS: mr?.mr_status || "-",
           FROZEN: mr?.is_frozen ? "YA" : "-",
           "PART NUMBER": item.part_number || "-",
@@ -750,15 +783,14 @@ export default function MaterialRequestPage() {
         };
       });
 
-      const ws = jsonToSheetWithDates(sheetData, [
-        "TANGGAL REQUEST",
-        "DUE DATE",
-      ]);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, "Material Request");
-      XLSX.writeFile(
+      toast.loading("Menyusun file Excel...", { id: toastId });
+      const wb = await buildMrWorkbook(sheetData, {
+        modeLabel: mode === "all" ? "Semua data" : "Sesuai filter aktif",
+        mrCount: allRows.length,
+      });
+      await downloadWorkbook(
         wb,
-        `MATERIAL_REQUEST_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        `MATERIAL_REQUEST_${toYmdLocal(new Date())}.xlsx`,
       );
       toast.success(`Export Excel berhasil (${sheetData.length} baris item).`, {
         id: toastId,

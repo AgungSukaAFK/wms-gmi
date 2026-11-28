@@ -126,7 +126,12 @@ export function writeTableSheet(
   subtitle: string,
   columns: ColumnDef[],
   rows: unknown[][],
-  opts: { freezeCols?: number; statusKeys?: (string | undefined)[][] } = {},
+  opts: {
+    freezeCols?: number;
+    statusKeys?: (string | undefined)[][];
+    /** Tambahan/override warna status ([background, font] ARGB). */
+    statusColors?: Record<string, [string, string]>;
+  } = {},
 ) {
   const HEADER_ROW = 4;
   const lastCol = columns.length;
@@ -189,7 +194,9 @@ export function writeTableSheet(
       const statusKey = def.statusKey
         ? opts.statusKeys?.[r]?.[c - 1]
         : undefined;
-      const statusColor = statusKey ? STATUS_COLOR[statusKey] : undefined;
+      const statusColor = statusKey
+        ? (opts.statusColors?.[statusKey] ?? STATUS_COLOR[statusKey])
+        : undefined;
       if (statusColor) {
         cell.fill = {
           type: "pattern",
